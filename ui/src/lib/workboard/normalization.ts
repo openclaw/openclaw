@@ -12,6 +12,8 @@ import {
   type WorkboardBoardSummary,
   type WorkboardCard,
   type WorkboardPriority,
+  type WorkboardProofPage,
+  type WorkboardProofPageInfo,
   type WorkboardStatus,
   type WorkboardTaskSummary,
 } from "./types.ts";
@@ -53,6 +55,29 @@ function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
   };
 }
 
+function normalizeProofPage(value: unknown, loadedProofCount: number): WorkboardProofPageInfo {
+  if (!isRecord(value)) {
+    return { total: loadedProofCount, hasMore: false };
+  }
+  const total = Math.max(normalizeCount(value.total), loadedProofCount);
+  const hasMore = value.hasMore === true;
+  const nextCursor = hasMore && typeof value.nextCursor === "string" ? value.nextCursor.trim() : "";
+  return {
+    total,
+    hasMore,
+    ...(nextCursor ? { nextCursor } : {}),
+  };
+}
+
+export function normalizeProofPagePayload(value: unknown): WorkboardProofPage | null {
+  if (!isRecord(value) || !Array.isArray(value.proof)) {
+    return null;
+  }
+  const proof = normalizeMetadata({ proof: value.proof })?.proof ?? [];
+  const page = normalizeProofPage(value, proof.length);
+  return { proof, ...page };
+}
+
 function normalizeCard(value: unknown): WorkboardCard | null {
   if (!isRecord(value)) {
     return null;
@@ -71,6 +96,7 @@ function normalizeCard(value: unknown): WorkboardCard | null {
   const execution = normalizeExecution(value.execution);
   const events = normalizeEvents(value.events);
   const metadata = normalizeMetadata(value.metadata);
+  const proofPage = normalizeProofPage(value.proofPage, metadata?.proof?.length ?? 0);
   return {
     id,
     title,
@@ -93,6 +119,7 @@ function normalizeCard(value: unknown): WorkboardCard | null {
     ...(typeof value.completedAt === "number" ? { completedAt: value.completedAt } : {}),
     ...(events.length ? { events } : {}),
     ...(metadata ? { metadata } : {}),
+    proofPage,
   };
 }
 

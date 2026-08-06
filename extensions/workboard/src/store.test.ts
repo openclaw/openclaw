@@ -6,16 +6,20 @@ import { DatabaseSync } from "node:sqlite";
 import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardCard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
+import { toBoundedWorkboardCard } from "./card-output.js";
+import {
+  WorkboardStaleSnapshotError,
+  type PersistedWorkboardAttachment,
+  type PersistedWorkboardBoard,
+  type PersistedWorkboardCard,
+  type PersistedWorkboardNotificationSubscription,
+  type WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { normalizeExecution } from "./store-normalizers.js";
 import { WorkboardStore } from "./store.js";
+
+const WORKBOARD_MODEL_OUTPUT_BYTES = 24 * 1024;
 
 function createMemoryStore<T = PersistedWorkboardCard>(options?: {
   beforeRegister?: (key: string, value: T) => Promise<void> | void;
@@ -273,6 +277,183 @@ describe("WorkboardStore", () => {
       });
       reopenedStores.close();
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retains sqlite proof history through metadata pressure and lifecycle mutations", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-retention-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    let storesClosed = false;
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const created = await store.create({ title: "Keep proof history", status: "todo" });
+      const proven = await store.addProof(created.id, {
+        status: "passed",
+        command: "node scripts/run-vitest.mjs extensions/workboard/src/store.test.ts",
+        note: "Canonical proof must survive unrelated writes.",
+      });
+      const proofIds = proven.metadata?.proof?.map((proof) => proof.id) ?? [];
+      expect(proofIds).toHaveLength(1);
+
+      for (let index = 0; index < 14; index += 1) {
+        await store.addComment(created.id, {
+          body: `${String(index).padStart(2, "0")} ${"x".repeat(1900)}`,
+        });
+      }
+      for (let index = 0; index < 12; index += 1) {
+        await store.addArtifact(created.id, {
+          label: `Artifact ${index}`,
+          url: `https://example.com/${index}/${"y".repeat(1800)}`,
+        });
+      }
+
+      const assertProofIds = (card: Awaited<ReturnType<WorkboardStore["get"]>>) => {
+        expect(card?.metadata?.proof?.map((proof) => proof.id)).toEqual(proofIds);
+      };
+      const pressured = await store.get(created.id);
+      assertProofIds(pressured);
+      expect(Buffer.byteLength(JSON.stringify(pressured?.metadata), "utf8")).toBeGreaterThan(
+        24 * 1024,
+      );
+
+      assertProofIds(await store.update(created.id, { notes: "Updated after proof." }));
+      assertProofIds(await store.move(created.id, "ready", 2_000));
+      const claimed = await store.claim(created.id, {
+        ownerId: "main",
+        token: "proof-retention-token",
+      });
+      assertProofIds(claimed.card);
+      assertProofIds(
+        await store.releaseClaim(created.id, {
+          ownerId: "main",
+          token: claimed.token,
+          status: "todo",
+        }),
+      );
+      assertProofIds(await store.block(created.id, { reason: "Temporary blocker." }));
+      assertProofIds(await store.unblock(created.id));
+      assertProofIds(
+        await store.reassign(created.id, {
+          agentId: "reviewer",
+          status: "todo",
+          reason: "Reassign after proof.",
+        }),
+      );
+      assertProofIds(await store.archive(created.id, true));
+      assertProofIds(await store.archive(created.id, false));
+
+      stores.close();
+      storesClosed = true;
+      const rawDb = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        expect(
+          rawDb
+            .prepare("SELECT id FROM workboard_card_proof WHERE card_id = ? ORDER BY ordinal ASC")
+            .all(created.id)
+            .map((row) => row.id),
+        ).toEqual(proofIds);
+      } finally {
+        rawDb.close();
+      }
+
+      const reopenedStores = createWorkboardSqliteStores({ dbPath });
+      try {
+        const reopened = new WorkboardStore(reopenedStores.cards, {
+          boards: reopenedStores.boards,
+          subscriptions: reopenedStores.subscriptions,
+          attachments: reopenedStores.attachments,
+        });
+        assertProofIds(await reopened.get(created.id));
+      } finally {
+        reopenedStores.close();
+      }
+    } finally {
+      if (!storesClosed) {
+        stores.close();
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists sqlite proof appends and resolutions without rewriting history", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-writes-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    let auditDb: DatabaseSync | undefined;
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const pending = {
+        id: "proof-pending",
+        status: "unknown" as const,
+        label: "Pending proof",
+        createdAt: 1,
+      };
+      const card = await store.create({
+        title: "Incremental proof persistence",
+        metadata: { proof: [pending] },
+      });
+
+      auditDb = new DatabaseSync(dbPath);
+      auditDb.exec(`
+        CREATE TABLE proof_mutation_audit (operation TEXT NOT NULL) STRICT;
+        CREATE TRIGGER proof_mutation_audit_insert
+          AFTER INSERT ON workboard_card_proof
+          BEGIN
+            INSERT INTO proof_mutation_audit (operation) VALUES ('insert');
+          END;
+        CREATE TRIGGER proof_mutation_audit_update
+          AFTER UPDATE ON workboard_card_proof
+          BEGIN
+            INSERT INTO proof_mutation_audit (operation) VALUES ('update');
+          END;
+        CREATE TRIGGER proof_mutation_audit_delete
+          AFTER DELETE ON workboard_card_proof
+          BEGIN
+            INSERT INTO proof_mutation_audit (operation) VALUES ('delete');
+          END;
+      `);
+      const operations = () =>
+        auditDb
+          ?.prepare("SELECT operation FROM proof_mutation_audit ORDER BY rowid")
+          .all()
+          .map((row) => row.operation) ?? [];
+
+      await store.addComment(card.id, { body: "Unrelated mutation." });
+      expect(operations()).toEqual([]);
+
+      const appended = await store.addProof(card.id, {
+        status: "passed",
+        label: "Appended proof",
+      });
+      expect(operations()).toEqual(["insert"]);
+
+      const nextProof = structuredClone(appended.metadata?.proof ?? []);
+      const resolved = nextProof.find((proof) => proof.id === pending.id);
+      if (!resolved) {
+        throw new Error("expected pending proof");
+      }
+      resolved.status = "passed";
+      await store.update(card.id, { metadata: { proof: nextProof } });
+      expect(operations()).toEqual(["insert", "update"]);
+      expect(
+        auditDb
+          .prepare("SELECT name FROM pragma_index_list('workboard_card_proof') WHERE name = ?")
+          .get("workboard_card_proof_card_ordinal_idx"),
+      ).toMatchObject({ name: "workboard_card_proof_card_ordinal_idx" });
+    } finally {
+      auditDb?.close();
+      stores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1066,7 +1247,7 @@ describe("WorkboardStore", () => {
     }
   });
 
-  it("retains the correlated proof when metadata budget trimming is required", async () => {
+  it("retains correlated proof and unrelated metadata above the former byte budget", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
       title: "Keep proof under metadata pressure",
@@ -1093,21 +1274,20 @@ describe("WorkboardStore", () => {
     });
     const pendingProof = pending.metadata?.proof?.at(-1);
     expect(pendingProof).toMatchObject({ status: "unknown", command: proofInput.command });
-    expect(pending.metadata?.artifacts?.length ?? 0).toBeLessThan(artifactCountBefore);
-    expect(Buffer.byteLength(JSON.stringify(pending.metadata), "utf8")).toBeLessThanOrEqual(
-      24 * 1024,
-    );
+    expect(pending.metadata?.artifacts).toHaveLength(artifactCountBefore);
+    expect(Buffer.byteLength(JSON.stringify(pending.metadata), "utf8")).toBeGreaterThan(24 * 1024);
 
     const completed = await store.complete(card.id, {
       ownerId: "main",
       token: "token-1",
-      summary: "Proof survived metadata trimming.",
+      summary: "Proof survived metadata pressure.",
       proofId: pendingProof?.id,
       proof: { ...proofInput, status: "passed" },
     });
 
     expect(completed.metadata?.proof).toEqual([{ ...pendingProof, status: "passed" }]);
-    expect(Buffer.byteLength(JSON.stringify(completed.metadata), "utf8")).toBeLessThanOrEqual(
+    expect(completed.metadata?.artifacts).toHaveLength(artifactCountBefore);
+    expect(Buffer.byteLength(JSON.stringify(completed.metadata), "utf8")).toBeGreaterThan(
       24 * 1024,
     );
   });
@@ -1226,6 +1406,656 @@ describe("WorkboardStore", () => {
     await expect(store.get(card.id)).resolves.toMatchObject({
       status: "todo",
       metadata: { proof: [{ id: "proof-pending", status: "unknown" }] },
+    });
+  });
+
+  it("retains more than forty proof records without replacing history", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Long proof history" });
+    const proofIds: string[] = [];
+
+    for (let index = 0; index < 45; index += 1) {
+      const updated = await store.addProof(card.id, {
+        status: "passed",
+        label: `Proof ${index}`,
+      });
+      const proofId = updated.metadata?.proof?.at(-1)?.id;
+      if (!proofId) {
+        throw new Error("expected proof id");
+      }
+      proofIds.push(proofId);
+    }
+
+    const saved = await store.get(card.id);
+    expect(saved?.metadata?.proof?.map((proof) => proof.id)).toEqual(proofIds);
+    expect(saved?.events?.filter((event) => event.kind === "proof_added")).toHaveLength(45);
+  });
+
+  it("rejects duplicate proof ids when creating a card", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = { id: "proof-duplicate", status: "passed" as const, createdAt: 1 };
+
+    await expect(
+      store.create({
+        title: "Reject ambiguous proof history",
+        metadata: { proof: [proof, { ...proof, createdAt: 2 }] },
+      }),
+    ).rejects.toThrow("card create cannot contain duplicate proof ids");
+    await expect(store.list()).resolves.toEqual([]);
+  });
+
+  it("rejects duplicate proof ids before a direct sqlite import writes the card", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-import-"));
+    const stores = createWorkboardSqliteStores({ dbPath: path.join(dir, "workboard.sqlite") });
+    const card: PersistedWorkboardCard["card"] = {
+      id: "card-duplicate-proof",
+      title: "Reject malformed import",
+      status: "todo",
+      priority: "normal",
+      labels: [],
+      position: 1000,
+      createdAt: 1,
+      updatedAt: 1,
+      metadata: {
+        proof: [
+          { id: "proof-duplicate", status: "passed", createdAt: 1 },
+          { id: "proof-duplicate", status: "failed", createdAt: 2 },
+        ],
+      },
+    };
+
+    try {
+      await expect(stores.cards.register(card.id, { version: 1, card })).rejects.toThrow(
+        "persisted card create cannot contain duplicate proof ids",
+      );
+      await expect(stores.cards.lookup(card.id)).resolves.toBeUndefined();
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pages memory proof history and rejects projected create, update, and bulk inputs", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = Array.from({ length: 45 }, (_, index) => ({
+      id: `proof-${index}`,
+      status: "passed" as const,
+      createdAt: index + 1,
+      label: `Proof ${index}`,
+    }));
+    const card = await store.create({ title: "Projected writeback", metadata: { proof } });
+    const view = toBoundedWorkboardCard(card);
+
+    const first = await store.listProof(card.id, { limit: 10 });
+    const second = await store.listProof(card.id, { limit: 10, cursor: first.nextCursor });
+    expect(first).toMatchObject({ total: 45, hasMore: true });
+    expect(first.proof.map((entry) => entry.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `proof-${index + 35}`),
+    );
+    expect(second.proof.map((entry) => entry.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `proof-${index + 25}`),
+    );
+    const foreign = await store.create({
+      title: "Same proof ids on another card",
+      metadata: { proof },
+    });
+    await expect(
+      store.listProof(foreign.id, { limit: 10, cursor: first.nextCursor }),
+    ).rejects.toThrow("proof cursor does not belong to this card");
+
+    await expect(store.create(view as never)).rejects.toThrow(
+      "projected Workboard cards are read-only",
+    );
+    await expect(store.update(card.id, view as never)).rejects.toThrow(
+      "projected Workboard cards are read-only",
+    );
+    await expect(store.bulkUpdate({ ids: [card.id], patch: view })).rejects.toThrow(
+      "projected Workboard cards are read-only",
+    );
+    await expect(store.bulkUpdate({ ...view, ids: [card.id] } as never)).rejects.toThrow(
+      "projected Workboard cards are read-only",
+    );
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: { proof },
+    });
+  });
+
+  it("keeps a single oversized proof canonical when model-safe paging rejects it", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = {
+      id: `proof-${"x".repeat(WORKBOARD_MODEL_OUTPUT_BYTES)}`,
+      status: "passed" as const,
+      createdAt: 1,
+      label: "Oversized id",
+    };
+    const card = await store.create({
+      title: "Oversized embedded proof",
+      metadata: { proof: [proof] },
+    });
+
+    const view = toBoundedWorkboardCard(card);
+    expect(view.metadata?.proof).toBeUndefined();
+    expect(view.proofPage).toEqual({ total: 1, hasMore: true });
+
+    await expect(store.listProof(card.id)).rejects.toThrow(
+      "proof record exceeds the model-safe page budget",
+    );
+    await expect(store.get(card.id)).resolves.toMatchObject({ metadata: { proof: [proof] } });
+    await expect(store.exportCards()).resolves.toMatchObject({
+      cards: [{ id: card.id, metadata: { proof: [proof] } }],
+    });
+  });
+
+  it("pages sqlite proof directly with stable cursors across append, resolution, and reopen", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-pages-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    let cardId = "";
+    let cursor = "";
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const proof = Array.from({ length: 45 }, (_, index) => ({
+        id: `proof-${index}`,
+        status: index === 44 ? ("unknown" as const) : ("passed" as const),
+        createdAt: index + 1,
+        label: `Proof ${index}`,
+      }));
+      const card = await store.create({ title: "SQLite proof pages", metadata: { proof } });
+      cardId = card.id;
+      const first = await store.listProof(card.id, { limit: 10 });
+      cursor = first.nextCursor ?? "";
+      expect(first.proof.map((entry) => entry.id)).toEqual(
+        Array.from({ length: 10 }, (_, index) => `proof-${index + 35}`),
+      );
+      expect(first).toMatchObject({ total: 45, hasMore: true });
+
+      await store.addProof(card.id, { status: "passed", label: "Proof 45" });
+      await store.complete(card.id, {
+        proofId: "proof-44",
+        proof: { status: "passed", label: "Proof 44" },
+      });
+      const second = await store.listProof(card.id, { limit: 10, cursor });
+      expect(second.proof.map((entry) => entry.id)).toEqual(
+        Array.from({ length: 10 }, (_, index) => `proof-${index + 25}`),
+      );
+      expect(second.total).toBe(46);
+
+      const foreign = await store.create({
+        title: "Foreign cursor",
+        metadata: {
+          proof: [
+            { id: "foreign-0", status: "passed", createdAt: 1 },
+            { id: "foreign-1", status: "passed", createdAt: 2 },
+          ],
+        },
+      });
+      const foreignCursor = (await store.listProof(foreign.id, { limit: 1 })).nextCursor;
+      await expect(store.listProof(card.id, { cursor: foreignCursor })).rejects.toThrow(
+        "proof cursor does not belong to this card",
+      );
+      await expect(store.listProof(card.id, { limit: 41 })).rejects.toThrow(
+        "limit must be an integer from 1 to 40",
+      );
+
+      stores.cards.lookup = async () => {
+        throw new Error("full card hydration is not allowed for sqlite proof pages");
+      };
+      await expect(store.listProof(card.id, { limit: 1 })).resolves.toMatchObject({
+        total: 46,
+        proof: [expect.objectContaining({ label: "Proof 45" })],
+      });
+    } finally {
+      stores.close();
+    }
+
+    const reopenedStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const reopened = new WorkboardStore(reopenedStores.cards, {
+        boards: reopenedStores.boards,
+        subscriptions: reopenedStores.subscriptions,
+        attachments: reopenedStores.attachments,
+      });
+      const page = await reopened.listProof(cardId, { limit: 10, cursor });
+      expect(page.proof.map((entry) => entry.id)).toEqual(
+        Array.from({ length: 10 }, (_, index) => `proof-${index + 25}`),
+      );
+      const canonical = await reopened.get(cardId);
+      expect(canonical?.metadata?.proof).toHaveLength(46);
+      expect(canonical?.metadata?.proof?.find((entry) => entry.id === "proof-44")?.status).toBe(
+        "passed",
+      );
+      expect(canonical).not.toHaveProperty("proofPage");
+    } finally {
+      reopenedStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("builds bounded sqlite card views without hydrating canonical proof history", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-bounded-views-"));
+    const stores = createWorkboardSqliteStores({ dbPath: path.join(dir, "workboard.sqlite") });
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      await store.upsertBoard({ id: "planning", name: "Planning" });
+      const proof = Array.from({ length: 100 }, (_, index) => ({
+        id: `proof-${index}`,
+        status: "passed" as const,
+        createdAt: index + 1,
+        label: `Proof ${index}`,
+      }));
+      const card = await store.create({
+        title: "Bounded SQLite view",
+        boardId: "planning",
+        metadata: { proof },
+      });
+      const parent = await store.create({
+        title: "Older noted proof",
+        boardId: "planning",
+        status: "done",
+        metadata: {
+          proof: Array.from({ length: 45 }, (_, index) => ({
+            id: `parent-proof-${index}`,
+            status: "passed" as const,
+            createdAt: index + 1,
+            ...(index === 0 ? { note: "Durable result older than the bounded window." } : {}),
+          })),
+        },
+      });
+      const child = await store.create({ title: "Context child", boardId: "planning" });
+      await store.linkCards(parent.id, child.id);
+      await store.create({ title: "Default board summary" });
+
+      stores.cards.entries = async () => {
+        throw new Error("canonical card entries must not back bounded sqlite views");
+      };
+      stores.cards.lookup = async () => {
+        throw new Error("canonical card lookup must not back bounded sqlite views");
+      };
+
+      const result = await store.listBoundedWithBoards({ boardId: "planning" });
+      expect(result.cards).toHaveLength(3);
+      expect(result.cards.find((entry) => entry.id === card.id)).toMatchObject({
+        id: card.id,
+        metadata: {
+          proof: Array.from({ length: 40 }, (_, index) =>
+            expect.objectContaining({ id: `proof-${index + 60}` }),
+          ),
+        },
+        proofPage: { total: 100, hasMore: true },
+      });
+      expect(result.boards).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "default", total: 1 }),
+          expect.objectContaining({ id: "planning", total: 3 }),
+        ]),
+      );
+      await expect(store.getBounded(card.id)).resolves.toMatchObject({
+        id: card.id,
+        proofPage: { total: 100, hasMore: true },
+      });
+      await expect(store.buildWorkerContext(card.id)).resolves.toContain("Proof 99");
+      await expect(store.buildWorkerContext(child.id)).resolves.toContain(
+        "Durable result older than the bounded window.",
+      );
+      await expect(store.list()).rejects.toThrow(
+        "canonical card entries must not back bounded sqlite views",
+      );
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits proof_added only when a genuinely new proof id is persisted", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Track proof identity", status: "running" });
+    const claimed = await store.claim(card.id, { ownerId: "main", token: "proof-token" });
+    const pending = await store.addProof(
+      card.id,
+      { command: "node scripts/run-vitest.mjs extensions/workboard/src/store.test.ts" },
+      { ownerId: "main", token: claimed.token },
+    );
+    const proofId = pending.metadata?.proof?.at(-1)?.id;
+    if (!proofId) {
+      throw new Error("expected proof id");
+    }
+    const proofEventsBefore =
+      pending.events?.filter((event) => event.kind === "proof_added").length ?? 0;
+
+    const completed = await store.complete(card.id, {
+      ownerId: "main",
+      token: claimed.token,
+      proofId,
+      proof: {
+        status: "passed",
+        command: "node scripts/run-vitest.mjs extensions/workboard/src/store.test.ts",
+      },
+    });
+    expect(completed.events?.filter((event) => event.kind === "proof_added")).toHaveLength(
+      proofEventsBefore,
+    );
+
+    const commented = await store.addComment(card.id, { body: "Unrelated follow-up." });
+    expect(commented.events?.filter((event) => event.kind === "proof_added")).toHaveLength(
+      proofEventsBefore,
+    );
+    await expect(
+      store.update(card.id, {
+        metadata: { ...commented.metadata, proof: [] },
+      }),
+    ).rejects.toThrow(`card update cannot remove proof history: ${proofId}`);
+
+    const appended = await store.addProof(card.id, { status: "passed", label: "Second proof" });
+    expect(appended.events?.filter((event) => event.kind === "proof_added")).toHaveLength(
+      proofEventsBefore + 1,
+    );
+    expect(appended.metadata?.proof?.map((proof) => proof.id)).toEqual([
+      proofId,
+      expect.any(String),
+    ]);
+  });
+
+  it("retains proof across UTF-8 metadata pressure", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Unicode proof retention" });
+    const proven = await store.addProof(card.id, {
+      status: "passed",
+      note: "Proof before multi-byte comments.",
+    });
+    const proofIds = proven.metadata?.proof?.map((proof) => proof.id);
+
+    for (let index = 0; index < 8; index += 1) {
+      await store.addComment(card.id, {
+        body: `${index} ${"🧪".repeat(900)}`,
+      });
+    }
+
+    const saved = await store.get(card.id);
+    expect(Buffer.byteLength(JSON.stringify(saved?.metadata), "utf8")).toBeGreaterThan(24 * 1024);
+    expect(saved?.metadata?.proof?.map((proof) => proof.id)).toEqual(proofIds);
+  });
+
+  it("serializes concurrent comment and proof appends without losing either", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Concurrent proof append" });
+
+    await Promise.all([
+      store.addProof(card.id, { status: "passed", label: "Concurrent proof" }),
+      store.addComment(card.id, { body: `Concurrent comment ${"x".repeat(1800)}` }),
+    ]);
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: {
+        proof: [expect.objectContaining({ label: "Concurrent proof" })],
+        comments: [
+          expect.objectContaining({ body: expect.stringContaining("Concurrent comment") }),
+        ],
+      },
+    });
+  });
+
+  it("retries an inverse cross-connection comment and proof race without losing either", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cas-retry-"));
+    const readerStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    const writerStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    try {
+      const writer = new WorkboardStore(writerStores.cards, {
+        boards: writerStores.boards,
+        subscriptions: writerStores.subscriptions,
+        attachments: writerStores.attachments,
+      });
+      const card = await writer.create({ title: "Retry stale metadata append" });
+      const compareAndSwap = readerStores.cards.compareAndSwap?.bind(readerStores.cards);
+      if (!compareAndSwap) {
+        throw new Error("expected sqlite compare-and-swap support");
+      }
+      let attempts = 0;
+      readerStores.cards.compareAndSwap = async (key, expected, value) => {
+        attempts += 1;
+        if (attempts === 1) {
+          await writer.addComment(card.id, { body: "Comment committed before stale proof write." });
+        }
+        await compareAndSwap(key, expected, value);
+      };
+      const reader = new WorkboardStore(readerStores.cards, {
+        boards: readerStores.boards,
+        subscriptions: readerStores.subscriptions,
+        attachments: readerStores.attachments,
+      });
+
+      await reader.addProof(card.id, { status: "passed", label: "Retried proof" });
+
+      expect(attempts).toBe(2);
+      await expect(writer.get(card.id)).resolves.toMatchObject({
+        metadata: {
+          comments: [
+            expect.objectContaining({ body: "Comment committed before stale proof write." }),
+          ],
+          proof: [expect.objectContaining({ label: "Retried proof", status: "passed" })],
+        },
+      });
+    } finally {
+      writerStores.close();
+      readerStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a proof-first cross-connection comment append without losing either", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-first-retry-"));
+    const commentStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    const proofStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    try {
+      const proofWriter = new WorkboardStore(proofStores.cards, {
+        boards: proofStores.boards,
+        subscriptions: proofStores.subscriptions,
+        attachments: proofStores.attachments,
+      });
+      const card = await proofWriter.create({ title: "Retry stale comment append" });
+      const compareAndSwap = commentStores.cards.compareAndSwap?.bind(commentStores.cards);
+      if (!compareAndSwap) {
+        throw new Error("expected sqlite compare-and-swap support");
+      }
+      let attempts = 0;
+      commentStores.cards.compareAndSwap = async (key, expected, value) => {
+        attempts += 1;
+        if (attempts === 1) {
+          await proofWriter.addProof(card.id, { status: "passed", label: "Proof committed first" });
+        }
+        await compareAndSwap(key, expected, value);
+      };
+      const commentWriter = new WorkboardStore(commentStores.cards, {
+        boards: commentStores.boards,
+        subscriptions: commentStores.subscriptions,
+        attachments: commentStores.attachments,
+      });
+
+      await commentWriter.addComment(card.id, { body: "Retried comment" });
+
+      expect(attempts).toBe(2);
+      await expect(proofWriter.get(card.id)).resolves.toMatchObject({
+        metadata: {
+          comments: [expect.objectContaining({ body: "Retried comment" })],
+          proof: [expect.objectContaining({ label: "Proof committed first", status: "passed" })],
+        },
+      });
+    } finally {
+      proofStores.close();
+      commentStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds stale metadata retries and leaves the canonical card unchanged", async () => {
+    const cards = createMemoryStore();
+    let attempts = 0;
+    cards.compareAndSwap = async (key) => {
+      attempts += 1;
+      throw new WorkboardStaleSnapshotError(key);
+    };
+    const store = new WorkboardStore(cards);
+    const card = await store.create({ title: "Bound stale retries" });
+
+    await expect(
+      store.addProof(card.id, { status: "passed", label: "Never persisted" }),
+    ).rejects.toBeInstanceOf(WorkboardStaleSnapshotError);
+
+    expect(attempts).toBe(3);
+    const saved = await store.get(card.id);
+    expect(saved?.id).toBe(card.id);
+    expect(saved?.metadata?.proof).toBeUndefined();
+  });
+
+  it("rolls back a stale sqlite snapshot that would erase a concurrent proof", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-race-"));
+    const readerStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    const writerStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    try {
+      const writer = new WorkboardStore(writerStores.cards, {
+        boards: writerStores.boards,
+        subscriptions: writerStores.subscriptions,
+        attachments: writerStores.attachments,
+      });
+      const card = await writer.create({ title: "Reject stale snapshot" });
+      const stale = await readerStores.cards.lookup(card.id);
+      if (!stale) {
+        throw new Error("expected stale card snapshot");
+      }
+      const proven = await writer.addProof(card.id, {
+        status: "passed",
+        label: "Concurrent proof",
+      });
+      const proofIds = proven.metadata?.proof?.map((proof) => proof.id);
+      const staleWrite = {
+        ...stale,
+        card: {
+          ...stale.card,
+          updatedAt: stale.card.updatedAt + 1,
+          metadata: {
+            ...stale.card.metadata,
+            comments: [{ id: "stale-comment", body: "Stale write", createdAt: Date.now() }],
+          },
+        },
+      };
+
+      await expect(readerStores.cards.register(card.id, staleWrite)).rejects.toBeInstanceOf(
+        WorkboardStaleSnapshotError,
+      );
+      const saved = await writer.get(card.id);
+      expect(saved?.metadata?.proof?.map((proof) => proof.id)).toEqual(proofIds);
+      expect(saved?.metadata?.comments).toBeUndefined();
+    } finally {
+      writerStores.close();
+      readerStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a stale sqlite snapshot that would revert a completed proof", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-status-race-"));
+    const readerStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    const writerStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    try {
+      const writer = new WorkboardStore(writerStores.cards, {
+        boards: writerStores.boards,
+        subscriptions: writerStores.subscriptions,
+        attachments: writerStores.attachments,
+      });
+      const card = await writer.create({ title: "Reject stale proof status" });
+      const pending = await writer.addProof(card.id, {
+        label: "Completion proof",
+        command: "verify result",
+      });
+      const proofId = pending.metadata?.proof?.[0]?.id;
+      if (!proofId) {
+        throw new Error("expected proof id");
+      }
+      const stalePending = await readerStores.cards.lookup(card.id);
+      if (!stalePending) {
+        throw new Error("expected pending proof snapshot");
+      }
+
+      await writer.complete(card.id, {
+        proofId,
+        proof: { status: "passed", label: "Completion proof", command: "verify result" },
+      });
+
+      await expect(readerStores.cards.register(card.id, stalePending)).rejects.toBeInstanceOf(
+        WorkboardStaleSnapshotError,
+      );
+      const terminal = await readerStores.cards.lookup(card.id);
+      if (!terminal?.card.metadata?.proof?.[0]) {
+        throw new Error("expected terminal proof snapshot");
+      }
+      const rewrittenEvidence = {
+        ...terminal,
+        card: {
+          ...terminal.card,
+          metadata: {
+            ...terminal.card.metadata,
+            proof: [{ ...terminal.card.metadata.proof[0], note: "Rewritten evidence" }],
+          },
+        },
+      };
+      await expect(readerStores.cards.register(card.id, rewrittenEvidence)).rejects.toThrow(
+        `persisted card update cannot rewrite proof evidence: ${proofId}`,
+      );
+      await expect(writer.get(card.id)).resolves.toMatchObject({
+        metadata: {
+          proof: [{ id: proofId, status: "passed", label: "Completion proof" }],
+        },
+      });
+    } finally {
+      writerStores.close();
+      readerStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects proof reordering because new proof history is append-only", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = [
+      { id: "proof-a", status: "passed" as const, createdAt: 1, label: "A" },
+      { id: "proof-b", status: "failed" as const, createdAt: 2, label: "B" },
+    ];
+    const card = await store.create({
+      title: "Append-only proof history",
+      metadata: { proof },
+    });
+
+    await expect(
+      store.update(card.id, {
+        metadata: { ...card.metadata, proof: [proof[1], proof[0]] },
+      }),
+    ).rejects.toThrow("card update must append new proof after existing history: proof-a");
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: { proof },
     });
   });
 
@@ -1387,7 +2217,7 @@ describe("WorkboardStore", () => {
     ]);
   });
 
-  it("keeps metadata under the keyed-store value budget", async () => {
+  it("keeps count-bounded comments above the former keyed-store byte budget", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Collect a lot of notes" });
 
@@ -1398,11 +2228,9 @@ describe("WorkboardStore", () => {
     }
 
     const saved = await store.get(card.id);
-    expect(Buffer.byteLength(JSON.stringify(saved?.metadata), "utf8")).toBeLessThanOrEqual(
-      24 * 1024,
-    );
+    expect(Buffer.byteLength(JSON.stringify(saved?.metadata), "utf8")).toBeGreaterThan(24 * 1024);
     expect(saved?.metadata?.comments?.at(-1)?.body).toContain("49 ");
-    expect(saved?.metadata?.comments?.length).toBeLessThan(50);
+    expect(saved?.metadata?.comments).toHaveLength(50);
   });
 
   it("records append events when metadata retention drops old comments", async () => {
@@ -3729,7 +4557,52 @@ describe("WorkboardStore", () => {
     ).rejects.toThrow(/title is required/);
 
     await expect(store.list()).resolves.toEqual([expect.objectContaining({ id: parent.id })]);
-    expect((await store.get(parent.id))?.metadata?.links).toBeUndefined();
+    await expect(store.get(parent.id)).resolves.toEqual(parent);
+  });
+
+  it("keeps the original failure after createDirect cleans up a partial parent link", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-create-cleanup-"));
+    const stores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    try {
+      const setup = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const parent = await setup.create({ title: "Parent" });
+      const compareAndSwap = stores.cards.compareAndSwap?.bind(stores.cards);
+      if (!compareAndSwap) {
+        throw new Error("expected sqlite compare-and-swap support");
+      }
+      let injected = false;
+      stores.cards.compareAndSwap = async (key, expected, value) => {
+        if (!injected && key !== parent.id) {
+          injected = true;
+          throw new Error("injected child link failure");
+        }
+        await compareAndSwap(key, expected, value);
+      };
+      const decomposer = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+
+      await expect(
+        decomposer.decompose(parent.id, {
+          children: [{ title: "Child whose link write fails" }],
+        }),
+      ).rejects.toThrow("injected child link failure");
+
+      expect(injected).toBe(true);
+      await expect(decomposer.list()).resolves.toEqual([parent]);
+      await expect(decomposer.get(parent.id)).resolves.toEqual(parent);
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rolls back links added to reused idempotent children when decomposition fails", async () => {
@@ -3759,6 +4632,74 @@ describe("WorkboardStore", () => {
         links: [expect.objectContaining({ type: "relates_to", targetCardId: parent.id })],
       },
     });
+  });
+
+  it("fails a decomposition rollback closed when a reused child changed externally", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-rollback-cas-"));
+    const decomposerStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    const writerStores = createWorkboardSqliteStores({
+      dbPath: path.join(dir, "workboard.sqlite"),
+    });
+    try {
+      const writer = new WorkboardStore(writerStores.cards, {
+        boards: writerStores.boards,
+        subscriptions: writerStores.subscriptions,
+        attachments: writerStores.attachments,
+      });
+      const parent = await writer.create({ title: "Parent" });
+      const existingChild = await writer.create({
+        title: "Existing child",
+        idempotencyKey: "rollback-child-key",
+      });
+      const compareAndSwap = decomposerStores.cards.compareAndSwap?.bind(decomposerStores.cards);
+      if (!compareAndSwap) {
+        throw new Error("expected sqlite compare-and-swap support");
+      }
+      const entries = decomposerStores.cards.entries.bind(decomposerStores.cards);
+      let childLinkPersisted = false;
+      let externalCommentPersisted = false;
+      decomposerStores.cards.compareAndSwap = async (key, expected, value) => {
+        await compareAndSwap(key, expected, value);
+        if (key === existingChild.id) {
+          childLinkPersisted = true;
+        }
+      };
+      decomposerStores.cards.entries = async () => {
+        if (childLinkPersisted && !externalCommentPersisted) {
+          externalCommentPersisted = true;
+          await writer.addComment(existingChild.id, { body: "External change during rollback." });
+        }
+        return await entries();
+      };
+      const decomposer = new WorkboardStore(decomposerStores.cards, {
+        boards: decomposerStores.boards,
+        subscriptions: decomposerStores.subscriptions,
+        attachments: decomposerStores.attachments,
+      });
+
+      await expect(
+        decomposer.decompose(parent.id, {
+          children: [
+            { title: "Existing child", idempotencyKey: "rollback-child-key" },
+            { notes: "Missing title" },
+          ],
+        }),
+      ).rejects.toBeInstanceOf(WorkboardStaleSnapshotError);
+
+      expect(externalCommentPersisted).toBe(true);
+      await expect(writer.get(existingChild.id)).resolves.toMatchObject({
+        metadata: {
+          comments: [expect.objectContaining({ body: "External change during rollback." })],
+          links: [expect.objectContaining({ type: "parent", targetCardId: parent.id })],
+        },
+      });
+    } finally {
+      writerStores.close();
+      decomposerStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("preserves parent child links when decomposition leaves the parent open", async () => {

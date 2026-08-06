@@ -1,11 +1,17 @@
 // Workboard tests cover tools plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
 import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
+
+const WORKBOARD_MODEL_OUTPUT_BYTES = 24 * 1024;
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -201,6 +207,7 @@ describe("workboard tools", () => {
     expect(claimed.card).toMatchObject({
       status: "running",
       metadata: { claim: { ownerId: "main", token: "[redacted]" } },
+      proofPage: { total: 0, hasMore: false },
     });
     const token = (claimed.token as string | undefined) ?? "";
 
@@ -211,6 +218,7 @@ describe("workboard tools", () => {
     );
     expect(heartbeat).toMatchObject({
       metadata: { comments: [expect.objectContaining({ body: "alive" })] },
+      proofPage: { total: 0, hasMore: false },
     });
 
     const read = readPayload(
@@ -224,7 +232,10 @@ describe("workboard tools", () => {
         .get("workboard_release")
         ?.execute("call-4", { id: "card-1", token, status: "review" }),
     );
-    expect(released).toMatchObject({ status: "review" });
+    expect(released).toMatchObject({
+      status: "review",
+      proofPage: { total: 0, hasMore: false },
+    });
     expect((released.metadata as { claim?: unknown } | undefined)?.claim).toBeUndefined();
 
     const list = readPayload(await byName.get("workboard_list")?.execute("call-5", {}));
@@ -235,6 +246,157 @@ describe("workboard tools", () => {
     expect(archivedList.cards).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "archived-1", archivedAt: 2 })]),
     );
+  });
+
+  it("hard-bounds proof in model card results while persistence stays canonical", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = Array.from({ length: 100 }, (_, index) => ({
+      id: `proof-${index}`,
+      status: "passed" as const,
+      createdAt: index + 1,
+      label: `Proof ${index}`,
+      note: "🧪".repeat(1000),
+    }));
+    const card = await store.create({ title: "Tool projection", metadata: { proof } });
+    const tools = new Map(
+      createWorkboardTools({
+        api: { runtime: {} } as unknown as OpenClawPluginApi,
+        store,
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+
+    const readParameters = tools.get("workboard_read")?.parameters as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    expect(readParameters?.properties).toHaveProperty("proofView");
+
+    const read = readPayload(await tools.get("workboard_read")?.execute("read", { id: card.id }));
+    const embeddedProof =
+      (read.card as { metadata?: { proof?: Array<{ id: string }> } }).metadata?.proof ?? [];
+    expect(embeddedProof.length).toBeGreaterThan(0);
+    expect(embeddedProof.length).toBeLessThan(40);
+    expect(embeddedProof.at(-1)?.id).toBe("proof-99");
+    expect(Buffer.byteLength(JSON.stringify(read.card), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
+    );
+    expect(read.card).toMatchObject({
+      proofPage: {
+        total: 100,
+        hasMore: true,
+        nextCursor: expect.any(String),
+      },
+    });
+    const explicitBoundedRead = readPayload(
+      await tools
+        .get("workboard_read")
+        ?.execute("read-explicit-bounded", { id: card.id, proofView: "bounded" }),
+    );
+    expect(explicitBoundedRead.card).toMatchObject({
+      proofPage: { total: 100, hasMore: true },
+    });
+    const olderCursor = (read.card as { proofPage: { nextCursor?: string } }).proofPage.nextCursor;
+    const oldestEmbeddedId = expectDefined(embeddedProof[0], "oldest embedded Workboard proof").id;
+
+    const commented = readPayload(
+      await tools.get("workboard_comment")?.execute("comment", {
+        id: card.id,
+        body: "Keep proof canonical.",
+      }),
+    );
+    const commentedProof = (commented.metadata as { proof?: unknown[] }).proof ?? [];
+    expect(commented).toMatchObject({ proofPage: { total: 100, hasMore: true } });
+    expect(commentedProof.length).toBeLessThan(40);
+    expect(Buffer.byteLength(JSON.stringify(commented), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
+    );
+
+    const added = readPayload(
+      await tools.get("workboard_proof")?.execute("proof", {
+        id: card.id,
+        status: "passed",
+        label: "Proof 100",
+      }),
+    );
+    expect(added.proofId).toEqual(expect.any(String));
+    const addedCard = added.card as {
+      metadata?: { proof?: unknown[] };
+      proofPage: { total: number; hasMore: boolean };
+    };
+    const addedProof = addedCard.metadata?.proof ?? [];
+    expect(addedCard.proofPage).toMatchObject({ total: 101, hasMore: true });
+    expect(addedProof.length).toBeLessThan(40);
+    expect(Buffer.byteLength(JSON.stringify(addedCard), "utf8")).toBeLessThanOrEqual(
+      WORKBOARD_MODEL_OUTPUT_BYTES,
+    );
+
+    const olderResult = await tools.get("workboard_proof_list")?.execute("proof-list-older", {
+      id: card.id,
+      limit: 40,
+      cursor: olderCursor,
+    });
+    const older = readPayload(olderResult);
+    const olderProof = older.proof as Array<{ id: string }>;
+    expect(older).toMatchObject({ total: 101, hasMore: true });
+    expect(olderProof.length).toBeGreaterThan(0);
+    expect(olderProof.length).toBeLessThan(40);
+    const olderText =
+      (olderResult as { content?: Array<{ text?: string }> }).content?.[0]?.text ?? "";
+    expect(Buffer.byteLength(olderText, "utf8")).toBeLessThanOrEqual(WORKBOARD_MODEL_OUTPUT_BYTES);
+    expect(olderProof).not.toContainEqual(expect.objectContaining({ id: oldestEmbeddedId }));
+    const newestOlderId = expectDefined(olderProof.at(-1), "newest older Workboard proof").id;
+    expect(Number(newestOlderId.split("-")[1])).toBe(Number(oldestEmbeddedId.split("-")[1]) - 1);
+
+    const canonical = await store.get(card.id);
+    expect(canonical?.metadata?.proof).toHaveLength(101);
+    expect(canonical).not.toHaveProperty("proofPage");
+  });
+
+  it("keeps default sqlite tool reads off canonical proof hydration", async () => {
+    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-tool-bounded-"));
+    const stores = createWorkboardSqliteStores({ dbPath: path.join(dir, "workboard.sqlite") });
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const card = await store.create({
+        title: "Bounded SQLite tool",
+        metadata: {
+          proof: Array.from({ length: 100 }, (_, index) => ({
+            id: `proof-${index}`,
+            status: "passed" as const,
+            createdAt: index + 1,
+            label: `Proof ${index}`,
+          })),
+        },
+      });
+      const tools = new Map(
+        createWorkboardTools({
+          api: { runtime: {} } as unknown as OpenClawPluginApi,
+          store,
+          context: { agentId: "main" } as never,
+        }).map((tool) => [tool.name, tool]),
+      );
+
+      stores.cards.lookup = async () => {
+        throw new Error("canonical lookup must not back bounded tool reads");
+      };
+      stores.cards.entries = async () => {
+        throw new Error("canonical entries must not back bounded tool reads");
+      };
+
+      const result = readPayload(
+        await tools.get("workboard_read")?.execute("sqlite-bounded", { id: card.id }),
+      );
+      expect(result.card).toMatchObject({ proofPage: { total: 100, hasMore: true } });
+      expect(result.workerContext).toContain("Proof 99");
+    } finally {
+      stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("can share one store across tool instances for claim coordination", async () => {
@@ -541,10 +703,19 @@ describe("workboard tools", () => {
         children: [{ title: "Child A" }, { title: "Child B" }],
       }),
     );
-    expect(decomposed.parent).toMatchObject({ status: "done" });
+    expect(decomposed.parent).toMatchObject({
+      status: "done",
+      proofPage: { total: 0, hasMore: false },
+    });
     expect(decomposed.children).toEqual([
-      expect.objectContaining({ title: "Child A" }),
-      expect.objectContaining({ title: "Child B" }),
+      expect.objectContaining({
+        title: "Child A",
+        proofPage: { total: 0, hasMore: false },
+      }),
+      expect.objectContaining({
+        title: "Child B",
+        proofPage: { total: 0, hasMore: false },
+      }),
     ]);
 
     const runs = readPayload(
@@ -621,7 +792,10 @@ describe("workboard tools", () => {
         status: "ready",
       }),
     );
-    expect(unclaimed.card).toMatchObject({ status: "ready" });
+    expect(unclaimed.card).toMatchObject({
+      status: "ready",
+      proofPage: { total: 0, hasMore: false },
+    });
 
     await store.claim(card.id, { ownerId: "agent-a", token: "test-auth-token" });
     await expect(

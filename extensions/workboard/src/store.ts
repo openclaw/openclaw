@@ -1,10 +1,16 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
-import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
+import type {
+  WorkboardAttachment,
+  WorkboardCard,
+  WorkboardProof,
+} from "@openclaw/workboard-contract";
+import { assertNotProjectedWorkboardCard, WORKBOARD_PROOF_VIEW_LIMIT } from "./card-output.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
@@ -37,11 +43,25 @@ import {
   metadataIsEmpty,
   normalizeBoardId,
   normalizeTimestamp,
-  trimMetadataToBudget,
+  removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
+
+function withProofHistory(card: WorkboardCard, proof: WorkboardProof[]): WorkboardCard {
+  const metadata =
+    card.metadata || proof.length > 0
+      ? {
+          ...card.metadata,
+          ...(proof.length > 0 ? { proof } : {}),
+        }
+      : undefined;
+  return {
+    ...card,
+    ...(metadata ? { metadata } : {}),
+  };
+}
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
@@ -171,6 +191,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async bulkUpdate(input: WorkboardBulkInput): Promise<{ cards: WorkboardCard[] }> {
+    assertNotProjectedWorkboardCard(input);
     const ids = Array.isArray(input.ids)
       ? input.ids.filter((id): id is string => typeof id === "string" && id.trim() !== "")
       : [];
@@ -181,6 +202,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       input.patch && typeof input.patch === "object" && !Array.isArray(input.patch)
         ? (input.patch as WorkboardCardPatch)
         : {};
+    assertNotProjectedWorkboardCard(patch);
     const cards: WorkboardCard[] = [];
     for (const id of ids) {
       const updated =
@@ -238,12 +260,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
           continue;
         }
-        const metadata = trimMetadataToBudget({ ...latest.metadata, diagnostics });
+        const metadata = removeUndefinedMetadataFields({ ...latest.metadata, diagnostics });
         const next = removeUndefinedCardFields({
           ...latest,
           metadata: metadataIsEmpty(metadata) ? undefined : metadata,
         });
-        await this.store.register(next.id, { version: 1, card: next });
+        await this.persistCard(next, latest);
         if (diagnostics.length > 0) {
           rows.push({ card: next, diagnostics });
         }
@@ -256,6 +278,23 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async buildWorkerContext(id: string): Promise<string> {
+    if (this.cardProofPageListReader) {
+      const entries = await this.cardProofPageListReader({ limit: WORKBOARD_PROOF_VIEW_LIMIT });
+      const target = entries.find((entry) => entry.card.id === id);
+      if (!target) {
+        throw new Error(`card not found: ${id}`);
+      }
+      const latestProofNoteByCardId = new Map(
+        entries.flatMap((entry) =>
+          entry.latestProofNote ? [[entry.card.id, entry.latestProofNote] as const] : [],
+        ),
+      );
+      return buildWorkerContext(
+        withProofHistory(target.card, target.proofPage.proof),
+        entries.map((entry) => entry.card),
+        latestProofNoteByCardId,
+      );
+    }
     const card = await this.get(id);
     if (!card) {
       throw new Error(`card not found: ${id}`);
@@ -273,7 +312,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       openKeyedStore({
         namespace: "workboard.cards",
         maxEntries: MAX_CARDS,
-      }) as WorkboardKeyedStore,
+      }) as WorkboardCardStore,
       {
         boards: openKeyedStore({
           namespace: "workboard.boards",

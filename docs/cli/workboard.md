@@ -30,6 +30,17 @@ The command reads and writes the same plugin-owned SQLite database used by the d
 
 Valid `status` values: `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`. Valid `priority` values: `low`, `normal`, `high`, `urgent`.
 
+## JSON card shapes
+
+Local `list --json`, `create --json`, `show --json`, and `move --json` read the
+canonical SQLite card directly. Their card JSON includes complete proof history
+and does not contain the output-only `proofPage` marker. Claim tokens are still
+redacted.
+
+Gateway-backed `dispatch --json` preserves the same complete-proof response
+contract. The Gateway also exposes explicitly bounded list views for clients
+that opt in with `proofView: "bounded"`; that mode is not used by the CLI.
+
 ## `list`
 
 ```bash
@@ -53,7 +64,10 @@ Columns are id prefix, status, priority, board id, optional agent id, and title.
 | `--include-archived` | Include archived cards in compact text output |
 | `--json`             | Print the full card list as machine JSON      |
 
-Compact text output hides archived cards by default so the CLI matches `/workboard list`. Pass `--include-archived` to show them. JSON output always keeps the full card list, including archived cards, for existing automation.
+Compact text output hides archived cards by default so the CLI matches
+`/workboard list`. Pass `--include-archived` to show them. JSON output always
+keeps the full card list, including archived cards and complete proof history,
+for existing automation. It does not add `proofPage`.
 
 ## `create`
 
@@ -72,7 +86,9 @@ openclaw workboard create "Write Workboard docs" --status ready --agent docs-age
 | `--labels <items>`      | Comma-separated labels                  |
 | `--json`                | Print the created card as machine JSON  |
 
-`create` writes directly to Workboard SQLite state. The card is immediately visible in the Control UI Workboard tab and to Workboard tools.
+`create` writes directly to Workboard SQLite state. The card is immediately
+visible in the Control UI Workboard tab and to Workboard tools. With `--json`,
+the created card uses the full-history local JSON shape described above.
 
 ## `show`
 
@@ -81,7 +97,10 @@ openclaw workboard show 7f4a2c10
 openclaw workboard show 7f4a2c10 --json
 ```
 
-Text output prints the compact card line and notes. JSON output returns the full card record, including execution metadata, attempts, comments, links, proof, artifacts, worker logs, protocol state, diagnostics, and automation metadata.
+Text output prints the compact card line and notes. JSON output returns the full
+card record, including execution metadata, attempts, comments, links, every
+canonical proof row, artifacts, worker logs, protocol state, diagnostics, and
+automation metadata. It does not include `proofPage`.
 
 Proof statuses in JSON are worker-reported outcomes. `passed` records the worker's
 self-assessment of the attached command or check; it is not an independent verification
@@ -95,6 +114,9 @@ openclaw workboard move 7f4a2c10 --status done --json
 ```
 
 `move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token; claim tokens remain scoped to agent-tool mutations and are redacted from JSON output.
+
+With `--json`, the moved card uses the same complete-proof, no-`proofPage`
+shape as other local commands.
 
 ## `dispatch`
 
@@ -136,7 +158,10 @@ Fallback output is explicit:
 gateway unavailable; data dispatch only: promoted=1 blocked=0
 ```
 
-JSON output includes the dispatch result. Gateway-backed dispatch can include `started` and `startFailures`; data-only fallback includes `gatewayUnavailable: true`. Claim tokens are redacted from card JSON output.
+JSON output includes the dispatch result. Gateway-backed dispatch can include
+`started` and `startFailures`; card-bearing arrays retain complete proof
+history. Data-only fallback includes `gatewayUnavailable: true`. Claim tokens
+are redacted from card JSON output.
 
 In the dashboard, the same dispatch result is shown as a short summary so an operator can see how many cards started, promoted, blocked, reclaimed, or failed without opening card details.
 

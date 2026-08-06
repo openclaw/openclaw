@@ -3,6 +3,7 @@ import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-cont
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "../api.js";
+import { redactClaimToken } from "./card-redaction.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import {
@@ -60,10 +61,14 @@ export function assertNoCursorAdvance(params: Record<string, unknown>) {
 export async function listWorkboardCards(
   store: WorkboardStore,
   boardId: unknown,
-  redactCard: (card: WorkboardCard) => WorkboardCard,
+  options: { bounded: boolean },
 ) {
+  if (options.bounded) {
+    const { cards, boards } = await store.listBoundedWithBoards({ boardId });
+    return { cards, boards, statuses: WORKBOARD_STATUSES };
+  }
   const [cards, { boards }] = await Promise.all([store.list({ boardId }), store.listBoards()]);
-  return { cards: cards.map(redactCard), boards, statuses: WORKBOARD_STATUSES };
+  return { cards: cards.map(redactClaimToken), boards, statuses: WORKBOARD_STATUSES };
 }
 
 export function resolveGatewayWorkboardWorkspaceAccess(params: {

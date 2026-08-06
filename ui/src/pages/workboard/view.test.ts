@@ -1960,6 +1960,7 @@ describe("renderWorkboard", () => {
     state.cards = [
       createWorkboardCard({
         title: "Metadata rich",
+        proofPage: { total: 100, hasMore: true, nextCursor: "proof-1" },
         metadata: {
           templateId: "plugin",
           attempts: [{ id: "run-1", status: "blocked", startedAt: 1, endedAt: 2 }],
@@ -2006,9 +2007,12 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Plugin");
     expect(container.textContent).toContain("1 failed");
     expect(container.textContent).toContain("1 comments");
-    expect(container.textContent).toContain("7 proof");
+    expect(container.textContent).toContain("100 proof");
     expect(container.textContent).toContain("stale");
     expect(container.textContent).not.toContain("Archived task");
+    const search = container.querySelector<HTMLInputElement>('input[type="search"]');
+    expect(search?.placeholder).toBe("Search cards and loaded proof");
+    expect(search?.title).toBe("Proof search covers the records currently loaded in this view.");
 
     container
       .querySelector<HTMLButtonElement>(".workboard-archive-toggle")
@@ -2023,7 +2027,10 @@ describe("renderWorkboard", () => {
     renderView();
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 attempts");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("1 links");
-    expect(container.querySelector(".workboard-detail")?.textContent).not.toContain("pnpm test 1");
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain(
+      "Latest 7 of 100 proof records",
+    );
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 1");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 7");
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "https://example.com/proof-7",
@@ -2040,6 +2047,73 @@ describe("renderWorkboard", () => {
     expect(container.querySelector(".workboard-detail")?.textContent).toContain(
       "Workspace: worktree /tmp/workboard proof",
     );
+  });
+
+  it("loads older proof from the card details drawer", async () => {
+    const request = vi.fn(async () => ({
+      proof: [{ id: "proof-1", status: "passed", command: "pnpm test 1", createdAt: 1 }],
+      total: 8,
+      hasMore: false,
+    }));
+    const { state, container, renderView } = createWorkboardView({
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    const card = createWorkboardCard({
+      proofPage: { total: 8, hasMore: true, nextCursor: "proof-2" },
+      metadata: {
+        proof: Array.from({ length: 7 }, (_, index) => ({
+          id: `proof-${index + 2}`,
+          status: "passed",
+          command: `pnpm test ${index + 2}`,
+          createdAt: index + 2,
+        })),
+      },
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    renderView();
+
+    buttonByText(container, "Load older proof")?.click();
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("workboard.cards.proof.list", {
+        id: card.id,
+        cursor: "proof-2",
+      });
+      expect(state.cards[0]?.metadata?.proof?.[0]?.id).toBe("proof-1");
+    });
+    renderView();
+
+    expect(container.querySelector(".workboard-detail")?.textContent).toContain("pnpm test 1");
+    expect(buttonByText(container, "Load older proof")).toBeNull();
+  });
+
+  it("keeps proof pagination failures visible in the card details drawer", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("Proof history unavailable");
+    });
+    const { state, container, renderView } = createWorkboardView({
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    const card = createWorkboardCard({
+      proofPage: { total: 2, hasMore: true, nextCursor: "proof-2" },
+      metadata: {
+        proof: [{ id: "proof-2", status: "passed", command: "pnpm test 2", createdAt: 2 }],
+      },
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    renderView();
+
+    buttonByText(container, "Load older proof")?.click();
+    await vi.waitFor(() => {
+      expect(state.proofLoadErrorsByCardId.get(card.id)).toBe("Proof history unavailable");
+    });
+    renderView();
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Proof history unavailable",
+    );
+    expect(buttonByText(container, "Load older proof")?.disabled).toBe(false);
   });
 
   it("filters cards by persisted boards and keeps empty archived boards selectable", () => {

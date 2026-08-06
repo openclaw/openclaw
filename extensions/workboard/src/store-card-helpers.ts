@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   WORKBOARD_STATUSES,
   type WorkboardAttemptStatus,
@@ -11,6 +12,7 @@ import {
   type WorkboardExecution,
   type WorkboardMetadata,
   type WorkboardNotification,
+  type WorkboardProof,
   type WorkboardRunAttempt,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
@@ -131,12 +133,54 @@ export function appendEvent(
   ].slice(-MAX_CARD_EVENTS);
 }
 
+function proofEvidence(proof: WorkboardProof): Omit<WorkboardProof, "status"> {
+  const { status: _status, ...evidence } = proof;
+  return evidence;
+}
+
+export function assertProofHistoryTransition(
+  existing: readonly WorkboardProof[] | undefined,
+  next: readonly WorkboardProof[] | undefined,
+  context = "card update",
+): void {
+  const existingEntries = existing ?? [];
+  const nextEntries = next ?? [];
+  const nextIds = new Set(nextEntries.map((proof) => proof.id));
+  if (nextIds.size !== nextEntries.length) {
+    throw new Error(`${context} cannot contain duplicate proof ids.`);
+  }
+  for (const [index, previous] of existingEntries.entries()) {
+    const current = nextEntries[index];
+    if (!current || !nextIds.has(previous.id)) {
+      throw new Error(`${context} cannot remove proof history: ${previous.id}`);
+    }
+    if (current.id !== previous.id) {
+      throw new Error(`${context} must append new proof after existing history: ${previous.id}`);
+    }
+    if (!isDeepStrictEqual(proofEvidence(previous), proofEvidence(current))) {
+      throw new Error(`${context} cannot rewrite proof evidence: ${previous.id}`);
+    }
+    const resolvesPendingProof = previous.status === "unknown" && current.status !== "unknown";
+    if (current.status !== previous.status && !resolvesPendingProof) {
+      throw new Error(`${context} cannot rewrite proof status: ${previous.id}`);
+    }
+  }
+}
+
 function latestMetadataIdChanged(
   existing: readonly { id: string }[] | undefined,
   next: readonly { id: string }[] | undefined,
 ): boolean {
   const latestId = next?.at(-1)?.id;
   return Boolean(latestId && latestId !== existing?.at(-1)?.id);
+}
+
+function metadataIdAdded(
+  existing: readonly { id: string }[] | undefined,
+  next: readonly { id: string }[] | undefined,
+): boolean {
+  const existingIds = new Set(existing?.map((entry) => entry.id));
+  return next?.some((entry) => !existingIds.has(entry.id)) ?? false;
 }
 
 export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
@@ -254,10 +298,7 @@ export function updateEvent(
   ) {
     return { kind: "link_added" };
   }
-  if (
-    (existing.metadata?.proof?.length ?? 0) !== (next.metadata?.proof?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.proof, next.metadata?.proof)
-  ) {
+  if (metadataIdAdded(existing.metadata?.proof, next.metadata?.proof)) {
     return { kind: "proof_added" };
   }
   if (
@@ -528,17 +569,19 @@ export function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";
 }
 
-function cardResultSummary(card: WorkboardCard): string | undefined {
+function cardResultSummary(card: WorkboardCard, latestProofNote?: string): string | undefined {
   return (
     card.metadata?.automation?.summary ??
     card.metadata?.comments?.findLast((comment) => comment.body.trim())?.body ??
-    card.metadata?.proof?.findLast((proof) => proof.note?.trim())?.note
+    card.metadata?.proof?.findLast((proof) => proof.note?.trim())?.note ??
+    latestProofNote
   );
 }
 
 export function buildWorkerContext(
   card: WorkboardCard,
   cards: readonly WorkboardCard[] = [],
+  latestProofNoteByCardId: ReadonlyMap<string, string> = new Map(),
 ): string {
   const lines = [
     `# Workboard card ${card.id}`,
@@ -626,7 +669,9 @@ export function buildWorkerContext(
     lines.push("", "## Parent results");
     for (const parent of parentResults) {
       lines.push(
-        `- ${parent.id} ${parent.title}: ${capText(cardResultSummary(parent), 500) ?? "done"}`,
+        `- ${parent.id} ${parent.title}: ${
+          capText(cardResultSummary(parent, latestProofNoteByCardId.get(parent.id)), 500) ?? "done"
+        }`,
       );
     }
   }
@@ -647,7 +692,9 @@ export function buildWorkerContext(
     lines.push("", `## Recent done work by ${card.agentId}`);
     for (const entry of recentAgentWork) {
       lines.push(
-        `- ${entry.id} ${entry.title}: ${capText(cardResultSummary(entry), 300) ?? "done"}`,
+        `- ${entry.id} ${entry.title}: ${
+          capText(cardResultSummary(entry, latestProofNoteByCardId.get(entry.id)), 300) ?? "done"
+        }`,
       );
     }
   }

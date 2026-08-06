@@ -19,6 +19,17 @@ import { WorkboardStore } from "./store.js";
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
 
+function readBoundedProofView(params: Record<string, unknown>): boolean {
+  const proofView = params.proofView;
+  if (proofView === undefined) {
+    return false;
+  }
+  if (proofView === "bounded") {
+    return true;
+  }
+  throw new Error('proofView must be "bounded" when provided.');
+}
+
 function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagnostics"]>>) {
   return {
     ...result,
@@ -45,7 +56,12 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.list",
     async ({ params: requestParams, respond }) => {
       try {
-        respond(true, await listWorkboardCards(store, requestParams.boardId, redactClaimToken));
+        respond(
+          true,
+          await listWorkboardCards(store, requestParams.boardId, {
+            bounded: readBoundedProofView(requestParams),
+          }),
+        );
       } catch (error) {
         respondError(respond, error);
       }
@@ -134,14 +150,38 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.proof",
     async ({ params: requestParams, respond }) => {
       try {
+        const card = await store.addProof(readId(requestParams), requestParams);
+        const proofId = card.metadata?.proof?.at(-1)?.id;
+        if (!proofId) {
+          throw new Error("proof was not retained in canonical card metadata.");
+        }
         respond(true, {
-          card: redactClaimToken(await store.addProof(readId(requestParams), requestParams)),
+          card: redactClaimToken(card),
+          proofId,
         });
       } catch (error) {
         respondError(respond, error);
       }
     },
     { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.proof.list",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(
+          true,
+          await store.listProof(readId(requestParams), {
+            cursor: requestParams.cursor,
+            limit: requestParams.limit,
+          }),
+        );
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
   );
 
   api.registerGatewayMethod(

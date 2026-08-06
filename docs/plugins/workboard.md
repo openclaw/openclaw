@@ -74,7 +74,7 @@ openclaw gateway restart
 | linked refs | optional task, run, session, or source URL                                                                    |
 | `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status) |
 
-Cards also carry compact metadata for attempts, comments, links, proof,
+Cards also carry metadata for attempts, comments, links, proof,
 artifacts, automation settings, attachments, worker logs, worker protocol
 state, claims, diagnostics, notifications, template id, archive state, and
 stale-session detection, plus a recent-events list (`created`, `edited`,
@@ -87,20 +87,74 @@ operator see how a card moved through the board without opening the linked
 session; it is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
-The plugin and Control UI use one Workboard card contract. Dashboard refreshes
-therefore preserve workspace provenance and authority, claim state, diagnostic
-actions, and notification sequence numbers instead of projecting a smaller
-UI-only copy of the card. Unknown diagnostic kinds, diagnostic severities, and
-notification kinds are ignored until both surfaces support them; they are never
-rewritten into another valid state.
+Workboard preserves workspace provenance and authority, claim state, diagnostic
+actions, and notification sequence numbers when it produces a card view.
+Unknown diagnostic kinds, diagnostic severities, and notification kinds are
+ignored until both surfaces support them; they are never rewritten into another
+valid state.
+
+### Proof history and card views
+
+Canonical proof history is lossless and append-only. Existing proof ids and
+order cannot change, and their timestamps and evidence fields are immutable. A
+pending `unknown` status may resolve to `passed`, `failed`, or `skipped`;
+duplicate ids and other attempts to rewrite or truncate history are rejected.
+
+Existing Gateway card responses retain complete proof history unless a client
+explicitly requests a bounded view. The model-facing `workboard_read` agent
+tool always uses the bounded view; older proof is available only through
+`workboard_proof_list`. Bounded card views keep canonical identity and current
+state plus the newest history that fits within a 24 KiB UTF-8 JSON budget. The
+budget covers the complete serialized card view, not only proof. Projection can
+omit older output-only history; it never changes SQLite rows or full-history
+exports.
+
+Every bounded card view includes top-level `proofPage`, including cards with no
+proof:
+
+```json
+{
+  "proofPage": {
+    "total": 92,
+    "hasMore": true,
+    "nextCursor": "opaque-proof-cursor"
+  }
+}
+```
+
+`total` is the canonical proof count. `hasMore` reports whether the view omitted
+proof, and `nextCursor` is an opaque token for requesting rows older than the
+oldest embedded proof. If one proof record is too large to embed, the view can
+contain no proof with `hasMore: true` and no cursor; start pagination without a
+cursor in that case.
+
+Explicit proof pages are limited by both 40 records and the same 24 KiB
+serialized-page budget. When bytes shorten a page, `hasMore` remains true and
+`nextCursor` resumes immediately before the oldest returned proof, so cursor
+traversal neither overlaps nor skips fitting records. A single legacy proof
+that cannot fit is retained canonically and produces an explicit size error
+instead of an oversized model result.
+
+Gateway `workboard.cards.list` returns complete proof history by default.
+Passing `{ "proofView": "bounded" }` opts into bounded card views without
+changing the existing response contract. Agent tool `workboard_read` always
+returns a bounded card view whether `proofView` is omitted or explicitly set to
+`"bounded"`; its separate worker context remains bounded. Use
+`workboard_proof_list` to page through older proof. All model-facing agent-tool
+card responses use the same bounded projection, so a later mutation cannot
+reintroduce complete proof history into model context. Existing Gateway card
+responses, Gateway `workboard.cards.export`, and local CLI JSON keep complete
+proof history and omit `proofPage`. `workboard_list` remains a compact summary
+without proof history. Claim tokens remain redacted on every card response.
 
 The open dashboard updates from `plugin.workboard.changed` invalidations. Each
-event contains only a store epoch and revision; the UI then rereads canonical
-cards through the normal `operator.read` RPC. Multiple revisions coalesce into
-one follow-up read. Workboard defers that read while a card is being dragged,
-edited, or written, then resumes after the local interaction finishes. A
-reconnect always performs a canonical reload. There is no routine full-card
-poll, and **Refresh** remains available as manual recovery.
+event contains only a store epoch and revision; the UI then rereads
+`workboard.cards.list` with `proofView: "bounded"` and `operator.read` access.
+Multiple
+revisions coalesce into one follow-up read. Workboard defers that read while a
+card is being dragged, edited, or written, then resumes after the local
+interaction finishes. A reconnect always performs a fresh reload. There is no
+routine full-card poll, and **Refresh** remains available as manual recovery.
 
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
@@ -142,7 +196,7 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `workboard_list`                                                                                                                                 | List compact cards with claim/diagnostic state; optional board filter.                                                                                                                    |
-| `workboard_read`                                                                                                                                 | Return one card plus bounded worker context (notes, attempts, comments, links, proof, artifacts, parent results, recent assignee work, active diagnostics).                               |
+| `workboard_read`                                                                                                                                 | Return one card with the newest bounded proof window, `proofPage` metadata, and bounded worker context.                                                                                   |
 | `workboard_create`                                                                                                                               | Create a card with optional parents, tenant, skills, board, workspace metadata, idempotency key, runtime limit, retry budget.                                                             |
 | `workboard_link`                                                                                                                                 | Link a parent to a child card. Children stay `todo` until every parent reaches `done`, then dispatch promotion moves them to `ready`.                                                     |
 | `workboard_claim`                                                                                                                                | Claim a card for the calling agent; moves `backlog`/`todo`/`ready` into `running`.                                                                                                        |
@@ -159,6 +213,7 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_boards` / `workboard_stats`                                                                                                           | Inspect board namespaces and queue stats.                                                                                                                                                 |
 | `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                           |
 | `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                    |
+| `workboard_proof_list`                                                                                                                           | Page backward through a card's complete proof history.                                                                                                                                    |
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
@@ -172,6 +227,19 @@ pending record is resolved in place without losing its identity or timestamp. A 
 already has the same terminal status is reused unchanged. Completion proof without
 `proofId` remains append-only, so a later retry cannot rewrite older history merely because
 its command or note is identical.
+
+`workboard_read` accepts `{ id, token?, proofView? }`. Omitting `proofView` and
+setting it to `bounded` both return `proofPage` plus the newest proof window.
+Use `workboard_proof_list` for older proof.
+
+`workboard_proof_list` accepts `{ id, cursor?, limit? }` and returns
+`{ proof, total, hasMore, nextCursor? }`. The default and maximum limit is 40;
+the limit must be an integer from 1 through 40. Omit `cursor` for the newest
+page. When `nextCursor` is present, pass it unchanged to request older rows.
+The cursor is opaque and card-scoped; empty cursors and cursors from another
+card fail explicitly. Each page is returned in canonical chronological order.
+Because proof ids and order are immutable, a cursor remains stable when newer
+proof is appended or an `unknown` status resolves.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
@@ -282,10 +350,13 @@ openclaw workboard dispatch [--board <id>] [--json]
 
 `list` text output hides archived cards by default (`--include-archived`
 overrides); `--json` always includes archived cards, matching the full-card
-contract used by existing scripts. `show` and `move` accept an unambiguous id
-prefix. `list`, `create`, `show`, and `move` always read/write local plugin
-state directly. Only `dispatch` calls the running Gateway, with the fallback
-described above.
+contract used by existing scripts. Local JSON `list`, `create`, `show`, and
+`move`, plus Gateway-backed `dispatch`, include complete proof history and no
+`proofPage`. Gateway `workboard.cards.export` is the separate full-history
+export path. `show` and
+`move` accept an unambiguous id prefix. `list`, `create`, `show`, and `move`
+always read/write local plugin state directly. Only `dispatch` calls the
+running Gateway, with the fallback described above.
 
 See [Workboard CLI](/cli/workboard) for full flags, JSON output, Gateway
 fallback behavior, id-prefix handling, dispatch selection rules, and
@@ -349,6 +420,12 @@ the template id is stored as card metadata.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually
    move the card to `done` when accepted.
 
+Proof badges and the missing-proof view use `proofPage.total`, not only the
+embedded array length. When older history is omitted, card details label the
+section **Latest N of M proof records** and provide **Load older proof**. Each
+click retrieves the next older page through `workboard.cards.proof.list` and
+adds it to the searchable card view without changing canonical proof history.
+
 ### Session-board widgets
 
 Workboard ships two native widgets for session dashboards (see
@@ -383,7 +460,7 @@ Gateway RPC methods live under `workboard.*`:
 
 | Scope            | Methods                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`  | `cards.list`, `cards.export`, `cards.diagnostics`, attachment list/get, notification event reads, `boards.list`, `cards.stats`, `cards.runs`                                                                                                                                                                                                                                       |
+| `operator.read`  | `cards.list`, `cards.export`, `cards.proof.list`, `cards.diagnostics`, attachment list/get, notification event reads, `boards.list`, `cards.stats`, `cards.runs`                                                                                                                                                                                                                   |
 | `operator.write` | `cards.diagnostics.refresh`, create/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
 
 No RPC method requires `operator.admin`. Browsers connected with read-only
@@ -399,6 +476,9 @@ attachment metadata and blobs, diagnostics, notifications, worker logs,
 protocol state, and subscriptions all live in Workboard tables (not
 plugin key-value entries). A card export preserves the board narrative
 without inlining attachment blob contents.
+
+SQLite retains every canonical proof row. Output projection changes only the
+serialized card view; it never trims persisted history or full-history exports.
 
 Installations that used Workboard in the `.28` release can run
 `openclaw doctor --fix` to migrate the shipped legacy plugin-state namespaces

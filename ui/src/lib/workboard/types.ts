@@ -1,7 +1,8 @@
 import type {
   WorkboardBoardSummary,
-  WorkboardCard,
+  WorkboardCard as CanonicalWorkboardCard,
   WorkboardPriority,
+  WorkboardProofPageInfo,
   WorkboardStatus,
   WorkboardTemplateId,
 } from "@openclaw/workboard-contract";
@@ -10,6 +11,12 @@ import type { TaskSummary } from "../tasks/task-summary.ts";
 
 export * from "@openclaw/workboard-contract";
 export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
+
+// List reads explicitly request projected cards; mutation responses, legacy
+// fixtures, and cached payloads can omit proofPage. Normalization fills it in.
+export type WorkboardCard = Omit<CanonicalWorkboardCard, "proofPage"> & {
+  proofPage?: WorkboardProofPageInfo;
+};
 
 type WorkboardLifecycleState =
   | "unlinked"
@@ -123,6 +130,8 @@ export type WorkboardUiState = {
   draftCommentBody: string;
   detailCardId: string | null;
   detailCommentBody: string;
+  proofLoadingCardIds: Set<string>;
+  proofLoadErrorsByCardId: Map<string, string>;
   busyCardIds: Set<string>;
   draggedCardId: string | null;
   syncingCardIds: Set<string>;
