@@ -150,6 +150,7 @@ export async function resolveGatewayIngressAttribution(params: {
   req: IncomingMessage;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
+  allowTailscale?: boolean;
   tailscaleWhois?: TailscaleWhoisLookup;
   tailscaleMode?: GatewayTailscaleIngressMode;
 }): Promise<GatewayIngressAttribution> {
@@ -170,9 +171,12 @@ export async function resolveGatewayIngressAttribution(params: {
   }
 
   if (remoteIsLoopback && hasProxyHeaders) {
+    const managedTailscaleMode =
+      params.tailscaleMode ?? readGatewayTailscaleIngressMode(req.socket.localPort);
     const tailscale = await resolveTailscaleIngress({
       req,
-      effectiveMode: params.tailscaleMode ?? readGatewayTailscaleIngressMode(req.socket.localPort),
+      effectiveMode:
+        managedTailscaleMode !== "off" || !params.allowTailscale ? managedTailscaleMode : "serve",
       tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
     });
     if (tailscale) {

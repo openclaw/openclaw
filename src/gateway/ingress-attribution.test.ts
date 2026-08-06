@@ -100,6 +100,27 @@ describe("gateway ingress attribution", () => {
     });
   });
 
+  it("recognizes manually managed Serve through verified WhoIs identity", async () => {
+    const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({
+        headers: {
+          ...proxyHeaders,
+          "x-forwarded-for": "100.64.0.10",
+          "tailscale-user-login": "owner@example.test",
+        },
+      }),
+      allowTailscale: true,
+      tailscaleWhois,
+    });
+
+    expect(tailscaleWhois).toHaveBeenCalledWith("100.64.0.10");
+    expect(attribution).toMatchObject({
+      kind: "tailscale-serve",
+      clientIp: "100.64.0.10",
+    });
+  });
+
   it("requires active Funnel provenance and the sanitized marker", async () => {
     const attributed = await resolveGatewayIngressAttribution({
       req: request({
