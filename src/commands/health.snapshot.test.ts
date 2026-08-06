@@ -510,6 +510,41 @@ describe("collectGatewayHealthSnapshot", () => {
     expect(timeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 
+  it("waits for a delayed account hook that settles inside its deadline", async () => {
+    vi.useFakeTimers();
+    const pluginId = "delayed-summary";
+    const account = { accountId: "default", enabled: true, configured: true };
+    const plugin: HealthTestPlugin = {
+      ...createChannelTestPluginBase({ id: pluginId, label: pluginId }),
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => account,
+        inspectAccount: () => account,
+        isConfigured: () => true,
+      },
+      status: {
+        buildChannelSummary: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 75));
+          return { configured: true, delayed: true };
+        },
+      },
+    };
+    healthPluginsForTest = [plugin];
+    testConfig = {};
+    testStore = {};
+
+    const run = getHealthSnapshot({ timeoutMs: 100 });
+    await vi.advanceTimersByTimeAsync(75);
+    const result = (await run).channels[pluginId]?.accounts?.default;
+
+    expect(result).toMatchObject({
+      accountId: "default",
+      configured: true,
+      delayed: true,
+    });
+    expect(result?.timedOut).toBeUndefined();
+  });
+
   it.each([
     "inspectAccount",
     "isConfigured",
