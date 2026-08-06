@@ -84,16 +84,21 @@ export async function persistSessionTranscriptTurn(
     throw new Error("Cannot patch session lifecycle without an expected session id");
   }
   const target = await resolveTranscriptTurnTarget(scope, options.config);
-  // Route through the guarded SQLite path when a real session entry is available
-  // to validate against, so a session-id rotation between resolve and append
-  // surfaces a visible session-rebound rejection instead of silently writing the
-  // stale transcript. Use the caller's session id (target.sessionId), not the
-  // resolved entry's — if a reset won before resolution, the entry already holds
-  // the replacement id and the guarded transaction must see the caller's old id
-  // to detect the mismatch. A sessionStore mirror does not exempt the caller —
-  // if it has a durable SQLite session entry + store path, the guard applies.
-  // Transcript-only scopes (no session entry) keep the legacy append below.
-  if (target.storePath && target.sessionKey && target.sessionEntry && target.sessionId) {
+  // Route through the guarded SQLite path when a durable (non-mirror) session
+  // entry is available to validate against, so a session-id rotation between
+  // resolve and append surfaces a visible session-rebound rejection instead of
+  // silently writing the stale transcript. Use the caller's session id
+  // (target.sessionId), not the resolved entry's. Mirror-only sessionStore
+  // scopes (entry from memory, not a persisted SQLite row) and transcript-only
+  // scopes (no session entry) keep the legacy append — the guarded transaction
+  // requires a persisted row to validate. (#119221)
+  if (
+    !scope.sessionStore &&
+    target.storePath &&
+    target.sessionKey &&
+    target.sessionEntry &&
+    target.sessionId
+  ) {
     return await persistExpectedSessionTranscriptTurn(
       { ...scope, storePath: target.storePath },
       {

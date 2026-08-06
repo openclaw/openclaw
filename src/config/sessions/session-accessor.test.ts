@@ -1156,14 +1156,14 @@ describe("session accessor seam", () => {
     );
   });
 
-  it("rejects a sessionStore-mirrored transcript turn when the session id rotates mid-append", async () => {
-    // Caller passes both sessionStore (in-memory mirror) and storePath (durable
-    // SQLite). The guarded path must still apply — a sessionStore mirror does
-    // not exempt the caller from identity validation.
+  it("keeps sessionStore-mirrored transcript turns on the legacy append path (#119221)", async () => {
+    // Mirror-only sessionStore callers (entry from memory, not a persisted
+    // SQLite row) must stay on the legacy append — the guarded transaction
+    // requires a persisted row to validate and would reject as session-rebound.
     const scope = {
       agentId: "main",
-      sessionId: "old-mirror-session",
-      sessionKey: "agent:main:mirror-rotate",
+      sessionId: "mirror-only-session",
+      sessionKey: "agent:main:mirror-only",
       storePath,
       sessionStore: {} as Record<string, import("./types.js").SessionEntry>,
     };
@@ -1175,29 +1175,16 @@ describe("session accessor seam", () => {
     const result = await persistSessionTranscriptTurn(scope, {
       messages: [
         {
-          message: { role: "user", content: "mirror-rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
-              { sessionKey: scope.sessionKey, storePath },
-              { sessionId: "new-mirror-session", updatedAt: Date.now() },
-            );
-            return true;
-          },
+          message: { role: "user", content: "mirror-only-hello", timestamp: Date.now() },
         },
       ],
       touchSessionEntry: true,
       updateMode: "none",
     });
 
-    expect(result.rejectedReason).toBe("session-rebound");
-    await expect(
-      loadTranscriptEvents({ ...scope, sessionId: "old-mirror-session" }),
-    ).resolves.not.toContainEqual(
-      expect.objectContaining({
-        type: "message",
-        message: expect.objectContaining({ content: "mirror-rotate-hello" }),
-      }),
-    );
+    // No session-rebound — the legacy append accepted the message.
+    expect(result.rejectedReason).toBeUndefined();
+    expect(result.appendedCount).toBe(1);
   });
 
   it("rejects a transcript turn when the session id rotates before target resolution", async () => {
