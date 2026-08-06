@@ -462,6 +462,13 @@ to tune its window, budget, cooldown, or enabled state. Group-level `allowBots`
 and `botLoopProtection` values follow the same exact-channel, wildcard, then
 account-level precedence as the other group policies.
 
+Older ClickClack responses may omit `author.kind`. Those messages intentionally
+remain on the legacy `allowFrom` path: `allowFrom: ["*"]` can admit them, and
+the bot-specific `allowBots` and bot-pair loop-protection checks do not apply
+because the server did not classify the author. Bot-specific restrictions
+therefore require a ClickClack server response that includes author
+classification.
+
 ### Configuration example
 
 ```json5
