@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
+import { stableStringify } from "@openclaw/normalization-core";
 import type { z } from "zod";
-import { stableStringify } from "../agents/stable-stringify.js";
 import {
   createRecoveryPointAcceptance,
   recoveryPointOwnerInventorySchema,
