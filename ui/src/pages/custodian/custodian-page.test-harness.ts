@@ -26,6 +26,8 @@ type TestCustodianPage = HTMLElement & {
 type ContextHarness = {
   context: ApplicationContext;
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
+  setRecoveryScopeReady: (ready: boolean) => void;
+  setGatewayUrl: (gatewayUrl: string) => void;
   setGatewayToken: (token: string) => void;
   setChannelsConnected: (connected: boolean) => void;
   setChannelsSnapshot: (snapshot: ChannelsStatusSnapshot | null) => void;
@@ -38,9 +40,17 @@ export function createContext(
   options: {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     channelsSnapshot?: ChannelsStatusSnapshot | null;
+    featureCapabilities?: string[];
+    recoveryScope?: string;
+    recoveryScopeReady?: boolean;
   } = {},
 ): ContextHarness {
-  const client = { request } as unknown as GatewayBrowserClient;
+  const clientState = {
+    request,
+    recoveryScope: options.recoveryScope ?? "",
+    recoveryScopeReady: options.recoveryScopeReady ?? true,
+  };
+  const client = clientState as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
@@ -50,7 +60,10 @@ export function createContext(
       type: "hello-ok" as const,
       protocol: 1,
       auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods },
+      features: {
+        methods,
+        ...(options.featureCapabilities ? { capabilities: options.featureCapabilities } : {}),
+      },
     },
     assistantAgentId: "main",
     sessionKey: "main",
@@ -134,10 +147,23 @@ export function createContext(
   return {
     context,
     setGatewaySnapshot: (patch) => {
+      if (patch.client && patch.client.recoveryScopeReady === undefined) {
+        Object.assign(patch.client, { recoveryScope: "", recoveryScopeReady: true });
+      }
       snapshot = { ...snapshot, ...patch };
       for (const listener of listeners) {
         listener(snapshot);
       }
+    },
+    setRecoveryScopeReady: (ready) => {
+      clientState.recoveryScopeReady = ready;
+      snapshot = { ...snapshot };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+    setGatewayUrl: (gatewayUrl) => {
+      connection.gatewayUrl = gatewayUrl;
     },
     setGatewayToken: (value) => {
       const credentials = { token: value };

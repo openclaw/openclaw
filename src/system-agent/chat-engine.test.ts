@@ -3445,6 +3445,32 @@ describe("OpenClaw chat wizard step payload", () => {
     expect(plain.step?.initialValue).toBe("123456:REAL-SECRET");
   });
 
+  it("snapshots only the sanitized active wizard step for reload recovery", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({
+          message: "Bot token",
+          initialValue: "REAL-SECRET",
+          sensitive: true,
+        });
+      },
+    });
+
+    const prompt = await engine.handle("connect telegram");
+    const snapshot = await engine.activeWizardStep();
+    expect(snapshot).toEqual(prompt.step);
+    expect(snapshot).not.toHaveProperty("initialValue");
+
+    const stepId = expectDefined(snapshot?.id, "expected an active wizard step");
+    await engine.cancelWizard({ stepId });
+    await expect(engine.activeWizardStep()).resolves.toBeUndefined();
+  });
+
   it("omits the wizard step outside an awaiting hosted wizard", async () => {
     useTempStateDir();
     const engine = new SystemAgentChatEngine({

@@ -91,6 +91,8 @@ describe("OpenClaw chat question protocol", () => {
 describe("OpenClaw chat history protocol", () => {
   it("accepts the default request and bounds explicit limits", () => {
     expect(validateSystemAgentChatHistoryParams({})).toBe(true);
+    expect(validateSystemAgentChatHistoryParams({ sessionId: "recover-session" })).toBe(true);
+    expect(validateSystemAgentChatHistoryParams({ sessionId: "" })).toBe(false);
     expect(validateSystemAgentChatHistoryParams({ limit: 1 })).toBe(true);
     expect(validateSystemAgentChatHistoryParams({ limit: 500 })).toBe(true);
     expect(validateSystemAgentChatHistoryParams({ limit: 0 })).toBe(false);
@@ -111,6 +113,23 @@ describe("OpenClaw chat history protocol", () => {
         turns: [{ role: "tool", text: "hidden", at: 1 }],
       }),
     ).toBe(false);
+  });
+
+  it("accepts an optional sanitized active wizard snapshot", () => {
+    expect(
+      Value.Check(SystemAgentChatHistoryResultSchema, {
+        turns: [],
+        activeWizard: {
+          sessionId: "recover-session",
+          step: {
+            id: "secret",
+            type: "text",
+            message: "Twitch client secret",
+            sensitive: true,
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });
 

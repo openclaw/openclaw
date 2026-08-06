@@ -40,6 +40,7 @@ vi.mock("../../system-agent/greeting.js", () => ({
 }));
 
 type FakeEngine = {
+  activeWizardStep: ReturnType<typeof vi.fn>;
   answerWizard: ReturnType<typeof vi.fn>;
   cancelWizard: ReturnType<typeof vi.fn>;
   handle: ReturnType<typeof vi.fn>;
@@ -55,6 +56,7 @@ type FakeEngine = {
 
 function makeEngine(): FakeEngine {
   return {
+    activeWizardStep: vi.fn(async () => undefined),
     answerWizard: vi.fn(async () => {
       throw new SystemAgentWizardAnswerError("No hosted wizard is awaiting an answer.");
     }),

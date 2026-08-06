@@ -3,6 +3,7 @@ import type {
   SystemAgentChatQuestion,
   SystemAgentWizardCancel,
   WizardAnswer,
+  WizardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
@@ -157,6 +158,7 @@ type GatewaySystemAgentSession = {
       sensitive?: boolean;
       question?: SystemAgentChatQuestion;
     }>;
+    activeWizardStep: () => Promise<WizardStep | undefined>;
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];

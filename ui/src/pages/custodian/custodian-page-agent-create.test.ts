@@ -20,7 +20,11 @@ type TestCustodianPage = HTMLElement & {
 };
 
 function createContext(request: ReturnType<typeof vi.fn>) {
-  const client = { request } as unknown as GatewayBrowserClient;
+  const client = {
+    request,
+    recoveryScope: "",
+    recoveryScopeReady: true,
+  } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",

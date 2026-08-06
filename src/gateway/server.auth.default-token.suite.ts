@@ -175,6 +175,9 @@ export function registerDefaultAuthTokenSuite(): void {
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
       );
       expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_CHAT_HISTORY_SESSION_RECOVERY,
+      );
+      expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
       );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);

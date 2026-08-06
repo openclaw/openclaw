@@ -109,6 +109,8 @@ export const SystemAgentChatResultSchema = closedObject({
 
 export const SystemAgentChatHistoryParamsSchema = closedObject({
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, default: 100 })),
+  /** Exact volatile chat session to inspect for a reload-recoverable active wizard. */
+  sessionId: Type.Optional(NonEmptyString),
 });
 
 export const SystemAgentChatHistoryTurnSchema = closedObject({
@@ -119,6 +121,12 @@ export const SystemAgentChatHistoryTurnSchema = closedObject({
 
 export const SystemAgentChatHistoryResultSchema = closedObject({
   turns: Type.Array(SystemAgentChatHistoryTurnSchema),
+  activeWizard: Type.Optional(
+    closedObject({
+      sessionId: NonEmptyString,
+      step: WizardStepSchema,
+    }),
+  ),
 });
 
 export const SystemChangeKindSchema = Type.Union([

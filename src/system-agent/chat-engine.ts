@@ -803,6 +803,18 @@ export class SystemAgentChatEngine {
     return await turn;
   }
 
+  async activeWizardStep(): Promise<WizardStep | undefined> {
+    const snapshot = this.turnQueue.then(() => {
+      const step = this.wizardBridge?.step;
+      return step ? sanitizeWizardStepForClient(step) : undefined;
+    });
+    this.turnQueue = snapshot.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await snapshot;
+  }
+
   private async handleSerialized(
     text: string,
     options?: SystemAgentChatTurnOptions,

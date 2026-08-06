@@ -13,6 +13,7 @@ version and the additive schema surface. Dates are authoring dates (2026).
 - Remove dead protocol surfaces and add since-vintage metadata to retained schemas and methods.
 - Add optional `step` on `SystemAgentChatResult` carrying the full awaited wizard step.
 - Add typed Custodian wizard cancellation to `openclaw.chat`.
+- Add owner-bound active-wizard snapshots to Custodian chat history for reload recovery.
 
 ## Protocol v4 (current)
 

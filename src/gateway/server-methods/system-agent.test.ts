@@ -787,9 +787,18 @@ describe("openclaw.chat", () => {
     transcriptStoreMocks.readTranscriptTail.mockImplementation((limit: number) =>
       turns.slice(-limit),
     );
-    const invoke = async (params: Record<string, unknown>) => {
+    const invoke = async (
+      params: Record<string, unknown>,
+      context = makeContext(new Map()),
+      client = defaultClient,
+    ) => {
       const { calls, respond } = makeRespond();
-      await systemAgentHandler("openclaw.chat.history")({ params, respond } as never);
+      await systemAgentHandler("openclaw.chat.history")({
+        params,
+        respond,
+        context,
+        client,
+      } as never);
       return calls[0];
     };
 
@@ -1037,9 +1046,11 @@ describe("openclaw.chat", () => {
     const second = callChat(context, { sessionId: "new-2" });
     await evictionStarted.promise;
     await waitOneTask();
+    const oldestPresentDuringEviction = sessions.has("oldest");
     releaseEviction.resolve();
     await Promise.all([first, second]);
 
+    expect(oldestPresentDuringEviction).toBe(false);
     expect(disposeOldest).toHaveBeenCalledOnce();
     expect(sessions.size).toBe(8);
     expect([sessions.has("new-1"), sessions.has("new-2")]).toEqual([true, true]);
