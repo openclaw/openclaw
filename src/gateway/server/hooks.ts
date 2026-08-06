@@ -316,15 +316,17 @@ export function createGatewayHooksRequestHandler(params: {
         const failureSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
         // Global-scope events land on the unscoped "global" key, which carries
         // no agent identity, so the scheduler cannot resolve a target from it
-        // and the queued failure event would sit unread. Carry the fresh
-        // default agent alongside the global key so the event is consumed.
+        // and the queued failure event would sit unread. Carry the explicit
+        // agent, or the fresh default agent, alongside the global key so the
+        // event is consumed. Use the recovered session key for the sentinel
+        // check: when initial event-key resolution fails (early config
+        // failure), hookEventSessionKey is absent but recovery still yields
+        // the global sentinel, and the wake must not lose its agent.
         const failureWakeAgentId =
           failureAgentId && hookEventSessionKey
             ? failureAgentId
-            : !failureAgentId &&
-                hookEventSessionKey &&
-                isUnscopedSessionKeySentinel(failureSessionKey)
-              ? resolveDefaultAgentId(getRuntimeConfig())
+            : isUnscopedSessionKeySentinel(failureSessionKey)
+              ? (failureAgentId ?? resolveDefaultAgentId(getRuntimeConfig()))
               : undefined;
         requestHeartbeat({
           source: "hook",
