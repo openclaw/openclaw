@@ -101,7 +101,7 @@ import type { MonitorSlackOpts } from "./types.js";
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
 
-function withSlackPresenceLifecycleSignal(
+function withSlackLifecycleSignal(
   fetchImpl: FetchFunction,
   lifecycleSignal: AbortSignal,
 ): FetchFunction {
@@ -130,6 +130,7 @@ const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 // Identity re-resolution after a failed startup auth.test. Without it, mention
 // detection stays disabled until the next socket restart, which a healthy
 // long-lived connection may never trigger.
+type SlackIdentityRecoveryOutcome = "adopted" | "not-blocked" | "retry" | "unrecoverable";
 const SLACK_IDENTITY_RECOVERY_POLICY = {
   initialMs: 10_000,
   maxMs: 600_000,
@@ -608,12 +609,27 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   monitorContextRef.current = ctx;
 
-  const recoverSlackIdentity = async (): Promise<boolean> => {
+  // Recovery auth must not outlive the provider. The startup auth client carries
+  // its own request timeout, so only a lifecycle-bound fetch signal cancels an
+  // in-flight attempt during teardown; the presence client below binds the same way.
+  const identityRecoveryAbort = new AbortController();
+  const identityRecoveryClientOptions = {
+    ...clientOptions,
+    fetch: withSlackLifecycleSignal(
+      clientOptions.fetch ?? globalThis.fetch,
+      identityRecoveryAbort.signal,
+    ),
+  };
+
+  const recoverSlackIdentity = async (): Promise<SlackIdentityRecoveryOutcome> => {
     if (ctx.identityHealth.lifecycle !== "blocked") {
-      return false;
+      return "not-blocked";
     }
     try {
-      const auth = await createSlackStartupAuthClient(token, clientOptions).auth.test();
+      const auth = await createSlackStartupAuthClient(
+        token,
+        identityRecoveryClientOptions,
+      ).auth.test();
       resolveSlackInstallationIdentity({
         enterpriseOrgInstall,
         auth,
@@ -631,19 +647,25 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           `[${account.accountId}] slack identity recovered; explicit mention detection enabled`,
         );
       }
-      return adopted;
-    } catch {
+      return adopted ? "adopted" : "retry";
+    } catch (err) {
+      // Revoked tokens and wrong token types need operator action, and the socket
+      // paths already treat them as terminal. Retrying them would issue auth
+      // requests for the life of the process.
+      if (isNonRecoverableSlackAuthError(err)) {
+        return "unrecoverable";
+      }
       // The transport stays usable while identity is degraded; the recovery loop
       // and socket (re)starts keep retrying.
-      return false;
+      return "retry";
     }
   };
 
   // A transient startup auth.test failure must not disable mention detection for
   // the life of the process: the onStarted hook below only re-resolves identity
   // when the socket (re)starts, so a stable connection never retries. Re-resolve
-  // with bounded backoff until identity adopts or the provider shuts down.
-  // Status output catches up on the next connect/disconnect publish.
+  // with bounded backoff until identity adopts, the failure proves terminal, or
+  // the provider shuts down.
   const runSlackIdentityRecoveryLoop = async () => {
     for (
       let attempt = 1;
@@ -658,7 +680,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       } catch {
         return;
       }
-      if (await recoverSlackIdentity()) {
+      const outcome = await recoverSlackIdentity();
+      if (outcome === "adopted") {
+        // Status is published per adoption, matching the Bolt-event and socket
+        // recovery paths. Without this a stable transport keeps reporting the
+        // blocked patch even though mention detection works again.
+        publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
+        return;
+      }
+      if (outcome === "unrecoverable") {
+        runtime.error?.(
+          `[${account.accountId}] slack identity recovery stopped due to non-recoverable auth error; ` +
+            "restart with valid credentials to restore explicit mention detection",
+        );
+        return;
+      }
+      if (outcome === "not-blocked") {
         return;
       }
     }
@@ -691,7 +728,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             { ...clientOptions, timeout: SLACK_PRESENCE_REQUEST_TIMEOUT_MS },
             slackDispatcher,
           );
-          options.fetch = withSlackPresenceLifecycleSignal(
+          options.fetch = withSlackLifecycleSignal(
             options.fetch ?? globalThis.fetch,
             presenceRequestAbort.signal,
           );
@@ -1027,6 +1064,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
   } finally {
+    identityRecoveryAbort.abort();
     presenceRequestAbort?.abort();
     await presenceMonitor?.stop();
     if (slackMode === "relay") {
