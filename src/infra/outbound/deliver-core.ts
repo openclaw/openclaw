@@ -245,6 +245,7 @@ export async function deliverOutboundPayloadsCore(
         sessionKey: diagnosticSessionKey,
       });
     };
+    let payloadDeliveryTarget: ReturnType<ChannelHandler["buildTargetRef"]> | undefined;
     try {
       throwIfAborted(abortSignal);
 
@@ -312,6 +313,7 @@ export async function deliverOutboundPayloadsCore(
           consumeImplicitReply: replyToResolution.source === "implicit",
         });
       const deliveryTarget = deliveryHandler.buildTargetRef({ threadId: sendOverrides.threadId });
+      payloadDeliveryTarget = deliveryTarget;
       if (
         deliveryHandler.sendPayload &&
         payloadRequiresDurablePayloadTransport(effectivePayload, {
@@ -339,6 +341,7 @@ export async function deliverOutboundPayloadsCore(
           index: payloadIndex,
           status: "sent",
           results: deliveredResults,
+          target: deliveryTarget,
         });
         recordDeliveredPayload(payloadSummary, deliveredResults);
         recordMessageSentEvent({
@@ -380,6 +383,7 @@ export async function deliverOutboundPayloadsCore(
             index: payloadIndex,
             status: "sent",
             results: deliveredResults,
+            target: deliveryTarget,
           });
           recordDeliveredPayload(payloadSummary, deliveredResults);
         } else {
@@ -437,6 +441,7 @@ export async function deliverOutboundPayloadsCore(
             index: payloadIndex,
             status: "sent",
             results: deliveredResults,
+            target: deliveryTarget,
           });
           recordDeliveredPayload(
             { ...payloadSummary, text: fallbackText, mediaUrls: [] },
@@ -506,6 +511,7 @@ export async function deliverOutboundPayloadsCore(
           index: payloadIndex,
           status: "sent",
           results: deliveredResults,
+          target: deliveryTarget,
         });
         recordDeliveredPayload(payloadSummary, deliveredResults);
       } else {
@@ -547,6 +553,7 @@ export async function deliverOutboundPayloadsCore(
         sentBeforeError: failedPayloadResults.length > 0,
         stage: "platform_send",
         results: failedPayloadResults,
+        ...(payloadDeliveryTarget ? { target: payloadDeliveryTarget } : {}),
       });
       errorDeliveryDiagnostics(err);
       // A completed provider send records success before optional pin/notify

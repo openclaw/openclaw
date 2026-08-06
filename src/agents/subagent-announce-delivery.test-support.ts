@@ -26,8 +26,17 @@ type DeliveryDeps = {
 type Testing = {
   setDepsForTest(overrides?: Partial<DeliveryDeps>): void;
   hasAnnounceSendEvidence(error: unknown): boolean;
+  hasTargetedAutomaticDeliveryEvidence(response: unknown, target: DeliveryTarget): boolean;
+  hasTargetedMessagingToolDeliveryEvidence(response: unknown, target: DeliveryTarget): boolean;
   hasSessionFileChangedAnnounceError(error: unknown): boolean;
   isSessionFileChangedAnnounceError(message: string): boolean;
+};
+
+type DeliveryTarget = {
+  channel?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string | number;
 };
 
 function getTesting(): Testing {
@@ -39,6 +48,10 @@ function getTesting(): Testing {
 export const testing: Testing = {
   setDepsForTest: (overrides) => getTesting().setDepsForTest(overrides),
   hasAnnounceSendEvidence: (error) => getTesting().hasAnnounceSendEvidence(error),
+  hasTargetedAutomaticDeliveryEvidence: (response, target) =>
+    getTesting().hasTargetedAutomaticDeliveryEvidence(response, target),
+  hasTargetedMessagingToolDeliveryEvidence: (response, target) =>
+    getTesting().hasTargetedMessagingToolDeliveryEvidence(response, target),
   hasSessionFileChangedAnnounceError: (error) =>
     getTesting().hasSessionFileChangedAnnounceError(error),
   isSessionFileChangedAnnounceError: (message) =>
