@@ -149,25 +149,26 @@ export function createClickClackClient(options: ClientOptions) {
   ): Promise<T> {
     const url = `${baseUrl}${path}`;
     const requestHeaders = new Headers(init.headers);
+    const isMultipartUpload = init.body instanceof FormData;
     for (const [key, value] of Object.entries(headers)) {
       requestHeaders.set(key, value);
     }
     if (correlationId) {
       requestHeaders.set(CLICKCLACK_CORRELATION_ID_HEADER, correlationId);
     }
-    if (init.body && !(init.body instanceof FormData)) {
+    if (init.body && !isMultipartUpload) {
       requestHeaders.set("Content-Type", "application/json");
     }
-    const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
-      timeoutMs: requestOptions.timeoutMs ?? CLICKCLACK_REST_REQUEST_TIMEOUT_MS,
+    // Large media uploads are exempt from the REST deadline; preserve only an
+    // explicit caller signal so slow healthy transfers are not cut off at 30s.
+    const { signal, cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: isMultipartUpload
+        ? undefined
+        : (requestOptions.timeoutMs ?? CLICKCLACK_REST_REQUEST_TIMEOUT_MS),
+      signal: init.signal ?? undefined,
       operation: "clickclack-rest",
       url,
     });
-    const callerSignal = init.signal ?? undefined;
-    const signal =
-      callerSignal && timeoutSignal
-        ? AbortSignal.any([callerSignal, timeoutSignal])
-        : (callerSignal ?? timeoutSignal);
     try {
       const response = await fetcher(url, { ...init, headers: requestHeaders, signal });
       if (!response.ok) {
