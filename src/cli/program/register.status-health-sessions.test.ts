@@ -193,6 +193,15 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("preserves an omitted timeout for status command ownership", async () => {
+    await runCli(["status", "--usage"]);
+
+    expectCommandOptions(statusCommand, {
+      usage: true,
+      timeoutMs: undefined,
+    });
+  });
+
   it("rejects invalid status timeout without calling status command", async () => {
     await runCli(["status", "--timeout", "nope"]);
 

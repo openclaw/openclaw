@@ -226,8 +226,8 @@ describe("collectGatewayHealthSnapshot hook deadlines", () => {
     expect(accounts?.["account-6"]).toMatchObject({
       accountId: "account-6",
       skipped: true,
-      timedOut: true,
     });
+    expect(accounts?.["account-6"]?.timedOut).toBeUndefined();
 
     releases[0]?.();
     await vi.advanceTimersByTimeAsync(0);

@@ -116,11 +116,9 @@ describe("Gateway RPC account health producer", () => {
       expect(proof.healthHookDeadlines.delayedCli.durationMs).toBeLessThanOrEqual(20_000);
       expect(proof.healthHookDeadlines.hangingRpc).toMatchObject({
         firstSkippedCount: 1,
-        firstStartedTimedOutCount: 5,
-        firstTimedOutCount: 6,
+        firstTimedOutCount: 5,
         secondSkippedCount: 6,
-        secondStartedTimedOutCount: 0,
-        secondTimedOutCount: 6,
+        secondTimedOutCount: 0,
       });
       expect(proof.healthHookDeadlines.hangingRpc.firstDurationMs).toBeGreaterThanOrEqual(9_000);
       expect(proof.healthHookDeadlines.hangingRpc.firstDurationMs).toBeLessThanOrEqual(16_000);

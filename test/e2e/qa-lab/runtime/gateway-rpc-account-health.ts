@@ -316,9 +316,7 @@ export async function main(argv = process.argv.slice(2)) {
         "delayed verbose health timed out a settling account",
       proof.healthHookDeadlines.delayedCli.skippedCount !== 0 &&
         "delayed verbose health skipped a settling account",
-      proof.healthHookDeadlines.hangingRpc.firstTimedOutCount !== 6 &&
-        "hanging health RPC did not mark every incomplete account as timed out",
-      proof.healthHookDeadlines.hangingRpc.firstStartedTimedOutCount !== 5 &&
+      proof.healthHookDeadlines.hangingRpc.firstTimedOutCount !== 5 &&
         "hanging health RPC did not time out exactly five admitted hooks",
       proof.healthHookDeadlines.hangingRpc.firstSkippedCount !== 1 &&
         "hanging health RPC did not skip the sixth hook after capacity remained occupied",
@@ -326,12 +324,10 @@ export async function main(argv = process.argv.slice(2)) {
         "hanging health RPC returned before the Gateway-owned hook deadline",
       proof.healthHookDeadlines.hangingRpc.firstDurationMs > 16_000 &&
         "hanging health RPC exceeded the bounded Gateway-owned hook deadline",
-      proof.healthHookDeadlines.hangingRpc.secondTimedOutCount !== 6 &&
-        "follow-up health RPC did not report every capacity-held account as timed out",
+      proof.healthHookDeadlines.hangingRpc.secondTimedOutCount !== 0 &&
+        "follow-up health RPC marked capacity-skipped accounts as timed out",
       proof.healthHookDeadlines.hangingRpc.secondSkippedCount !== 6 &&
         "follow-up health RPC started work while all channel hook slots remained occupied",
-      proof.healthHookDeadlines.hangingRpc.secondStartedTimedOutCount !== 0 &&
-        "follow-up health RPC admitted work while all channel hook slots remained occupied",
       proof.healthHookDeadlines.hangingRpc.secondDurationMs > 3_000 &&
         "follow-up health RPC was not bounded while all channel hook slots remained occupied",
     ].filter((value): value is string => Boolean(value));

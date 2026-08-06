@@ -28,12 +28,10 @@ export type HealthHookDeadlineProof = {
   hangingRpc: {
     firstDurationMs: number;
     firstSkippedCount: number;
-    firstStartedTimedOutCount: number;
     firstTimedOutCount: number;
     gatewayTrace: string;
     secondDurationMs: number;
     secondSkippedCount: number;
-    secondStartedTimedOutCount: number;
     secondTimedOutCount: number;
   };
 };
@@ -201,12 +199,6 @@ function countAccountState(accounts: Record<string, AccountState>, key: "skipped
   return Object.values(accounts).filter((account) => account[key] === true).length;
 }
 
-function countStartedTimeouts(accounts: Record<string, AccountState>) {
-  return Object.values(accounts).filter(
-    (account) => account.timedOut === true && account.skipped !== true,
-  ).length;
-}
-
 function boundedGatewayTrace(logs: string) {
   return logs.slice(-GATEWAY_TRACE_MAX_CHARS);
 }
@@ -271,12 +263,10 @@ async function runHangingHealthHookRpcProof(repoRoot: string, pluginDir: string)
     return {
       firstDurationMs,
       firstSkippedCount: countAccountState(firstAccounts, "skipped"),
-      firstStartedTimedOutCount: countStartedTimeouts(firstAccounts),
       firstTimedOutCount: countAccountState(firstAccounts, "timedOut"),
       gatewayTrace: boundedGatewayTrace(gateway.logs()),
       secondDurationMs,
       secondSkippedCount: countAccountState(secondAccounts, "skipped"),
-      secondStartedTimedOutCount: countStartedTimeouts(secondAccounts),
       secondTimedOutCount: countAccountState(secondAccounts, "timedOut"),
     };
   } catch (error) {

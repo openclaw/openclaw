@@ -455,6 +455,37 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("keeps the status default while preserving an omitted deep-health timeout", async () => {
+    await resolveStatusRuntimeSnapshot({
+      config: { gateway: {} },
+      sourceConfig: { gateway: {} },
+      usage: true,
+      deep: true,
+      gatewayReachable: true,
+      includeSecurityAudit: true,
+    });
+
+    expect(requireProviderUsageCall().timeoutMs).toBe(10_000);
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ deepTimeoutMs: 10_000 }),
+    );
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
+      method: "health",
+      params: { probe: true },
+      timeoutMs: null,
+      unboundedRequestCapability: GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+      config: { gateway: {} },
+    });
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(2, {
+      method: "last-heartbeat",
+      params: {},
+      timeoutMs: 10_000,
+      config: { gateway: {} },
+    });
+    expect(mocks.getDaemonStatusSummary).toHaveBeenCalledWith(10_000);
+    expect(mocks.getNodeDaemonStatusSummary).toHaveBeenCalledWith(10_000);
+  });
+
   it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {
     mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
 

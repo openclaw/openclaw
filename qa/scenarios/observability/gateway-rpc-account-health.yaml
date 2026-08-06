@@ -15,8 +15,8 @@ scenario:
     - Only the selected account configuration leaf changes.
     - The default sibling remains enabled and running while the disabled account is configured, stopped, and operator-visible.
     - Verbose health without an explicit CLI timeout completes all six delayed accounts after the legacy 10-second client deadline.
-    - A non-settling channel probe hook returns a partial health snapshot after the Gateway-owned deadline, retaining five occupied hook slots and skipping queued work.
-    - A follow-up authenticated health RPC starts no additional work while the five non-cancellable hook promises remain unsettled.
+    - A non-settling channel probe hook returns a partial health snapshot after the Gateway-owned deadline with five admitted accounts timed out and one queued account skipped.
+    - A follow-up authenticated health RPC returns six skipped accounts and zero timed-out accounts while the five non-cancellable hook promises remain unsettled.
   docsRefs:
     - docs/gateway/health.md
     - docs/gateway/protocol.md
