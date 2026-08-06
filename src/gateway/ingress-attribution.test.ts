@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { buildRateLimitIdentityKey, createAuthRateLimiter } from "./auth-rate-limit.js";
 import {
   createGatewayIngressAttributionDiagnostics,
   type GatewayIngressAttribution,
@@ -27,6 +27,7 @@ const proxyHeaders = {
   "x-forwarded-proto": "https",
   "x-forwarded-host": "gateway.example.test",
 };
+const managedProxyKey = buildRateLimitIdentityKey("managed-tailscale-proxy", "127.0.0.1");
 
 function serveIdentity(attribution: GatewayIngressAttribution) {
   if (attribution.kind !== "tailscale-serve") {
@@ -150,7 +151,7 @@ describe("gateway ingress attribution", () => {
       kind: "tailscale-serve",
       clientIp: "100.64.0.9",
       rateLimit: {
-        subject: { key: "127.0.0.1", exemption: "none" },
+        subject: { key: managedProxyKey, exemption: "none" },
         resetOnSuccess: false,
       },
     });
@@ -158,10 +159,28 @@ describe("gateway ingress attribution", () => {
       kind: "tailscale-serve",
       clientIp: "100.64.0.10",
       rateLimit: {
-        subject: { key: "127.0.0.1", exemption: "none" },
+        subject: { key: managedProxyKey, exemption: "none" },
         resetOnSuccess: false,
       },
     });
+  });
+
+  it("isolates managed proxy failures from direct-local success resets", async () => {
+    const managed = await resolveGatewayIngressAttribution({
+      req: request({ headers: proxyHeaders }),
+      tailscaleMode: "serve",
+    });
+    const direct = await resolveGatewayIngressAttribution({ req: request({}) });
+    if (managed.kind === "unattributable-proxy" || direct.kind === "unattributable-proxy") {
+      throw new Error("expected attributed ingress");
+    }
+
+    const limiter = createAuthRateLimiter({ maxAttempts: 1, pruneIntervalMs: 0 });
+    limiter.recordFailure(managed.rateLimit.subject);
+    expect(limiter.check(managed.rateLimit.subject).allowed).toBe(false);
+    limiter.reset(direct.rateLimit.subject);
+    expect(limiter.check(managed.rateLimit.subject).allowed).toBe(false);
+    limiter.dispose();
   });
 
   it("keeps tagged managed Serve clients eligible for shared-secret auth", async () => {
@@ -176,7 +195,7 @@ describe("gateway ingress attribution", () => {
       kind: "tailscale-serve",
       provenance: "managed-route",
       rateLimit: {
-        subject: { key: "127.0.0.1", exemption: "none" },
+        subject: { key: managedProxyKey, exemption: "none" },
         resetOnSuccess: false,
       },
     });
@@ -198,7 +217,7 @@ describe("gateway ingress attribution", () => {
       clientIp: "198.51.100.10",
       provenance: "managed-route",
       rateLimit: {
-        subject: { key: "127.0.0.1", exemption: "none" },
+        subject: { key: managedProxyKey, exemption: "none" },
         resetOnSuccess: false,
       },
     });
@@ -428,7 +447,7 @@ describe("gateway ingress attribution", () => {
       kind: "tailscale-funnel",
       clientIp: "198.51.100.10",
       rateLimit: {
-        subject: { key: "127.0.0.1", exemption: "none" },
+        subject: { key: managedProxyKey, exemption: "none" },
         resetOnSuccess: false,
       },
     });
@@ -436,7 +455,7 @@ describe("gateway ingress attribution", () => {
       kind: "tailscale-funnel",
       clientIp: "198.51.100.11",
       rateLimit: {
-        subject: { key: "127.0.0.1", exemption: "none" },
+        subject: { key: managedProxyKey, exemption: "none" },
         resetOnSuccess: false,
       },
     });

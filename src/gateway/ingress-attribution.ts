@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
-import type { AuthRateLimitSubject } from "./auth-rate-limit.js";
+import { buildRateLimitIdentityKey, type AuthRateLimitSubject } from "./auth-rate-limit.js";
 import {
   hasForwardedRequestHeaders,
   isLoopbackAddress,
@@ -165,6 +165,16 @@ function unattributableProxy(remoteAddress: string): GatewayIngressAttribution {
   };
 }
 
+function managedTailscaleProxySubject(req: IncomingMessage): AuthRateLimitSubject {
+  return {
+    key: buildRateLimitIdentityKey(
+      "managed-tailscale-proxy",
+      req.socket.remoteAddress ?? "unknown",
+    ),
+    exemption: "none",
+  };
+}
+
 function resolveTailscaleForwardedClient(req: IncomingMessage): string | undefined {
   return resolveClientIp({
     remoteAddr: req.socket.remoteAddress,
@@ -196,7 +206,7 @@ async function resolveTailscaleIngress(params: {
       // The marker identifies managed Funnel mode but is not connection-bound.
       // Keep unverified shared-secret attempts on one non-resetting peer bucket.
       rateLimit: {
-        subject: { key: req.socket.remoteAddress ?? "unknown", exemption: "none" },
+        subject: managedTailscaleProxySubject(req),
         resetOnSuccess: false,
       },
     };
@@ -245,10 +255,7 @@ async function resolveTailscaleIngress(params: {
           // Until WhoIs verifies ambient identity, claimed forwarded IPs cannot
           // select shared-secret buckets or reset failures from another caller.
           rateLimit: {
-            subject: {
-              key: req.socket.remoteAddress ?? "unknown",
-              exemption: "none" as const,
-            },
+            subject: managedTailscaleProxySubject(req),
             resetOnSuccess: false,
           },
         }),
