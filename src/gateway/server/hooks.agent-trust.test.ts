@@ -781,4 +781,105 @@ describe("dispatchAgentHook trust handling", () => {
       ),
     );
   });
+
+  it("targets the announce wake at the hook agent's main session", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: false,
+      deliveryAttempted: false,
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Email", "hooks"),
+      deliver: true,
+    });
+
+    await waitForFast(() => expect(enqueueSystemEventMock).toHaveBeenCalled());
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
+      agentId: "hooks",
+      sessionKey: "agent:hooks:main",
+    });
+  });
+
+  it("targets the failure wake at the hook agent's main session", async () => {
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+
+    dispatchAgentHook(buildAgentPayload("Email", "hooks"));
+
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Email (error): Error: agent exploded",
+        {
+          sessionKey: "agent:hooks:main",
+        },
+      ),
+    );
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      agentId: "hooks",
+      sessionKey: "agent:hooks:main",
+    });
+  });
+
+  it("scopes the failure wake by session when no agent is named", async () => {
+    runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
+
+    dispatchAgentHook(buildAgentPayload("Email"));
+
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Email (error): Error: agent exploded",
+        {
+          sessionKey: "agent:main:main",
+        },
+      ),
+    );
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(wake).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      sessionKey: "agent:main:main",
+    });
+    expect(wake.agentId).toBeUndefined();
+  });
+
+  it("scopes the failure wake at the fallback main session when config is unavailable", async () => {
+    loadConfigMock.mockImplementationOnce(() => {
+      throw new Error("config exploded");
+    });
+
+    const result = await dispatchAgentHook(buildAgentPayload("Config", "hooks"));
+
+    expect(result).toMatchObject({
+      ok: false,
+      statusCode: 502,
+      error: "hook agent run failed before entering the agent runner",
+      runId: expect.any(String),
+    });
+    await waitForFast(() =>
+      expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+        "Hook Config (error): Error: config exploded",
+        { sessionKey: "main-session" },
+      ),
+    );
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(wake).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+:error$/),
+      sessionKey: "main-session",
+    });
+    expect(wake.agentId).toBeUndefined();
+  });
 });

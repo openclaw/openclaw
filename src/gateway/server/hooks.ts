@@ -310,10 +310,16 @@ export function createGatewayHooksRequestHandler(params: {
         sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
       });
       if (value.wakeMode === "now") {
+        // A hook wake must target the same agent/session the event landed on;
+        // an unscoped wake would run heartbeat turns for every heartbeat-enabled agent.
+        const failureAgentId = normalizeOptionalString(value.agentId);
+        const failureSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
+          ...(failureAgentId && hookEventSessionKey ? { agentId: failureAgentId } : {}),
+          ...(failureSessionKey ? { sessionKey: failureSessionKey } : {}),
         });
       }
     };
@@ -471,7 +477,15 @@ export function createGatewayHooksRequestHandler(params: {
               sessionKey: eventSessionKey,
             });
             if (value.wakeMode === "now") {
-              requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+              // Target the wake at the agent/session the announcement landed on
+              // instead of fanning out to every heartbeat-enabled agent.
+              requestHeartbeat({
+                source: "hook",
+                intent: "immediate",
+                reason: `hook:${jobId}`,
+                ...(agentId ? { agentId } : {}),
+                ...(eventSessionKey ? { sessionKey: eventSessionKey } : {}),
+              });
             }
           } else if (result.status === "ok" && !value.deliver) {
             logHooks.info("hook agent run completed without announcement", {
