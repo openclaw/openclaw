@@ -52,6 +52,8 @@ describe("custodian page", () => {
     await page.updateComplete;
     const assistantGroup = page.querySelector<HTMLElement>(".chat-group.assistant")!;
     expect(assistantGroup.querySelector("strong")?.textContent).toBe("aboard");
+    expect(assistantGroup.classList.contains("chat-group--with-footer")).toBe(false);
+    expect(assistantGroup.querySelector(".chat-group-footer")).toBeNull();
     expect(
       assistantGroup
         .querySelector<HTMLImageElement>("img.chat-avatar.assistant")
@@ -138,6 +140,7 @@ describe("custodian page", () => {
     await waitForFast(() =>
       expect(page.querySelectorAll('.custodian__wizard-step input[type="radio"]')).toHaveLength(5),
     );
+    expect(page.querySelector(".chat-group.assistant > .chat-group-footer")).toBeNull();
     expect(page.querySelector("openclaw-option-card")).toBeNull();
     expect(page.querySelector(".agent-chat__composer-shell")).toBeNull();
     page

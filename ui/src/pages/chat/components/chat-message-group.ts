@@ -79,6 +79,7 @@ type RenderMessageGroupOptions = {
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   assistantName?: string;
   assistantAvatar?: string | null;
+  showFooter?: boolean;
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
@@ -382,10 +383,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
+  const showFooter = opts.showFooter !== false;
 
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
+      class="chat-group ${roleClass}${showFooter ? " chat-group--with-footer" : ""}${isPeerGroup
         ? " chat-group--peer"
         : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
@@ -446,53 +448,55 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
             ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
             : nothing}
       </div>
-      <div
-        class="chat-group-footer ${persistUserIdentity
-          ? "chat-group-footer--persistent-identity"
-          : ""}"
-      >
-        <div class="chat-group-footer__meta">
-          ${hasUserFooterActions
-            ? html`
-                <div
-                  class="chat-group-footer-actions"
-                  data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-                >
-                  ${footerActionDetails?.replyTarget && opts.onReply
-                    ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
-                    : nothing}
-                  ${opts.onDelete ? renderDeleteButton(opts.onDelete, "left") : nothing}
-                  ${opts.onRewind
-                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
-                    : nothing}
-                </div>
-              `
-            : nothing}
-          ${normalizedRole === "user" && !showAvatarGutter
-            ? renderChatAuthorAvatar(group.sender)
-            : nothing}
-          <span class="chat-sender-name">${who}</span>
-          ${renderMessageMeta(group.timestamp, meta)}
-        </div>
-        ${normalizedRole !== "user" && (footerActionDetails || opts.onDelete)
-          ? html`
-              <div
-                class="chat-group-footer-actions"
-                data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-              >
-                ${footerActionDetails
-                  ? renderMessageActionButtons(
-                      footerActionDetails,
-                      opts,
-                      normalizedRole !== "user" ? opts.onDelete : undefined,
-                    )
-                  : opts.onDelete
-                    ? renderDeleteButton(opts.onDelete, "right")
-                    : nothing}
-              </div>
-            `
-          : nothing}
-      </div>
+      ${showFooter
+        ? html`<div
+            class="chat-group-footer ${persistUserIdentity
+              ? "chat-group-footer--persistent-identity"
+              : ""}"
+          >
+            <div class="chat-group-footer__meta">
+              ${hasUserFooterActions
+                ? html`
+                    <div
+                      class="chat-group-footer-actions"
+                      data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+                    >
+                      ${footerActionDetails?.replyTarget && opts.onReply
+                        ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
+                        : nothing}
+                      ${opts.onDelete ? renderDeleteButton(opts.onDelete, "left") : nothing}
+                      ${opts.onRewind
+                        ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
+              ${normalizedRole === "user" && !showAvatarGutter
+                ? renderChatAuthorAvatar(group.sender)
+                : nothing}
+              <span class="chat-sender-name">${who}</span>
+              ${renderMessageMeta(group.timestamp, meta)}
+            </div>
+            ${normalizedRole !== "user" && (footerActionDetails || opts.onDelete)
+              ? html`
+                  <div
+                    class="chat-group-footer-actions"
+                    data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+                  >
+                    ${footerActionDetails
+                      ? renderMessageActionButtons(
+                          footerActionDetails,
+                          opts,
+                          normalizedRole !== "user" ? opts.onDelete : undefined,
+                        )
+                      : opts.onDelete
+                        ? renderDeleteButton(opts.onDelete, "right")
+                        : nothing}
+                  </div>
+                `
+              : nothing}
+          </div>`
+        : nothing}
     </div>
   `;
 }

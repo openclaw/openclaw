@@ -269,6 +269,17 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
       await page.goto(`${server.baseUrl}custodian`);
       const skip = page.getByRole("button", { name: "Skip for now" });
       await skip.waitFor();
+      const assistantGroup = page.locator(".chat-group.assistant", { hasText: "Choose one." });
+      const messageColumn = assistantGroup.locator(":scope > .chat-group-messages");
+      const questionCard = page.locator(".custodian__option-card");
+      expect(await assistantGroup.locator(":scope > .chat-group-footer").count()).toBe(0);
+      const [messageBox, cardBox] = await Promise.all([
+        messageColumn.boundingBox(),
+        questionCard.boundingBox(),
+      ]);
+      expect(messageBox).not.toBeNull();
+      expect(cardBox).not.toBeNull();
+      expect(cardBox!.y - (messageBox!.y + messageBox!.height)).toBeGreaterThanOrEqual(12);
       await gateway.emitGatewayEvent("health", {
         channelLabels: { discord: "Discord" },
         channels: { discord: { configured: true, connected: false, running: true } },

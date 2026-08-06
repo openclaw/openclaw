@@ -165,6 +165,7 @@ export function renderCustodianTranscriptEntry(params: {
           showToolCalls: false,
           assistantName: t("custodian.title"),
           assistantAvatar: params.assistantAvatar,
+          showFooter: !((params.showQuestion && question) || (params.showWizardStep && step)),
         })
       : nothing}
     ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
