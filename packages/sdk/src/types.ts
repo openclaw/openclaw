@@ -390,8 +390,10 @@ export type AgentsUpdateParams = {
   name?: string;
   workspace?: string;
   model?: string | null;
-  emoji?: string;
-  avatar?: string;
+  /** Prefer `null` to clear; empty string also clears for legacy clients. */
+  emoji?: string | null;
+  /** Prefer `null` to clear; empty string also clears for legacy clients. */
+  avatar?: string | null;
 };
 
 export type AgentsDeleteParams = {
