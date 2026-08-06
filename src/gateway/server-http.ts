@@ -49,6 +49,8 @@ import {
 } from "./http-common.js";
 import {
   prepareGatewayIngressAttribution,
+  PROXY_ATTRIBUTION_GUIDANCE,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayIngressAttribution,
   type GatewayIngressAttributionDiagnostics,
 } from "./ingress-attribution.js";
@@ -266,6 +268,25 @@ function writeUpgradeAuthFailure(
       [
         "HTTP/1.1 429 Too Many Requests",
         ...(retryAfterSeconds ? [`Retry-After: ${retryAfterSeconds}`] : []),
+        "Content-Type: application/json; charset=utf-8",
+        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
+        "Connection: close",
+        "",
+        body,
+      ].join("\r\n"),
+    );
+    return;
+  }
+  if (auth.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    const body = JSON.stringify({
+      error: {
+        message: `Proxy client attribution is required. ${PROXY_ATTRIBUTION_GUIDANCE}`,
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
+    socket.write(
+      [
+        "HTTP/1.1 403 Forbidden",
         "Content-Type: application/json; charset=utf-8",
         `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
         "Connection: close",

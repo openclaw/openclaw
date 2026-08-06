@@ -121,6 +121,23 @@ describe("gateway ingress attribution", () => {
     });
   });
 
+  it("does not run manual Serve WhoIs without a Serve identity header", async () => {
+    const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({
+        headers: {
+          ...proxyHeaders,
+          "x-forwarded-for": "100.64.0.10",
+        },
+      }),
+      allowTailscale: true,
+      tailscaleWhois,
+    });
+
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+    expect(attribution.kind).toBe("unattributable-proxy");
+  });
+
   it("requires active Funnel provenance and the sanitized marker", async () => {
     const attributed = await resolveGatewayIngressAttribution({
       req: request({

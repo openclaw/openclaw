@@ -125,12 +125,17 @@ async function resolveTailscaleIngress(params: {
     return buildAttributedIngress({ kind: "tailscale-funnel", clientIp });
   }
 
+  const headerLogin = normalizeOptionalString(req.headers["tailscale-user-login"]);
+  if (!headerLogin) {
+    // allowTailscale is the operator opt-in for externally managed Serve, while
+    // the identity header plus WhoIs proves this request used that identity path.
+    return unattributableProxy(req.socket.remoteAddress ?? "unknown");
+  }
   const whois = await params.tailscaleWhois(clientIp);
   if (!whois?.login) {
     return unattributableProxy(req.socket.remoteAddress ?? "unknown");
   }
-  const headerLogin = normalizeOptionalString(req.headers["tailscale-user-login"]);
-  if (headerLogin && headerLogin.toLowerCase() !== whois.login.toLowerCase()) {
+  if (headerLogin.toLowerCase() !== whois.login.toLowerCase()) {
     return unattributableProxy(req.socket.remoteAddress ?? "unknown");
   }
   const headerName = normalizeOptionalString(req.headers["tailscale-user-name"]);
