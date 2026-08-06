@@ -988,7 +988,7 @@ export function attachGatewayUpgradeHandler(opts: {
           head,
           wss,
           preauthConnectionBudget,
-          preauthBudgetKey: ingressAttribution.clientIp,
+          preauthBudgetKey: ingressAttribution.rateLimit.subject.key,
           ingressName: "Gateway",
         });
       } catch {
