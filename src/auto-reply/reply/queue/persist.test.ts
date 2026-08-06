@@ -13,6 +13,7 @@ import {
   replaceFollowupQueueEntries,
 } from "../../../infra/followup-queue-sqlite.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
+import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueuesRestoredFlagForTest,
   clearRestoredPendingDrainKey,
@@ -262,6 +263,26 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     } finally {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
+  });
+
+  it("rejects enqueue and rolls back when persistence fails", () => {
+    const blocker = path.join(tmpDir, "not-a-directory");
+    fs.writeFileSync(blocker, "file");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+    try {
+      const admitted = enqueueFollowupRun(
+        TEST_KEY,
+        makeFollowupRun("must not admit"),
+        SETTINGS,
+        "none",
+      );
+      expect(admitted).toBe(false);
+      expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items ?? []).toEqual([]);
+    } finally {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    expect(hasPersistedFollowupQueues()).toBe(false);
   });
 
   it("keeps in-flight items in SQLite until settle-after-success", () => {

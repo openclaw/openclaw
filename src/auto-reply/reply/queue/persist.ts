@@ -345,7 +345,7 @@ function isPersistedSummaryElision(value: unknown): value is PersistedSummaryEli
   );
 }
 
-function isPersistedQueueEntry(value: unknown): value is PersistedQueueEntry {
+export function isPersistedQueueEntry(value: unknown): value is PersistedQueueEntry {
   if (
     !isRecord(value) ||
     !Array.isArray(value.items) ||
@@ -397,6 +397,37 @@ function filterRestorableFollowupItems(queueKey: string, items: FollowupRun[]): 
     restored.push(item);
   }
   return restored;
+}
+
+function isDeliverablePersistedFollowup(queueKey: string, item: PersistedFollowupRun): boolean {
+  const sessionKey = normalizeOptionalString(item.run.sessionKey);
+  if (sessionKey && sessionKey !== queueKey && !queueKey.startsWith(`${sessionKey}:`)) {
+    return false;
+  }
+  const channel = normalizeOptionalString(item.originatingChannel);
+  const to = normalizeOptionalString(item.originatingTo);
+  if ((channel && !to) || (!channel && to)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * True when Doctor can migrate this entry without runtime restore skipping any
+ * delivery-bearing source (items, overflow summarySources, or elision sources).
+ */
+export function canMigrateFollowupQueueEntryLosslessly(
+  queueKey: string,
+  value: unknown,
+): value is PersistedQueueEntry {
+  if (!isPersistedQueueEntry(value)) {
+    return false;
+  }
+  const summarySources = value.summarySources ?? [];
+  const elisionSources = (value.summaryElisions ?? []).flatMap((elision) => elision.sources);
+  return [...value.items, ...summarySources, ...elisionSources].every((item) =>
+    isDeliverablePersistedFollowup(queueKey, item),
+  );
 }
 
 function rehydrateRun(run: PersistedRunFields, currentConfig: OpenClawConfig): FollowupRun["run"] {

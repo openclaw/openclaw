@@ -456,8 +456,14 @@ describe("server-runtime-services", () => {
     expect(firstStopped).toBe(false);
     expect(secondStopped).toBe(false);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledWith(
+    const deliveryRecoveryWarn = log.child.mock.calls
+      .map((call, index) => ({
+        name: call[0],
+        warn: log.child.mock.results[index]?.value.warn as ReturnType<typeof vi.fn> | undefined,
+      }))
+      .find((entry) => entry.name === "delivery-recovery")?.warn;
+    expect(deliveryRecoveryWarn).toHaveBeenCalledOnce();
+    expect(deliveryRecoveryWarn).toHaveBeenCalledWith(
       "delivery recovery is still pending after 5000ms; waiting before runtime teardown",
     );
 
@@ -466,7 +472,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(firstStopped).toBe(false);
     expect(secondStopped).toBe(false);
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
+    expect(deliveryRecoveryWarn).toHaveBeenCalledOnce();
 
     if (!resolveDrain) {
       throw new Error("Expected outbound retry drain resolver to be initialized");

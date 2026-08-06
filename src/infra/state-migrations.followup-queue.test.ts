@@ -180,7 +180,7 @@ describe("legacy followup queue sidecar doctor migration", () => {
     expect(sqliteQueue.items?.[0]?.prompt).toBe("already in sqlite");
   });
 
-  it("retains the sidecar when an entry fails restore-strength validation", async () => {
+  it("retains the sidecar when an entry fails the full restore contract", async () => {
     const stateDir = await useStateDir();
     const sourcePath = await writeLegacySidecar(stateDir, {
       version: 1,
@@ -213,7 +213,7 @@ describe("legacy followup queue sidecar doctor migration", () => {
     const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
 
     expect(result.warnings).toContain(
-      `Left followup queue sidecar in place because one or more entries failed restore-strength validation: ${sourcePath}`,
+      `Left followup queue sidecar in place because one or more entries failed the full restore contract: ${sourcePath}`,
     );
     expect(result.changes).toStrictEqual([]);
     expect(fs.existsSync(sourcePath)).toBe(true);
@@ -231,8 +231,54 @@ describe("legacy followup queue sidecar doctor migration", () => {
     const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
 
     expect(result.warnings).toContain(
-      `Left followup queue sidecar in place because one or more entries failed restore-strength validation: ${sourcePath}`,
+      `Left followup queue sidecar in place because one or more entries failed the full restore contract: ${sourcePath}`,
     );
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
+  });
+
+  it("retains the sidecar when summarySources fail session/route deliverability", async () => {
+    const stateDir = await useStateDir();
+    const queueKey = "agent:main:dm:summary-source-bad";
+    const sourcePath = await writeLegacySidecar(stateDir, {
+      version: 1,
+      entries: [
+        [
+          queueKey,
+          {
+            items: [
+              {
+                prompt: "ok item",
+                enqueuedAt: 1,
+                originatingChannel: "telegram",
+                originatingTo: "999",
+                run: makeRestorableRun({ sessionKey: queueKey }),
+              },
+            ],
+            summarySources: [
+              {
+                prompt: "overflow with incomplete route",
+                enqueuedAt: 2,
+                originatingChannel: "telegram",
+                run: makeRestorableRun({ sessionKey: queueKey }),
+              },
+            ],
+            mode: "steer",
+            lastEnqueuedAt: 2,
+            droppedCount: 1,
+            summaryLines: ["overflow with incomplete route"],
+          },
+        ],
+      ],
+    });
+
+    const detected = detectLegacyFollowupQueueSidecar({ stateDir });
+    const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
+
+    expect(result.warnings).toContain(
+      `Left followup queue sidecar in place because one or more entries failed the full restore contract: ${sourcePath}`,
+    );
+    expect(result.changes).toStrictEqual([]);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
   });

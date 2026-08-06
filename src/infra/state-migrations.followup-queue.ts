@@ -1,11 +1,9 @@
 // Migrates the retired live-chat-followup-queues.json sidecar into shared SQLite state.
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME,
-  isPersistedFollowupRun,
-  isPersistedRunFields,
+  canMigrateFollowupQueueEntryLosslessly,
 } from "../auto-reply/reply/queue/persist.js";
 import { loadFollowupQueueEntries, replaceFollowupQueueEntries } from "./followup-queue-sqlite.js";
 import { fileExists } from "./state-migrations.fs.js";
@@ -13,20 +11,6 @@ import type { LegacyStateDetection, MigrationMessages } from "./state-migrations
 
 function resolveLegacyFollowupQueueStatePath(stateDir: string): string {
   return path.join(stateDir, LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME);
-}
-
-/**
- * Restore-strength queue payload: every item (and optional lastRun) must satisfy
- * the same validators restoreFollowupQueues uses, including sessionFile,
- * workspaceDir, timeoutMs, and blockReplyBreak.
- */
-function isRestorableQueueData(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    Array.isArray(value.items) &&
-    value.items.every(isPersistedFollowupRun) &&
-    (value.lastRun === undefined || isPersistedRunFields(value.lastRun))
-  );
 }
 
 /** Detect a retired followup-queue JSON sidecar left over from before SQLite persistence. */
@@ -43,8 +27,9 @@ export function detectLegacyFollowupQueueSidecar(params: {
 /**
  * Import entries from the legacy JSON sidecar into shared SQLite state, then remove the
  * sidecar. Entries already present in SQLite win on conflict — the sidecar is left in place
- * (with a warning) so no data is silently dropped. Conversion must be lossless: any entry
- * that fails restore-strength validation retains the sidecar and skips migration.
+ * (with a warning) so no data is silently dropped. Conversion must be lossless against the
+ * full runtime restore contract (shape + session/route deliverability for items and
+ * overflow-summary sources); otherwise the sidecar is retained.
  */
 export async function migrateLegacyFollowupQueueSidecar(params: {
   detected: LegacyStateDetection["followupQueueSidecar"];
@@ -81,7 +66,7 @@ export async function migrateLegacyFollowupQueueSidecar(params: {
     if (!key) {
       continue;
     }
-    if (!isRestorableQueueData(entry[1])) {
+    if (!canMigrateFollowupQueueEntryLosslessly(key, entry[1])) {
       hasUnrestorableEntry = true;
       continue;
     }
@@ -90,7 +75,7 @@ export async function migrateLegacyFollowupQueueSidecar(params: {
 
   if (hasUnrestorableEntry) {
     warnings.push(
-      `Left followup queue sidecar in place because one or more entries failed restore-strength validation: ${sourcePath}`,
+      `Left followup queue sidecar in place because one or more entries failed the full restore contract: ${sourcePath}`,
     );
     return { changes, warnings };
   }

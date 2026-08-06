@@ -2,9 +2,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { defaultRuntime } from "../../../runtime.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
+  removeQueuedItemsByRef,
   shouldSkipQueueItem,
 } from "../../../utils/queue-helpers.js";
 import {
@@ -14,7 +16,7 @@ import {
   resolveFollowupDeliveryContextKey,
   resolveFollowupReplyAnchor,
 } from "./drain.js";
-import { persistFollowupQueues } from "./persist.js";
+import { persistFollowupQueuesOrThrow } from "./persist.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
@@ -204,7 +206,19 @@ export function enqueueFollowupRun(
   } else {
     queue.items.push(run);
   }
-  persistFollowupQueues();
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    removeQueuedItemsByRef(queue.items, [run]);
+    if (queue.items.length === 0 && queue.lastRun === run.run) {
+      queue.lastRun = undefined;
+    }
+    defaultRuntime.error?.(
+      `rejected followup enqueue for ${key}: persistence failed: ${String(err)}`,
+    );
+    completeFollowupRunLifecycle(run);
+    return false;
+  }
   if (recentMessageIdKey) {
     recordRecentQueueMessageId(run, recentMessageIdKey);
   }
