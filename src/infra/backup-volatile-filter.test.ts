@@ -30,6 +30,7 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress`, false],
     [`${stateDir}/delivery-queue/pending.tmp`, true],
     [`${stateDir}/session-delivery-queue/pending.tmp`, true],
+    [`${stateDir}/locks/gateway.lock`, true],
 
     // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],

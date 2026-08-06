@@ -75,7 +75,8 @@ function resolveLockPath(env: NodeJS.ProcessEnv) {
   return {
     lockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
-    stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
+    legacyStateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
+    stateLockPath: path.join(canonicalStateDir, "locks", "gateway.lock"),
   };
 }
 
@@ -192,10 +193,12 @@ describe("gateway lock", () => {
     await expectGatewayLock(lock2).release();
   });
 
-  it("serializes different config paths that resolve to the same state directory", async () => {
+  it("serializes isolated lock directories that resolve to the same state directory", async () => {
     const stateDir = await fixtureRootTracker.make("shared-state");
     const configA = path.join(stateDir, "gateway-a.json");
     const configB = path.join(stateDir, "gateway-b.json");
+    const lockDirA = await fixtureRootTracker.make("container-a-locks");
+    const lockDirB = await fixtureRootTracker.make("container-b-locks");
     await fs.writeFile(configA, "{}", "utf8");
     await fs.writeFile(configB, "{}", "utf8");
     const envA = {
@@ -210,6 +213,7 @@ describe("gateway lock", () => {
     };
     const lock = expectGatewayLock(
       await acquireForTest(envA, {
+        lockDir: lockDirA,
         platform: "darwin",
       }),
     );
@@ -217,6 +221,7 @@ describe("gateway lock", () => {
     try {
       await expect(
         acquireForTest(envB, {
+          lockDir: lockDirB,
           platform: "darwin",
           readProcessCmdline: () => ["openclaw-gateway"],
           timeoutMs: 15,
@@ -546,9 +551,9 @@ describe("gateway lock", () => {
 
   it("continues honoring the legacy lifetime coordinator", async () => {
     const env = await makeEnv();
-    const { stateLockPath } = resolveLockPath(env);
-    await fs.mkdir(path.dirname(stateLockPath), { recursive: true });
-    const coordinator = openNodeSqliteDatabase(`${stateLockPath}.sqlite`);
+    const { legacyStateLockPath } = resolveLockPath(env);
+    await fs.mkdir(path.dirname(legacyStateLockPath), { recursive: true });
+    const coordinator = openNodeSqliteDatabase(`${legacyStateLockPath}.sqlite`);
     coordinator.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
     try {
       await expect(acquireForTest(env, { timeoutMs: 15 })).rejects.toBeInstanceOf(GatewayLockError);
@@ -557,7 +562,14 @@ describe("gateway lock", () => {
       coordinator.close();
     }
 
-    await expectGatewayLock(await acquireForTest(env)).release();
+    const lock = expectGatewayLock(await acquireForTest(env));
+    const currentCoordinator = openNodeSqliteDatabase(`${legacyStateLockPath}.sqlite`);
+    try {
+      expect(() => currentCoordinator.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;")).toThrow();
+    } finally {
+      currentCoordinator.close();
+      await lock.release();
+    }
   });
 
   it("preserves a fresh gateway lock that replaces the stale reclaim candidate", async () => {
@@ -962,6 +974,7 @@ describe("gateway lock", () => {
     vi.useRealTimers();
     const env = await makeEnv();
     const { stateLockPath } = resolveLockPath(env);
+    await fs.mkdir(path.dirname(stateLockPath), { recursive: true });
 
     const writeError = Object.assign(new Error("ENOSPC: no space left on device"), {
       code: "ENOSPC",

@@ -258,7 +258,7 @@ describe("formatBackupCreateSummary", () => {
       "Included 1 path:",
       "- state: ~/.openclaw",
       "Created /tmp/openclaw-backup.tar.gz",
-      "Skipped 3 volatile files (live sessions, cron logs, queues, sockets, pid/tmp).",
+      "Skipped 3 volatile files (live sessions, cron logs, queues, locks, sockets, pid/tmp).",
     ]);
   });
 });
@@ -669,6 +669,7 @@ describe("createBackupArchive", () => {
         );
         await state.writeText("tmp/staged.tmp", "tmp\n");
         await state.writeText("gateway.pid", "123\n");
+        await state.writeText("locks/gateway.lock", "live lock\n");
 
         const result = await createBackupArchive({
           output: outputDir,
@@ -690,13 +691,14 @@ describe("createBackupArchive", () => {
           "/state/session-delivery-queue/message.delivered",
           "/state/tmp/staged.tmp",
           "/state/gateway.pid",
+          "/state/locks/gateway.lock",
         ]) {
           expect(
             entries.some((entry) => entry.endsWith(suffix)),
             suffix,
           ).toBe(false);
         }
-        expect(result.skippedVolatileCount).toBe(10);
+        expect(result.skippedVolatileCount).toBe(11);
       },
     );
   });

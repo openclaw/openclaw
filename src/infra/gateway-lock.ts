@@ -302,8 +302,13 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, lockDir = resolveGatewa
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
+    // Keep the shipped coordinator until old Gateway builds no longer share
+    // state with this one; otherwise an old and new process can both start.
+    legacyStateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
     stateDir,
-    stateLockPath: path.join(lockDir, `gateway.state.${stateHash}.lock`),
+    // State ownership must live on the shared mount so isolated containers contend.
+    // The config lock remains ephemeral for process-local config-path coordination.
+    stateLockPath: path.join(stateDir, "locks", "gateway.lock"),
   };
 }
 
@@ -323,9 +328,16 @@ export async function readActiveGatewayLockIdentity(
   > = {},
 ): Promise<GatewayLockIdentity | undefined> {
   const env = opts.env ?? process.env;
-  const { configLockPath, stateLockPath } = resolveGatewayLockPaths(env, opts.lockDir);
+  const { configLockPath, legacyStateLockPath, stateLockPath } = resolveGatewayLockPaths(
+    env,
+    opts.lockDir,
+  );
   const configIdentity = await readVerifiedGatewayLockIdentity(configLockPath, opts);
-  return configIdentity ?? (await readVerifiedGatewayLockIdentity(stateLockPath, opts));
+  return (
+    configIdentity ??
+    (await readVerifiedGatewayLockIdentity(stateLockPath, opts)) ??
+    (await readVerifiedGatewayLockIdentity(legacyStateLockPath, opts))
+  );
 }
 
 async function readVerifiedGatewayLockIdentity(
@@ -367,20 +379,58 @@ export async function acquireGatewayLock(
   const role = opts.role ?? "gateway";
   const ownerId = randomUUID();
   const paths = resolveGatewayLockPaths(env, opts.lockDir);
-  const stateLock = await acquireLockFile({
+  const legacyStateLock = await acquireLockFile({
     ...opts,
     configPath: paths.configPath,
     env,
-    lockPath: paths.stateLockPath,
+    lockPath: paths.legacyStateLockPath,
     role,
     stateDir: paths.stateDir,
     ownerId,
   });
+  let stateLock: Omit<GatewayLockHandle, "stateLockPath">;
+  try {
+    stateLock = await acquireLockFile({
+      ...opts,
+      configPath: paths.configPath,
+      env,
+      lockPath: paths.stateLockPath,
+      role,
+      stateDir: paths.stateDir,
+      ownerId,
+    });
+  } catch (error) {
+    await legacyStateLock.release().catch(() => undefined);
+    throw error;
+  }
+  const releaseStateLocks = async () => {
+    let releaseError: Error | undefined;
+    try {
+      await stateLock.release();
+    } catch (error) {
+      releaseError =
+        error instanceof Error
+          ? error
+          : new GatewayLockError("failed to release state lock", error);
+    }
+    try {
+      await legacyStateLock.release();
+    } catch (error) {
+      releaseError ??=
+        error instanceof Error
+          ? error
+          : new GatewayLockError("failed to release legacy state lock", error);
+    }
+    if (releaseError) {
+      throw releaseError;
+    }
+  };
   const shouldAcquireConfigLock = role !== "gateway" || env.OPENCLAW_ALLOW_MULTI_GATEWAY !== "1";
   if (!shouldAcquireConfigLock) {
     return {
       ...stateLock,
       stateLockPath: stateLock.lockPath,
+      release: releaseStateLocks,
     };
   }
 
@@ -408,7 +458,7 @@ export async function acquireGatewayLock(
               : new GatewayLockError("failed to release config lock", error);
         }
         try {
-          await stateLock.release();
+          await releaseStateLocks();
         } catch (error) {
           releaseError ??=
             error instanceof Error
@@ -421,7 +471,7 @@ export async function acquireGatewayLock(
       },
     };
   } catch (error) {
-    await stateLock.release().catch(() => undefined);
+    await releaseStateLocks().catch(() => undefined);
     throw error;
   }
 }
