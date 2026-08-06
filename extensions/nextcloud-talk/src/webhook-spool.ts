@@ -51,6 +51,23 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
 });
 
 export type NextcloudTalkIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+export class NextcloudTalkRetryableWebhookError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NextcloudTalkRetryableWebhookError";
+  }
+}
+
+function isNextcloudTalkRetryableWebhookError(
+  error: unknown,
+): error is NextcloudTalkRetryableWebhookError {
+  return error instanceof NextcloudTalkRetryableWebhookError;
+}
+
+type NextcloudTalkIngressDispatchResult =
+  | { kind: "completed" }
+  | { kind: "deferred" }
+  | { kind: "failed-retryable"; error: unknown };
 
 type NextcloudTalkIngressMonitor = {
   receive: (rawEvent: string) => Promise<"accepted" | "ignored">;
@@ -98,6 +115,9 @@ function parseClaimedMessage(
 }
 
 function resolveNonRetryableFailure(error: unknown) {
+  if (isNextcloudTalkRetryableWebhookError(error)) {
+    return null;
+  }
   if (error instanceof NextcloudTalkWebhookPayloadError) {
     return { reason: "invalid-event", message: error.message };
   }
@@ -117,7 +137,7 @@ export function createNextcloudTalkWebhookSpool(options: {
   deliver: (
     message: NextcloudTalkInboundMessage,
     lifecycle: NextcloudTalkIngressLifecycle,
-  ) => Promise<void>;
+  ) => Promise<NextcloudTalkIngressDispatchResult | void>;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
@@ -176,7 +196,7 @@ export function createNextcloudTalkWebhookSpool(options: {
       const message = parseClaimedMessage(claim.payload, claim.id, claim.laneKey);
       // The shared monitor translates these lifecycle callbacks into terminal or deferred
       // drain outcomes, including successful no-dispatch policy gates.
-      await options.deliver(message, lifecycle);
+      return await options.deliver(message, lifecycle);
     },
     pollIntervalMs: options.pollIntervalMs ?? NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS,
     retention: {
