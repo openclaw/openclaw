@@ -1,3 +1,5 @@
+import { summarizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Discord plugin module implements transcripts source behavior.
 import type {
   TranscriptSourceProvider,
@@ -12,6 +14,20 @@ const managerWaiters = new Set<{
   accountId?: string;
   resolve: () => void;
 }>();
+
+const ACCOUNT_ID_ERROR_MAX_CHARS = 64;
+const ACCOUNT_ID_ERROR_MAX_ENTRIES = 4;
+
+function formatAccountIdForError(accountId: string): string {
+  return JSON.stringify(truncateUtf16Safe(accountId, ACCOUNT_ID_ERROR_MAX_CHARS));
+}
+
+function summarizeAccountIdsForError(accountIds: readonly string[]): string {
+  return summarizeStringEntries({
+    entries: accountIds.map(formatAccountIdForError),
+    limit: ACCOUNT_ID_ERROR_MAX_ENTRIES,
+  });
+}
 
 export function setDiscordTranscriptsVoiceManager(params: {
   accountId: string;
@@ -48,47 +64,50 @@ const resolveDiscordTranscriptsAccountId: NonNullable<
     // A provider can be called directly without config while its manager is starting.
     // With config, reject accounts that can never register a voice manager.
     if (!cfg || capableAccountIds.includes(requestedAccountId)) {
-      return requestedAccountId;
+      return { ok: true, value: requestedAccountId };
     }
-    throw new Error(`Discord account "${requestedAccountId}" is not enabled for voice.`);
+    return {
+      ok: false,
+      error: `Discord account ${formatAccountIdForError(requestedAccountId)} is not enabled for voice.`,
+    };
   }
   if (capableAccountIds.length === 1) {
-    return capableAccountIds[0];
+    return { ok: true, value: capableAccountIds[0] };
   }
   if (capableAccountIds.length === 0) {
-    throw new Error("No Discord account is enabled for voice; enable voice or specify an account.");
+    return {
+      ok: false,
+      error: "No Discord account is enabled for voice; enable voice or specify an account.",
+    };
   }
-  throw new Error(
-    `Multiple Discord accounts are enabled for voice (${capableAccountIds.join(", ")}); specify accountId.`,
-  );
+  return {
+    ok: false,
+    error: `Multiple Discord accounts are enabled for voice (${summarizeAccountIdsForError(capableAccountIds)}); specify accountId.`,
+  };
 };
-
-function resolveManager(request: TranscriptStartRequest): DiscordVoiceManager | undefined {
-  const accountId = resolveDiscordTranscriptsAccountId({
-    cfg: request.cfg,
-    source: request.session.source,
-  });
-  return accountId ? managersByAccountId.get(accountId) : undefined;
-}
 
 async function waitForManager(
   request: TranscriptStartRequest,
-): Promise<DiscordVoiceManager | undefined> {
-  const existing = resolveManager(request);
-  if (existing) {
-    return existing;
-  }
-  if (request.abortSignal?.aborted) {
-    return undefined;
-  }
-  const startupWaitMs = request.startupWaitMs ?? 0;
-  if (startupWaitMs <= 0) {
-    return undefined;
-  }
-  const accountId = resolveDiscordTranscriptsAccountId({
+): Promise<{ ok: true; value: DiscordVoiceManager | undefined } | { ok: false; error: string }> {
+  const accountResolution = resolveDiscordTranscriptsAccountId({
     cfg: request.cfg,
     source: request.session.source,
   });
+  if (!accountResolution.ok) {
+    return accountResolution;
+  }
+  const accountId = accountResolution.value;
+  const existing = accountId ? managersByAccountId.get(accountId) : undefined;
+  if (existing) {
+    return { ok: true, value: existing };
+  }
+  if (request.abortSignal?.aborted) {
+    return { ok: true, value: undefined };
+  }
+  const startupWaitMs = request.startupWaitMs ?? 0;
+  if (startupWaitMs <= 0) {
+    return { ok: true, value: undefined };
+  }
   await new Promise<void>((resolve) => {
     const waiter = {
       accountId,
@@ -105,9 +124,9 @@ async function waitForManager(
     managerWaiters.add(waiter);
   });
   if (request.abortSignal?.aborted) {
-    return undefined;
+    return { ok: true, value: undefined };
   }
-  return resolveManager(request);
+  return { ok: true, value: accountId ? managersByAccountId.get(accountId) : undefined };
 }
 
 export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
@@ -118,7 +137,11 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
   name: "Discord Voice",
   sourceKinds: ["live-audio"],
   async start(request) {
-    const manager = await waitForManager(request);
+    const managerResolution = await waitForManager(request);
+    if (!managerResolution.ok) {
+      return managerResolution;
+    }
+    const manager = managerResolution.value;
     if (!manager) {
       return { ok: false, error: "Discord voice manager is not available." };
     }

@@ -820,7 +820,10 @@ describe("transcripts tool", () => {
     const provider: TranscriptSourceProvider = {
       id: "discord-voice",
       accountBindingChannels: ["discord"],
-      resolveAccountId: ({ source }) => source.accountId ?? "account-a",
+      resolveAccountId: ({ source }) => ({
+        ok: true,
+        value: source.accountId ?? "account-a",
+      }),
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
