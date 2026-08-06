@@ -1,5 +1,6 @@
 // Nextcloud Talk plugin module implements send behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -61,7 +62,9 @@ async function readNextcloudTalkErrorSnippet(response: Response): Promise<string
     // unbounded body into memory. Collapse the bounded prefix locally to keep a
     // short, log-safe error snippet (no new plugin SDK surface required).
     const text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
-    return collapseErrorSnippet(text);
+    // Redact credentials that a misbehaving upstream may reflect in error bodies
+    // (e.g. Authorization headers echoed back in the response).
+    return redactToolPayloadText(collapseErrorSnippet(text));
   } catch {
     return "";
   }
