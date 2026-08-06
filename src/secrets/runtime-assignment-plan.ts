@@ -73,6 +73,8 @@ export async function buildSecretsRuntimeAssignmentPlan(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
   allowUnavailableSecretOwners?: boolean;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  /** Defaults true for startup; config inspection must keep external channel code unloaded. */
+  loadExternalChannelContracts?: boolean;
 }) {
   const { collectAuthStoreAssignments, collectConfigAssignments, createResolverContext } =
     await loadRuntimePrepareHelpers();
@@ -105,6 +107,7 @@ export async function buildSecretsRuntimeAssignmentPlan(params: {
       config: params.resolvedConfig,
       context,
       loadablePluginOrigins,
+      loadExternalChannelContracts: params.loadExternalChannelContracts,
     });
   }
 
@@ -164,6 +167,10 @@ export async function buildActiveSecretsRuntimePreflightPlan(params: {
     candidateDirs,
     includeConfigRefs: true,
     includeAuthStoreRefs: true,
+    // Third-party channel contracts are executable modules. Early config preflight uses trusted
+    // bundled artifacts and manifest configContracts only; startup remains authoritative for
+    // channel-only SecretRefs until channels have a declarative activation contract.
+    loadExternalChannelContracts: false,
     ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
   });
   const refsByKey = new Map<string, SecretRef>();

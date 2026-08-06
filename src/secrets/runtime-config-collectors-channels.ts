@@ -13,6 +13,8 @@ export function collectChannelConfigAssignments(params: {
   context: ResolverContext;
   /** Optional installed plugin roots for external channel contract loading. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  /** Defaults true. Config inspection disables external executable contract modules. */
+  loadExternalContracts?: boolean;
 }): void {
   const channelIds = Object.keys(params.config.channels ?? {});
   if (channelIds.length === 0) {
@@ -24,6 +26,7 @@ export function collectChannelConfigAssignments(params: {
       config: params.config,
       env: params.context.env,
       loadablePluginOrigins: params.loadablePluginOrigins,
+      allowExternal: params.loadExternalContracts,
     });
     const collectRuntimeConfigAssignments =
       contract?.collectRuntimeConfigAssignments ??

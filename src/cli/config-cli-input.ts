@@ -44,6 +44,8 @@ const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 export type ConfigSetOperation = {
   inputMode: ConfigSetDryRunInputMode;
   requestedPath: PathSegment[];
+  /** Original CLI spelling retained for operator-visible success output. */
+  requestedPathLabel?: string;
   setPath: PathSegment[];
   value: unknown;
   mutation?: "set" | "merge" | "replace" | "delete";
@@ -534,12 +536,16 @@ function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
   };
 }
 
-export function buildUnsetOperation(path: PathSegment[]): ConfigSetOperation {
+export function buildUnsetOperation(
+  path: PathSegment[],
+  requestedPathLabel?: string,
+): ConfigSetOperation {
   const resolved = resolveConfigSecretTargetByPath(path);
   const providerAlias = parseProviderAliasFromTargetPath(path);
   return {
     inputMode: "unset",
     requestedPath: path,
+    ...(requestedPathLabel ? { requestedPathLabel } : {}),
     setPath: path,
     value: undefined,
     mutation: "delete",

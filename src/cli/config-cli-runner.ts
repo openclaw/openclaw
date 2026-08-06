@@ -217,7 +217,7 @@ function expandActualChangedPaths(
   return [...expanded];
 }
 
-export function configApplyHintForOperations(
+function configApplyHintForOperations(
   operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
   beforeConfig: OpenClawConfig,
   afterConfig: OpenClawConfig,
@@ -277,6 +277,8 @@ export async function runConfigOperations(params: {
   operations: ConfigSetOperation[];
   options: ConfigMutationOptions;
   successMode: "set" | "patch";
+  /** Reuse a caller's authoritative snapshot when it already checked path existence. */
+  snapshot?: Awaited<ReturnType<typeof loadValidConfig>>;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -290,7 +292,7 @@ export async function runConfigOperations(params: {
   if (autoManagedTargets.length > 0) {
     throw new Error(formatAutoManagedMetaError(autoManagedTargets));
   }
-  const snapshot = await loadValidConfig(runtime);
+  const snapshot = params.snapshot ?? (await loadValidConfig(runtime));
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(
@@ -481,7 +483,8 @@ export async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
+    const pathLabel = operation?.requestedPathLabel ?? toDotPath(operation?.requestedPath ?? []);
+    runtime.log(info(`${action} ${pathLabel}. ${hint}`));
   } else if (params.successMode === "set") {
     runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
   } else {

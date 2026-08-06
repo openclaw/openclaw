@@ -4921,6 +4921,48 @@ describe("config cli", () => {
       });
     });
 
+    it.skipIf(process.platform === "win32")(
+      "rejects an unset that reactivates an unsafe exec SecretRef",
+      async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-unset-exec-"));
+        const symlinkPath = path.join(root, "node-link");
+        fs.symlinkSync(process.execPath, symlinkPath);
+        try {
+          const resolved = {
+            gateway: { port: 18789 },
+            skills: {
+              entries: {
+                dormant: {
+                  enabled: false,
+                  apiKey: {
+                    source: "exec",
+                    provider: "execmain",
+                    id: "reactivated-api-key",
+                  },
+                },
+              },
+            },
+            secrets: {
+              providers: {
+                execmain: { source: "exec", command: symlinkPath },
+              },
+            },
+          } as unknown as OpenClawConfig;
+          setSnapshot(resolved, resolved);
+
+          await expect(
+            runConfigCommand(["config", "unset", "skills.entries.dormant.enabled"]),
+          ).rejects.toThrow(ExitError);
+
+          expect(mockWriteConfigFile).not.toHaveBeenCalled();
+          expectErrorIncludes("secrets.providers.execmain");
+          expectErrorIncludes("must not be a symlink");
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
+
     it("dry-runs an unset without writing the config file", async () => {
       const resolved: OpenClawConfig = {
         agents: { entries: { main: {} } },
@@ -4931,13 +4973,12 @@ describe("config cli", () => {
         },
       };
       setSnapshot(resolved, resolved);
-      setSnapshot(resolved, resolved);
 
       await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run"]);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
-      expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(2);
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(1);
     });
 
     it("rejects an unset that makes a dependent model reference unresolved", async () => {
@@ -4988,7 +5029,6 @@ describe("config cli", () => {
         },
       };
       setSnapshot(resolved, resolved);
-      setSnapshot(resolved, resolved);
       mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
         refsChecked: 1,
         refsTotal: 1,
@@ -5030,7 +5070,6 @@ describe("config cli", () => {
           alsoAllow: ["agents_list"],
         },
       };
-      setSnapshot(resolved, resolved);
       setSnapshot(resolved, resolved);
 
       await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run", "--json"]);
@@ -5159,7 +5198,6 @@ describe("config cli", () => {
           },
         },
       };
-      setSnapshot(resolved, resolved);
       setSnapshot(resolved, resolved);
       mockResolveSecretRefValue.mockRejectedValueOnce(new Error("provider removed"));
 

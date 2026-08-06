@@ -13,6 +13,7 @@ function createExternalPluginFixture(params: {
   id: string;
   entrypoint: string;
   manifest: Record<string, unknown>;
+  secretContract?: string;
 }): string {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-${params.id}-`));
   fixtureRoots.push(rootDir);
@@ -34,6 +35,9 @@ function createExternalPluginFixture(params: {
     })}\n`,
   );
   fs.writeFileSync(path.join(rootDir, "index.js"), params.entrypoint);
+  if (params.secretContract) {
+    fs.writeFileSync(path.join(rootDir, "secret-contract-api.cjs"), params.secretContract);
+  }
   return rootDir;
 }
 
@@ -51,22 +55,41 @@ afterEach(() => {
 });
 
 describe("active secrets runtime preflight external plugins", () => {
-  it("does not import an external channel entrypoint", async () => {
+  it("does not import an external channel entrypoint or secret-contract sidecar", async () => {
     const pluginId = "throwing-channel-preflight";
-    const markerPath = path.join(os.tmpdir(), `${pluginId}-${Date.now()}.marker`);
-    fixtureFiles.push(markerPath);
+    const entrypointMarkerPath = path.join(os.tmpdir(), `${pluginId}-${Date.now()}-entry.marker`);
+    const contractMarkerPath = path.join(os.tmpdir(), `${pluginId}-${Date.now()}-contract.marker`);
+    fixtureFiles.push(entrypointMarkerPath, contractMarkerPath);
     const rootDir = createExternalPluginFixture({
       id: pluginId,
       entrypoint: `import fs from "node:fs";
-fs.writeFileSync(${JSON.stringify(markerPath)}, "imported");
+fs.writeFileSync(${JSON.stringify(entrypointMarkerPath)}, "imported");
 throw new Error("external channel entrypoint was imported");\n`,
-      manifest: { channels: [pluginId] },
+      secretContract: `const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(contractMarkerPath)}, "imported");
+throw new Error("external channel secret contract was imported");\n`,
+      manifest: {
+        channels: [pluginId],
+        configContracts: {
+          secretInputs: { paths: [{ path: "credential", expected: "string" }] },
+        },
+      },
     });
+    const activeRef = {
+      source: "exec" as const,
+      provider: "vault",
+      id: "channel/plugin-owned-credential",
+    };
     const config = {
       channels: { [pluginId]: { enabled: true } },
       plugins: {
         load: { paths: [rootDir] },
-        entries: { [pluginId]: { enabled: true } },
+        entries: { [pluginId]: { enabled: true, config: { credential: activeRef } } },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: process.execPath },
+        },
       },
     } as OpenClawConfig;
 
@@ -76,8 +99,9 @@ throw new Error("external channel entrypoint was imported");\n`,
       loadAuthStore: emptyAuthStore,
     });
 
-    expect(plan.refs).toEqual([]);
-    expect(fs.existsSync(markerPath)).toBe(false);
+    expect(plan.refs).toEqual([activeRef]);
+    expect(fs.existsSync(entrypointMarkerPath)).toBe(false);
+    expect(fs.existsSync(contractMarkerPath)).toBe(false);
   });
 
   it("collects a manifest-declared external web ref without registering its plugin", async () => {

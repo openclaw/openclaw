@@ -2,14 +2,13 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { danger, info, success, warn } from "../globals.js";
+import { danger, success, warn } from "../globals.js";
 import {
   ExitError,
   type RuntimeEnv,
@@ -29,16 +28,13 @@ import {
   type ConfigPatchOptions,
   type ConfigUnsetOptions,
 } from "./config-cli-input.js";
-import { normalizeConfigMutationModelRefs } from "./config-cli-model-normalization.js";
 import {
   formatConfigUnsetMissingPathMessage,
   getAtPath,
   parseConfigSetPath,
-  unsetAtPath,
 } from "./config-cli-path.js";
 import {
   assertConfigPathIsNotAutoManaged,
-  configApplyHintForOperations,
   handleConfigMutationError,
   runConfigOperations,
 } from "./config-cli-runner.js";
@@ -47,7 +43,6 @@ import {
   formatInvalidConfigRepairHint,
   loadValidConfig,
 } from "./config-cli-validation.js";
-import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import {
   hasBatchMode,
@@ -212,13 +207,7 @@ export async function runConfigUnset(opts: {
     const parsedPath = parseConfigSetPath(opts.path);
     assertConfigPathIsNotAutoManaged(parsedPath);
     const snapshot = await loadValidConfig(runtime);
-    // Mutate resolved config so runtime defaults never leak into the authored file.
-    const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-    const currentConfig = normalizeConfigMutationModelRefs(
-      structuredClone(snapshot.resolved) as OpenClawConfig,
-    );
-    const unsetResult = unsetAtPath(next, parsedPath);
-    if (!unsetResult.removed) {
+    if (!getAtPath(snapshot.resolved, parsedPath).found) {
       const runtimeOnly = getAtPath(snapshot.runtimeConfig, parsedPath).found;
       const missingPathMessage = formatConfigUnsetMissingPathMessage({
         path: opts.path,
@@ -247,36 +236,14 @@ export async function runConfigUnset(opts: {
       runtime.exit(1);
       return;
     }
-    const operation = buildUnsetOperation(parsedPath);
-    if (cliOptions.dryRun) {
-      await runConfigOperations({
-        runtime,
-        operations: [operation],
-        options: cliOptions,
-        successMode: "set",
-      });
-      return;
-    }
-    const nextConfig = normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig);
-    const modelRefCheck = await checkTouchedTextModelRefs({
-      config: nextConfig,
-      previousConfig: currentConfig,
-      touchedPaths: [parsedPath],
-      redactDependencyValues: true,
+    const operation = buildUnsetOperation(parsedPath, opts.path);
+    await runConfigOperations({
+      runtime,
+      operations: [operation],
+      options: cliOptions,
+      successMode: "set",
+      snapshot,
     });
-    if (modelRefCheck.errors[0]) {
-      throw new Error(modelRefCheck.errors[0]);
-    }
-    await replaceConfigFile({
-      nextConfig,
-      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-      writeOptions:
-        unsetResult.leafContainer === "array"
-          ? { auditOrigin: "cli" }
-          : { auditOrigin: "cli", unsetPaths: [parsedPath] },
-    });
-    const hint = configApplyHintForOperations([operation], currentConfig, nextConfig);
-    runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });
   }
