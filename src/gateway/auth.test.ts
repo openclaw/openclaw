@@ -652,10 +652,7 @@ describe("gateway auth", () => {
 
     expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter@github" });
     expect(limiter.check).not.toHaveBeenCalled();
-    expect(limiter.reset).toHaveBeenCalledWith(
-      { key: "100.64.0.1", exemption: "none" },
-      "shared-secret",
-    );
+    expect(limiter.reset).not.toHaveBeenCalled();
   });
 
   it("rejects a cross-origin page after preparing Tailscale identity", async () => {
@@ -805,6 +802,7 @@ describe("gateway auth", () => {
       method: "password",
     },
   ])("keeps $method auth on the profile avatar HTTP surface", async (testCase) => {
+    const limiter = createLimiterSpy();
     const req = createTailscaleForwardedReq();
     req.headers.origin = "https://evil.example";
     req.headers["sec-fetch-site"] = "cross-site";
@@ -814,11 +812,13 @@ describe("gateway auth", () => {
       ...testCase,
       req,
       ingressAttribution,
+      rateLimiter: limiter,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["*"]),
     });
 
     expect(res).toMatchObject({ ok: true, method: testCase.method });
     expect(tailscaleWhois).not.toHaveBeenCalled();
+    expect(limiter.reset).not.toHaveBeenCalled();
   });
 
   it("keeps explicit token auth independent of disabled Tailscale identity lookup", async () => {

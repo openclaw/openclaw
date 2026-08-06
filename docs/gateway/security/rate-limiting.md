@@ -70,6 +70,13 @@ direct-local exemption. The error tells the operator to configure
 `gateway.trustedProxies` narrowly and make the proxy overwrite or safely
 rebuild the forwarded client chain.
 
+Before managed Serve identity is verified, shared-secret attempts use one
+non-exempt, non-resetting proxy-peer bucket rather than the claimed forwarded
+address. This prevents unverified headers from rotating limiter keys, but one
+client can temporarily lock shared-secret attempts for other clients on that
+route. Verified tokenless Serve identity is evaluated independently of that
+degraded fallback.
+
 A headerless TCP forwarder cannot be distinguished from a direct local TCP
 client at the HTTP boundary. Do not use raw TCP forwarding as a remote-access
 path; use a configured reverse proxy, SSH forwarding, or the supported

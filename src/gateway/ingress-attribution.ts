@@ -219,11 +219,25 @@ async function resolveTailscaleIngress(params: {
     })();
     return identityPromise;
   };
+  const attributed = buildAttributedIngress({
+    kind: "tailscale-serve",
+    clientIp,
+  });
   return {
-    ...buildAttributedIngress({
-      kind: "tailscale-serve",
-      clientIp,
-    }),
+    ...attributed,
+    ...(params.externalServe
+      ? {}
+      : {
+          // Until WhoIs verifies ambient identity, claimed forwarded IPs cannot
+          // select shared-secret buckets or reset failures from another caller.
+          rateLimit: {
+            subject: {
+              key: req.socket.remoteAddress ?? "unknown",
+              exemption: "none" as const,
+            },
+            resetOnSuccess: false,
+          },
+        }),
     provenance: params.externalServe ? "operator-trusted-proxy" : "managed-route",
     // Capture immutable request facts now; WhoIs runs only if tokenless identity auth is selected.
     verifyIdentity,

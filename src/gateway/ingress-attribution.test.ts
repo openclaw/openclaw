@@ -130,6 +130,40 @@ describe("gateway ingress attribution", () => {
     expect(tailscaleWhois).toHaveBeenCalledOnce();
   });
 
+  it("uses one non-resetting shared-secret subject until managed Serve identity verifies", async () => {
+    const resolveClient = async (clientIp: string) =>
+      await resolveGatewayIngressAttribution({
+        req: request({
+          headers: {
+            ...proxyHeaders,
+            "x-forwarded-for": clientIp,
+            "tailscale-user-login": `${clientIp}@example.test`,
+          },
+        }),
+        tailscaleMode: "serve",
+      });
+
+    const clientA = await resolveClient("100.64.0.9");
+    const clientB = await resolveClient("100.64.0.10");
+
+    expect(clientA).toMatchObject({
+      kind: "tailscale-serve",
+      clientIp: "100.64.0.9",
+      rateLimit: {
+        subject: { key: "127.0.0.1", exemption: "none" },
+        resetOnSuccess: false,
+      },
+    });
+    expect(clientB).toMatchObject({
+      kind: "tailscale-serve",
+      clientIp: "100.64.0.10",
+      rateLimit: {
+        subject: { key: "127.0.0.1", exemption: "none" },
+        resetOnSuccess: false,
+      },
+    });
+  });
+
   it("preserves generic trusted-proxy attribution without Serve identity evidence", async () => {
     const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
     const attribution = await resolveGatewayIngressAttribution({
