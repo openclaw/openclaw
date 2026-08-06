@@ -4,6 +4,7 @@
  * specific XML suffix and Office-extension corruption seen in path arguments.
  */
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { preserveAtPrefixedRelativePath } from "./path-policy.js";
 
 export type RequiredParamGroup = {
   keys: readonly string[];
@@ -123,9 +124,14 @@ function normalizeHallucinatedOfficePathExtension(value: string): string {
   });
 }
 
-/** Normalize model-supplied file-tool path params without touching payload text. */
-export function normalizeFileToolPathParam(value: string): string {
-  return normalizeHallucinatedOfficePathExtension(stripMalformedXmlArgValueSuffix(value));
+/**
+ * Normalize model-supplied file-tool path params without touching payload text.
+ * `cwd` enables the leading-`@` disambiguation; without it the value is only
+ * repaired as a string.
+ */
+export function normalizeFileToolPathParam(value: string, cwd?: string): string {
+  const repaired = normalizeHallucinatedOfficePathExtension(stripMalformedXmlArgValueSuffix(value));
+  return cwd ? preserveAtPrefixedRelativePath(repaired, cwd) : repaired;
 }
 
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
@@ -152,6 +158,7 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
 export function normalizeFileToolPathParamsFromKeys<T extends Record<string, unknown>>(
   record: T,
   keys: readonly string[],
+  cwd?: string,
 ): T {
   let normalized: T | undefined;
   for (const key of keys) {
@@ -159,7 +166,7 @@ export function normalizeFileToolPathParamsFromKeys<T extends Record<string, unk
     if (typeof value !== "string") {
       continue;
     }
-    const normalizedValue = normalizeFileToolPathParam(value);
+    const normalizedValue = normalizeFileToolPathParam(value, cwd);
     if (normalizedValue !== value) {
       normalized ??= { ...record };
       normalized[key as keyof T] = normalizedValue as T[keyof T];
@@ -226,6 +233,7 @@ export function assertRequiredParams(
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
   requiredParamGroups?: readonly RequiredParamGroup[],
+  cwd?: string,
 ): AnyAgentTool {
   return {
     ...tool,
@@ -234,7 +242,7 @@ export function wrapToolParamValidation(
       const pathKeys = resolveFileToolPathParamKeys(requiredParamGroups);
       const normalizedParams =
         record && pathKeys.length > 0
-          ? normalizeFileToolPathParamsFromKeys(record, pathKeys)
+          ? normalizeFileToolPathParamsFromKeys(record, pathKeys, cwd)
           : params;
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
