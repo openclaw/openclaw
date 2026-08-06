@@ -56,7 +56,9 @@ describe("template payload textual fallback", () => {
     expect(message).toEqual({ type: "text", text: "Menu: Pick" });
   });
 
-  it("delivers the confirm question as text when a label is blank", () => {
+  it("keeps the surviving confirm label in the fallback when the other is blank", () => {
+    // A confirm cannot keep just one provider action; the remaining label is
+    // authored content, so the fallback renders it beside the question.
     const message = buildTemplateMessageFromPayload({
       type: "confirm",
       text: "Continue?",
@@ -66,7 +68,20 @@ describe("template payload textual fallback", () => {
       cancelData: "no",
     });
 
-    expect(message).toEqual({ type: "text", text: "Continue?" });
+    expect(message).toEqual({ type: "text", text: "Continue? (No)" });
+  });
+
+  it("delivers only labels when the confirm question and altText are blank", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "confirm",
+      text: " ",
+      confirmLabel: "Yes",
+      confirmData: "yes",
+      cancelLabel: "",
+      cancelData: "",
+    });
+
+    expect(message).toEqual({ type: "text", text: "(Yes)" });
   });
 
   it("sends the label when a template action's data is blank", () => {
@@ -207,7 +222,7 @@ describe("template payload textual fallback", () => {
     expect(template.template.actions).toEqual([{ type: "message", label: "One", text: "one" }]);
   });
 
-  it("delivers the confirm altText as text when the question is blank", () => {
+  it("delivers the confirm altText with both labels when the question is blank", () => {
     const message = buildTemplateMessageFromPayload({
       type: "confirm",
       text: " ",
@@ -218,7 +233,7 @@ describe("template payload textual fallback", () => {
       altText: "Continue?",
     });
 
-    expect(message).toEqual({ type: "text", text: "Continue?" });
+    expect(message).toEqual({ type: "text", text: "Continue? (Yes / No)" });
   });
 
   it("delivers carousel content as text instead of trimming unequal action counts", () => {
@@ -280,7 +295,7 @@ describe("template payload textual fallback", () => {
       altText,
     });
 
-    expect(message).toEqual({ type: "text", text: altText });
+    expect(message).toEqual({ type: "text", text: `${altText} (No)` });
   });
 
   it("truncates a fallback alternative text at the provider limit", () => {
@@ -294,7 +309,20 @@ describe("template payload textual fallback", () => {
       altText: "a".repeat(1600),
     });
 
-    expect(message).toEqual({ type: "text", text: "a".repeat(1500) });
+    expect(message).toEqual({ type: "text", text: `${"a".repeat(1500)} (No)` });
+  });
+
+  it("delivers button labels when text, title, and altText are all blank", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "buttons",
+      text: " ",
+      actions: [
+        { type: "message", label: "Help", data: "/help" },
+        { type: "message", label: "Status", data: "/status" },
+      ],
+    });
+
+    expect(message).toEqual({ type: "text", text: "(Help / Status)" });
   });
 
   it("fails loudly when a template payload has nothing deliverable", () => {

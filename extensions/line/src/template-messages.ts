@@ -297,17 +297,20 @@ export function createCarouselColumn(params: {
 
 // A degraded column must keep every user-visible part: title, text, and the
 // labels of the actions the recipient can no longer tap.
+// Surviving action labels are authored content; a textual fallback renders
+// every non-blank one so degraded controls stay visible to the recipient.
+function labeledActionSuffix(labels: Array<string | undefined>): string {
+  const rendered = labels
+    .map((label) => label?.trim())
+    .filter((label): label is string => Boolean(label));
+  return rendered.length ? `(${rendered.join(" / ")})` : "";
+}
+
 function describeCarouselColumn(column: CarouselColumn): string {
   const text = column.text.trim();
   const heading = column.title ? (text ? `${column.title}: ${text}` : column.title) : text;
-  const labels = column.actions
-    .map((action) => action.label?.trim())
-    .filter((label): label is string => Boolean(label));
-  if (labels.length === 0) {
-    return heading;
-  }
-  const rendered = `(${labels.join(" / ")})`;
-  return heading ? `${heading} ${rendered}` : rendered;
+  const suffix = labeledActionSuffix(column.actions.map((action) => action.label));
+  return [heading, suffix].filter(Boolean).join(" ");
 }
 
 // A template that lost every button still carries user-visible content; LINE
@@ -333,11 +336,14 @@ export function buildTemplateMessageFromPayload(
   switch (payload.type) {
     case "confirm": {
       // Confirm templates require two labeled actions and body text; a blank
-      // value in any of them makes LINE reject the whole message.
+      // value in any of them makes LINE reject the whole message. A confirm
+      // cannot keep just one provider action, so the fallback carries any
+      // surviving label alongside the question instead of dropping it.
       if (!payload.confirmLabel || !payload.cancelLabel || !payload.text.trim()) {
-        return templateTextFallback(
-          truncateTemplateText(payload.altText || payload.text, TEMPLATE_ALT_TEXT_LIMIT),
-        );
+        const raw = payload.altText || payload.text;
+        const base = raw.trim() ? truncateTemplateText(raw, TEMPLATE_ALT_TEXT_LIMIT) : "";
+        const suffix = labeledActionSuffix([payload.confirmLabel, payload.cancelLabel]);
+        return templateTextFallback([base, suffix].filter(Boolean).join(" "));
       }
 
       // Empty data means "tap sends the label", matching buildTemplatePayloadAction.
@@ -368,9 +374,12 @@ export function buildTemplateMessageFromPayload(
       const bodyText = payload.text.trim() ? payload.text : undefined;
       const text = bodyText ?? title;
       if (!text) {
-        return templateTextFallback(
-          truncateTemplateText(payload.altText ?? "", TEMPLATE_ALT_TEXT_LIMIT),
-        );
+        // No body and no title: the altText summary still cannot stand in
+        // for the buttons themselves, so their labels ride along.
+        const raw = payload.altText ?? "";
+        const base = raw.trim() ? truncateTemplateText(raw, TEMPLATE_ALT_TEXT_LIMIT) : "";
+        const suffix = labeledActionSuffix(actions.map((action) => action.label));
+        return templateTextFallback([base, suffix].filter(Boolean).join(" "));
       }
       // Only an actual fold drops the title slot; an authored title that
       // happens to match the text stays.
