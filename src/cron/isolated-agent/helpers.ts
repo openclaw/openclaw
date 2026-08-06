@@ -4,6 +4,7 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
@@ -252,9 +253,15 @@ export function resolveCronPayloadOutcome(params: {
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
   const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
-  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
-    params.finalAssistantVisibleText,
-  );
+  const rawFinalAssistantVisibleText = normalizeOptionalString(params.finalAssistantVisibleText);
+  // Silent-reply tokens (NO_REPLY) are outbound-suppressed and are not user-visible
+  // output. Treat them as absent so a preceding tool failure is not falsely classified
+  // as recovered.
+  const normalizedFinalAssistantVisibleText =
+    rawFinalAssistantVisibleText !== undefined &&
+    !isSilentReplyPayloadText(rawFinalAssistantVisibleText)
+      ? rawFinalAssistantVisibleText
+      : undefined;
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&

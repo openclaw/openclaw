@@ -29,6 +29,26 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toContain("Exec failed");
   });
 
+  it("keeps exec tool warnings fatal when the assistant replied with NO_REPLY (#116731)", () => {
+    // Regression: when the agent's only reply was the NO_REPLY sentinel, the outbound-
+    // suppressed text was leaking into finalAssistantVisibleText and being treated as
+    // "recovering terminal output", causing the exec failure to be silently cleared.
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ Bash failed: /mnt/d: No such file or directory",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "NO_REPLY",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("Bash failed");
+    expect(result.summary).toContain("Bash failed");
+  });
+
   it("lets preferred final assistant text recover a plain tool warning", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
