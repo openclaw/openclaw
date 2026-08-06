@@ -174,6 +174,41 @@ describeControlUiE2e("Control UI guarded config writes mocked Gateway E2E", () =
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBeGreaterThan(configGetsBeforePatch);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: {
+                context: {
+                  runtimeConfig: {
+                    state: {
+                      configDraftBaseHash?: string | null;
+                      configFormDirty: boolean;
+                      configLoading: boolean;
+                      configSaving: boolean;
+                      configSnapshot: { hash?: string | null } | null;
+                    };
+                  };
+                };
+              };
+            };
+            const state = app.runtime?.context.runtimeConfig.state;
+            return {
+              draftBaseHash: state?.configDraftBaseHash,
+              formDirty: state?.configFormDirty,
+              loading: state?.configLoading,
+              saving: state?.configSaving,
+              snapshotHash: state?.configSnapshot?.hash,
+            };
+          }),
+        )
+        .toEqual({
+          draftBaseHash: "snapshot-2",
+          formDirty: false,
+          loading: false,
+          saving: false,
+          snapshotHash: "snapshot-2",
+        });
       await expect.poll(() => codeModeRow.textContent()).toContain("Using default: Enabled");
 
       expect(
@@ -181,6 +216,7 @@ describeControlUiE2e("Control UI guarded config writes mocked Gateway E2E", () =
       ).toBe(200);
       const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
       await expect.poll(() => endpoint.inputValue()).toBe("local-api");
+      const saveIndicator = page.locator("openclaw-settings-save-indicator");
 
       await gateway.deferNext("config.set");
       await endpoint.fill("form-api");
@@ -194,7 +230,6 @@ describeControlUiE2e("Control UI guarded config writes mocked Gateway E2E", () =
         message: "config changed since last load; re-run config.get and retry",
       });
 
-      const saveIndicator = page.locator("openclaw-settings-save-indicator");
       await expect.poll(() => saveIndicator.textContent()).toContain("Settings changed elsewhere");
       await expect
         .poll(() => saveIndicator.getByRole("button", { name: "Reload" }).count())
