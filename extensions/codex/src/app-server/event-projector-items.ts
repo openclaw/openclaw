@@ -1,3 +1,4 @@
+import { isReplaySafeToolCall } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readItemString } from "./event-projector-values.js";
 import type { CodexThreadItem } from "./protocol.js";
 
@@ -181,9 +182,11 @@ export function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean
 
 export function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
   if (item.type === "commandExecution") {
-    // Codex commandActions describe presentation, not safety. Upstream may
-    // classify mutating commands as read/search, so native commands fail closed.
-    return true;
+    // Prefer shared shell replay-safety analysis over commandActions presentation
+    // hints (those can mislabel mutating commands as read/search). Unknown or
+    // non-read-only commands stay fail-closed as mutating/side-effecting.
+    const command = typeof item.command === "string" ? item.command : "";
+    return !isReplaySafeToolCall("bash", { command });
   }
   return (
     item.type === "fileChange" ||
