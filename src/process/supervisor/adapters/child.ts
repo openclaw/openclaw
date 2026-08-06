@@ -6,7 +6,7 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
 } from "../../../plugin-sdk/windows-spawn.js";
-import { signalProcessTree } from "../../kill-tree.js";
+import { killProcessTree, signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import {
   addSecretInputStdio,
@@ -20,7 +20,12 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
-import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
+import {
+  GRACEFUL_CANCEL_TIMEOUT_MS,
+  type ManagedRunStdin,
+  type SpawnProcessAdapter,
+  type SpawnSecretInput,
+} from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
@@ -257,6 +262,13 @@ export async function createChildAdapter(params: {
   let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
+  let attachedTreeTermination: ReturnType<typeof killProcessTree>;
+  // True once a Linux attached SIGTERM delegated to killProcessTree. When that
+  // call declined to return a force handle (the root identity could not be
+  // bound), a later SIGKILL must not fall back to the generic tree-enumerating
+  // signal helper, which could discover and signal a recycled PID. Only the
+  // direct child PID may be signaled in that fail-closed state.
+  let attemptedAttachedLinuxTree = false;
   let hardKillRequested = false;
   let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
@@ -443,6 +455,29 @@ export async function createChildAdapter(params: {
     });
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
+    if (signal === "SIGKILL" && attachedTreeTermination) {
+      attachedTreeTermination.force();
+      return;
+    }
+    if (
+      (signal === undefined || signal === "SIGKILL") &&
+      attemptedAttachedLinuxTree &&
+      !attachedTreeTermination
+    ) {
+      // The Linux attached SIGTERM delegated to killProcessTree, which declined
+      // to retain a force handle because the root identity could not be bound.
+      // The fail-closed contract forbids re-enumerating a tree here (a recycled
+      // PID could be discovered and signaled), so only the direct child PID is
+      // force-killed.
+      hardKillRequested = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore kill errors
+      }
+      scheduleForceKillWaitFallback("SIGKILL");
+      return;
+    }
     if (signal === undefined || signal === "SIGKILL") {
       hardKillRequested = true;
       scheduleForcedWindowsCloseSettlement();
@@ -476,7 +511,17 @@ export async function createChildAdapter(params: {
       return;
     }
     if (signal === "SIGTERM" && pid) {
-      signalProcessTreeForChild(pid, "SIGTERM");
+      if (process.platform === "linux" && !childIsDetached) {
+        // Linux can bind attached descendants to `/proc` identities, so one
+        // tree termination owns TERM-to-KILL state even after its root exits.
+        attemptedAttachedLinuxTree = true;
+        attachedTreeTermination = killProcessTree(pid, {
+          detached: false,
+          graceMs: GRACEFUL_CANCEL_TIMEOUT_MS,
+        });
+      } else {
+        signalProcessTreeForChild(pid, "SIGTERM");
+      }
       return;
     }
     try {

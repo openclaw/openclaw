@@ -58,6 +58,8 @@ export type ManagedRunStdin = {
   writableFinished?: boolean;
 };
 
+export const GRACEFUL_CANCEL_TIMEOUT_MS = 5000;
+
 export type SpawnSecretInput = {
   fd: number;
   createData: () => Buffer;

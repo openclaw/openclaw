@@ -12,26 +12,31 @@ import {
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
-  () => ({
-    spawnWithFallbackMock: vi.fn(),
-    signalProcessTreeMock: vi.fn(
-      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
-        opts?.onComplete?.();
-      },
-    ),
-    createWindowsOutputDecoderMock: vi.fn(() => ({
-      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
-      flush: () => "",
-    })),
-  }),
-);
+const {
+  killProcessTreeMock,
+  spawnWithFallbackMock,
+  signalProcessTreeMock,
+  createWindowsOutputDecoderMock,
+} = vi.hoisted(() => ({
+  killProcessTreeMock: vi.fn(),
+  spawnWithFallbackMock: vi.fn(),
+  signalProcessTreeMock: vi.fn(
+    (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+      opts?.onComplete?.();
+    },
+  ),
+  createWindowsOutputDecoderMock: vi.fn(() => ({
+    decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+    flush: () => "",
+  })),
+}));
 
 vi.mock("../../spawn-utils.js", () => ({
   spawnWithFallback: spawnWithFallbackMock,
 }));
 
 vi.mock("../../kill-tree.js", () => ({
+  killProcessTree: killProcessTreeMock,
   signalProcessTree: signalProcessTreeMock,
 }));
 
@@ -149,6 +154,7 @@ describe("createChildAdapter", () => {
     });
     ({ getWindowsInstallRoots } = await import("../../../infra/windows-install-roots.js"));
     ({ createChildAdapter } = await import("./child.js"));
+    killProcessTreeMock.mockClear();
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
@@ -354,6 +360,72 @@ describe("createChildAdapter", () => {
     }
   });
 
+  it.runIf(process.platform === "linux")(
+    "keeps the service-managed attached tree through SIGTERM escalation",
+    async () => {
+      setPlatform("linux");
+      process.env.OPENCLAW_SERVICE_MARKER = "1";
+      try {
+        const { adapter, killMock } = await createAdapterHarness({ pid: 7653 });
+        adapter.kill("SIGTERM");
+
+        expect(killProcessTreeMock).toHaveBeenCalledWith(7653, { detached: false, graceMs: 5000 });
+        expect(signalProcessTreeMock).not.toHaveBeenCalled();
+        expect(killMock).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "force-kills the attached tree snapshot during supervisor escalation",
+    async () => {
+      setPlatform("linux");
+      process.env.OPENCLAW_SERVICE_MARKER = "1";
+      const forceMock = vi.fn();
+      killProcessTreeMock.mockReturnValueOnce({ force: forceMock });
+      try {
+        const { adapter, killMock } = await createAdapterHarness({ pid: 7655 });
+        adapter.kill("SIGTERM");
+        adapter.kill("SIGKILL");
+
+        expect(killProcessTreeMock).toHaveBeenCalledOnce();
+        expect(forceMock).toHaveBeenCalledOnce();
+        expect(signalProcessTreeMock).not.toHaveBeenCalled();
+        expect(killMock).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "does not re-enumerate the tree when the attached identity could not be captured",
+    async () => {
+      // When killProcessTree declines a force handle (the root identity could
+      // not be bound), a later SIGKILL must fall back to the direct child PID
+      // only, never the generic tree-enumerating signal helper that could
+      // discover and signal a recycled PID.
+      setPlatform("linux");
+      process.env.OPENCLAW_SERVICE_MARKER = "1";
+      killProcessTreeMock.mockReturnValueOnce(undefined);
+      try {
+        const { adapter, killMock } = await createAdapterHarness({ pid: 7657 });
+        adapter.kill("SIGTERM");
+        adapter.kill("SIGKILL");
+
+        expect(killProcessTreeMock).toHaveBeenCalledOnce();
+        // The fail-closed SIGKILL signals the direct child only.
+        expect(killMock).toHaveBeenCalledWith("SIGKILL");
+        // It must not re-enumerate via the generic signal helper.
+        expect(signalProcessTreeMock).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      }
+    },
+  );
+
   it("uses process-tree kill for graceful SIGTERM cancellation", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });
 
@@ -366,24 +438,41 @@ describe("createChildAdapter", () => {
     expect(killMock).not.toHaveBeenCalled();
   });
 
-  it("passes detached:false to process-tree SIGTERM when spawn fell back to no-detach", async () => {
-    const { child, killMock } = createStubChild(8765);
-    spawnWithFallbackMock.mockResolvedValue({
-      child,
-      usedFallback: true,
-      fallbackLabel: "no-detach",
-    });
-    const adapter = await createChildAdapter({
-      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
-      stdinMode: "pipe-open",
-    });
+  it.runIf(process.platform === "linux")(
+    "keeps the attached tree snapshot through SIGTERM escalation after no-detach fallback",
+    async () => {
+      const { child, killMock } = createStubChild(8765);
+      spawnWithFallbackMock.mockResolvedValue({
+        child,
+        usedFallback: true,
+        fallbackLabel: "no-detach",
+      });
+      const adapter = await createChildAdapter({
+        argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+        stdinMode: "pipe-open",
+      });
 
-    adapter.kill("SIGTERM");
+      adapter.kill("SIGTERM");
 
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(8765, "SIGTERM", {
-      detached: false,
-    });
-    expect(killMock).not.toHaveBeenCalled();
+      expect(killProcessTreeMock).toHaveBeenCalledWith(8765, { detached: false, graceMs: 5000 });
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
+      expect(killMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("signals the attached root directly when no safe tree identity exists", async () => {
+    setPlatform("darwin");
+    process.env.OPENCLAW_SERVICE_MARKER = "1";
+    try {
+      const { adapter, killMock } = await createAdapterHarness({ pid: 7656 });
+      adapter.kill("SIGTERM");
+
+      expect(killProcessTreeMock).not.toHaveBeenCalled();
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(7656, "SIGTERM", { detached: false });
+      expect(killMock).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+    }
   });
 
   it("uses direct child.kill for non-SIGTERM and non-SIGKILL signals", async () => {
