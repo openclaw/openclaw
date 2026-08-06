@@ -76,9 +76,10 @@ async function writeLease(
 ) {
   const file = leasePath(input.home, input.workspace, nonce);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const processes = await Promise.all(
-    pids.map(async (pid) => ({ pid, start: await processStart(pid) })),
-  );
+  const processes: Array<{ pid: number; start: string }> = [];
+  for (const pid of pids) {
+    processes.push({ pid, start: await processStart(pid) });
+  }
   await fs.writeFile(
     file,
     `${JSON.stringify({
