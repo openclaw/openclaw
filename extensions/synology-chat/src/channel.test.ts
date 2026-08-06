@@ -22,13 +22,11 @@ const securityAccountDefaults: ResolvedSynologyChatAccount = {
   allowInsecureSsl: false,
 };
 
-const { preparedCapabilityUrl, prepareSynologyHostedMediaMock, hostedMediaCleanupMock } =
-  vi.hoisted(() => ({
-    preparedCapabilityUrl:
-      "https://gateway.example.com/w?__openclaw_synology_media_token_aaaaaaaaaaaaaaaaaaaaaaaa=secret",
-    prepareSynologyHostedMediaMock: vi.fn(),
-    hostedMediaCleanupMock: vi.fn(async () => undefined),
-  }));
+const { preparedCapabilityUrl, prepareSynologyHostedMediaMock } = vi.hoisted(() => ({
+  preparedCapabilityUrl:
+    "https://gateway.example.com/w?__openclaw_synology_media_token_aaaaaaaaaaaaaaaaaaaaaaaa=secret",
+  prepareSynologyHostedMediaMock: vi.fn(),
+}));
 
 vi.mock("./outbound-media.js", () => ({
   prepareSynologyHostedMedia: prepareSynologyHostedMediaMock,
@@ -80,7 +78,6 @@ describe("createSynologyChatPlugin", () => {
     mockSendMessage.mockClear();
     mockSendHostedFileUrl.mockClear();
     prepareSynologyHostedMediaMock.mockReset();
-    hostedMediaCleanupMock.mockClear();
     registerSynologyWebhookRouteMock.mockClear();
     mockSendMessage.mockResolvedValue(true);
     mockSendHostedFileUrl.mockResolvedValue(true);
@@ -88,7 +85,7 @@ describe("createSynologyChatPlugin", () => {
       if (!account.webhookUrl) {
         throw new Error("Synology Chat attachments require webhookUrl");
       }
-      return { url: preparedCapabilityUrl, cleanup: hostedMediaCleanupMock };
+      return { url: preparedCapabilityUrl };
     });
     registerSynologyWebhookRouteMock.mockImplementation(async () => vi.fn(async () => undefined));
   });
@@ -664,7 +661,6 @@ describe("createSynologyChatPlugin", () => {
       expect(prepareSynologyHostedMediaMock).toHaveBeenCalledWith(
         expect.objectContaining({ mediaUrl: "https://example.com/img.png" }),
       );
-      expect(hostedMediaCleanupMock).not.toHaveBeenCalled();
     });
 
     it("sendMedia throws when missing incomingUrl", async () => {
@@ -701,7 +697,7 @@ describe("createSynologyChatPlugin", () => {
       expect(mockSendHostedFileUrl).not.toHaveBeenCalled();
     });
 
-    it("sendMedia revokes staged bytes when Synology rejects the webhook", async () => {
+    it("sendMedia retains staged bytes when webhook acceptance is indeterminate", async () => {
       mockSendHostedFileUrl.mockResolvedValueOnce(false);
       await expect(
         synologyChatPlugin.outbound.sendMedia({
@@ -718,8 +714,7 @@ describe("createSynologyChatPlugin", () => {
           mediaUrl: "https://example.com/img.png",
           to: "user1",
         }),
-      ).rejects.toThrow("did not accept the hosted attachment request");
-      expect(hostedMediaCleanupMock).toHaveBeenCalledTimes(1);
+      ).rejects.toThrow("acceptance could not be confirmed");
     });
 
     it("sanitizeText strips internal tool-trace banners from outbound text", () => {

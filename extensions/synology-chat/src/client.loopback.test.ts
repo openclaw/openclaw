@@ -208,7 +208,7 @@ describe("Synology Chat user_list loopback", () => {
         mediaUrl: "https://example.com/synology-receipt-proof.png",
         to: "42",
       }),
-    ).rejects.toThrow("did not accept the hosted attachment request");
+    ).rejects.toThrow("acceptance could not be confirmed");
     expect(rejectedRequests).toBe(4);
   });
 
