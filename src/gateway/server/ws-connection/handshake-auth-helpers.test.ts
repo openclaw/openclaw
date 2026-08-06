@@ -171,6 +171,17 @@ describe("handshake auth helpers", () => {
     expect(resolved.rateLimitClientIp).toBe("198.18.0.1");
   });
 
+  it("preserves an attributed non-exempt subject for browser traffic", () => {
+    const subject = { key: "100.64.0.8", exemption: "none" as const };
+    const resolved = resolveHandshakeBrowserSecurityContext({
+      requestOrigin: "https://app.example",
+      clientIp: "100.64.0.8",
+      rateLimitSubject: subject,
+    });
+
+    expect(resolved.rateLimitClientIp).toBe(subject);
+  });
+
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {
     const resolved = resolveUnauthorizedHandshakeContext({
       connectAuth: { token: "shared-token" },

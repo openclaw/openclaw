@@ -86,6 +86,16 @@ export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayA
     sendRateLimited(res, authResult.retryAfterMs);
     return;
   }
+  if (authResult.reason === "proxy_attribution_required") {
+    sendJson(res, 403, {
+      error: {
+        message:
+          "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+        type: "proxy_attribution_required",
+      },
+    });
+    return;
+  }
   sendUnauthorized(res);
 }
 

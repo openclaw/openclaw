@@ -563,6 +563,32 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("fails closed with guidance for unattributable proxied readiness", async () => {
+    await withGatewayServer({
+      prefix: "probe-unattributable-proxy",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        getReadiness: () => ({ ready: true, failing: [], uptimeMs: 45_000 }),
+      },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/ready",
+          headers: { "x-forwarded-for": "198.51.100.10" },
+          authorization: "Bearer test-token",
+        });
+
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(getBody())).toEqual({
+          error: {
+            message:
+              "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+            type: "proxy_attribution_required",
+          },
+        });
+      },
+    });
+  });
+
   it("returns only readiness state for unauthenticated remote /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,

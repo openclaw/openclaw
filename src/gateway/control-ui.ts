@@ -89,6 +89,7 @@ import {
   resolveTrustedHttpOperatorScopes,
   setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
+import type { GatewayIngressAttribution } from "./ingress-attribution.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -114,6 +115,7 @@ type ControlUiRequestOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  ingressAttribution?: GatewayIngressAttribution;
 };
 
 export type ControlUiRootState =
@@ -292,6 +294,7 @@ async function authorizeControlUiReadRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    ingressAttribution?: GatewayIngressAttribution;
     allowQueryToken?: boolean;
     requiredOperatorMethod?: string;
     onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
@@ -305,7 +308,10 @@ async function authorizeControlUiReadRequest(
   const token = resolveControlUiReadAuthToken(req, {
     allowQueryToken: opts.allowQueryToken,
   });
+  const attributed =
+    opts.ingressAttribution?.kind === "unattributable-proxy" ? undefined : opts.ingressAttribution;
   const clientIp =
+    attributed?.rateLimit.subject ??
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;
   const authResult = await authorizeHttpGatewayConnect({
@@ -318,6 +324,7 @@ async function authorizeControlUiReadRequest(
     rateLimiter: token ? opts.rateLimiter : undefined,
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+    ingressAttribution: opts.ingressAttribution,
   });
   const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
     opts.auth,
@@ -327,6 +334,7 @@ async function authorizeControlUiReadRequest(
   let verifiedDeviceScopes: string[] | undefined;
   if (
     !resolvedAuthResult.ok &&
+    resolvedAuthResult.reason !== "proxy_attribution_required" &&
     token &&
     opts.auth.mode !== "trusted-proxy" &&
     opts.auth.mode !== "none"
@@ -346,8 +354,10 @@ async function authorizeControlUiReadRequest(
         : null;
       if (deviceScopes) {
         verifiedDeviceScopes = deviceScopes;
-        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+        if (attributed?.rateLimit.resetOnSuccess ?? true) {
+          opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+          opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+        }
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
         await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
@@ -629,6 +639,7 @@ export async function handleControlUiAssistantMediaRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    ingressAttribution?: GatewayIngressAttribution;
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
@@ -656,6 +667,7 @@ export async function handleControlUiAssistantMediaRequest(
       trustedProxies: opts?.trustedProxies,
       allowRealIpFallback: opts?.allowRealIpFallback,
       rateLimiter: opts?.rateLimiter,
+      ingressAttribution: opts?.ingressAttribution,
       allowQueryToken: true,
     }))
   ) {
@@ -759,6 +771,7 @@ export async function handleControlUiAvatarRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    ingressAttribution?: GatewayIngressAttribution;
   },
 ): Promise<boolean> {
   const urlRaw = req.url;
@@ -793,6 +806,7 @@ export async function handleControlUiAvatarRequest(
       trustedProxies: opts.trustedProxies,
       allowRealIpFallback: opts.allowRealIpFallback,
       rateLimiter: opts.rateLimiter,
+      ingressAttribution: opts.ingressAttribution,
     }))
   ) {
     return true;
@@ -1038,6 +1052,7 @@ export async function handleControlUiHttpRequest(
         trustedProxies: opts?.trustedProxies,
         allowRealIpFallback: opts?.allowRealIpFallback,
         rateLimiter: opts?.rateLimiter,
+        ingressAttribution: opts?.ingressAttribution,
         onPluginFrameGrants: (grants) => {
           pluginFrameGrants = grants;
         },

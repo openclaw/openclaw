@@ -110,6 +110,12 @@ openclaw gateway --tailscale funnel --auth password
 
 When `tailscale.mode: "serve"` and `gateway.auth.allowTailscale` is `true`, Control UI/WebSocket auth can use Tailscale identity headers (`tailscale-user-login`) instead of a token/password. OpenClaw verifies the header by resolving the request's `x-forwarded-for` address via the local Tailscale daemon (`tailscale whois`) and matching it to the header login before accepting it. A request only qualifies for this path when it arrives from loopback carrying Tailscale's `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` headers.
 
+Serve attribution is prepared before authentication rate limiting, so each
+verified tailnet client has its own limiter key. OpenClaw-managed Funnel also
+uses Tailscale's validated source address as a per-client key, while retaining
+its required shared-password authentication. Neither path is grouped with
+generic loopback proxy traffic.
+
 This tokenless flow assumes the gateway host is trusted. If untrusted local code may run on the same host, set `gateway.auth.allowTailscale: false` and require token/password auth instead.
 
 Scope of the bypass:

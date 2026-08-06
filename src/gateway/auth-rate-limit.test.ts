@@ -417,6 +417,20 @@ describe("auth rate limiter", () => {
     expect(limiter.check("127.0.0.1").allowed).toBe(false);
   });
 
+  it("does not exempt a prepared non-local subject with a loopback key", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1 });
+    const subject = { key: "127.0.0.1", exemption: "none" as const };
+    limiter.recordFailure(subject);
+    expect(limiter.check(subject).allowed).toBe(false);
+  });
+
+  it("keeps the configured loopback policy for a prepared local subject", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, exemptLoopback: false });
+    const subject = { key: "127.0.0.1", exemption: "configured-loopback" as const };
+    limiter.recordFailure(subject);
+    expect(limiter.check(subject).allowed).toBe(false);
+  });
+
   it("does not exempt opaque identity keys", () => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     const key = buildRateLimitIdentityKey("node", "node-1");

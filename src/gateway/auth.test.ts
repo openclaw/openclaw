@@ -15,6 +15,7 @@ import {
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
+import { prepareGatewayIngressAttribution } from "./ingress-attribution.js";
 
 function createLimiterSpy(): AuthRateLimiter & {
   check: ReturnType<typeof vi.fn>;
@@ -508,6 +509,46 @@ describe("gateway auth", () => {
     });
   });
 
+  it("rejects unattributable proxy ingress before checking credentials", async () => {
+    const limiter = createLimiterSpy();
+    const req = {
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: { "x-forwarded-for": "198.51.100.10" },
+    } as never;
+    await prepareGatewayIngressAttribution({ req });
+    const res = await authorizeHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "secret" },
+      req,
+      rateLimiter: limiter,
+    });
+
+    expect(res).toEqual({ ok: false, reason: "proxy_attribution_required" });
+    expect(limiter.check).not.toHaveBeenCalled();
+    expect(limiter.reset).not.toHaveBeenCalled();
+  });
+
+  it("verifies Serve identity before an unrelated limiter bucket", async () => {
+    const limiter = createLimiterSpy();
+    limiter.check.mockReturnValue({ allowed: false, remaining: 0, retryAfterMs: 60_000 });
+    const req = createTailscaleForwardedReq();
+    await prepareGatewayIngressAttribution({
+      req,
+      tailscaleWhois: createTailscaleWhois(),
+      tailscaleMode: "serve",
+    });
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req,
+      rateLimiter: limiter,
+    });
+
+    expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter@github" });
+    expect(limiter.check).not.toHaveBeenCalled();
+  });
+
   it("allows an origin-less same-origin image through the profile avatar surface", async () => {
     const limiter = createLimiterSpy();
     const req = createTailscaleForwardedReq();
@@ -521,7 +562,7 @@ describe("gateway auth", () => {
     });
 
     expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter@github" });
-    expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.check).not.toHaveBeenCalled();
     expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
   });
 

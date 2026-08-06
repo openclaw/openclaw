@@ -10,10 +10,17 @@ import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infr
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  type AuthRateLimitSubject,
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import {
+  readPreparedGatewayIngressAttribution,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
+  type GatewayIngressAttribution,
+  type VerifiedTailscaleIngressIdentity,
+} from "./ingress-attribution.js";
 import {
   isLocalDirectRequest,
   isLoopbackAddress,
@@ -69,6 +76,7 @@ type AuthorizeGatewayConnectParams = {
   req?: IncomingMessage;
   trustedProxies?: string[];
   tailscaleWhois?: TailscaleWhoisLookup;
+  ingressAttribution?: GatewayIngressAttribution;
   /**
    * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
    * WS Control UI enables it intentionally for tokenless trusted-host login.
@@ -77,7 +85,7 @@ type AuthorizeGatewayConnectParams = {
   /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
   rateLimiter?: AuthRateLimiter;
   /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
-  clientIp?: string;
+  clientIp?: string | AuthRateLimitSubject;
   /** Optional limiter scope; defaults to shared-secret auth scope. */
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
@@ -92,20 +100,18 @@ type AuthorizeGatewayConnectParams = {
   };
 };
 
-type VerifiedTailscaleIdentity = {
-  login: string;
-  name: string;
-  profilePic?: string;
-};
+type VerifiedTailscaleIdentity = VerifiedTailscaleIngressIdentity;
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
 type GatewayAuthRequestContext = {
   authSurface: GatewayAuthSurface;
   limiter?: AuthRateLimiter;
-  ip?: string;
+  subject?: string | AuthRateLimitSubject;
   rateLimitScope: string;
   localDirect: boolean;
+  resetOnSuccess: boolean;
+  ingressAttribution?: GatewayIngressAttribution;
 };
 
 function resolveGatewayAuthRequestContext(
@@ -113,7 +119,12 @@ function resolveGatewayAuthRequestContext(
 ): GatewayAuthRequestContext {
   const { req, trustedProxies } = params;
   const authSurface = params.authSurface ?? "http";
+  const attributed =
+    params.ingressAttribution?.kind === "unattributable-proxy"
+      ? undefined
+      : params.ingressAttribution;
   const ip =
+    attributed?.clientIp ??
     params.clientIp ??
     resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
@@ -121,9 +132,13 @@ function resolveGatewayAuthRequestContext(
   return {
     authSurface,
     limiter: params.rateLimiter,
-    ip,
+    subject: attributed?.rateLimit.subject ?? ip,
     rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-    localDirect: isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true),
+    localDirect:
+      attributed?.localDirect ??
+      isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true),
+    resetOnSuccess: attributed?.rateLimit.resetOnSuccess ?? true,
+    ingressAttribution: params.ingressAttribution,
   };
 }
 
@@ -173,40 +188,33 @@ function getTailscaleUser(req?: IncomingMessage): VerifiedTailscaleIdentity | nu
 }
 
 function hasTailscaleProxyHeaders(req?: IncomingMessage): boolean {
-  if (!req) {
-    return false;
-  }
   return Boolean(
-    req.headers["x-forwarded-for"] &&
+    req?.headers["x-forwarded-for"] &&
     req.headers["x-forwarded-proto"] &&
     req.headers["x-forwarded-host"],
   );
-}
-
-function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
-  if (!req) {
-    return false;
-  }
-  return isLoopbackAddress(req.socket?.remoteAddress) && hasTailscaleProxyHeaders(req);
 }
 
 async function resolveVerifiedTailscaleUser(params: {
   req?: IncomingMessage;
   tailscaleWhois: TailscaleWhoisLookup;
 }): Promise<{ ok: true; user: VerifiedTailscaleIdentity } | { ok: false; reason: string }> {
-  const { req, tailscaleWhois } = params;
-  const tailscaleUser = getTailscaleUser(req);
+  const tailscaleUser = getTailscaleUser(params.req);
   if (!tailscaleUser) {
     return { ok: false, reason: "tailscale_user_missing" };
   }
-  if (!isTailscaleProxyRequest(req)) {
+  if (
+    !params.req ||
+    !isLoopbackAddress(params.req.socket?.remoteAddress) ||
+    !hasTailscaleProxyHeaders(params.req)
+  ) {
     return { ok: false, reason: "tailscale_proxy_missing" };
   }
-  const clientIp = resolveTailscaleClientIp(req);
+  const clientIp = resolveTailscaleClientIp(params.req);
   if (!clientIp) {
     return { ok: false, reason: "tailscale_whois_failed" };
   }
-  const whois = await tailscaleWhois(clientIp);
+  const whois = await params.tailscaleWhois(clientIp);
   if (!whois?.login) {
     return { ok: false, reason: "tailscale_whois_failed" };
   }
@@ -383,8 +391,9 @@ async function authorizeTokenAuth(params: {
   authToken?: string;
   connectToken?: string;
   limiter?: AuthRateLimiter;
-  ip?: string;
+  subject?: string | AuthRateLimitSubject;
   rateLimitScope: string;
+  resetOnSuccess: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authToken) {
     return { ok: false, reason: "token_missing_config" };
@@ -396,10 +405,12 @@ async function authorizeTokenAuth(params: {
     return { ok: false, reason: "token_missing" };
   }
   if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    await params.limiter?.recordFailureAndDelay(params.subject, params.rateLimitScope);
     return { ok: false, reason: "token_mismatch" };
   }
-  params.limiter?.reset(params.ip, params.rateLimitScope);
+  if (params.resetOnSuccess) {
+    params.limiter?.reset(params.subject, params.rateLimitScope);
+  }
   return { ok: true, method: "token" };
 }
 
@@ -407,8 +418,9 @@ async function authorizePasswordAuth(params: {
   authPassword?: string;
   connectPassword?: string;
   limiter?: AuthRateLimiter;
-  ip?: string;
+  subject?: string | AuthRateLimitSubject;
   rateLimitScope: string;
+  resetOnSuccess: boolean;
 }): Promise<GatewayAuthResult> {
   if (!params.authPassword) {
     return { ok: false, reason: "password_missing_config" };
@@ -418,22 +430,24 @@ async function authorizePasswordAuth(params: {
     return { ok: false, reason: "password_missing" };
   }
   if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
-    await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
+    await params.limiter?.recordFailureAndDelay(params.subject, params.rateLimitScope);
     return { ok: false, reason: "password_mismatch" };
   }
-  params.limiter?.reset(params.ip, params.rateLimitScope);
+  if (params.resetOnSuccess) {
+    params.limiter?.reset(params.subject, params.rateLimitScope);
+  }
   return { ok: true, method: "password" };
 }
 
 function rejectIfRateLimited(params: {
   limiter?: AuthRateLimiter;
-  ip?: string;
+  subject?: string | AuthRateLimitSubject;
   rateLimitScope: string;
 }): GatewayAuthResult | undefined {
   if (!params.limiter) {
     return undefined;
   }
-  const rlCheck: RateLimitCheckResult = params.limiter.check(params.ip, params.rateLimitScope);
+  const rlCheck: RateLimitCheckResult = params.limiter.check(params.subject, params.rateLimitScope);
   if (rlCheck.allowed) {
     return undefined;
   }
@@ -450,8 +464,15 @@ async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth } = params;
-  const { authSurface, limiter, ip, rateLimitScope, localDirect } =
-    resolveGatewayAuthRequestContext(params);
+  const ingressAttribution =
+    params.ingressAttribution ??
+    (params.req ? await readPreparedGatewayIngressAttribution(params.req) : undefined);
+  if (ingressAttribution?.kind === "unattributable-proxy") {
+    return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
+  }
+  const preparedParams = ingressAttribution ? { ...params, ingressAttribution } : params;
+  const { authSurface, limiter, subject, rateLimitScope, localDirect } =
+    resolveGatewayAuthRequestContext(preparedParams);
 
   // Keep the limiter strict on the async Tailscale branch by serializing
   // attempts for the same {scope, ip} key across the pre-check and failure write.
@@ -462,22 +483,28 @@ async function authorizeGatewayConnect(
     !localDirect
   ) {
     return await withSerializedRateLimitAttempt({
-      ip,
+      ip: subject,
       scope: rateLimitScope,
-      run: async () => await authorizeGatewayConnectCore(params),
+      run: async () => await authorizeGatewayConnectCore(preparedParams),
     });
   }
 
-  return await authorizeGatewayConnectCore(params);
+  return await authorizeGatewayConnectCore(preparedParams);
 }
 
 async function authorizeGatewayConnectCore(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
-  const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const { authSurface, limiter, ip, rateLimitScope, localDirect } =
-    resolveGatewayAuthRequestContext(params);
+  const {
+    authSurface,
+    limiter,
+    subject,
+    rateLimitScope,
+    localDirect,
+    resetOnSuccess,
+    ingressAttribution,
+  } = resolveGatewayAuthRequestContext(params);
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
 
   if (auth.mode === "trusted-proxy") {
@@ -508,7 +535,7 @@ async function authorizeGatewayConnectCore(
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     if (localDirect && auth.password && connectAuth?.password) {
-      const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+      const rateLimitResult = rejectIfRateLimited({ limiter, subject, rateLimitScope });
       if (rateLimitResult) {
         return rateLimitResult;
       }
@@ -516,8 +543,9 @@ async function authorizeGatewayConnectCore(
         authPassword: auth.password,
         connectPassword: connectAuth.password,
         limiter,
-        ip,
+        subject,
         rateLimitScope,
+        resetOnSuccess,
       });
     }
     return { ok: false, reason: result.reason };
@@ -536,16 +564,12 @@ async function authorizeGatewayConnectCore(
     return { ok: true, method: "none" };
   }
 
-  const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
-  if (rateLimitResult) {
-    return rateLimitResult;
-  }
-
   if (
     allowTailscaleHeaderAuth &&
     auth.allowTailscale &&
     !localDirect &&
-    !hasExplicitSharedSecretAuth(connectAuth)
+    !hasExplicitSharedSecretAuth(connectAuth) &&
+    getTailscaleUser(req)
   ) {
     if (authSurface === "http-user-profile-avatar") {
       // Same-origin <img> loads may omit Origin, but Fetch Metadata still identifies
@@ -563,12 +587,17 @@ async function authorizeGatewayConnectCore(
         return originResult;
       }
     }
-    const tailscaleCheck = await resolveVerifiedTailscaleUser({
-      req,
-      tailscaleWhois,
-    });
-    if (tailscaleCheck.ok) {
-      limiter?.reset(ip, rateLimitScope);
+    const tailscaleCheck =
+      ingressAttribution?.kind === "tailscale-serve"
+        ? ({ ok: true, user: ingressAttribution.tailscaleIdentity } as const)
+        : await resolveVerifiedTailscaleUser({
+            req,
+            tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
+          });
+    if (tailscaleCheck.ok && tailscaleCheck.user) {
+      if (resetOnSuccess) {
+        limiter?.reset(subject, rateLimitScope);
+      }
       return {
         ok: true,
         method: "tailscale",
@@ -578,13 +607,19 @@ async function authorizeGatewayConnectCore(
     }
   }
 
+  const rateLimitResult = rejectIfRateLimited({ limiter, subject, rateLimitScope });
+  if (rateLimitResult) {
+    return rateLimitResult;
+  }
+
   if (auth.mode === "token") {
     return await authorizeTokenAuth({
       authToken: auth.token,
       connectToken: connectAuth?.token,
       limiter,
-      ip,
+      subject,
       rateLimitScope,
+      resetOnSuccess,
     });
   }
 
@@ -593,12 +628,13 @@ async function authorizeGatewayConnectCore(
       authPassword: auth.password,
       connectPassword: connectAuth?.password,
       limiter,
-      ip,
+      subject,
       rateLimitScope,
+      resetOnSuccess,
     });
   }
 
-  await limiter?.recordFailureAndDelay(ip, rateLimitScope);
+  await limiter?.recordFailureAndDelay(subject, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
 }
 

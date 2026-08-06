@@ -6,6 +6,7 @@ import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
+  type AuthRateLimitSubject,
 } from "../../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
@@ -64,7 +65,7 @@ type ResolveConnectAuthDecisionParams = {
   role: string;
   scopes: string[];
   rateLimiter?: AuthRateLimiter;
-  clientIp?: string;
+  clientIp?: string | AuthRateLimitSubject;
   verifyBootstrapToken: (params: {
     deviceId: string;
     publicKey: string;
@@ -131,7 +132,7 @@ export async function resolveConnectAuthState(params: {
   trustedProxies: string[];
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
-  clientIp?: string;
+  clientIp?: string | AuthRateLimitSubject;
 }): Promise<ConnectAuthState> {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);

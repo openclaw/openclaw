@@ -23,6 +23,7 @@ import {
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
 import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
+import type { GatewayIngressAttribution } from "./ingress-attribution.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
@@ -75,6 +76,7 @@ type GatewayHttpRequestAuthParams = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  ingressAttribution?: GatewayIngressAttribution;
 };
 
 type GatewayHttpRequestAuthCheckParams = Omit<GatewayHttpRequestAuthParams, "res"> & {
@@ -120,6 +122,7 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  ingressAttribution?: GatewayIngressAttribution;
 }): Promise<AuthorizedGatewayHttpRequest | null> {
   return await authorizeGatewayHttpRequestWithOrReply(params, authorizeHttpGatewayConnect);
 }
@@ -200,6 +203,7 @@ export async function authorizePluginGatewayHttpRequestOrReply(params: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  ingressAttribution?: GatewayIngressAttribution;
   requestPath: string;
   resolveOperatorScopes: (
     req: IncomingMessage,
@@ -229,6 +233,7 @@ export async function checkGatewayHttpRequestAuth(params: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  ingressAttribution?: GatewayIngressAttribution;
   cfg?: OpenClawConfig;
 }): Promise<GatewayHttpRequestAuthCheckResult> {
   return await checkGatewayHttpRequestAuthWith(params, authorizeHttpGatewayConnect);
@@ -247,6 +252,7 @@ async function checkGatewayHttpRequestAuthWith(
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
     rateLimiter: params.rateLimiter,
+    ingressAttribution: params.ingressAttribution,
     browserOriginPolicy,
   });
   if (!authResult.ok) {
@@ -276,6 +282,7 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  ingressAttribution?: GatewayIngressAttribution;
   operatorMethod: string;
   resolveOperatorScopes: (
     req: IncomingMessage,
@@ -312,6 +319,7 @@ async function authorizeScopedGatewayHttpRequestWithOrReply(
       trustedProxies: params.trustedProxies ?? cfg.gateway?.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
       rateLimiter: params.rateLimiter,
+      ingressAttribution: params.ingressAttribution,
     },
     authorizeConnect,
   );

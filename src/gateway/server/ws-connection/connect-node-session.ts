@@ -7,7 +7,10 @@ import {
   beginNodePairingConnect,
   requestNodePairing,
 } from "../../../infra/node-pairing.js";
-import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+  type AuthRateLimitSubject,
+} from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { filterLegacyNodeProtocolFeatures } from "../../node-legacy-protocol-filter.js";
@@ -26,7 +29,7 @@ class NodePairingRateLimitError extends Error {
 async function requestNodePairingFromConnect(params: {
   input: Parameters<typeof requestNodePairing>[0];
   rateLimiter?: import("../../auth-rate-limit.js").AuthRateLimiter;
-  clientIp?: string;
+  clientIp?: string | AuthRateLimitSubject;
   pairedReconnect?: boolean;
   cleanupClaim?: import("../../../infra/node-pairing.js").NodePairingCleanupClaim;
   reapprovalCoordinator?: import("../../node-reapproval-coordinator.js").NodeReapprovalCoordinator;

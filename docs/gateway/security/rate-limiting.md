@@ -33,7 +33,9 @@ request handling. This is the brute-force guard for exposed Gateways.
   successful auth resets the counter for that IP.
 - Defaults: 10 failures per 60 seconds, then a 5 minute lockout for that IP.
 - Loopback (`127.0.0.1` / `::1`) is exempt by default so local CLI sessions
-  cannot be locked out.
+  cannot be locked out. The exemption applies only to a clean direct-local
+  request, not merely to a proxy connection whose socket happens to use
+  loopback.
 - Counters are scoped per credential class, so a flood against one surface
   does not displace another. Scopes include the shared gateway
   token/password, device tokens, node pairing, paired-node reapproval,
@@ -56,6 +58,21 @@ While locked out, connection attempts fail with:
 ```
 
 Attempts from other IPs (including loopback) are unaffected during a lockout.
+
+### Reverse-proxy attribution
+
+The Gateway decides ingress attribution once, before HTTP routing or WebSocket
+authentication. A configured trusted proxy and OpenClaw-managed Tailscale
+Serve/Funnel traffic use validated per-client limiter keys. Forwarded headers
+from an unconfigured same-host proxy are rejected instead of inheriting the
+direct-local exemption. The error tells the operator to configure
+`gateway.trustedProxies` narrowly and make the proxy overwrite or safely
+rebuild the forwarded client chain.
+
+A headerless TCP forwarder cannot be distinguished from a direct local TCP
+client at the HTTP boundary. Do not use raw TCP forwarding as a remote-access
+path; use a configured reverse proxy, SSH forwarding, or the supported
+Tailscale modes.
 
 Tune it under `gateway.auth.rateLimit` in `openclaw.json`:
 
@@ -158,9 +175,10 @@ the resulting restart obeys the cooldown.
   recreated, not on Gateway restart.
 - Bucket maps are bounded (hard entry caps plus periodic pruning), so
   unique-key floods cannot grow memory without bound.
-- When a client is behind a reverse proxy, the effective IP is the resolved
-  client IP; see [trusted proxy auth](/gateway/trusted-proxy-auth) for how
-  proxy headers are validated before they can influence it.
+- When a client is behind a configured reverse proxy, the effective IP is the
+  validated client IP. Unconfigured header-bearing loopback proxies fail
+  closed; see [trusted proxy auth](/gateway/trusted-proxy-auth) for safe header
+  handling.
 - Retry signaling varies by surface: Gateway RPC limiters return
   `retryable: true` plus `retryAfterMs`, the webhook ingress uses HTTP 429
   with a `Retry-After` header, and ACP embeds the wait in the error message.
