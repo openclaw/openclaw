@@ -422,7 +422,6 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
           configured: Boolean(account.token && account.incomingUrl),
           extra: {
             webhookPath: account.webhookPath,
-            webhookUrl: account.webhookUrl || null,
             attachmentsReady: Boolean(account.webhookUrl),
           },
         }),
