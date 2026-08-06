@@ -60,6 +60,7 @@ describe("validateTelegramMiniAppInitData", () => {
       "+1800000000",
       " 1800000000 ",
       "01800000000",
+      "0",
     ]) {
       expect(
         validateTelegramMiniAppInitData({
