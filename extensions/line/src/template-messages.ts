@@ -117,17 +117,22 @@ function normalizeCarouselColumns(columns: CarouselColumn[]): CarouselColumn[] {
     }
     return result;
   });
+  // A column with no text, no title, and no labeled action carries nothing
+  // any rendering could show; it drops before the ten-column cap so it
+  // cannot consume a valid column's slot. Content-bearing columns keep
+  // LINE's longstanding first-N cap behavior.
+  const considered = normalized
+    .filter((column) => column.text.trim() !== "" || column.actions.length > 0)
+    .slice(0, 10); // LINE limit: max 10 columns
   const isDeliverable = (column: CarouselColumn) =>
     column.actions.length > 0 && column.text.trim() !== "";
-  const deliverable = normalized.filter(isDeliverable);
+  const deliverable = considered.filter(isDeliverable);
   // A column LINE cannot render still counts as content when it carries text
   // or a labeled action — the textual fallback can represent either — so
-  // dropping it is lossy. Only a column with neither is omitted losslessly.
+  // dropping it is lossy.
   const dropsContent =
-    normalized.some(
-      (column) =>
-        !isDeliverable(column) && (column.text.trim() !== "" || column.actions.length > 0),
-    ) || new Set(deliverable.map((column) => column.actions.length)).size > 1;
+    considered.some((column) => !isDeliverable(column)) ||
+    new Set(deliverable.map((column) => column.actions.length)).size > 1;
   if (deliverable.length === 0 || dropsContent) {
     return [];
   }
@@ -250,7 +255,7 @@ export function createTemplateCarousel(
 ): TemplateMessage {
   const template: CarouselTemplate = {
     type: "carousel",
-    columns: normalizeCarouselColumns(columns.slice(0, 10)), // LINE limit: max 10 columns
+    columns: normalizeCarouselColumns(columns),
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
   };
@@ -287,7 +292,12 @@ export function createCarouselColumn(params: {
   return {
     title: truncateOptionalTemplateText(normalizedTitle, 40),
     text: truncateTemplateText(params.text, textLimit),
-    actions: params.actions.slice(0, 3).map((action) => normalizeLineAction(action)), // LINE limit: max 3 actions per column
+    // Blank labels are unrenderable and drop before LINE's three-action cap
+    // so an invalid label cannot consume a valid control's slot.
+    actions: params.actions
+      .map((action) => normalizeLineAction(action))
+      .filter(hasRenderableLabel)
+      .slice(0, 3), // LINE limit: max 3 actions per column
     thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
     defaultAction:
@@ -295,8 +305,6 @@ export function createCarouselColumn(params: {
   };
 }
 
-// A degraded column must keep every user-visible part: title, text, and the
-// labels of the actions the recipient can no longer tap.
 // A whitespace-only altText carries nothing readable; treating it as present
 // would let it suppress an authored question, title, or body in a fallback,
 // or blank the fallback into a loud failure.
@@ -313,6 +321,8 @@ function labeledActionSuffix(labels: Array<string | undefined>): string {
   return rendered.length ? `(${rendered.join(" / ")})` : "";
 }
 
+// A degraded column must keep every user-visible part: title, text, and the
+// labels of the actions the recipient can no longer tap.
 function describeCarouselColumn(column: CarouselColumn): string {
   const text = column.text.trim();
   const heading = column.title ? (text ? `${column.title}: ${text}` : column.title) : text;
@@ -408,10 +418,12 @@ export function buildTemplateMessageFromPayload(
     }
 
     case "carousel": {
-      const columns: CarouselColumn[] = payload.columns.slice(0, 10).map((col) => {
-        const colActions: Action[] = col.actions
-          .slice(0, 3)
-          .map((action) => buildTemplatePayloadAction(action));
+      // Caps are owned by the builders, which drop unrenderable entries first
+      // so a blank label or an empty column cannot consume a capped slot.
+      const columns: CarouselColumn[] = payload.columns.map((col) => {
+        const colActions: Action[] = col.actions.map((action) =>
+          buildTemplatePayloadAction(action),
+        );
 
         return createCarouselColumn({
           title: col.title,
@@ -426,7 +438,9 @@ export function buildTemplateMessageFromPayload(
         // The altText is an authored summary, not a substitute for the column
         // content — an arbitrary "Two options" must not replace the columns'
         // text and action labels, so both are delivered.
-        const lines = columns.map(describeCarouselColumn).filter(Boolean);
+        // Mirror the template's ten-column cap over content-bearing lines so
+        // the fallback represents exactly what the template could have shown.
+        const lines = columns.map(describeCarouselColumn).filter(Boolean).slice(0, 10);
         const alt = authoredAltText(payload.altText);
         if (alt !== undefined) {
           lines.unshift(truncateTemplateText(alt, TEMPLATE_ALT_TEXT_LIMIT));

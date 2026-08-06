@@ -117,6 +117,33 @@ describe("carousel column consistency", () => {
     expect(columns[0]?.text).toBe("Short: Body");
   });
 
+  it("filters blank action labels before the three-action cap", () => {
+    // A blank label is unrenderable; letting it consume a capped slot would
+    // silently drop the valid third control.
+    const created = createCarouselColumn({
+      text: "Text",
+      actions: [
+        messageAction("", "x"),
+        messageAction("One"),
+        messageAction("Two"),
+        messageAction("Three"),
+      ],
+    });
+
+    expect(created.actions.map((action) => action.label)).toEqual(["One", "Two", "Three"]);
+  });
+
+  it("omits an empty column before the ten-column cap", () => {
+    // An empty column carries nothing any rendering could show; letting it
+    // consume a capped slot would silently drop the valid tenth column.
+    const template = createTemplateCarousel([
+      createCarouselColumn({ text: " ", actions: [messageAction("", "x")] }),
+      ...Array.from({ length: 10 }, () => column({ actions: 1 })),
+    ]);
+
+    expect(getColumns(template)).toHaveLength(10);
+  });
+
   it("keeps an unavailable-action fallback as a labeled action", () => {
     const template = createTemplateCarousel([
       createCarouselColumn({

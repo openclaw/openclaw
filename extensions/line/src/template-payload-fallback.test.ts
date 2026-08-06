@@ -379,6 +379,58 @@ describe("template payload textual fallback", () => {
     expect(message).toEqual({ type: "text", text: "A" });
   });
 
+  it("keeps four valid button actions when a blank label precedes them", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "buttons",
+      text: "Pick",
+      actions: [
+        { type: "message", label: "" },
+        { type: "message", label: "One", data: "one" },
+        { type: "message", label: "Two", data: "two" },
+        { type: "message", label: "Three", data: "three" },
+        { type: "message", label: "Four", data: "four" },
+      ],
+    });
+
+    const template = expectDefined(message, "buttons template message");
+    if (template.type !== "template" || template.template.type !== "buttons") {
+      throw new Error("expected a buttons template");
+    }
+    expect(template.template.actions.map((action) => action.label)).toEqual([
+      "One",
+      "Two",
+      "Three",
+      "Four",
+    ]);
+  });
+
+  it("keeps three valid carousel actions when a blank label precedes them", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "carousel",
+      columns: [
+        {
+          text: "Pick",
+          actions: [
+            { type: "message", label: "" },
+            { type: "message", label: "One", data: "one" },
+            { type: "message", label: "Two", data: "two" },
+            { type: "message", label: "Three", data: "three" },
+          ],
+        },
+      ],
+    });
+
+    const template = expectDefined(message, "carousel template message");
+    if (template.type !== "template" || template.template.type !== "carousel") {
+      throw new Error("expected a carousel template");
+    }
+    expect(template.template.columns[0]?.actions.map((action) => action.label)).toEqual([
+      "One",
+      "Two",
+      "Three",
+    ]);
+  });
+
   it("fails loudly when a template payload has nothing deliverable", () => {
     expect(() =>
       buildTemplateMessageFromPayload({
