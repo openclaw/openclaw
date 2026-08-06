@@ -19,6 +19,7 @@ import {
 } from "../../agents/sandbox.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
+import { buildInventoryContinuationToolOpts } from "../../agents/tools/continuation-inventory-opts.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
@@ -198,6 +199,9 @@ export async function resolveCommandsSystemPromptBundle(
     sessionKey: toolPolicySessionKey,
     workspaceDir,
   });
+  const continuationToolOpts = buildInventoryContinuationToolOpts(
+    params.cfg?.agents?.defaults?.continuation?.enabled === true,
+  );
   const tools = (() => {
     try {
       return createOpenClawCodingTools({
@@ -217,6 +221,7 @@ export async function resolveCommandsSystemPromptBundle(
         senderE164: params.ctx.SenderE164,
         modelProvider: params.provider,
         modelId: params.model,
+        ...continuationToolOpts,
       });
     } catch {
       return [];

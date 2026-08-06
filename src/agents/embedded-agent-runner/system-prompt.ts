@@ -96,6 +96,8 @@ export function buildEmbeddedSystemPrompt(params: {
   projectMemoryBootstrap?: string[];
   activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
+  /** Whether the continuation feature is enabled for this agent. */
+  continuationEnabled?: boolean;
 }): string {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
@@ -144,6 +146,7 @@ export function buildEmbeddedSystemPrompt(params: {
     projectMemoryBootstrap: params.projectMemoryBootstrap,
     activeProjectKeys: params.activeProjectKeys,
     promptContribution: params.promptContribution,
+    continuationEnabled: params.continuationEnabled,
   });
 }
 

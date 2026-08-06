@@ -12,8 +12,14 @@ import {
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import {
+  resetContinuationTracer,
+  setContinuationTracer,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type { DiagnosticTraceContext, OpenClawPluginService } from "../api.js";
+import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
@@ -98,12 +104,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let unregisterTracePropagationBridge: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
+  let continuationTracerInstalled = false;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
     const currentUnregisterTracePropagationBridge = unregisterTracePropagationBridge;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
+    const currentContinuationTracerInstalled = continuationTracerInstalled;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
 
@@ -111,6 +119,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
     unregisterTracePropagationBridge = null;
     logProvider = null;
     sdk = null;
+    continuationTracerInstalled = false;
     stopActiveTrustedSpans = null;
     unregisterUnhandledRejectionHandler = null;
 
@@ -118,20 +127,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       (
         await Promise.allSettled(stops.map((stop) => Promise.resolve().then(() => stop?.())))
       ).flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-    // Preserve cleanup -> provider flush -> handler removal while attempting every step per phase.
-    const failures = await settle(
-      currentUnregisterTracePropagationBridge,
-      currentUnsubscribe,
-      currentStopActiveTrustedSpans,
-    );
+    // Stop new propagation, drain queued events, then retire listeners/spans before providers.
+    const failures = await settle(currentUnregisterTracePropagationBridge);
+    if (currentUnsubscribe) {
+      failures.push(...(await settle(() => waitForDiagnosticEventsDrained())));
+    }
     failures.push(
+      ...(await settle(currentUnsubscribe)),
+      ...(await settle(currentStopActiveTrustedSpans)),
+      ...(await settle(
+        currentContinuationTracerInstalled ? () => resetContinuationTracer() : null,
+      )),
       ...(await settle(
         currentLogProvider ? () => currentLogProvider.shutdown() : null,
         currentSdk ? () => currentSdk.shutdown() : null,
       )),
       ...(await settle(currentUnregisterUnhandledRejectionHandler)),
     );
-
     if (failures.length === 1) {
       throw failures[0];
     }
@@ -403,6 +415,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...createModelRecorders(recorderRuntime),
         ...createToolAndSystemRecorders(recorderRuntime),
       };
+
+      if (tracesActive) {
+        setContinuationTracer(
+          createContinuationOtelTracerAdapter({
+            resolveSpanContext: diagnosticsTrace.resolveTrustedSpanContext,
+            resolveParentContext: diagnosticsTrace.resolveTrustedParentContext,
+          }),
+        );
+        continuationTracerInstalled = true;
+      }
 
       unsubscribe = subscribe(
         createDiagnosticsEventHandler({

@@ -18,6 +18,7 @@ import {
   resolveToolProfilePolicy,
   type ToolPolicyLike,
 } from "../../agents/tool-policy.js";
+import { buildInventoryContinuationToolOpts } from "../../agents/tools/continuation-inventory-opts.js";
 import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
@@ -184,6 +185,15 @@ export function resolveSkillDispatchTools(params: {
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,
     inheritedToolDenylist: explicitDenylist,
+    // Skills runtime tool-dispatch builds the tool catalog to look up + invoke a
+    // single skill-command, not to register the full continuation tool set for
+    // active-turn execution. Register continue_work + request_compaction via inert
+    // stub callbacks so the catalog reflects the full continuation surface and the
+    // openclaw-tools.ts partial-registration warning is satisfied honestly (not
+    // suppressed).
+    ...buildInventoryContinuationToolOpts(
+      params.cfg?.agents?.defaults?.continuation?.enabled === true,
+    ),
   });
   const policyFiltered = applyToolPolicyPipeline({
     tools,

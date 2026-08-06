@@ -145,6 +145,7 @@ export {
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
+  resolveSessionEntryFromStore,
   resolveSessionEntrySelection,
   updateResolvedSessionEntry,
   upsertSessionEntry,

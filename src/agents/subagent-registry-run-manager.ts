@@ -30,7 +30,7 @@ import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
-import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -52,9 +52,11 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type {
+  SubagentAcceptedSteerDispatch,
   SubagentCompletionRequest,
   SubagentProgressOrigin,
   SubagentRestartRecoveryReceipt,
+  SubagentRunOutcome,
   SubagentRunRecord,
   SwarmQueuedLaunch,
 } from "./subagent-registry.types.js";
@@ -251,6 +253,13 @@ export type RegisterSubagentRunParams = {
   outputSchema?: Record<string, unknown>;
   queuedLaunch?: SwarmQueuedLaunch;
   queued?: boolean;
+  silentAnnounce?: boolean;
+  wakeOnReturn?: boolean;
+  drainsContinuationDelegateQueue?: boolean;
+  continuationTargetSessionKey?: string;
+  continuationTargetSessionKeys?: string[];
+  continuationFanoutMode?: "tree" | "all";
+  traceparent?: string;
 };
 
 export function createSubagentRunManager(params: {
@@ -608,7 +617,12 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const clearSubagentRunSteerRestart = (runId: string, expected?: SubagentRunRecord) => {
+  const clearSubagentRunSteerRestart = (
+    runId: string,
+    expected?: SubagentRunRecord,
+    acceptedDispatch?: SubagentAcceptedSteerDispatch,
+    requirePersistence = false,
+  ) => {
     const key = runId.trim();
     if (!key) {
       return false;
@@ -617,7 +631,36 @@ export function createSubagentRunManager(params: {
     if (!entry || (expected && entry !== expected)) {
       return false;
     }
+    if (acceptedDispatch && entry.acceptedSteerDispatch !== acceptedDispatch) {
+      return false;
+    }
+    const previousSuppressAnnounceReason = entry.suppressAnnounceReason;
+    const previousAcceptedSteerDispatch = entry.acceptedSteerDispatch;
+    const persistClear = () => {
+      try {
+        if (requirePersistence) {
+          params.persistOrThrow(entry.runId);
+        } else {
+          params.persist(entry.runId);
+        }
+        return true;
+      } catch (error) {
+        entry.suppressAnnounceReason = previousSuppressAnnounceReason;
+        entry.acceptedSteerDispatch = previousAcceptedSteerDispatch;
+        log.warn("failed to persist steer dispatch ownership cleanup", {
+          error,
+          runId: entry.runId,
+        });
+        params.startSweeper();
+        params.scheduleSweep({ delayMs: 1_000 });
+        return false;
+      }
+    };
     if (entry.suppressAnnounceReason !== "steer-restart") {
+      if (acceptedDispatch) {
+        entry.acceptedSteerDispatch = undefined;
+        return persistClear();
+      }
       return true;
     }
     if (typeof entry.execution.endedAt === "number") {
@@ -655,7 +698,10 @@ export function createSubagentRunManager(params: {
       }
     }
     entry.suppressAnnounceReason = undefined;
-    params.persist(entry.runId);
+    entry.acceptedSteerDispatch = undefined;
+    if (!persistClear()) {
+      return false;
+    }
     // If the interrupted run already finished while suppression was active, retry
     // cleanup now so completion output is not lost when restart dispatch fails.
     params.resumedRuns.delete(key);
@@ -663,6 +709,71 @@ export function createSubagentRunManager(params: {
       params.resumeSubagentRun(key);
     }
     return true;
+  };
+
+  const recordAcceptedSubagentSteerDispatch = (recordParams: {
+    runId: string;
+    expected: SubagentRunRecord;
+    gatewayRunId: string;
+    phase?: SubagentAcceptedSteerDispatch["phase"];
+    lifecycleGeneration?: string;
+    expectedSessionId?: string;
+    expectedLifecycleRevision?: string;
+  }):
+    | {
+        status: "persisted" | "pending-persistence";
+        ownerRunId: string;
+        owner: SubagentRunRecord;
+        dispatch: SubagentAcceptedSteerDispatch;
+      }
+    | { status: "rejected" } => {
+    const runId = recordParams.runId.trim();
+    const gatewayRunId = recordParams.gatewayRunId.trim();
+    if (!runId || !gatewayRunId) {
+      return { status: "rejected" };
+    }
+    const exactEntry = params.runs.get(runId);
+    const entry =
+      exactEntry === recordParams.expected
+        ? exactEntry
+        : [...params.getRunsForChildSession(recordParams.expected.childSessionKey)]
+            .toSorted(compareSubagentRunGeneration)
+            .at(-1);
+    const owner = entry ?? recordParams.expected;
+    if (!entry && !params.runs.has(owner.runId)) {
+      // The accepted run still needs a durable cleanup owner even if concurrent
+      // lifecycle cleanup removed its source row.
+      params.runs.set(owner.runId, owner);
+    }
+    const acceptedSteerDispatch = {
+      gatewayRunId,
+      phase: recordParams.phase,
+      lifecycleGeneration: recordParams.lifecycleGeneration?.trim() || undefined,
+      expectedSessionId: recordParams.expectedSessionId?.trim() || undefined,
+      expectedLifecycleRevision: recordParams.expectedLifecycleRevision?.trim() || undefined,
+    };
+    owner.acceptedSteerDispatch = acceptedSteerDispatch;
+    let result: "persisted" | "pending-persistence" = "persisted";
+    try {
+      // The Gateway may accept this exact run as soon as dispatch starts. Keep its
+      // in-memory owner authoritative if persistence is temporarily unavailable.
+      params.persistOrThrow(owner.runId);
+    } catch (error) {
+      result = "pending-persistence";
+      log.warn("failed to persist accepted steer dispatch; retaining live owner", {
+        error,
+        runId: owner.runId,
+        gatewayRunId,
+      });
+    }
+    params.startSweeper();
+    params.scheduleSweep({ delayMs: 1_000 });
+    return {
+      status: result,
+      ownerRunId: owner.runId,
+      owner,
+      dispatch: acceptedSteerDispatch,
+    };
   };
 
   const replaceSubagentRunAfterSteer = (replaceParams: {
@@ -785,6 +896,7 @@ export function createSubagentRunManager(params: {
       cleanupCompletedAt: undefined,
       cleanupHandled: false,
       suppressAnnounceReason: undefined,
+      acceptedSteerDispatch: undefined,
       terminalOwner: undefined,
       killReconciliation: undefined,
       killIntent: undefined,
@@ -1232,7 +1344,15 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
+      silentAnnounce: registerParams.silentAnnounce,
+      wakeOnReturn: registerParams.wakeOnReturn,
+      drainsContinuationDelegateQueue: registerParams.drainsContinuationDelegateQueue,
+      continuationTargetSessionKey: registerParams.continuationTargetSessionKey,
+      continuationTargetSessionKeys: registerParams.continuationTargetSessionKeys,
+      continuationFanoutMode: registerParams.continuationFanoutMode,
+      ...(registerParams.traceparent ? { traceparent: registerParams.traceparent } : {}),
     });
+    const previousEntry = params.runs.get(runId);
     params.runs.set(runId, entry);
     const killReconciliationSnapshots = markOlderKillReconciliationsSuperseded(entry);
     try {
@@ -1241,7 +1361,11 @@ export function createSubagentRunManager(params: {
         ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
       );
     } catch (error) {
-      params.runs.delete(runId);
+      if (previousEntry) {
+        params.runs.set(runId, previousEntry);
+      } else {
+        params.runs.delete(runId);
+      }
       restoreKillReconciliationSnapshots(killReconciliationSnapshots);
       throw error;
     }
@@ -1276,10 +1400,27 @@ export function createSubagentRunManager(params: {
         });
       }
     } catch (error) {
-      log.warn("Failed to create background task for subagent run", {
-        runId: registerParams.runId,
-        error,
-      });
+      const rollbackRunIds = [
+        runId,
+        ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
+      ];
+      if (previousEntry) {
+        params.runs.set(runId, previousEntry);
+      } else {
+        params.runs.delete(runId);
+      }
+      restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+      try {
+        params.persistOrThrow(...rollbackRunIds);
+      } catch (rollbackError) {
+        const aggregateError = new AggregateError(
+          [error, rollbackError],
+          `Subagent task registration and rollback persistence both failed: ${runId}`,
+        );
+        aggregateError.cause = error;
+        throw aggregateError;
+      }
+      throw error;
     }
     params.ensureListener();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
@@ -1819,6 +1960,7 @@ export function createSubagentRunManager(params: {
     clearAcceptedSubagentRestartRecovery,
     clearSubagentRunSteerRestart,
     markSubagentRunForSteerRestart,
+    recordAcceptedSubagentSteerDispatch,
     markSubagentRunTerminated,
     registerSubagentRun,
     releaseSubagentRunKillClaim,

@@ -11,7 +11,8 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
-import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
+import { HEARTBEAT_SKIP_LANES_BUSY } from "../../infra/heartbeat-wake.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import { cancelTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import {

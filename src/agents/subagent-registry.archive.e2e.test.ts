@@ -19,6 +19,9 @@ const taskStatusMocks = vi.hoisted(() => ({
   findTaskByRunIdForStatus: vi.fn(),
   listTasksForSessionKeyForStatus: vi.fn(() => [] as never[]),
 }));
+const hasLiveOrRecentlyDispatchedContinuationWorkMock = vi.hoisted(() =>
+  vi.fn<(_sessionKey: string) => boolean>(() => false),
+);
 const sessionAccessorMocks = vi.hoisted(() => ({
   listSessionEntriesReadOnly: vi.fn(() => [] as Array<{ sessionKey: string; entry: unknown }>),
 }));
@@ -85,6 +88,10 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+vi.mock("../auto-reply/continuation/work-store.js", () => ({
+  hasLiveOrRecentlyDispatchedContinuationWork: hasLiveOrRecentlyDispatchedContinuationWorkMock,
+}));
+
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => true),
 }));
@@ -149,6 +156,7 @@ describe("subagent registry archive behavior", () => {
       return {};
     });
     loadConfigMock.mockClear();
+    hasLiveOrRecentlyDispatchedContinuationWorkMock.mockReset().mockReturnValue(false);
     taskRuntimeMocks.finalizeTaskRunByRunId.mockClear();
     taskStatusMocks.findTaskByRunIdForStatus.mockReset();
     taskStatusMocks.listTasksForSessionKeyForStatus.mockReset();
@@ -218,6 +226,98 @@ describe("subagent registry archive behavior", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     await waitForNoRequesterRuns();
+  });
+
+  it("defers archive eviction without session identity while continuation work is live", async () => {
+    const childSessionKey = "agent:main:subagent:delete-work-live";
+    mod.addSubagentRunForTests({
+      runId: "run-delete-work-live",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "guard archived delete until continuation drains",
+      cleanup: "delete",
+      createdAt: Date.now() - 60_000,
+      endedAt: Date.now() - 1,
+      archiveAtMs: Date.now(),
+    });
+    hasLiveOrRecentlyDispatchedContinuationWorkMock
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(hasLiveOrRecentlyDispatchedContinuationWorkMock).toHaveBeenCalledWith(childSessionKey);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toEqual([
+      expect.objectContaining({ runId: "run-delete-work-live" }),
+    ]);
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.some(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toBe(false);
+
+    await mod.testing.sweepOnceForTests();
+    await flushSweepMicrotasks();
+
+    await waitForNoRequesterRuns();
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.filter(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toHaveLength(0);
+  });
+
+  it("defers collector-group archive eviction while continuation work is live", async () => {
+    const now = Date.now();
+    const groupId = "collector-work-live";
+    for (const suffix of ["one", "two"]) {
+      addCanonicalSubagentRunForTests({
+        runId: `run-collector-work-live-${suffix}`,
+        childSessionKey: `agent:main:subagent:collector-work-live-${suffix}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: `guard collector ${suffix} until continuation drains`,
+        cleanup: "delete",
+        collect: true,
+        groupId,
+        collectorCompletion: { status: "done" },
+        createdAt: now - 60_000,
+        endedAt: now - 1,
+        archiveAtMs: now,
+      });
+    }
+    hasLiveOrRecentlyDispatchedContinuationWorkMock.mockImplementation((sessionKey: string) =>
+      sessionKey.endsWith("-one"),
+    );
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(2);
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.some(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toBe(false);
+
+    hasLiveOrRecentlyDispatchedContinuationWorkMock.mockReturnValue(false);
+    await mod.testing.sweepOnceForTests();
+    await flushSweepMicrotasks();
+
+    await waitForNoRequesterRuns();
+    expect(
+      vi
+        .mocked(callGateway)
+        .mock.calls.filter(
+          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
+        ),
+    ).toHaveLength(0);
   });
 
   it("keeps archived delete-mode runs for retry when sessions.delete fails", async () => {

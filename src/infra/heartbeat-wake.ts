@@ -1,7 +1,18 @@
 // Tracks heartbeat wake requests, busy skips, and retry timing.
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
-import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
+import {
+  getWakeCoalesceKey,
+  isUnscopedWakeTargetKey,
+  mergePendingWakeReasons,
+  normalizeWakeReason,
+  normalizeWakeTarget,
+  resolveWakePriority,
+  UNSCOPED_WAKE_TARGET_KEYS,
+  type PendingWakeGroup,
+  type PendingWakeReason,
+  type ReadyWakeGroup,
+} from "./heartbeat-wake-coalescing.js";
 import type {
   HeartbeatRunResult,
   HeartbeatScheduledTask,
@@ -16,14 +27,14 @@ import {
   runAbortableHeartbeatWake,
 } from "./heartbeat-wake-lifecycle.js";
 import {
-  GLOBAL_HEARTBEAT_WAKE_TARGET_KEY,
   isHeartbeatWakeAfterGlobalBarrier,
   isHeartbeatWakeTargetGroupReady,
-  normalizeHeartbeatWakeTarget,
-  resolveHeartbeatWakeTargetKey,
 } from "./heartbeat-wake-target.js";
 
-export { getHeartbeatWakeAbortSignal } from "./heartbeat-wake-lifecycle.js";
+export {
+  getActiveHeartbeatWakeContext,
+  getHeartbeatWakeAbortSignal,
+} from "./heartbeat-wake-lifecycle.js";
 export type {
   HeartbeatRunResult,
   HeartbeatScheduledTask,
@@ -47,6 +58,35 @@ export function isRetryableHeartbeatBusySkipReason(reason: string): boolean {
   return RETRYABLE_BUSY_SKIP_REASONS.has(reason);
 }
 
+const TRUSTED_CONTINUATION_ROUTING_MARKER = Symbol("trustedContinuationRouting");
+
+type TrustedContinuationRoutingCarrier = {
+  [TRUSTED_CONTINUATION_ROUTING_MARKER]?: true;
+};
+
+function markTrustedContinuationRoutingCarrier<T extends object>(request: T): T {
+  Object.defineProperty(request, TRUSTED_CONTINUATION_ROUTING_MARKER, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+  return request;
+}
+
+export function markTrustedContinuationHeartbeatWake<T extends object>(request: T): T {
+  return markTrustedContinuationRoutingCarrier(request);
+}
+
+export function hasTrustedContinuationHeartbeatWake(
+  request: unknown,
+): request is TrustedContinuationRoutingCarrier {
+  return Boolean(
+    request &&
+    typeof request === "object" &&
+    (request as TrustedContinuationRoutingCarrier)[TRUSTED_CONTINUATION_ROUTING_MARKER] === true,
+  );
+}
+
 let heartbeatsEnabled = true;
 
 export function setHeartbeatsEnabled(enabled: boolean) {
@@ -56,43 +96,6 @@ export function setHeartbeatsEnabled(enabled: boolean) {
 export function areHeartbeatsEnabled(): boolean {
   return heartbeatsEnabled;
 }
-
-type PendingWakeReason = {
-  source: HeartbeatWakeSource;
-  intent: HeartbeatWakeIntent;
-  reason: string;
-  priority: number;
-  requestedAt: number;
-  /** Stable enqueue order retained across coalescing, deferral, and lifecycle handoff. */
-  enqueueSequence: number;
-  /** First immediate-global request represented by this coalesced wake. */
-  immediateBarrierSequence?: number;
-  /** Earliest dispatch instant requested by the wake's coalescing window. */
-  readyAtMs?: number;
-  agentId?: string;
-  sessionKey?: string;
-  heartbeat?: HeartbeatWakeOverride;
-  scheduledEveryMs?: number;
-  scheduledAnchorMs?: number;
-  tasks?: HeartbeatScheduledTask[];
-  /** Earliest instant at which this retained wake class may be dispatched. */
-  notBeforeMs?: number;
-  /** The wake was retained after a spacing/cooldown guard deferred its work. */
-  guardRetry?: boolean;
-};
-
-type PendingWakeGroup = {
-  task?: PendingWakeReason;
-  scheduled?: PendingWakeReason;
-  event?: PendingWakeReason;
-  /** Busy/error backoff blocks every wake class for this target. */
-  blockedUntilMs?: number;
-};
-
-type ReadyWakeGroup = {
-  targetKey: string;
-  wakes: PendingWakeReason[];
-};
 
 let handler: HeartbeatWakeHandler | null = null;
 let handlerGeneration = 0;
@@ -109,131 +112,54 @@ const DEFAULT_RETRY_MS = 1_000;
 // Heartbeat turns can start model/provider work; bound cross-target fan-out so
 // one aligned monitor tick cannot exhaust gateway or provider capacity.
 const MAX_CONCURRENT_HEARTBEAT_WAKE_TARGETS = 4;
-const REASON_PRIORITY = {
-  RETRY: 0,
-  INTERVAL: 1,
-  DEFAULT: 2,
-  ACTION: 3,
-} as const;
 
-function resolveWakePriority(params: {
-  source: HeartbeatWakeSource;
-  intent: HeartbeatWakeIntent;
-  reason: string;
-}): number {
-  if (params.intent === "manual" || params.intent === "immediate") {
-    return REASON_PRIORITY.ACTION;
+/**
+ * Trust-domain separation splits upstream's single unscoped group in two, so the
+ * bare `"::"` comparison inside the upstream helper no longer identifies a global
+ * wake. Narrow on the fork's unscoped key set first, then defer to upstream.
+ */
+function isAfterGlobalWakeBarrier(
+  targetKey: string,
+  enqueueSequence: number,
+  barrierSequence: number | undefined,
+): boolean {
+  if (isUnscopedWakeTargetKey(targetKey)) {
+    return false;
   }
-  if (params.source === "retry" || params.reason === "retry") {
-    return REASON_PRIORITY.RETRY;
-  }
-  if (
-    params.intent === "scheduled" ||
-    params.source === "interval" ||
-    params.reason === "interval"
-  ) {
-    return REASON_PRIORITY.INTERVAL;
-  }
-  return REASON_PRIORITY.DEFAULT;
-}
-
-function normalizeWakeReason(reason?: string): string {
-  return normalizeHeartbeatWakeReason(reason);
-}
-
-function mergePendingWakeReasons(
-  previous: PendingWakeReason,
-  next: PendingWakeReason,
-): PendingWakeReason {
-  const tasksByJobId = new Map<string, HeartbeatScheduledTask>();
-  for (const task of previous.tasks ?? []) {
-    tasksByJobId.set(task.jobId, task);
-  }
-  for (const task of next.tasks ?? []) {
-    tasksByJobId.set(task.jobId, task);
-  }
-  // Concurrent cron ticks can arrive in either order; stable job order keeps the model prompt cacheable.
-  const mergedTasks = Array.from(tasksByJobId.values()).toSorted((left, right) =>
-    left.jobId.localeCompare(right.jobId),
-  );
-  const mixedTaskPair = (previous.intent === "task") !== (next.intent === "task");
-  const preferred = mixedTaskPair
-    ? previous.intent === "task"
-      ? previous
-      : next
-    : next.priority > previous.priority ||
-        (next.priority === previous.priority && next.requestedAt >= previous.requestedAt)
-      ? next
-      : previous;
-  const other = preferred === previous ? next : previous;
-  // Explicit wakes bypass a retained spacing guard, but busy backoff remains
-  // target-owned in PendingWakeGroup.blockedUntilMs.
-  const bypassGuardRetry =
-    (preferred.intent === "manual" || preferred.intent === "immediate") &&
-    preferred.guardRetry !== true &&
-    (previous.guardRetry === true || next.guardRetry === true);
-  const scheduledEveryMs = preferred.scheduledEveryMs ?? other.scheduledEveryMs;
-  const scheduledAnchorMs = preferred.scheduledAnchorMs ?? other.scheduledAnchorMs;
-  const immediateBarrierSequences = [
-    previous.immediateBarrierSequence,
-    next.immediateBarrierSequence,
-  ].filter((value): value is number => value !== undefined);
-  const readyAtMs = Math.min(
-    previous.readyAtMs ?? previous.requestedAt,
-    next.readyAtMs ?? next.requestedAt,
-  );
-  const merged: PendingWakeReason = {
-    ...preferred,
-    enqueueSequence: Math.min(previous.enqueueSequence, next.enqueueSequence),
-    readyAtMs,
-    ...(!bypassGuardRetry && (previous.notBeforeMs !== undefined || next.notBeforeMs !== undefined)
-      ? {
-          requestedAt: Math.min(previous.requestedAt, next.requestedAt),
-          notBeforeMs: Math.max(previous.notBeforeMs ?? 0, next.notBeforeMs ?? 0),
-        }
-      : {}),
-    ...((preferred.heartbeat ?? other.heartbeat)
-      ? { heartbeat: preferred.heartbeat ?? other.heartbeat }
-      : {}),
-    ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
-    ...(scheduledAnchorMs !== undefined ? { scheduledAnchorMs } : {}),
-    ...(mergedTasks.length ? { tasks: mergedTasks } : {}),
-  };
-  if (!bypassGuardRetry && (previous.guardRetry || next.guardRetry)) {
-    merged.guardRetry = true;
-  } else {
-    delete merged.guardRetry;
-  }
-  if (immediateBarrierSequences.length > 0) {
-    merged.immediateBarrierSequence = Math.min(...immediateBarrierSequences);
-  } else {
-    delete merged.immediateBarrierSequence;
-  }
-  return merged;
+  return isHeartbeatWakeAfterGlobalBarrier(targetKey, enqueueSequence, barrierSequence);
 }
 
 function takePendingWakeBatch(maxGroups: number, now = Date.now()): ReadyWakeGroup[] {
   if (maxGroups <= 0) {
     return [];
   }
-  const globalWakeGroup = pendingWakes.get(GLOBAL_HEARTBEAT_WAKE_TARGET_KEY);
-  const globalImmediateWake = globalWakeGroup?.event;
-  // An unscoped immediate wake is a global flush barrier. Preserve the task
-  // registry contract while keeping spacing and busy guards authoritative.
-  const flushPendingCoalescing =
-    globalImmediateWake?.intent === "immediate" &&
-    !activeWakeTargets.has(GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) &&
-    (globalWakeGroup?.blockedUntilMs === undefined || globalWakeGroup.blockedUntilMs <= now) &&
-    (globalImmediateWake.readyAtMs === undefined || globalImmediateWake.readyAtMs <= now) &&
-    (globalImmediateWake.notBeforeMs === undefined || globalImmediateWake.notBeforeMs <= now);
-  const globalBarrierCutoffSequence =
-    globalImmediateWake?.intent === "immediate"
-      ? globalImmediateWake.immediateBarrierSequence
-      : undefined;
-  const globalBarrierReady = isHeartbeatWakeTargetGroupReady(globalWakeGroup, now);
-  if (activeWakeTargets.has(GLOBAL_HEARTBEAT_WAKE_TARGET_KEY)) {
+  if (UNSCOPED_WAKE_TARGET_KEYS.some((targetKey) => activeWakeTargets.has(targetKey))) {
     return [];
   }
+  // An unscoped immediate wake is a global flush barrier. Preserve the task
+  // registry contract while keeping spacing and busy guards authoritative.
+  // Both trust-domain spellings of the unscoped group own that barrier.
+  const flushPendingCoalescing = UNSCOPED_WAKE_TARGET_KEYS.some((targetKey) => {
+    const group = pendingWakes.get(targetKey);
+    const immediateWake = group?.event;
+    return (
+      immediateWake?.intent === "immediate" &&
+      (group?.blockedUntilMs === undefined || group.blockedUntilMs <= now) &&
+      (immediateWake.readyAtMs === undefined || immediateWake.readyAtMs <= now) &&
+      (immediateWake.notBeforeMs === undefined || immediateWake.notBeforeMs <= now)
+    );
+  });
+  const barrierCutoffSequences = UNSCOPED_WAKE_TARGET_KEYS.flatMap((targetKey) => {
+    const immediateWake = pendingWakes.get(targetKey)?.event;
+    const sequence =
+      immediateWake?.intent === "immediate" ? immediateWake.immediateBarrierSequence : undefined;
+    return sequence === undefined ? [] : [sequence];
+  });
+  const globalBarrierCutoffSequence =
+    barrierCutoffSequences.length > 0 ? Math.min(...barrierCutoffSequences) : undefined;
+  const globalBarrierReady = UNSCOPED_WAKE_TARGET_KEYS.some((targetKey) =>
+    isHeartbeatWakeTargetGroupReady(pendingWakes.get(targetKey), now),
+  );
   // An unscoped wake can fan out across every configured heartbeat agent.
   // Never admit it beside a targeted turn. Immediate flushes first drain only
   // target work that predates the barrier; every other global wake takes the
@@ -246,10 +172,13 @@ function takePendingWakeBatch(maxGroups: number, now = Date.now()): ReadyWakeGro
     ? flushPendingCoalescing
       ? [...pendingWakes.entries()].toSorted(
           ([leftTarget], [rightTarget]) =>
-            Number(leftTarget === GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) -
-            Number(rightTarget === GLOBAL_HEARTBEAT_WAKE_TARGET_KEY),
+            Number(isUnscopedWakeTargetKey(leftTarget)) -
+            Number(isUnscopedWakeTargetKey(rightTarget)),
         )
-      : [[GLOBAL_HEARTBEAT_WAKE_TARGET_KEY, globalWakeGroup as PendingWakeGroup] as const]
+      : UNSCOPED_WAKE_TARGET_KEYS.flatMap((targetKey) => {
+          const group = pendingWakes.get(targetKey);
+          return group ? [[targetKey, group] as const] : [];
+        })
     : pendingWakes.entries();
   for (const [targetKey, group] of pendingEntries) {
     if (readyGroups.length >= maxGroups) {
@@ -262,7 +191,7 @@ function takePendingWakeBatch(maxGroups: number, now = Date.now()): ReadyWakeGro
       continue;
     }
     if (
-      targetKey === GLOBAL_HEARTBEAT_WAKE_TARGET_KEY &&
+      isUnscopedWakeTargetKey(targetKey) &&
       (activeWakeTargets.size > 0 || readyGroups.length > 0)
     ) {
       continue;
@@ -274,7 +203,7 @@ function takePendingWakeBatch(maxGroups: number, now = Date.now()): ReadyWakeGro
       if (!pending) {
         continue;
       }
-      const isPostBarrierTarget = isHeartbeatWakeAfterGlobalBarrier(
+      const isPostBarrierTarget = isAfterGlobalWakeBarrier(
         targetKey,
         pending.enqueueSequence,
         globalBarrierCutoffSequence,
@@ -348,7 +277,9 @@ function queuePendingWakeReason(params: {
   readyAtMs?: number;
   agentId?: string;
   sessionKey?: string;
+  parentRunId?: string;
   heartbeat?: HeartbeatWakeOverride;
+  trustedContinuationRouting?: boolean;
   scheduledEveryMs?: number;
   scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
@@ -359,15 +290,18 @@ function queuePendingWakeReason(params: {
   const requestedAt = params.requestedAt ?? Date.now();
   const enqueueSequence = params.enqueueSequence ?? ++wakeEnqueueSequence;
   const normalizedReason = normalizeWakeReason(params.reason);
-  const normalizedAgentId = normalizeHeartbeatWakeTarget(params.agentId);
-  const normalizedSessionKey = normalizeHeartbeatWakeTarget(params.sessionKey);
-  const wakeTargetKey = resolveHeartbeatWakeTargetKey({
+  const normalizedAgentId = normalizeWakeTarget(params.agentId);
+  const normalizedSessionKey = normalizeWakeTarget(params.sessionKey);
+  const normalizedParentRunId = normalizeWakeTarget(params.parentRunId);
+  const trustedContinuationRouting = params.trustedContinuationRouting === true;
+  const wakeTargetKey = getWakeCoalesceKey({
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
+    trustedContinuationRouting,
   });
   const immediateBarrierSequence =
     params.immediateBarrierSequence ??
-    (wakeTargetKey === GLOBAL_HEARTBEAT_WAKE_TARGET_KEY && params.intent === "immediate"
+    (isUnscopedWakeTargetKey(wakeTargetKey) && params.intent === "immediate"
       ? enqueueSequence
       : undefined);
   const next: PendingWakeReason = {
@@ -385,7 +319,9 @@ function queuePendingWakeReason(params: {
     ...(params.readyAtMs === undefined ? {} : { readyAtMs: params.readyAtMs }),
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
+    ...(normalizedParentRunId ? { parentRunId: normalizedParentRunId } : {}),
     heartbeat: params.heartbeat,
+    trustedContinuationRouting,
     scheduledEveryMs: params.scheduledEveryMs,
     scheduledAnchorMs: params.scheduledAnchorMs,
     ...(params.tasks?.length ? { tasks: [...params.tasks] } : {}),
@@ -417,7 +353,9 @@ function retryPendingWake(pendingWake: PendingWakeReason) {
     reason: pendingWake.reason ?? "retry",
     agentId: pendingWake.agentId,
     sessionKey: pendingWake.sessionKey,
+    parentRunId: pendingWake.parentRunId,
     heartbeat: pendingWake.heartbeat,
+    trustedContinuationRouting: pendingWake.trustedContinuationRouting,
     scheduledEveryMs: pendingWake.scheduledEveryMs,
     scheduledAnchorMs: pendingWake.scheduledAnchorMs,
     tasks: pendingWake.tasks,
@@ -460,6 +398,7 @@ async function dispatchPendingWakeGroup(params: {
         reason: pendingWake.reason ?? undefined,
         ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
         ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
+        ...(pendingWake.parentRunId ? { parentRunId: pendingWake.parentRunId } : {}),
         ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
         ...(pendingWake.scheduledEveryMs !== undefined
           ? { scheduledEveryMs: pendingWake.scheduledEveryMs }
@@ -470,6 +409,9 @@ async function dispatchPendingWakeGroup(params: {
         ...(pendingWake.tasks ? { tasks: pendingWake.tasks } : {}),
         ...(pendingWake.guardRetry ? { retainedWork: true } : {}),
       };
+      if (pendingWake.trustedContinuationRouting) {
+        markTrustedContinuationRoutingCarrier(wakeOpts);
+      }
       let result: HeartbeatRunResult;
       try {
         // Admission spans the entire target turn so gateway drain can observe it.
@@ -514,7 +456,9 @@ async function dispatchPendingWakeGroup(params: {
           reason: pendingWake.reason ?? "retry",
           agentId: pendingWake.agentId,
           sessionKey: pendingWake.sessionKey,
+          parentRunId: pendingWake.parentRunId,
           heartbeat: pendingWake.heartbeat,
+          trustedContinuationRouting: pendingWake.trustedContinuationRouting,
           tasks: pendingWake.tasks,
           scheduledEveryMs: pendingWake.scheduledEveryMs,
           scheduledAnchorMs: pendingWake.scheduledAnchorMs,
@@ -596,19 +540,26 @@ function schedulePendingWakes(readyDelayMs: number) {
   }
   const now = Date.now();
   if (
-    activeWakeTargets.has(GLOBAL_HEARTBEAT_WAKE_TARGET_KEY) ||
+    UNSCOPED_WAKE_TARGET_KEYS.some((targetKey) => activeWakeTargets.has(targetKey)) ||
     (activeWakeTargets.size > 0 &&
-      isHeartbeatWakeTargetGroupReady(pendingWakes.get(GLOBAL_HEARTBEAT_WAKE_TARGET_KEY), now))
+      UNSCOPED_WAKE_TARGET_KEYS.some((targetKey) =>
+        isHeartbeatWakeTargetGroupReady(pendingWakes.get(targetKey), now),
+      ))
   ) {
     // The active side of a global barrier re-arms pending work when it exits.
     // Avoid zero-delay timer churn while the other side is still draining.
     return;
   }
-  const pendingGlobalImmediateWake = pendingWakes.get(GLOBAL_HEARTBEAT_WAKE_TARGET_KEY)?.event;
+  const barrierCutoffSequences = UNSCOPED_WAKE_TARGET_KEYS.flatMap((targetKey) => {
+    const pendingImmediateWake = pendingWakes.get(targetKey)?.event;
+    const sequence =
+      pendingImmediateWake?.intent === "immediate"
+        ? pendingImmediateWake.immediateBarrierSequence
+        : undefined;
+    return sequence === undefined ? [] : [sequence];
+  });
   const globalBarrierCutoffSequence =
-    pendingGlobalImmediateWake?.intent === "immediate"
-      ? pendingGlobalImmediateWake.immediateBarrierSequence
-      : undefined;
+    barrierCutoffSequences.length > 0 ? Math.min(...barrierCutoffSequences) : undefined;
   let earliestNotBeforeMs = Number.POSITIVE_INFINITY;
   let hasReadyWake = false;
   for (const [targetKey, group] of pendingWakes) {
@@ -620,11 +571,7 @@ function schedulePendingWakes(readyDelayMs: number) {
       groupWakes.every(
         (pending) =>
           !pending ||
-          isHeartbeatWakeAfterGlobalBarrier(
-            targetKey,
-            pending.enqueueSequence,
-            globalBarrierCutoffSequence,
-          ),
+          isAfterGlobalWakeBarrier(targetKey, pending.enqueueSequence, globalBarrierCutoffSequence),
       )
     ) {
       continue;
@@ -636,11 +583,7 @@ function schedulePendingWakes(readyDelayMs: number) {
     for (const pending of groupWakes) {
       if (
         !pending ||
-        isHeartbeatWakeAfterGlobalBarrier(
-          targetKey,
-          pending.enqueueSequence,
-          globalBarrierCutoffSequence,
-        )
+        isAfterGlobalWakeBarrier(targetKey, pending.enqueueSequence, globalBarrierCutoffSequence)
       ) {
         continue;
       }
@@ -720,11 +663,13 @@ export function requestHeartbeat(opts: {
   coalesceMs?: number;
   agentId?: string;
   sessionKey?: string;
+  parentRunId?: string;
   heartbeat?: HeartbeatWakeOverride;
   scheduledEveryMs?: number;
   scheduledAnchorMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
 }) {
+  const trustedContinuationRouting = hasTrustedContinuationHeartbeatWake(opts);
   const requestedAt = Date.now();
   const coalesceMs = opts.coalesceMs ?? DEFAULT_COALESCE_MS;
   queuePendingWakeReason({
@@ -733,7 +678,9 @@ export function requestHeartbeat(opts: {
     reason: opts.reason,
     agentId: opts.agentId,
     sessionKey: opts.sessionKey,
+    parentRunId: opts.parentRunId,
     heartbeat: opts.heartbeat,
+    trustedContinuationRouting,
     scheduledEveryMs: opts.scheduledEveryMs,
     scheduledAnchorMs: opts.scheduledAnchorMs,
     tasks: opts.tasks,
@@ -741,4 +688,56 @@ export function requestHeartbeat(opts: {
     readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
   });
   schedule(coalesceMs);
+}
+
+export function requestHeartbeatNow(opts?: {
+  source?: HeartbeatWakeSource;
+  intent?: HeartbeatWakeIntent;
+  reason?: string;
+  coalesceMs?: number;
+  agentId?: string;
+  sessionKey?: string;
+  parentRunId?: string;
+  heartbeat?: HeartbeatWakeOverride;
+}) {
+  const request = {
+    source: opts?.source ?? "other",
+    intent: opts?.intent ?? "immediate",
+    reason: opts?.reason,
+    coalesceMs: opts?.coalesceMs,
+    agentId: opts?.agentId,
+    sessionKey: opts?.sessionKey,
+    parentRunId: opts?.parentRunId,
+    heartbeat: opts?.heartbeat,
+  } satisfies Parameters<typeof requestHeartbeat>[0];
+  if (opts && hasTrustedContinuationHeartbeatWake(opts)) {
+    markTrustedContinuationRoutingCarrier(request);
+  }
+  requestHeartbeat(request);
+}
+
+export function hasHeartbeatWakeHandler() {
+  return handler !== null;
+}
+
+export function hasPendingHeartbeatWake() {
+  // Per-target dispatch replaced the single `scheduled`/`running` pair: work is
+  // still outstanding while any target turn is mid-flight.
+  return pendingWakes.size > 0 || Boolean(timer) || activeWakeTargets.size > 0;
+}
+
+export function resetHeartbeatWakeStateForTests() {
+  if (timer) {
+    clearTimeout(timer);
+  }
+  timer = null;
+  timerDueAt = null;
+  pendingWakes.clear();
+  for (const target of activeWakeTargets.values()) {
+    target.abortController.abort();
+  }
+  activeWakeTargets.clear();
+  wakeEnqueueSequence = 0;
+  handlerGeneration += 1;
+  handler = null;
 }

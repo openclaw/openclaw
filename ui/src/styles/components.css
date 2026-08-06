@@ -5807,6 +5807,8 @@ td.data-table-key-col {
 
 .session-row-host--pinned .session-action--pin {
   color: var(--accent);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .session-run-spinner {

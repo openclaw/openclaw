@@ -109,8 +109,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "inbound-reply-dispatch": 24,
   "channel-reply-pipeline": 12,
   "interactive-runtime": 11,
-  // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-  "infra-runtime": 596,
+  // +3: canonical incognito classifier plus seven continuation/runtime compatibility exports.
+  "infra-runtime": 603,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
@@ -196,6 +196,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared low-cardinality diagnostic dimension normalizers.
       // +1: shared plugin SecretRef setup CLI factory.
       // +1: shared multi-claim ingress lifecycle fan-in.
+      // +17: continuation tracing, live catalog, and hardened system-event compatibility exports.
       // +3: channel prompt-context entry/compat types and channel metadata builder.
       // +4: focused CLI root-option constants and parsers.
       // +6: model-picker action/capability and authoritative session-apply contracts.
@@ -214,13 +215,14 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +45: restore typed session-catalog and tool-results exports promised to plugins.
+      // +17: candidate continuation/#666 export additions retained through this back-merge.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
       // +1: canonical webhook route identity for plugin-owned target registries.
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
       // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
       // +1: auth-profile preservation decision for native model pickers.
-      4831,
+      4848,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -247,6 +249,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared low-cardinality diagnostic dimension normalizers.
       // +1: shared plugin SecretRef setup CLI factory.
       // +1: shared multi-claim ingress lifecycle fan-in.
+      // +5: continuation tracing, live catalog, and hardened system-event compatibility functions.
       // +1: channel metadata builder.
       // +3: focused CLI root-option parsers.
       // +1: authoritative model-picker session-apply operation.
@@ -262,13 +265,14 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: standard raw-event ingress profile replacing two channel-local shells.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
       // +14: restore callable session-catalog and tool-results helpers promised to plugins.
+      // +5: candidate continuation/#666 callable-export additions retained through this back-merge.
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
       // +1: canonical webhook route identity for plugin-owned target registries.
       // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
       // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
       // +1: auth-profile preservation decision for native model pickers.
-      2908,
+      2913,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -276,17 +280,19 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
+      // +7: continuation compatibility exports retained by the deprecated infra barrel.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
       // +1: flushLogger projected through the deprecated text-runtime barrel.
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
-      1703,
+      // +7: candidate continuation/#666 deprecated-compat exports retained through this back-merge.
+      1710,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // -1: text-runtime now names its global-singleton exports explicitly.
-      81,
+      80,
       env,
     ),
   };

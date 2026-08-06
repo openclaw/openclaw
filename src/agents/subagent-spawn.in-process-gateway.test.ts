@@ -316,7 +316,11 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
   it("hands a registered collector launch to Gateway as the host", async () => {
     const gatewayContext = makeGatewayContext();
-    const dispatchOptions: Array<{ method: string; forceSyntheticClient?: boolean }> = [];
+    const dispatchOptions: Array<{
+      method: string;
+      forceSyntheticClient?: boolean;
+      allowSyntheticModelOverride?: boolean;
+    }> = [];
     const preflightResults: Array<{
       externalAccepted: boolean;
       externalError?: string;
@@ -329,7 +333,11 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         params: Record<string, unknown>,
         options?: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]>,
       ) => {
-        dispatchOptions.push({ method, forceSyntheticClient: options?.forceSyntheticClient });
+        dispatchOptions.push({
+          method,
+          forceSyntheticClient: options?.forceSyntheticClient,
+          allowSyntheticModelOverride: options?.allowSyntheticModelOverride,
+        });
 
         const externalRespond = vi.fn();
         const externalPreflight = prepareAgentRequestPreflight({
@@ -341,7 +349,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
         const hostRespond = vi.fn();
         const client = options?.forceSyntheticClient
-          ? createSyntheticPluginRuntimeClient({ scopes: options.syntheticScopes })
+          ? createSyntheticPluginRuntimeClient({
+              allowModelOverride: options.allowSyntheticModelOverride,
+              scopes: options.syntheticScopes,
+            })
           : externalCliClient();
         const hostPreflight = prepareAgentRequestPreflight({
           params,
@@ -388,7 +399,13 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     expect(result.status).toBe("accepted");
     expect(result.runId).toBeTruthy();
     await waitForAssertion(() => {
-      expect(dispatchOptions).toEqual([{ method: "agent", forceSyntheticClient: true }]);
+      expect(dispatchOptions).toEqual([
+        {
+          method: "agent",
+          forceSyntheticClient: true,
+          allowSyntheticModelOverride: undefined,
+        },
+      ]);
       expect(preflightResults).toEqual([
         {
           externalAccepted: false,

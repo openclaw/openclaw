@@ -6,6 +6,7 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
+import { normalizeCompactionTrigger } from "./compaction-attribution.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -30,6 +31,9 @@ type CompactionEndEvent =
       willRetry?: unknown;
       result?: unknown;
       aborted?: unknown;
+      errorMessage?: unknown;
+      invalidatedDeliveryGeneration?: number;
+      retryAlreadyNoted?: boolean;
     };
 
 // Unknown reasons come from external runtimes or older sessions. Treat them as
@@ -46,7 +50,18 @@ function compactionLogKind(reason: CompactionReason): string {
 
 function emitCompactionAgentEvent(
   ctx: EmbeddedAgentSubscribeContext,
-  data: { phase: "start" } | { phase: "end"; willRetry: boolean; completed: boolean },
+  data:
+    | { phase: "start"; trigger: string; sessionKey?: string }
+    | {
+        phase: "end";
+        willRetry: boolean;
+        completed: boolean;
+        trigger: string;
+        sessionKey?: string;
+        compactionCountBefore: number;
+        compactionCountAfter: number;
+        compactionCountDelta: number;
+      },
 ): void {
   const event = { stream: "compaction" as const, data };
   emitAgentEvent({ runId: ctx.params.runId, ...event });
@@ -91,6 +106,9 @@ export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: CompactionStartEvent,
 ) {
+  // Both axes: `trigger` feeds attribution / counter reconciliation (feature),
+  // `reason` feeds structured logging (upstream). They consume the same field.
+  const trigger = normalizeCompactionTrigger(evt.reason);
   const reason = normalizeCompactionReason(evt.reason);
   const kind = compactionLogKind(reason);
   ctx.state.compactionInFlight = true;
@@ -102,7 +120,12 @@ export function handleCompactionStart(
     reason,
     consoleMessage: `embedded run ${kind} start: runId=${ctx.params.runId} reason=${reason}`,
   });
-  emitCompactionAgentEvent(ctx, { phase: "start" });
+  ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId} trigger=${trigger}`);
+  emitCompactionAgentEvent(ctx, {
+    phase: "start",
+    trigger,
+    sessionKey: ctx.params.sessionKey,
+  });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
@@ -114,12 +137,15 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   const reason = normalizeCompactionReason(evt.reason);
   const kind = compactionLogKind(reason);
   ctx.state.compactionInFlight = false;
+  const trigger = normalizeCompactionTrigger(evt.reason);
   const willRetry = Boolean(evt.willRetry);
   // Increment counter whenever compaction actually produced a result, regardless
   // of willRetry. Overflow-triggered compaction retries the LLM request after
   // trimming context, and the persisted count must reflect that successful trim.
   const hasResult = evt.result != null;
   const wasAborted = Boolean(evt.aborted);
+  const compactionCountBefore = ctx.getCompactionCount();
+  let compactionCountAfter = compactionCountBefore;
   const completed = hasResult && !wasAborted;
   if (completed) {
     ctx.incrementCompactionCount();
@@ -128,10 +154,10 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
         ? (evt.result as { tokensAfter?: unknown }).tokensAfter
         : undefined;
     ctx.noteCompactionTokensAfter(tokensAfter);
-    const observedCompactionCount = ctx.getCompactionCount();
+    compactionCountAfter = ctx.getCompactionCount();
     recordSessionCompacted({
       sessionKey: ctx.params.sessionKey,
-      operationId: `${ctx.params.runId}:${observedCompactionCount}`,
+      operationId: `${ctx.params.runId}:${compactionCountAfter}`,
       agentId: ctx.params.agentId,
       runId: ctx.params.runId,
     });
@@ -141,8 +167,8 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       reason,
       completed: true,
       willRetry,
-      compactionCount: observedCompactionCount,
-      consoleMessage: `embedded run ${kind} complete: runId=${ctx.params.runId} reason=${reason} compactionCount=${observedCompactionCount} willRetry=${willRetry}`,
+      compactionCount: compactionCountAfter,
+      consoleMessage: `embedded run ${kind} complete: runId=${ctx.params.runId} reason=${reason} compactionCount=${compactionCountAfter} willRetry=${willRetry}`,
     });
     void import("./embedded-agent-subscribe.handlers.compaction.runtime.js")
       .then(({ default: reconcile }) =>
@@ -150,16 +176,33 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
           sessionKey: ctx.params.sessionKey,
           agentId: ctx.params.agentId,
           configStore: ctx.params.config?.session?.store,
-          observedCompactionCount,
+          observedCompactionCount: compactionCountAfter,
+          attribution: {
+            runId: ctx.params.runId,
+            trigger,
+            outcome: "compacted",
+          },
         }),
       )
       .catch((err: unknown) => {
         ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
       });
   }
+  const outcome = completed ? "compacted" : wasAborted ? "aborted" : "skipped";
+  const compactionCountDelta = compactionCountAfter - compactionCountBefore;
+  ctx.log.debug(
+    `[compaction-attribution] end runId=${ctx.params.runId} sessionKey=${ctx.params.sessionKey ?? ctx.params.sessionId} ` +
+      `trigger=${trigger} outcome=${outcome} willRetry=${willRetry} ` +
+      `compactionCount.before=${compactionCountBefore} compactionCount.after=${compactionCountAfter} ` +
+      `compactionCount.delta=${compactionCountDelta}`,
+  );
   if (willRetry) {
-    ctx.noteCompactionRetry();
-    ctx.resetForCompactionRetry();
+    if (!("retryAlreadyNoted" in evt) || evt.retryAlreadyNoted !== true) {
+      ctx.noteCompactionRetry();
+    }
+    ctx.resetForCompactionRetry(
+      "invalidatedDeliveryGeneration" in evt ? evt.invalidatedDeliveryGeneration : undefined,
+    );
     ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
     if (!wasAborted) {
@@ -187,7 +230,16 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       consoleMessage: `embedded run ${kind} incomplete: runId=${ctx.params.runId} reason=${reason} aborted=${wasAborted} willRetry=${willRetry}`,
     });
   }
-  emitCompactionAgentEvent(ctx, { phase: "end", willRetry, completed });
+  emitCompactionAgentEvent(ctx, {
+    phase: "end",
+    willRetry,
+    completed,
+    trigger,
+    sessionKey: ctx.params.sessionKey,
+    compactionCountBefore,
+    compactionCountAfter,
+    compactionCountDelta,
+  });
 
   // after_compaction runs only once the run will not retry, matching the visible
   // post-compaction session state plugin authors observe.

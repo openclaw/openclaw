@@ -33,6 +33,32 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     entry.pauseReason !== "sessions_yield"
       ? "interrupted-recovery"
       : undefined;
+  const acceptedSteerDispatch = entry.acceptedSteerDispatch;
+  const acceptedSteerGatewayRunId =
+    typeof acceptedSteerDispatch?.gatewayRunId === "string"
+      ? acceptedSteerDispatch.gatewayRunId.trim()
+      : "";
+  if (!acceptedSteerGatewayRunId) {
+    delete entry.acceptedSteerDispatch;
+  } else {
+    const expectedSessionId = acceptedSteerDispatch?.expectedSessionId?.trim();
+    const expectedLifecycleRevision = acceptedSteerDispatch?.expectedLifecycleRevision?.trim();
+    entry.acceptedSteerDispatch = {
+      gatewayRunId: acceptedSteerGatewayRunId,
+      phase:
+        acceptedSteerDispatch?.phase === "dispatching" ||
+        acceptedSteerDispatch?.phase === "accepted"
+          ? acceptedSteerDispatch.phase
+          : undefined,
+      lifecycleGeneration:
+        typeof acceptedSteerDispatch?.lifecycleGeneration === "string" &&
+        acceptedSteerDispatch.lifecycleGeneration.trim()
+          ? acceptedSteerDispatch.lifecycleGeneration.trim()
+          : undefined,
+      expectedSessionId: expectedSessionId || undefined,
+      expectedLifecycleRevision: expectedLifecycleRevision || undefined,
+    };
+  }
   if (entry.completion) {
     entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
       entry.completion.terminalReply,

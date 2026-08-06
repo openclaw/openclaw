@@ -8,7 +8,6 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveContextTokensForModel, waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
@@ -22,10 +21,14 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
+import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-helpers.js";
+import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
+import { stagedPostCompactionDelegateCount } from "../auto-reply/continuation/delegate-store-post-compaction.js";
+import { pendingDelegateCount } from "../auto-reply/continuation/delegate-store.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -56,15 +59,19 @@ import {
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
-import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
+  resolveUsageCredentialType,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { resolveCodexSyntheticUsageAuthProfileId } from "./status-codex-auth-profile.js";
+import { formatStatusTextContinuationLine } from "./status-continuation-line.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import { appendSessionCostLine, buildStatusUptimeLine } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
+
+export { formatStatusTextContinuationLine };
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
 // final formatting to status-message.runtime through lazy imports.
@@ -161,34 +168,6 @@ function shouldLoadUsageSummary(params: {
     auth?.startsWith("oauth") ||
     auth?.startsWith("token"),
   );
-}
-
-function resolveCodexSyntheticUsageAuthProfileId(params: {
-  profileId: string | undefined;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-}): string | undefined {
-  const normalizedProfileId = params.profileId?.trim();
-  if (!normalizedProfileId) {
-    return undefined;
-  }
-  try {
-    const store = ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-      config: params.cfg,
-      readOnly: true,
-      syncExternalCli: false,
-    });
-    const credential = store.profiles[normalizedProfileId];
-    if (!credential) {
-      return undefined;
-    }
-    return normalizeOptionalLowercaseString(credential.provider) === "openai"
-      ? normalizedProfileId
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function formatSessionTaskLine(sessionKey: string): string | undefined {
@@ -553,6 +532,22 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         subagentReadContext.countPendingDescendantRuns(entry.childSessionKey),
     });
   }
+  let continuationLine: string | undefined;
+  const continuation = cfg.agents?.defaults?.continuation;
+  if (continuation?.enabled && sessionKey) {
+    const chainCount = sessionEntry?.continuationChainCount ?? 0;
+    const { maxChainLength } = resolveContinuationRuntimeConfig(cfg);
+    const pending = pendingDelegateCount(sessionKey);
+    const staged = stagedPostCompactionDelegateCount(sessionKey);
+    const volitional = getVolitionalCompactionCount(sessionKey);
+    continuationLine = formatStatusTextContinuationLine({
+      maxChainLength,
+      chainCount,
+      pending,
+      staged,
+      volitional,
+    });
+  }
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
@@ -706,6 +701,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     },
     subagentsLine,
     taskLine,
+    continuationLine,
     pluginHealthLine,
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,

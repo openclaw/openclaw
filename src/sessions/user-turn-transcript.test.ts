@@ -446,6 +446,114 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("persists managed delivery adoption metadata through transcript hooks", async () => {
+      const dir = createTempDir("openclaw-user-turn-managed-delivery-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "managed completion",
+          sessionDeliveryAckIds: ["delivery-1", "delivery-1", "delivery-2"],
+        },
+        beforeMessageWrite: ({ message }) => {
+          const metadata = Reflect.get(message, "__openclaw") as
+            | { sessionDeliveryAckIds?: unknown[] }
+            | undefined;
+          const deliveryIds = metadata?.sessionDeliveryAckIds;
+          deliveryIds?.splice(0);
+          return castAgentMessage({
+            role: "user",
+            content: message.content,
+            __openclaw: { hookOwned: true },
+          });
+        },
+        target,
+      });
+
+      await recorder.persistApproved();
+
+      expect(await readTranscriptMessages(target)).toEqual([
+        expect.objectContaining({
+          content: "managed completion",
+          __openclaw: {
+            hookOwned: true,
+            sessionDeliveryAckIds: ["delivery-1", "delivery-2"],
+          },
+        }),
+      ]);
+    });
+
+    it("replaces managed delivery receipts in a supplied recorder before persistence", async () => {
+      const dir = createTempDir("openclaw-user-turn-managed-delivery-supplied-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "managed completion" },
+        target,
+      });
+
+      expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-1", "delivery-1"])).toBe(true);
+      expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-2"])).toBe(true);
+      await recorder.persistApproved();
+
+      expect(recorder.getPersistedMessage?.()).toMatchObject({
+        __openclaw: { sessionDeliveryAckIds: ["delivery-2"] },
+      });
+      expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-3"])).toBe(false);
+    });
+
+    it("removes stale managed delivery receipts when the final replacement is empty", async () => {
+      const dir = createTempDir("openclaw-user-turn-managed-delivery-empty-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "managed completion", sessionDeliveryAckIds: ["delivery-stale"] },
+        target,
+      });
+
+      expect(recorder.replaceSessionDeliveryAckIds?.([])).toBe(true);
+      await recorder.persistApproved();
+
+      expect(recorder.getPersistedMessage?.()).not.toHaveProperty(
+        "__openclaw.sessionDeliveryAckIds",
+      );
+    });
+
+    it("returns the older receipt-free row for an idempotent managed-delivery retry", async () => {
+      const dir = createTempDir("openclaw-user-turn-managed-delivery-retry-");
+      const target = createSqliteTranscriptTarget({ dir });
+      const original = createUserTurnTranscriptRecorder({
+        input: {
+          text: "original active steer",
+          idempotencyKey: "active-steer:user",
+        },
+        target,
+      });
+      await original.persistApproved();
+      const retry = createUserTurnTranscriptRecorder({
+        input: {
+          text: "managed completion retry",
+          idempotencyKey: "active-steer:user",
+          sessionDeliveryAckIds: ["delivery-1"],
+        },
+        target,
+      });
+
+      const persisted = await retry.persistApproved();
+
+      expect(persisted).toMatchObject({
+        appended: false,
+        message: {
+          content: "original active steer",
+          idempotencyKey: "active-steer:user",
+        },
+      });
+      expect(retry.getPersistedMessage?.()).not.toHaveProperty("__openclaw.sessionDeliveryAckIds");
+      await expect(readTranscriptMessages(target)).resolves.toEqual([
+        expect.objectContaining({
+          content: "original active steer",
+          idempotencyKey: "active-steer:user",
+        }),
+      ]);
+    });
+
     it("appends #99495 media that resolves after the admitted turn reached the provider", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-late-media-");
       const target = createSqliteTranscriptTarget({ dir });
@@ -459,6 +567,7 @@ describe("user turn transcript persistence", () => {
       const resolverStarted = new Promise<void>((resolve) => {
         markResolverStarted = resolve;
       });
+
       const mediaInput = new Promise<UserTurnInput>((resolve) => {
         resolveMedia = resolve;
       });

@@ -1,4 +1,5 @@
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -33,6 +34,8 @@ type CompletedFallbackCycle = {
   fallbackExhausted: boolean;
   fallbackAttempts: RuntimeFallbackAttempt[];
   terminalRunFailed: boolean;
+  continueWorkRequests: ContinueWorkRequest[];
+  compactionTraceparent?: string;
 };
 
 export type AgentFallbackCycleResult =

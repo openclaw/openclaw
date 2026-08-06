@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { purgeExpiredDelegateArtifacts } from "../agents/delegate-artifacts.js";
 import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -47,6 +48,9 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+const DELEGATE_ARTIFACT_GC_INTERVAL_MS = 60 * 60_000;
+const DELEGATE_ARTIFACT_GC_BATCH_SIZE = 100;
+const DELEGATE_ARTIFACT_GC_YIELD_BATCHES = 10;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -81,6 +85,7 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
+  runDelegateArtifactGc?: () => number | Promise<number>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
   enableSkillCurator?: boolean;
   runSkillCuratorSweep?: () => Promise<unknown>;
@@ -92,6 +97,7 @@ export function startGatewayMaintenanceTimers(params: {
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   worktreeCleanup: ReturnType<typeof setInterval>;
+  delegateArtifactCleanup: ReturnType<typeof setInterval>;
   skillCuratorCleanup: () => void;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
@@ -165,14 +171,64 @@ export function startGatewayMaintenanceTimers(params: {
   };
   void performDeliveryQueueMediaGc();
 
-  let skillCuratorCleanup = () => {};
+  const runDelegateArtifactGc =
+    params.runDelegateArtifactGc ?? (() => purgeExpiredDelegateArtifacts());
+  let delegateArtifactGcInFlight: Promise<void> | null = null;
+  let delegateArtifactGcCancelled = false;
+  const performDelegateArtifactGc = () => {
+    if (delegateArtifactGcInFlight || delegateArtifactGcCancelled) {
+      return delegateArtifactGcInFlight;
+    }
+    delegateArtifactGcInFlight = Promise.resolve()
+      .then(async () => {
+        let fullBatchesSinceYield = 0;
+        while (true) {
+          if (delegateArtifactGcCancelled) {
+            break;
+          }
+          const purged = await runDelegateArtifactGc();
+          if (delegateArtifactGcCancelled || purged < DELEGATE_ARTIFACT_GC_BATCH_SIZE) {
+            break;
+          }
+          fullBatchesSinceYield += 1;
+          if (fullBatchesSinceYield >= DELEGATE_ARTIFACT_GC_YIELD_BATCHES) {
+            fullBatchesSinceYield = 0;
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 0);
+            });
+            if (delegateArtifactGcCancelled) {
+              break;
+            }
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        params.logHealth.error(`delegate artifact cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        delegateArtifactGcInFlight = null;
+      });
+    return delegateArtifactGcInFlight;
+  };
+  const delegateArtifactCleanup = setInterval(
+    () => void performDelegateArtifactGc(),
+    DELEGATE_ARTIFACT_GC_INTERVAL_MS,
+  );
+  void performDelegateArtifactGc();
+
+  let curatorCleanup = () => {};
   if (params.enableSkillCurator) {
-    skillCuratorCleanup = startSkillCuratorMaintenance({
+    curatorCleanup = startSkillCuratorMaintenance({
       onError: (err) => params.logHealth.error(`skill curator sweep failed: ${formatError(err)}`),
       registerUsageTracking: params.registerSkillUsageTracking,
       runSweep: params.runSkillCuratorSweep,
     });
   }
+  const skillCuratorCleanup = () => {
+    delegateArtifactGcCancelled = true;
+    clearInterval(delegateArtifactCleanup);
+    curatorCleanup();
+  };
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
@@ -433,6 +489,7 @@ export function startGatewayMaintenanceTimers(params: {
     startMediaCleanup,
     stopMediaCleanup,
     worktreeCleanup,
+    delegateArtifactCleanup,
     skillCuratorCleanup,
   };
 }

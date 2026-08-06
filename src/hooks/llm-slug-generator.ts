@@ -102,6 +102,8 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       config: params.cfg,
       prompt,
       model: params.model,
+      // Slug generation is a one-off utility run with no delegate queue.
+      drainsContinuationDelegateQueue: false,
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
       disableTrajectory: true,

@@ -11,6 +11,7 @@ import {
   countPendingDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
   isSubagentSessionRunActiveFromRuns,
+  listAncestorSessionKeysFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
@@ -34,6 +35,10 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
     requesterSessionKey: resolved.requesterSessionKey,
     requesterOrigin: normalizeDeliveryContext(resolved.requesterOrigin),
   };
+}
+
+export function listAncestorSessionKeys(sessionKey: string): string[] {
+  return listAncestorSessionKeysFromRuns(getSubagentRunsSnapshotForRead(subagentRuns), sessionKey);
 }
 
 /** True when a subagent session still has an active run record. */

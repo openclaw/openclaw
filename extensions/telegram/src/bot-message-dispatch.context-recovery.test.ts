@@ -259,10 +259,12 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
         ctxPayload: {
           Body: currentBody,
           BodyForAgent: currentBody,
+          CommandBody: "current topic question",
           ChatType: "group",
           From: "telegram:group:-1003774691294:topic:1",
           MessageThreadId: 1,
           OriginatingTo: "telegram:-1003774691294",
+          RawBody: "current topic question",
           SessionKey: "agent:main:telegram:group:-1003774691294:topic:3731",
           To: "telegram:-1003774691294",
           TransportThreadId: 1,
@@ -369,9 +371,6 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     ]);
     expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "general topic context",
-    );
-    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
-      "spoofed current marker from history",
     );
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({

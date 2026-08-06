@@ -323,6 +323,13 @@ export type AgentEventHandlerOptions = {
   loadGatewaySessionLifecycleSnapshotForEvent?: typeof loadGatewaySessionLifecycleSnapshot;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
+  wasChatSendActiveAtTerminalObservation?: (runId: string) => boolean;
+  wasChatSendTerminalBroadcasted?: (runId: string) => boolean;
+  resolveRunToolErrorSummary?: (params: {
+    runId: string;
+    clientRunId: string;
+  }) => string | undefined;
+  markChatSendTerminalBroadcasted?: (params: { runId: string; clientRunId: string }) => void;
   clearTrackedActiveRun?: (params: {
     runId: string;
     clientRunId: string;
@@ -342,11 +349,6 @@ export type AgentEventHandlerOptions = {
     persistence: Promise<void>;
   }) => void;
   resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
-  updateRunToolErrorSummary?: (params: {
-    runId: string;
-    clientRunId: string;
-    summary: string | undefined;
-  }) => void;
   resolveSessionActiveRunState?: (params: {
     requestedKey: string;
     canonicalKey: string;
@@ -377,11 +379,14 @@ export function createAgentEventHandler({
   loadGatewaySessionLifecycleSnapshotForEvent = loadGatewaySessionLifecycleSnapshot,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
+  wasChatSendActiveAtTerminalObservation = () => false,
+  wasChatSendTerminalBroadcasted = () => false,
+  resolveRunToolErrorSummary = () => undefined,
+  markChatSendTerminalBroadcasted,
   clearTrackedActiveRun,
   markTrackedRunTerminalPersisted,
   trackTrackedRunTerminalPersistence,
   resolveActiveLifecycleGenerationForRun = () => undefined,
-  updateRunToolErrorSummary,
   resolveSessionActiveRunState,
 }: AgentEventHandlerOptions): AgentEventHandler {
   const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
@@ -405,7 +410,9 @@ export function createAgentEventHandler({
   };
 
   type TerminalLifecycleOptions = {
-    skipChatErrorFinal?: boolean;
+    chatSendWasActive?: boolean;
+    skipChatSendOwnedTerminal?: boolean;
+    validationAbortErrorMessage?: string;
     suppressRestartRecoveryProjection?: boolean;
     restartRecoveryState?: { suppress: boolean };
   };
@@ -734,6 +741,39 @@ export function createAgentEventHandler({
     if (isSupersededRestartRecoveryEvent) {
       return;
     }
+    const chatSendStillActive = isChatSendRunActive(evt.runId);
+    const chatSendAlreadySettled =
+      opts?.chatSendWasActive === true &&
+      !chatSendStillActive &&
+      wasChatSendTerminalBroadcasted(evt.runId);
+    const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+      phase: lifecyclePhase,
+      data: evt.data,
+      endedAt: evt.data?.endedAt ?? evt.ts,
+    });
+    const validationAbortErrorMessage =
+      opts?.validationAbortErrorMessage ??
+      readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+    const classifiedTerminalState =
+      CHAT_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminalOutcome)];
+    const terminalState = validationAbortErrorMessage ? "aborted" : classifiedTerminalState;
+    const yieldedWaiting = isAgentLifecycleYieldedWaiting({
+      phase: lifecyclePhase,
+      yielded: evt.data?.yielded,
+      livenessState: evt.data?.livenessState,
+      stopReason: terminalOutcome.stopReason,
+      aborted: lifecycleAborted,
+      status: evt.data?.status,
+      timeoutPhase: evt.data?.timeoutPhase,
+      error: evt.data?.error,
+    });
+    const chatSendOwnsTerminal =
+      opts?.skipChatSendOwnedTerminal === true &&
+      chatSendStillActive &&
+      !yieldedWaiting &&
+      (lifecyclePhase === "error" ||
+        classifiedTerminalState === "done" ||
+        validationAbortErrorMessage !== undefined);
 
     if (
       !suppressRestartRecoveryProjection &&
@@ -751,24 +791,7 @@ export function createAgentEventHandler({
         const terminalSessionKey = finished?.sessionKey ?? sessionKey;
         const terminalRunId = finished?.clientRunId ?? eventRunId;
         const terminalAgentId = finished?.agentId ?? sessionAgentId;
-        const terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
-          phase: lifecyclePhase,
-          data: evt.data,
-          endedAt: evt.data?.endedAt ?? evt.ts,
-        });
-        const yieldedWaiting = isAgentLifecycleYieldedWaiting({
-          phase: lifecyclePhase,
-          yielded: evt.data?.yielded,
-          livenessState: evt.data?.livenessState,
-          stopReason: terminalOutcome.stopReason,
-          aborted: lifecycleAborted,
-          status: evt.data?.status,
-          timeoutPhase: evt.data?.timeoutPhase,
-          error: evt.data?.error,
-        });
-        const terminalState =
-          CHAT_STATE_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminalOutcome)];
-        if (!(opts?.skipChatErrorFinal && terminalState === "error")) {
+        if (!chatSendOwnsTerminal && !chatSendAlreadySettled) {
           emitChatTerminal(
             terminalSessionKey,
             terminalRunId,
@@ -783,10 +806,16 @@ export function createAgentEventHandler({
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,
               firstAssistantTimingEntry: finished,
-              abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+              abortErrorMessage: validationAbortErrorMessage,
               yielded: yieldedWaiting ? true : undefined,
             },
           );
+          if (opts?.chatSendWasActive && chatSendStillActive) {
+            markChatSendTerminalBroadcasted?.({
+              runId: evt.runId,
+              clientRunId: terminalRunId,
+            });
+          }
         }
       } else {
         clearBufferedChatState(clientRunId);
@@ -802,8 +831,21 @@ export function createAgentEventHandler({
       chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
     }
     clearRunContextForEvent(evt);
-    agentRunSeq.delete(evt.runId);
-    agentRunSeq.delete(clientRunId);
+    if (chatSendOwnsTerminal && isChatSendRunActive(evt.runId)) {
+      // The post-dispatch chat.send owner emits the terminal next. Preserve the
+      // latest lifecycle sequence so clients cannot reject that terminal as stale.
+      const terminalSeq = Math.max(
+        agentRunSeq.get(evt.runId) ?? evt.seq,
+        agentRunSeq.get(clientRunId) ?? 0,
+      );
+      agentRunSeq.set(clientRunId, terminalSeq);
+      if (evt.runId !== clientRunId) {
+        agentRunSeq.delete(evt.runId);
+      }
+    } else {
+      agentRunSeq.delete(evt.runId);
+      agentRunSeq.delete(clientRunId);
+    }
 
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
@@ -1412,9 +1454,6 @@ export function createAgentEventHandler({
       );
     }
     agentRunSeq.set(evt.runId, evt.seq);
-    if (evt.stream === "assistant") {
-      updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
-    }
     if (evt.stream === "plan" && evt.data?.phase === "update") {
       const steps = normalizeAgentPlanSteps(evt.data.steps) ?? [];
       const explanation =
@@ -1456,15 +1495,6 @@ export function createAgentEventHandler({
     }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      if (toolPhase === "start") {
-        updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
-      } else if (toolPhase === "result") {
-        updateRunToolErrorSummary?.({
-          runId: evt.runId,
-          clientRunId,
-          summary: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
-        });
-      }
       // Flush pending assistant text before tool-start events so clients can
       // render complete pre-tool text above tool cards (not truncated by delta throttle).
       if (
@@ -1643,15 +1673,29 @@ export function createAgentEventHandler({
     }
 
     if (lifecyclePhase === "error") {
-      const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
       const isFallbackExhaustedFailure = evt.data?.fallbackExhaustedFailure === true;
+      const validationAbortErrorMessage =
+        readToolValidationErrorSummary(evt.data?.toolErrorSummary) ??
+        resolveRunToolErrorSummary({ runId: evt.runId, clientRunId });
+      const isValidationAbort = validationAbortErrorMessage !== undefined;
+      const chatSendWasActive =
+        wasChatSendActiveAtTerminalObservation(evt.runId) || isChatSendRunActive(evt.runId);
+      const skipChatSendOwnedTerminal = chatSendWasActive && (!chatLink || isValidationAbort);
       // Per-attempt provider errors keep the retry grace so fallback can reuse
       // the runId. Once the runner marks fallback as exhausted, clear chat state
       // immediately so webchat sessions do not stay in progress until the timer.
-      if (isAborted || isFallbackExhaustedFailure || lifecycleErrorRetryGraceMs <= 0) {
-        // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
-        // has flushed the throttled tail and resolved the terminal message.
-        finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });
+      if (
+        isAborted ||
+        isValidationAbort ||
+        isFallbackExhaustedFailure ||
+        lifecycleErrorRetryGraceMs <= 0
+      ) {
+        finalizeLifecycleEvent(evt, {
+          chatSendWasActive,
+          skipChatSendOwnedTerminal,
+          validationAbortErrorMessage,
+          restartRecoveryState,
+        });
       } else {
         // Deliver the throttled tail before isolating the buffer so a fallback
         // attempt cannot merge onto the failed attempt's text.
@@ -1668,13 +1712,28 @@ export function createAgentEventHandler({
           );
         }
         clearBufferedChatState(clientRunId);
-        scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });
+        scheduleTerminalLifecycleError(evt, {
+          chatSendWasActive,
+          skipChatSendOwnedTerminal,
+          validationAbortErrorMessage,
+          restartRecoveryState,
+        });
       }
       return;
     }
 
     if (lifecyclePhase === "end") {
-      finalizeLifecycleEvent(evt, { restartRecoveryState });
+      const validationAbortErrorMessage =
+        readToolValidationErrorSummary(evt.data?.toolErrorSummary) ??
+        resolveRunToolErrorSummary({ runId: evt.runId, clientRunId });
+      const chatSendWasActive =
+        wasChatSendActiveAtTerminalObservation(evt.runId) || isChatSendRunActive(evt.runId);
+      finalizeLifecycleEvent(evt, {
+        chatSendWasActive,
+        skipChatSendOwnedTerminal: chatSendWasActive,
+        validationAbortErrorMessage,
+        restartRecoveryState,
+      });
       return;
     }
 

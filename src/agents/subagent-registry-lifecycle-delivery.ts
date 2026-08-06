@@ -20,7 +20,6 @@ import {
 } from "./announce-idempotency.js";
 import { isSilentAgentReplyText } from "./embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 import {
   clearDeliveryState,
@@ -35,7 +34,11 @@ import type {
   SubagentRegistryLifecycleParams,
   SubagentRegistryLifecycleState,
 } from "./subagent-registry-lifecycle-contracts.js";
-import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  PendingFinalDeliveryPayload,
+  SubagentRunOutcome,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
 
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
 

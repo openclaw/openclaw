@@ -30,6 +30,7 @@ export type GatewayServerMutableState = {
   dedupeCleanup: ReturnType<typeof setInterval>;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   worktreeCleanup: ReturnType<typeof setInterval> | null;
+  delegateArtifactCleanup: ReturnType<typeof setInterval> | null;
   skillCuratorCleanup: () => void;
   heartbeatRunner: HeartbeatRunner;
   stopOutboundDeliveryRecovery: () => Promise<void>;
@@ -66,6 +67,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     dedupeCleanup: noopInterval(),
     stopMediaCleanup: () => waitForMediaCleanupDrains({ timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS }),
     worktreeCleanup: null as ReturnType<typeof setInterval> | null,
+    delegateArtifactCleanup: null as ReturnType<typeof setInterval> | null,
     skillCuratorCleanup: () => {},
     heartbeatRunner: {
       stop: () => {},

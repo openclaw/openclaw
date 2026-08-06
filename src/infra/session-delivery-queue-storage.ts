@@ -1,108 +1,144 @@
 import { computeBackoff } from "../../packages/retry/src/index.js";
 // Persists queued session deliveries for retry and recovery.
-import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
-import type { ChatType } from "../channels/chat-type.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { SessionPostCompactionDelegate } from "../config/sessions/types.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
   completeDeliveryQueueEntry,
+  failPendingDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntries,
-  loadDeliveryQueueEntry,
+  loadDeliveryQueueEntryResult,
+  loadDeliveryQueueEntryResults,
   moveDeliveryQueueEntryToFailed,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
-  type DeliveryQueueCompletionRetention,
 } from "./delivery-queue-sqlite.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { generateSecureUuid } from "./secure-random.js";
+import {
+  hasOnlyGenericAttachmentRefs,
+  scrubTerminalQueuedAttachments,
+} from "./session-delivery-queue-attachment-metadata.js";
+import {
+  decodeSessionDeliveryResult,
+  normalizeQueuedSessionDeliveryTraceparent,
+  normalizeSessionDeliveryForPersistence,
+  queuedSessionDeliveryMetadata,
+  type QueuedSessionDelivery,
+  type QueuedSessionDeliveryPayload,
+  type SessionDeliveryContext,
+  type SessionDeliverySettledOutcome,
+} from "./session-delivery-queue-codec.js";
+
+export type { AttachmentRef } from "./session-delivery-queue-attachment-metadata.js";
+export type {
+  DelegateArtifactDeliveryReceipt,
+  ManagedDelegateArtifactDelivery,
+  QueuedSessionDelivery,
+  QueuedSessionDeliveryPayload,
+  QueuedSessionDeliveryPayloadWithRetry,
+  SessionDeliveryContext,
+  SessionDeliveryRoute,
+  SessionDeliverySettledOutcome,
+} from "./session-delivery-queue-codec.js";
 
 // Session delivery queue persists session-scoped messages until channel
 // delivery acknowledges them or recovery exhausts retry policy.
 export const SESSION_DELIVERY_QUEUE_NAME = "session";
 
-type SessionDeliveryOwnerReference = {
-  kind: "subagent_completion";
-  runId: string;
-  taskId: string;
-  generation: number;
-  deadlineAt: number;
-};
+/** Default age threshold for purging failed entries (14 days). */
+export const DEFAULT_FAILED_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
-type SessionDeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
-type SessionDeliveryRetryPolicy = {
-  maxRetries?: number;
-  /** Retain terminal ownership when the durable producer can replay forever. */
-  completionRetention?: DeliveryQueueCompletionRetention;
-};
+function openStateDatabaseForSession(stateDir?: string) {
+  return openOpenClawStateDatabase({
+    env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
+  });
+}
 
-export type SessionDeliveryRoute = {
-  channel: string;
-  to: string;
-  accountId?: string;
-  replyToId?: string;
-  threadId?: string;
-  chatType: ChatType;
-};
+/**
+ * Prune failed session-delivery entries older than maxAgeMs.
+ * Returns scanned + removed counts for caller logging.
+ */
+export async function pruneFailedOlderThan(
+  maxAgeMs: number,
+  now: number = Date.now(),
+  stateDir?: string,
+): Promise<{ scanned: number; removed: number }> {
+  const cutoff = now - maxAgeMs;
+  const database = openStateDatabaseForSession(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const scannedRow = executeSqliteQueryTakeFirstSync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .where("queue_name", "=", SESSION_DELIVERY_QUEUE_NAME)
+      .where("status", "=", "failed"),
+  ) as { count: number | bigint } | undefined;
+  const scanned = scannedRow ? Number(scannedRow.count) : 0;
+  const deleteResult = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .deleteFrom("delivery_queue_entries")
+      .where("queue_name", "=", SESSION_DELIVERY_QUEUE_NAME)
+      .where("status", "=", "failed")
+      .where("failed_at", "<", cutoff),
+  );
+  const removed = Number(deleteResult.numAffectedRows ?? 0n);
+  return { scanned, removed };
+}
 
-export type SessionDeliverySettledOutcome = "recovered" | "moved-to-failed";
+function failInvalidSessionDelivery(params: {
+  entry: { id: string; enqueuedAt: number; retryCount: number };
+  error: string;
+  entryJson: string;
+  stateDir?: string;
+}): void {
+  failPendingDeliveryQueueEntry({
+    queueName: SESSION_DELIVERY_QUEUE_NAME,
+    id: params.entry.id,
+    expectedStatus: "pending",
+    lastError: params.error,
+    entry: {
+      id: params.entry.id,
+      enqueuedAt: params.entry.enqueuedAt,
+      retryCount: params.entry.retryCount,
+    },
+    // The rejected row is never re-serialized, so guard the transition on the
+    // persisted text itself and keep the terminal payload identity-only.
+    expectedEntryJson: params.entryJson,
+    clearIndexedMetadata: true,
+    stateDir: params.stateDir,
+  });
+}
 
-/** Payload variants that can be replayed by session delivery recovery. */
-export type QueuedSessionDeliveryPayload =
-  | ({
-      kind: "systemEvent";
-      sessionKey: string;
-      text: string;
-      deliveryContext?: SessionDeliveryContext;
-      idempotencyKey?: string;
-    } & SessionDeliveryRetryPolicy)
-  | ({
-      kind: "agentTurn";
-      sessionKey: string;
-      message: string;
-      messageId: string;
-      expectedSessionId?: string;
-      route?: SessionDeliveryRoute;
-      deliveryContext?: SessionDeliveryContext;
-      inputProvenance?: InputProvenance;
-      sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-      expectedMediaUrls?: string[];
-      suppressTextDelivery?: true;
-      idempotencyKey?: string;
-      owner?: SessionDeliveryOwnerReference;
-    } & SessionDeliveryRetryPolicy);
-
-export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
-  id: string;
-  enqueuedAt: number;
-  agentRunAttempt?: number;
-  lastChargedAgentRunAttempt?: number;
-  retryCount: number;
-  lastAttemptAt?: number;
-  lastError?: string;
-  deliveryStartedAt?: number;
-  acknowledgedAt?: number;
-  settlementOutcome?: SessionDeliverySettledOutcome;
-  availableAt?: number;
-};
+// Strip trailing whitespace per line and at end-of-string before hashing the
+// idempotency key, so same-intent keys that differ only by trailing whitespace
+// produce the same sha256 taskHash and the replay-dedupe path stays robust.
+function canonicalizeIdempotencyKey(key: string): string {
+  return key.replace(/[ \t\r\f\v]+(?=\n|$)/g, "").replace(/\s+$/, "");
+}
 
 export function prepareClaimedSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   initialAttemptLeaseMs: number,
   now = Date.now(),
 ): QueuedSessionDelivery {
-  return {
-    ...params,
+  const payload = normalizeQueuedSessionDeliveryTraceparent(params);
+  return normalizeSessionDeliveryForPersistence({
+    ...payload,
     id: buildEntryId(params.idempotencyKey),
     enqueuedAt: now,
     retryCount: 0,
     availableAt: now + Math.max(0, initialAttemptLeaseMs),
-  };
+  } as QueuedSessionDelivery);
 }
 
 export class SessionDeliveryDeferredError extends Error {
@@ -133,7 +169,78 @@ function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
     return generateSecureUuid();
   }
-  return sha256Hex(idempotencyKey);
+  return sha256Hex(canonicalizeIdempotencyKey(idempotencyKey));
+}
+
+function buildPostCompactionDelegateIdempotencyKey(params: {
+  sessionKey: string;
+  delegate: SessionPostCompactionDelegate;
+  sequence: number;
+  compactionCount?: number;
+}): string {
+  const taskHash = sha256Hex(params.delegate.task).slice(0, 16);
+  return [
+    "post-compaction-delegate",
+    params.sessionKey,
+    String(params.compactionCount ?? "unknown"),
+    String(params.delegate.firstArmedAt ?? params.delegate.createdAt),
+    String(params.sequence),
+    taskHash,
+  ].join(":");
+}
+
+export function buildPostCompactionDelegateDeliveryPayload(params: {
+  sessionKey: string;
+  delegate: SessionPostCompactionDelegate;
+  sequence: number;
+  compactionCount?: number;
+  deliveryContext?: SessionDeliveryContext;
+  idempotencyKey?: string;
+}): QueuedSessionDeliveryPayload {
+  return {
+    kind: "postCompactionDelegate",
+    sessionKey: params.sessionKey,
+    task: params.delegate.task,
+    createdAt: params.delegate.createdAt,
+    firstArmedAt: params.delegate.firstArmedAt ?? params.delegate.createdAt,
+    ...(params.delegate.silent != null ? { silent: params.delegate.silent } : {}),
+    ...(params.delegate.silentWake != null ? { silentWake: params.delegate.silentWake } : {}),
+    ...(params.delegate.targetSessionKey
+      ? { targetSessionKey: params.delegate.targetSessionKey }
+      : {}),
+    ...(params.delegate.targetSessionKeys && params.delegate.targetSessionKeys.length > 0
+      ? { targetSessionKeys: params.delegate.targetSessionKeys }
+      : {}),
+    ...(params.delegate.fanoutMode ? { fanoutMode: params.delegate.fanoutMode } : {}),
+    ...(params.delegate.returnOptions ? { returnOptions: params.delegate.returnOptions } : {}),
+    ...(params.delegate.recipientContext
+      ? { recipientContext: params.delegate.recipientContext }
+      : {}),
+    ...(params.delegate.model ? { model: params.delegate.model } : {}),
+    ...(params.delegate.attachments && params.delegate.attachments.length > 0
+      ? { attachments: params.delegate.attachments }
+      : {}),
+    ...(params.delegate.attachAs ? { attachAs: params.delegate.attachAs } : {}),
+    ...(params.delegate.traceparentProvenance === "internal" && params.delegate.traceparent
+      ? {
+          traceparent: params.delegate.traceparent,
+          traceparentProvenance: "internal" as const,
+        }
+      : {}),
+    ...(params.delegate.flowId ? { sourceFlowId: params.delegate.flowId } : {}),
+    ...(params.delegate.expectedRevision !== undefined
+      ? { sourceExpectedRevision: params.delegate.expectedRevision }
+      : {}),
+    ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+    idempotencyKey:
+      params.idempotencyKey ??
+      buildPostCompactionDelegateIdempotencyKey({
+        sessionKey: params.sessionKey,
+        delegate: params.delegate,
+        sequence: params.sequence,
+        compactionCount: params.compactionCount,
+      }),
+  };
 }
 
 /** Enqueue a session delivery and return its durable id. */
@@ -141,14 +248,37 @@ export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<string> {
-  const id = buildEntryId(params.idempotencyKey);
+  return (await enqueueSessionDeliveryWithStatus(params, stateDir)).id;
+}
 
-  const entry: QueuedSessionDelivery = {
-    ...params,
+/**
+ * Enqueue outcome for callers that must distinguish "this row is now mine to
+ * drive" from "a completed tombstone already settled this idempotency key".
+ *
+ * `enqueueSessionDelivery` only returns the deterministic id, so a caller that
+ * also owns an in-memory fast path cannot tell whether it created work or hit a
+ * tombstone — and would emit a duplicate notice for an outcome already
+ * delivered.
+ */
+export type SessionDeliveryEnqueueResult = {
+  id: string;
+  /** `completed` means a tombstone settled this key; no new work was created. */
+  status: "pending" | "completed" | "unknown";
+};
+
+export async function enqueueSessionDeliveryWithStatus(
+  params: QueuedSessionDeliveryPayload,
+  stateDir?: string,
+): Promise<SessionDeliveryEnqueueResult> {
+  const payload = normalizeQueuedSessionDeliveryTraceparent(params);
+  const id = buildEntryId(payload.idempotencyKey);
+
+  const entry = normalizeSessionDeliveryForPersistence({
+    ...payload,
     id,
     enqueuedAt: Date.now(),
     retryCount: 0,
-  };
+  } as QueuedSessionDelivery);
   upsertDeliveryQueueEntry({
     queueName: SESSION_DELIVERY_QUEUE_NAME,
     entry,
@@ -157,7 +287,31 @@ export async function enqueueSessionDelivery(
       ? { insertOnly: true }
       : { reviveFailedOrCorruptPending: Boolean(params.idempotencyKey) }),
   });
-  return id;
+  // The upsert deliberately never replaces valid pending/completed ownership,
+  // so read back the authoritative row state rather than assuming insertion.
+  let status: SessionDeliveryEnqueueResult["status"];
+  try {
+    const current = getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id, stateDir);
+    status = current === "completed" ? "completed" : current === "pending" ? "pending" : "unknown";
+  } catch {
+    status = "unknown";
+  }
+  return { id, status };
+}
+
+/** Enqueue a post-compaction delegate through the shared durable queue. */
+export async function enqueuePostCompactionDelegateDelivery(
+  params: {
+    sessionKey: string;
+    delegate: SessionPostCompactionDelegate;
+    sequence: number;
+    compactionCount?: number;
+    deliveryContext?: SessionDeliveryContext;
+    idempotencyKey?: string;
+  },
+  stateDir?: string,
+): Promise<string> {
+  return await enqueueSessionDelivery(buildPostCompactionDelegateDeliveryPayload(params), stateDir);
 }
 
 /** Enqueue and lease the first attempt to one caller before recovery can see it as eligible. */
@@ -276,10 +430,11 @@ export async function markSessionDeliverySettlement(
   stateDir?: string,
 ): Promise<void> {
   try {
+    const terminalEntry = scrubTerminalQueuedAttachments(entry);
     const settled = upsertDeliveryQueueEntry({
       queueName: SESSION_DELIVERY_QUEUE_NAME,
       entry: {
-        ...entry,
+        ...terminalEntry,
         settlementOutcome: outcome,
         ...(outcome === "recovered" ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() } : {}),
       } as QueuedSessionDelivery,
@@ -325,6 +480,19 @@ export async function completeSessionDelivery(id: string, stateDir?: string): Pr
   }
 }
 
+/** Acknowledge a delivered row and retain its completed idempotency tombstone. */
+export async function ackSessionDelivery(id: string, stateDir?: string): Promise<void> {
+  const entry = await loadPendingSessionDelivery(id, stateDir);
+  if (!entry) {
+    if (getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id, stateDir) === "completed") {
+      return;
+    }
+    throw new SessionDeliveryAcknowledgementFinalizeError(id);
+  }
+  await markSessionDeliverySettlement(entry, "recovered", stateDir);
+  await completeSessionDelivery(id, stateDir);
+}
+
 /** Record a failed delivery attempt and increment retry metadata. */
 export async function failSessionDelivery(
   id: string,
@@ -334,17 +502,21 @@ export async function failSessionDelivery(
 ): Promise<void> {
   updateDeliveryQueueEntry(SESSION_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => {
     const queued = entry as QueuedSessionDelivery;
+    const safeQueued =
+      queued.kind === "postCompactionDelegate" || hasOnlyGenericAttachmentRefs(queued)
+        ? queued
+        : scrubTerminalQueuedAttachments(queued);
     const retryCount = queued.retryCount + 1;
     const now = Date.now();
     return {
-      ...queued,
+      ...safeQueued,
       retryCount,
-      ...(queued.kind === "agentTurn"
-        ? { lastChargedAgentRunAttempt: queued.agentRunAttempt ?? 0 }
+      ...(safeQueued.kind === "agentTurn"
+        ? { lastChargedAgentRunAttempt: safeQueued.agentRunAttempt ?? 0 }
         : {}),
       ...(options?.releaseAttemptOwnership === true ? { deliveryStartedAt: undefined } : {}),
       lastAttemptAt: now,
-      ...(queued.kind === "agentTurn" && queued.owner?.kind === "subagent_completion"
+      ...(safeQueued.kind === "agentTurn" && safeQueued.owner?.kind === "subagent_completion"
         ? {
             availableAt:
               now +
@@ -364,23 +536,53 @@ export async function loadPendingSessionDelivery(
   id: string,
   stateDir?: string,
 ): Promise<QueuedSessionDelivery | null> {
-  return loadDeliveryQueueEntry(
-    SESSION_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-  ) as QueuedSessionDelivery | null;
+  const result = loadDeliveryQueueEntryResult(SESSION_DELIVERY_QUEUE_NAME, id, stateDir);
+  if (!result) {
+    return null;
+  }
+  const decoded = decodeSessionDeliveryResult(result);
+  if (decoded.status === "loaded") {
+    return decoded.entry;
+  }
+  failInvalidSessionDelivery({ ...decoded, stateDir });
+  return null;
 }
 
 /** Load all pending session deliveries in retry order. */
 export async function loadPendingSessionDeliveries(
   stateDir?: string,
 ): Promise<QueuedSessionDelivery[]> {
-  return loadDeliveryQueueEntries(SESSION_DELIVERY_QUEUE_NAME, stateDir) as QueuedSessionDelivery[];
+  return loadDeliveryQueueEntryResults(SESSION_DELIVERY_QUEUE_NAME, stateDir).flatMap((result) => {
+    const decoded = decodeSessionDeliveryResult(result);
+    if (decoded.status === "loaded") {
+      return [decoded.entry];
+    }
+    failInvalidSessionDelivery({ ...decoded, stateDir });
+    return [];
+  });
 }
 
 /** Move an exhausted session delivery out of the pending queue. */
 export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
   try {
+    const entry = await loadPendingSessionDelivery(id, stateDir);
+    if (entry) {
+      const failedEntry = scrubTerminalQueuedAttachments(entry);
+      const moved = upsertDeliveryQueueEntry({
+        queueName: SESSION_DELIVERY_QUEUE_NAME,
+        entry: failedEntry,
+        metadata: queuedSessionDeliveryMetadata(failedEntry),
+        status: "failed",
+        stateDir,
+        updatePendingOnly: true,
+      });
+      if (moved) {
+        return;
+      }
+    }
+    if (getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, id, stateDir) === "failed") {
+      return;
+    }
     moveDeliveryQueueEntryToFailed(SESSION_DELIVERY_QUEUE_NAME, id, stateDir);
   } catch (error) {
     try {

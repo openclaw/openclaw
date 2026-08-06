@@ -4,6 +4,7 @@
  * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
  */
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { deriveContinuationDelegateChildRunId } from "./subagent-continuation-ids.js";
 import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
@@ -68,6 +69,23 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
   );
+}
+
+/** Returns the preferred run for a child session, favoring active over ended runs. */
+export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
+  return getSubagentRunByChildSessionKeyFromRuns(
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
+    childSessionKey,
+  );
+}
+
+/** Returns whether a continuation child was accepted before its registry row was written. */
+export function hasLiveContinuationDelegateChildRun(params: {
+  childSessionKey: string;
+  flowId: string;
+}): boolean {
+  const runContext = getAgentRunContext(deriveContinuationDelegateChildRunId(params.flowId));
+  return runContext?.sessionKey === params.childSessionKey;
 }
 
 /** Returns whether a registry entry still has a live agent run context. */

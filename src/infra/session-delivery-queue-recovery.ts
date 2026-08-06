@@ -16,6 +16,7 @@ import {
   loadPendingSessionDeliveries,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
+  pruneFailedOlderThan,
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
@@ -25,6 +26,43 @@ import {
   type QueuedSessionDelivery,
   type SessionDeliverySettledOutcome,
 } from "./session-delivery-queue-storage.js";
+
+// Session delivery recovery replays persisted messages after crashes while
+// bounding retry count, backoff, and concurrent drain work.
+const FAILED_GC_AMORTIZATION_MS = 60_000;
+let lastGcAt = 0;
+
+// oxlint-disable-next-line eslint/no-underscore-dangle -- test-only reset hook
+export function __resetFailedGcWatermarkForTests(): void {
+  lastGcAt = 0;
+}
+
+async function maybePruneFailedRecords(opts: {
+  failedMaxAgeMs?: number;
+  stateDir?: string;
+  log: SessionDeliveryRecoveryLogger;
+  now: number;
+}): Promise<void> {
+  const { failedMaxAgeMs, stateDir, log, now } = opts;
+  if (failedMaxAgeMs == null || !(failedMaxAgeMs > 0)) {
+    return;
+  }
+  if (now - lastGcAt < FAILED_GC_AMORTIZATION_MS) {
+    return;
+  }
+  try {
+    const summary = await pruneFailedOlderThan(failedMaxAgeMs, now, stateDir);
+    if (summary.removed > 0) {
+      log.info(
+        `Session delivery failed/ prune: removed ${summary.removed} of ${summary.scanned} entries older than ${failedMaxAgeMs}ms`,
+      );
+    }
+  } catch (err) {
+    log.warn(`Session delivery failed/ prune error: ${formatErrorMessage(err)}`);
+  } finally {
+    lastGcAt = now;
+  }
+}
 
 export type DeliverSessionDeliveryFn = (
   entry: QueuedSessionDelivery,
@@ -92,6 +130,23 @@ function resolvePendingSettlementOutcome(
   entry: QueuedSessionDelivery,
 ): SessionDeliverySettledOutcome | undefined {
   return entry.settlementOutcome ?? (entry.acknowledgedAt !== undefined ? "recovered" : undefined);
+}
+
+function formatRetryBudgetExhaustedLog(entry: QueuedSessionDelivery): string | null {
+  if (entry.kind !== "postCompactionDelegate") {
+    return null;
+  }
+  return `[session-delivery-queue:retry-budget-exhausted] entry ${entry.id} hit retry cap before post-compaction delegate spawn for session ${entry.sessionKey}: ${entry.task}`;
+}
+
+function logRetryBudgetExhausted(
+  log: SessionDeliveryRecoveryLogger,
+  entry: QueuedSessionDelivery,
+): void {
+  const message = formatRetryBudgetExhaustedLog(entry);
+  if (message) {
+    log.warn(message);
+  }
 }
 
 function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
@@ -190,8 +245,15 @@ export async function drainPendingSessionDeliveries(opts: {
   deliver: DeliverSessionDeliveryFn;
   onSettled?: SettleSessionDeliveryFn;
   selectEntry: (entry: QueuedSessionDelivery, now: number) => DeliveryRecoveryDrainDecision;
+  failedMaxAgeMs?: number;
 }): Promise<void> {
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
+    await maybePruneFailedRecords({
+      failedMaxAgeMs: opts.failedMaxAgeMs,
+      stateDir: opts.stateDir,
+      log: opts.log,
+      now: Date.now(),
+    });
     const matchingEntries = (await loadPendingSessionDeliveries(opts.stateDir)).filter(
       (entry) => opts.selectEntry(entry, Date.now()).match,
     );
@@ -212,6 +274,7 @@ export async function drainPendingSessionDeliveries(opts: {
           !canReconcileStartedAgentAttemptAtRetryLimit(currentEntry) &&
           currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)
         ) {
+          logRetryBudgetExhausted(opts.log, currentEntry);
           await markSessionDeliverySettlement(currentEntry, "moved-to-failed", opts.stateDir);
           const finalized = await finalizeSessionDeliverySettlement({
             entry: currentEntry,
@@ -271,7 +334,14 @@ export async function recoverPendingSessionDeliveries(opts: {
   stateDir?: string;
   maxRecoveryMs?: number;
   maxEnqueuedAt?: number;
+  failedMaxAgeMs?: number;
 }): Promise<DeliveryRecoverySummary> {
+  await maybePruneFailedRecords({
+    failedMaxAgeMs: opts.failedMaxAgeMs,
+    stateDir: opts.stateDir,
+    log: opts.log,
+    now: Date.now(),
+  });
   const pending = (await loadPendingSessionDeliveries(opts.stateDir)).filter(
     (entry) => opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt,
   );
@@ -300,6 +370,7 @@ export async function recoverPendingSessionDeliveries(opts: {
         currentEntry.retryCount >= resolveSessionDeliveryMaxRetries(currentEntry)
       ) {
         summary.skippedMaxRetries += 1;
+        logRetryBudgetExhausted(opts.log, currentEntry);
         await markSessionDeliverySettlement(currentEntry, "moved-to-failed", opts.stateDir);
         await finalizeSessionDeliverySettlement({
           entry: currentEntry,

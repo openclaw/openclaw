@@ -53,6 +53,24 @@ const hoisted = vi.hoisted(() => {
     })),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+    recoverPendingContinuationDelegates: vi.fn(async () => ({
+      sessions: 0,
+      dispatched: 0,
+      rejected: 0,
+    })),
+    requeueAwaitingNextCompactionDelegates: vi.fn(async () => ({ requeued: 0 })),
+    recoverAndReleaseStagedPostCompactionDelegates: vi.fn(async () => ({
+      sessions: 0,
+      dispatched: 0,
+      failed: 0,
+    })),
+    recoverPendingContinuationWork: vi.fn(async () => ({
+      sessions: 0,
+      dispatched: 0,
+      failed: 0,
+      reaped: 0,
+      terminalNotices: 0,
+    })),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
     settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
@@ -96,6 +114,17 @@ vi.mock("./server-restart-sentinel.js", () => ({
   settleQueuedSessionDelivery: hoisted.settleQueuedSessionDelivery,
 }));
 
+vi.mock("../auto-reply/continuation/delegate-dispatch-recovery.js", () => ({
+  recoverPendingContinuationDelegates: hoisted.recoverPendingContinuationDelegates,
+  requeueAwaitingNextCompactionDelegates: hoisted.requeueAwaitingNextCompactionDelegates,
+  recoverAndReleaseStagedPostCompactionDelegates:
+    hoisted.recoverAndReleaseStagedPostCompactionDelegates,
+}));
+
+vi.mock("../auto-reply/continuation/work-dispatch.js", () => ({
+  recoverPendingContinuationWork: hoisted.recoverPendingContinuationWork,
+}));
+
 vi.mock("./channel-health-monitor.js", () => ({
   startChannelHealthMonitor: hoisted.startChannelHealthMonitor,
 }));
@@ -137,6 +166,10 @@ describe("server-runtime-services", () => {
     hoisted.drainPendingDeliveries.mockReset();
     hoisted.drainPendingDeliveries.mockResolvedValue(undefined);
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
+    hoisted.recoverPendingContinuationDelegates.mockClear();
+    hoisted.requeueAwaitingNextCompactionDelegates.mockClear();
+    hoisted.recoverAndReleaseStagedPostCompactionDelegates.mockClear();
+    hoisted.recoverPendingContinuationWork.mockClear();
     hoisted.deliverQueuedSessionDelivery.mockClear();
     hoisted.settleQueuedSessionDelivery.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
@@ -521,6 +554,55 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
   });
 
+  it("requeues next-seam post-compaction claims using the boot-time cutoff", async () => {
+    vi.useFakeTimers();
+    const recoveryArmedAt = new Date("2026-07-03T20:00:00.000Z");
+    const recoveryArmedAtMs = recoveryArmedAt.getTime();
+    vi.setSystemTime(recoveryArmedAt);
+
+    activateScheduledServicesForTest();
+    await vi.advanceTimersByTimeAsync(1_400);
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.recoverPendingContinuationDelegates).toHaveBeenCalledWith({
+      queuedCreatedAtOrBefore: recoveryArmedAtMs,
+      includeRunningUpdatedAtOrBefore: recoveryArmedAtMs,
+    });
+    expect(hoisted.requeueAwaitingNextCompactionDelegates).toHaveBeenCalledWith({
+      runningUpdatedAtOrBefore: recoveryArmedAtMs,
+    });
+    expect(hoisted.recoverAndReleaseStagedPostCompactionDelegates).toHaveBeenCalledWith({
+      runningUpdatedAtOrBefore: recoveryArmedAtMs,
+    });
+  });
+
+  it("runs delegate, staged, then work recovery in startup order", async () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    hoisted.recoverPendingContinuationDelegates.mockImplementationOnce(async () => {
+      order.push("delegate");
+      return { sessions: 0, dispatched: 0, rejected: 0 };
+    });
+    hoisted.requeueAwaitingNextCompactionDelegates.mockImplementationOnce(async () => {
+      order.push("requeue-next-seam");
+      return { requeued: 0 };
+    });
+    hoisted.recoverAndReleaseStagedPostCompactionDelegates.mockImplementationOnce(async () => {
+      order.push("staged");
+      return { sessions: 0, dispatched: 0, failed: 0 };
+    });
+    hoisted.recoverPendingContinuationWork.mockImplementationOnce(async () => {
+      order.push("work");
+      return { sessions: 0, dispatched: 0, failed: 0, reaped: 0, terminalNotices: 0 };
+    });
+
+    activateScheduledServicesForTest();
+    await vi.advanceTimersByTimeAsync(1_400);
+    await vi.dynamicImportSettled();
+
+    expect(order).toEqual(["delegate", "requeue-next-seam", "staged", "work"]);
+  });
+
   it.each([
     {
       name: "startup recovery deferred an existing delivery for backoff",
@@ -649,8 +731,8 @@ describe("server-runtime-services", () => {
 
     suspension.release();
     await vi.advanceTimersByTimeAsync(5_000);
-
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    services.heartbeatRunner.stop();
     services.heartbeatRunner.stop();
   });
 
@@ -847,6 +929,7 @@ describe("server-runtime-services", () => {
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.dedupeCleanup);
     expect(maintenance.stopMediaCleanup).toHaveBeenCalledTimes(1);
     expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.worktreeCleanup);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.delegateArtifactCleanup);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
@@ -962,6 +1045,7 @@ function createMaintenanceHandles() {
     startMediaCleanup: vi.fn(async () => undefined),
     stopMediaCleanup: vi.fn(async () => "drained" as const),
     worktreeCleanup: setInterval(() => undefined, 60_000),
+    delegateArtifactCleanup: setInterval(() => undefined, 60_000),
     skillCuratorCleanup: vi.fn(),
   };
 }

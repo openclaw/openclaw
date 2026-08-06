@@ -93,6 +93,10 @@ export async function resetReplyRunSession(params: {
     contextBudgetStatus: undefined,
     systemPromptReport: undefined,
     fallbackNotice: undefined,
+    continuationChainCount: undefined,
+    continuationChainStartedAt: undefined,
+    continuationChainTokens: undefined,
+    continuationChainId: undefined,
     compactionCount: 0,
     memoryFlush: undefined,
   };

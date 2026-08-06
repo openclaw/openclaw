@@ -597,12 +597,14 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     runs,
     resumedRuns: new Set(),
     persist: () => {},
+    persistOrThrow: () => {},
     clearPendingLifecycleError: () => {},
     clearPendingLifecycleTimeout: () => {},
     sweepPendingLifecycle: () => {},
     completeSubagentRunWithRecovery: async () => {
       lostContextCompletions += 1;
     },
+    clearSubagentRunSteerRestart: () => true,
     getGatewayRecoveryRuntime: () => undefined,
     abandonSubagentRestartRecoveryLaunch: () => true,
     clearAcceptedSubagentRestartRecovery: () => true,
@@ -625,6 +627,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     completeCleanupBookkeeping: () => {},
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: async () => {},
+    shouldDeferArchive: () => false,
     callGateway: (async <T>() => {
       sessionEffects += 1;
       return {} as T;

@@ -602,7 +602,7 @@ describe("subagent registry restart recovery", () => {
     expect(mocks.patchSessionEntry).not.toHaveBeenCalled();
   });
 
-  it("keeps accepted source ownership when durable remap fails before settlement", async () => {
+  it("defers accepted source ownership when durable remap fails before settlement", async () => {
     replaceRun.mockReturnValue(false);
     const entry = run();
 
@@ -617,6 +617,20 @@ describe("subagent registry restart recovery", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("could not remap"),
       expect.any(Object),
+    );
+  });
+
+  it("preserves a thrown durable remap error while deferring its accepted run", async () => {
+    const remapError = new Error("registry persistence unavailable");
+    replaceRun.mockImplementationOnce(() => {
+      throw remapError;
+    });
+    const entry = run();
+
+    await expect(recover(entry)).resolves.toEqual({ status: "deferred" });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("could not remap"),
+      expect.objectContaining({ error: remapError }),
     );
   });
 
@@ -972,5 +986,49 @@ describe("subagent registry restart recovery", () => {
         wedgedAt: expect.any(Number),
       },
     });
+  });
+
+  it("terminalizes when the recovery wedge marker cannot be persisted", async () => {
+    mocks.entries[childSessionKey]!.subagentRecovery = {
+      automaticAttempts: 2,
+      lastAttemptAt: Date.now(),
+      lastRunId: "prior-run",
+    };
+    mocks.patchSessionEntry.mockRejectedValueOnce(new Error("store unavailable"));
+
+    await expect(recover(run())).resolves.toEqual({
+      status: "terminal",
+      error: "failed to persist subagent restart recovery wedge marker: store unavailable",
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(mocks.entries[childSessionKey]).toMatchObject({
+      abortedLastRun: true,
+      subagentRecovery: {
+        automaticAttempts: 2,
+      },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "failed to persist wedged subagent recovery marker",
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
+  });
+
+  it("terminalizes when the recovery wedge write returns no persisted row", async () => {
+    mocks.entries[childSessionKey]!.subagentRecovery = {
+      automaticAttempts: 2,
+      lastAttemptAt: Date.now(),
+      lastRunId: "prior-run",
+    };
+    mocks.patchSessionEntry.mockResolvedValueOnce(null);
+
+    await expect(recover(run())).resolves.toEqual({
+      status: "terminal",
+      error: "subagent restart recovery wedge marker was not persisted",
+    });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "failed to persist wedged subagent recovery marker",
+      expect.objectContaining({ error: expect.any(Error) }),
+    );
   });
 });

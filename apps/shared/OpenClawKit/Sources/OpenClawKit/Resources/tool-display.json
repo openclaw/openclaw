@@ -697,6 +697,39 @@
         "cleanup"
       ]
     },
+    "delegate_artifacts_publish": {
+      "emoji": "📦",
+      "title": "Publish Delegate Artifacts",
+      "detailKeys": []
+    },
+    "delegate_artifacts": {
+      "emoji": "📦",
+      "title": "Delegate Artifacts",
+      "actions": {
+        "list": {
+          "label": "list"
+        },
+        "inspect": {
+          "label": "inspect",
+          "detailKeys": [
+            "claimId"
+          ]
+        },
+        "materialize": {
+          "label": "materialize",
+          "detailKeys": [
+            "claimId",
+            "destination"
+          ]
+        },
+        "discard": {
+          "label": "discard",
+          "detailKeys": [
+            "claimId"
+          ]
+        }
+      }
+    },
     "agents_wait": {
       "emoji": "⏳",
       "title": "Wait for Agents",
@@ -1150,6 +1183,30 @@
       "detailKeys": [
         "text",
         "channel"
+      ]
+    },
+    "continue_delegate": {
+      "emoji": "🔄",
+      "title": "Continue Delegate",
+      "detailKeys": [
+        "task",
+        "mode",
+        "delaySeconds"
+      ]
+    },
+    "continue_work": {
+      "emoji": "⏩",
+      "title": "Continue Work",
+      "detailKeys": [
+        "reason",
+        "delaySeconds"
+      ]
+    },
+    "request_compaction": {
+      "emoji": "📦",
+      "title": "Request Compaction",
+      "detailKeys": [
+        "reason"
       ]
     }
   }

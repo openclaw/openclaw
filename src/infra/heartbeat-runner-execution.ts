@@ -79,6 +79,11 @@ import {
 } from "./heartbeat-runner-session.js";
 import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
+import type {
+  HeartbeatScheduledTask,
+  HeartbeatWakeIntent,
+  HeartbeatWakeSource,
+} from "./heartbeat-wake-contracts.js";
 import {
   inferHeartbeatWakeSourceFromReason,
   isConfiguredHeartbeatAgent,
@@ -89,9 +94,6 @@ import {
   getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-  type HeartbeatScheduledTask,
-  type HeartbeatWakeIntent,
-  type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
 import { normalizeDeliverableOutboundChannel } from "./outbound/channel-resolution.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";

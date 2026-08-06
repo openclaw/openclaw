@@ -43,6 +43,8 @@ export type UserTurnInput = {
   } | null;
   timestamp?: number;
   idempotencyKey?: string;
+  /** Private durable receipts for managed system events adopted by this turn. */
+  sessionDeliveryAckIds?: readonly string[];
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
   /** Durable participant attribution. Callers must opt in at the product boundary. */
@@ -147,6 +149,7 @@ export type UserTurnTranscriptRecorder = {
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
+  replaceSessionDeliveryAckIds?: (deliveryIds: readonly string[]) => boolean;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (message?: PersistedUserTurnMessage) => void;

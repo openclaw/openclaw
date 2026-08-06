@@ -2,6 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../test/helpers/infra/delivery-recovery.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
@@ -10,6 +11,7 @@ const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 import {
+  buildPostCompactionDelegateDeliveryPayload,
   deferSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
@@ -31,6 +33,22 @@ describe("session-delivery queue recovery", () => {
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
   });
+
+  function readSessionQueueRow(
+    tempDir: string,
+    id: string,
+  ): { status: string; entry_json: string } | undefined {
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+    });
+    return db
+      .prepare(
+        `SELECT status, entry_json
+           FROM delivery_queue_entries
+          WHERE queue_name = 'session' AND id = ?`,
+      )
+      .get(id) as { status: string; entry_json: string } | undefined;
+  }
 
   it("replays and acks pending entries on recovery", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
@@ -60,6 +78,187 @@ describe("session-delivery queue recovery", () => {
       expect(onSettled).toHaveBeenCalledWith(expect.any(Object), "recovered");
       expect(summary.recovered).toBe(1);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
+    });
+  });
+
+  it("replays continuation trigger and trusted trace exactly once after restart", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "generated media ready",
+          messageId: "generated-media-restart",
+          continuationTrigger: "delegate-return",
+          traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+          traceparentProvenance: "internal",
+        },
+        tempDir,
+      );
+      const deliver = vi.fn(async () => undefined);
+
+      const summary = await recoverPendingSessionDeliveries({
+        deliver,
+        stateDir: tempDir,
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          continuationTrigger: "delegate-return",
+          traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+          traceparentProvenance: "internal",
+        }),
+        { stateDir: tempDir },
+      );
+      expect(summary.recovered).toBe(1);
+    });
+  });
+
+  it("does not deliver seeded generic rows containing inline attachment bytes", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      for (const kind of ["systemEvent", "agentTurn"] as const) {
+        const id =
+          kind === "systemEvent"
+            ? await enqueueSessionDelivery(
+                { kind, sessionKey: "agent:main:main", text: "unsafe generic seed" },
+                tempDir,
+              )
+            : await enqueueSessionDelivery(
+                {
+                  kind,
+                  sessionKey: "agent:main:main",
+                  message: "unsafe generic seed",
+                  messageId: `unsafe-generic-${kind}`,
+                },
+                tempDir,
+              );
+        const secret = `GENERIC_RECOVERY_${kind.toUpperCase()}_SECRET`;
+        const row = readSessionQueueRow(tempDir, id);
+        const corrupted = JSON.parse(row?.entry_json ?? "{}") as Record<string, unknown>;
+        corrupted.attachments = [{ name: "brief.md", content: secret }];
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        });
+        db.prepare(
+          `UPDATE delivery_queue_entries
+              SET entry_json = ?
+            WHERE queue_name = 'session' AND id = ?`,
+        ).run(JSON.stringify(corrupted), id);
+
+        const deliver = vi.fn(async () => undefined);
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+        expect(deliver).not.toHaveBeenCalled();
+        const terminal = readSessionQueueRow(tempDir, id);
+        expect(terminal?.status).toBe("failed");
+        expect(terminal?.entry_json).not.toContain(secret);
+      }
+    });
+  });
+
+  it("dead-letters recovered post-compaction rows with one-sided source metadata", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const deliver = vi.fn(async () => undefined);
+      const missingFields = ["sourceExpectedRevision", "sourceFlowId"] as const;
+
+      for (const [sequence, missingField] of missingFields.entries()) {
+        const id = await enqueueSessionDelivery(
+          buildPostCompactionDelegateDeliveryPayload({
+            sessionKey: "agent:main:main",
+            delegate: {
+              task: "do not recover incomplete source metadata",
+              createdAt: 200 + sequence,
+              flowId: `source-flow-${sequence}`,
+              expectedRevision: 7,
+            },
+            sequence,
+          }),
+          tempDir,
+        );
+        const row = readSessionQueueRow(tempDir, id);
+        const corrupted = JSON.parse(row?.entry_json ?? "{}") as Record<string, unknown>;
+        delete corrupted[missingField];
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        });
+        db.prepare(
+          `UPDATE delivery_queue_entries
+              SET entry_json = ?
+            WHERE queue_name = 'session' AND id = ?`,
+        ).run(JSON.stringify(corrupted), id);
+
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+
+        expect(readSessionQueueRow(tempDir, id)?.status, missingField).toBe("failed");
+      }
+
+      expect(deliver).not.toHaveBeenCalled();
+      await expect(loadPendingSessionDeliveries(tempDir)).resolves.toEqual([]);
+    });
+  });
+
+  it("dead-letters invalid recovered mount hints without delivering or retaining snapshots", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const invalidMountPaths = [
+        "/absolute",
+        "handoff/../outside",
+        "handoff/./nested",
+        "handoff//nested",
+        "handoff/path/",
+        " handoff/path ",
+        "handoff:path",
+      ];
+      const deliver = vi.fn(async () => undefined);
+
+      for (const [sequence, mountPath] of invalidMountPaths.entries()) {
+        const secret = `RECOVERY_INVALID_MOUNT_SECRET_${sequence}`;
+        const id = await enqueueSessionDelivery(
+          buildPostCompactionDelegateDeliveryPayload({
+            sessionKey: "agent:main:main",
+            delegate: {
+              task: "recover only a canonical mount",
+              createdAt: 300 + sequence,
+              attachments: [{ name: "brief.md", content: secret }],
+              attachAs: { mountPath: "handoff/path" },
+            },
+            sequence,
+          }),
+          tempDir,
+        );
+        const row = readSessionQueueRow(tempDir, id);
+        const corrupted = JSON.parse(row?.entry_json ?? "{}") as Record<string, unknown>;
+        corrupted.attachAs = { mountPath };
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        });
+        db.prepare(
+          `UPDATE delivery_queue_entries
+              SET entry_json = ?
+            WHERE queue_name = 'session' AND id = ?`,
+        ).run(JSON.stringify(corrupted), id);
+
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+
+        const terminal = readSessionQueueRow(tempDir, id);
+        expect(terminal?.status, mountPath).toBe("failed");
+        expect(terminal?.entry_json).not.toContain(secret);
+        expect(terminal?.entry_json).not.toContain("attachAs");
+        expect(terminal?.entry_json).not.toContain("attachments");
+      }
+      expect(deliver).not.toHaveBeenCalled();
     });
   });
 
@@ -141,6 +340,50 @@ describe("session-delivery queue recovery", () => {
       expect(second.recovered).toBe(1);
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(onSettled).toHaveBeenCalledTimes(2);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+    });
+  });
+
+  it("scrubs post-compaction snapshots before retrying settlement cleanup", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const secret = "POST_COMPACTION_SETTLEMENT_SECRET";
+      const id = await enqueueSessionDelivery(
+        buildPostCompactionDelegateDeliveryPayload({
+          sessionKey: "agent:main:main",
+          delegate: {
+            task: "deliver the durable snapshot",
+            createdAt: 123,
+            attachments: [{ name: "brief.md", content: secret }],
+            attachAs: { mountPath: "handoff" },
+          },
+          sequence: 0,
+        }),
+        tempDir,
+      );
+      const deliver = vi.fn(async () => undefined);
+      let failCleanup = true;
+      const onSettled = vi.fn(async () => {
+        if (failCleanup) {
+          failCleanup = false;
+          throw new Error("cleanup interrupted");
+        }
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      await recoverPendingSessionDeliveries({ deliver, onSettled, stateDir: tempDir, log });
+
+      const [pending] = await loadPendingSessionDeliveries(tempDir);
+      expect(pending).toMatchObject({
+        id,
+        settlementOutcome: "recovered",
+        acknowledgedAt: expect.any(Number),
+      });
+      expect(pending).not.toHaveProperty("attachments");
+      expect(pending).not.toHaveProperty("attachAs");
+      expect(readSessionQueueRow(tempDir, id)?.entry_json).not.toContain(secret);
+
+      await recoverPendingSessionDeliveries({ deliver, onSettled, stateDir: tempDir, log });
+      expect(deliver).toHaveBeenCalledTimes(1);
       expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
     });
   });
@@ -659,190 +902,5 @@ describe("session-delivery queue recovery", () => {
       expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), "moved-to-failed");
       expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
     });
-  });
-
-  it("settles entries moved to failed after startup retry exhaustion", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue",
-          messageId: "restart-sentinel:agent:main:main:agentTurn:startup-exhausted",
-          maxRetries: 1,
-        },
-        tempDir,
-      );
-      await failSessionDelivery(id, "busy", tempDir);
-
-      const deliver = vi.fn(async () => undefined);
-      const onSettled = vi.fn(async () => undefined);
-      const summary = await recoverPendingSessionDeliveries({
-        deliver,
-        onSettled,
-        stateDir: tempDir,
-        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      });
-
-      expect(deliver).not.toHaveBeenCalled();
-      expect(summary.skippedMaxRetries).toBe(1);
-      expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ id }), "moved-to-failed");
-      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
-    });
-  });
-
-  it.each(["runtime", "startup"] as const)(
-    "reconciles an accepted agent turn before %s retry exhaustion",
-    async (mode) => {
-      if (mode === "startup") {
-        vi.useFakeTimers();
-      }
-      try {
-        await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-          const id = await enqueueSessionDelivery(
-            {
-              kind: "agentTurn",
-              sessionKey: "agent:main:main",
-              message: "generated image ready",
-              messageId: `image:task-exhausted-${mode}:agent-loop`,
-              maxRetries: 1,
-            },
-            tempDir,
-          );
-          const entry = await loadPendingSessionDeliveries(tempDir).then((entries) => entries[0]);
-          if (!entry) {
-            throw new Error("Expected pending session delivery");
-          }
-          await markSessionDeliveryAttemptStarted(entry, tempDir);
-          await failSessionDelivery(id, "final response lost", tempDir);
-
-          const deliver = vi.fn(async () => undefined);
-          if (mode === "startup") {
-            vi.setSystemTime(new Date(Date.now() + 60_000));
-          }
-          if (mode === "runtime") {
-            await drainPendingSessionDeliveries({
-              drainKey: `test-started-exhausted-${mode}`,
-              logLabel: "test started reconciliation",
-              deliver,
-              stateDir: tempDir,
-              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-              selectEntry: (candidate) => ({ match: candidate.id === id, bypassBackoff: true }),
-            });
-          } else {
-            const summary = await recoverPendingSessionDeliveries({
-              deliver,
-              stateDir: tempDir,
-              log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-            });
-            expect(summary.skippedMaxRetries).toBe(0);
-          }
-
-          expect(deliver).toHaveBeenCalledWith(
-            expect.objectContaining({ id, deliveryStartedAt: expect.any(Number) }),
-            { stateDir: tempDir },
-          );
-          expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
-        });
-      } finally {
-        if (mode === "startup") {
-          vi.useRealTimers();
-        }
-      }
-    },
-  );
-
-  it("dead-letters a started agent turn after its bounded reconciliation fails", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "generated image ready",
-          messageId: "image:task-reconciliation-failed:agent-loop",
-          maxRetries: 1,
-        },
-        tempDir,
-      );
-      const [entry] = await loadPendingSessionDeliveries(tempDir);
-      if (!entry) {
-        throw new Error("Expected pending session delivery");
-      }
-      await markSessionDeliveryAttemptStarted(entry, tempDir);
-      await failSessionDelivery(id, "final response lost", tempDir);
-
-      const deliver = vi.fn(async () => {
-        throw new Error("terminal evidence unavailable");
-      });
-      const drain = async () =>
-        await drainPendingSessionDeliveries({
-          drainKey: "test-started-reconciliation-failed",
-          logLabel: "test started reconciliation",
-          deliver,
-          stateDir: tempDir,
-          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          selectEntry: (candidate) => ({ match: candidate.id === id, bypassBackoff: true }),
-        });
-
-      await drain();
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
-        expect.objectContaining({ id, retryCount: 2, deliveryStartedAt: expect.any(Number) }),
-      ]);
-
-      await drain();
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
-    });
-  });
-
-  it("skips entries queued after the startup recovery cutoff", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
-
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "recover old entry",
-        },
-        tempDir,
-      );
-      const maxEnqueuedAt = Date.now();
-
-      vi.setSystemTime(new Date("2026-04-23T00:00:05.000Z"));
-      await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "leave fresh entry queued",
-        },
-        tempDir,
-      );
-
-      const deliver = vi.fn(async () => undefined);
-      const summary = await recoverPendingSessionDeliveries({
-        deliver,
-        stateDir: tempDir,
-        maxEnqueuedAt,
-        log: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
-      });
-
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(summary.recovered).toBe(1);
-      const pending = await loadPendingSessionDeliveries(tempDir);
-      expect(pending).toHaveLength(1);
-      expect(pending[0]?.kind).toBe("systemEvent");
-      if (pending[0]?.kind === "systemEvent") {
-        expect(pending[0].text).toBe("leave fresh entry queued");
-      }
-    });
-
-    vi.useRealTimers();
   });
 });

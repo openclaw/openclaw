@@ -465,6 +465,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       route,
       sessionKey: route.sessionKey,
     });
+    const sessionInitRetrySignal =
+      deps.abortSignal && entry.turnAdoptionLifecycle?.abortSignal
+        ? AbortSignal.any([deps.abortSignal, entry.turnAdoptionLifecycle.abortSignal])
+        : (deps.abortSignal ?? entry.turnAdoptionLifecycle?.abortSignal);
 
     await runChannelInboundEvent({
       channel: "signal",
@@ -531,9 +535,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           },
           dispatcherOptions,
           delivery,
-          // Signal retries the whole debounced flush below so the keyed lane and durable claims
-          // remain owned during backoff; a nested dispatch retry breaks shutdown cancellation.
-          sessionInitRetry: { delaysMs: [] },
           replyOptions: {
             ...(entry.turnAdoptionLifecycle
               ? bindIngressLifecycleToReplyOptions(entry.turnAdoptionLifecycle)
@@ -561,16 +562,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               : {}),
             onModelSelected,
           },
+          sessionInitRetry: {
+            delaysMs: RETRYABLE_FLUSH_RETRY_DELAYS_MS,
+            signal: sessionInitRetrySignal,
+          },
         }),
-        onFinalize: (result) => {
+        onFinalize: async (result) => {
           if (!statusReactionController) {
+            return;
+          }
+          if (sessionInitRetrySignal?.aborted) {
+            await statusReactionController.restoreInitial();
             return;
           }
           const hasFinalResponse =
             result.dispatched && hasVisibleInboundReplyDispatch(result.dispatchResult);
           const hasDeliveryFailure =
             result.dispatched && hasSignalStatusReplyDeliveryFailure(result.dispatchResult);
-          void finalizeSignalStatusReaction({
+          await finalizeSignalStatusReaction({
             controller: statusReactionController,
             outcome: hasFinalResponse && !hasDeliveryFailure ? "done" : "error",
           }).catch((err: unknown) => {
@@ -677,6 +686,26 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         try {
           await flushSignalInboundEntries(entries, admissionLifecycle, settle);
         } catch (err) {
+          const errorGraph = collectErrorGraphCandidates(err, (current) => [
+            current.cause,
+            current.error,
+          ]);
+          const abortedEntrySignals = entries
+            .map((entry) => entry.turnAdoptionLifecycle?.abortSignal)
+            .filter((signal): signal is AbortSignal => signal?.aborted === true);
+          if (abortedEntrySignals.some((signal) => errorGraph.includes(signal.reason))) {
+            // The fanned-in abort may reclaim only one constituent claim. Release
+            // only still-live siblings; reclaimed claims retain drain ownership.
+            await Promise.all(
+              entries
+                .filter((entry) => entry.turnAdoptionLifecycle?.abortSignal.aborted === false)
+                .map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+            );
+            return;
+          }
+          if (deps.abortSignal?.aborted && errorGraph.includes(deps.abortSignal.reason)) {
+            return;
+          }
           if (!isSignalReplySessionInitConflictError(err)) {
             throw err;
           }

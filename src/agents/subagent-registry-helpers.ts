@@ -306,6 +306,7 @@ export function reconcileOrphanedRestoredRuns(params: {
     if (
       entry.killReconciliation ||
       entry.killIntent ||
+      entry.acceptedSteerDispatch ||
       entry.execution.restartRecovery ||
       entry.terminalOwner === "interrupted-recovery"
     ) {

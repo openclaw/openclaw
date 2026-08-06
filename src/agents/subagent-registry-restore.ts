@@ -68,7 +68,7 @@ export function createSubagentRegistryRestorer(config: {
     timeoutMs: number;
     expectedSessionId?: string;
     expectedLifecycleRevision?: string;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
   cleanupCollectorLaunchResources: (
     entry: SubagentRunRecord,
     options?: { isCurrent?: () => boolean },
@@ -98,6 +98,12 @@ export function createSubagentRegistryRestorer(config: {
     warn,
   } = config;
   let restoreAttempted = false;
+
+  // Single ownership predicate for the restored queued launch: both the failure
+  // settlement path and the scheduler seam must agree on whether this exact row
+  // still owns the queued work before either holds or releases its FIFO slot.
+  const ownsRestoredQueuedLaunch = (runId: string, entry: SubagentRunRecord) =>
+    runs.get(runId) === entry && entry.execution.status === "queued";
 
   function restoreSubagentRunsOnce() {
     if (restoreAttempted) {
@@ -164,7 +170,12 @@ export function createSubagentRegistryRestorer(config: {
       for (const [runId, entry] of runs) {
         // Restart recovery exclusively owns receipt-bearing source rows until it
         // remaps or terminalizes them. Generic resume would wait on an obsolete run.
-        if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
+        if (
+          entry.acceptedSteerDispatch ||
+          entry.execution.restartRecovery ||
+          entry.killIntent ||
+          entry.killReconciliation
+        ) {
           continue;
         }
         if (entry.collect && entry.execution.status === "queued") {
@@ -194,6 +205,7 @@ export function createSubagentRegistryRestorer(config: {
             deps().getRuntimeConfig(),
             entry.requesterAgentId,
           );
+          let launchAcceptanceObserved = false;
           let launchTerminationConfirmed = false;
           let launchLifecycleGeneration: string | undefined;
           enqueueSwarmRun({
@@ -204,6 +216,9 @@ export function createSubagentRegistryRestorer(config: {
               .filter((candidate) => candidate.execution.status === "running")
               .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
             start: async () => {
+              // Acceptance is sticky for this deterministic launch identity. A lost
+              // response on a retry cannot prove the previously accepted run stopped.
+              launchTerminationConfirmed = false;
               await runWithGatewayIndependentRootWorkAdmission(async () => {
                 launchLifecycleGeneration = getAgentEventLifecycleGeneration();
                 const response = await deps().callGateway({
@@ -214,6 +229,7 @@ export function createSubagentRegistryRestorer(config: {
                   ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
                   timeoutMs: launch.timeoutMs,
                 });
+                launchAcceptanceObserved = true;
                 const gatewayRunId = readGatewayRunId(response) ?? runId;
                 try {
                   if (!startQueuedSubagentRun(runId, gatewayRunId, launchLifecycleGeneration)) {
@@ -222,14 +238,13 @@ export function createSubagentRegistryRestorer(config: {
                     );
                   }
                 } catch (error) {
-                  await terminateAcceptedRestoredCollectorRun({
+                  launchTerminationConfirmed = await terminateAcceptedRestoredCollectorRun({
                     entry,
                     gatewayRunId,
                     timeoutMs: launch.timeoutMs,
                     expectedSessionId: cleanupSessionEntry?.sessionId,
                     expectedLifecycleRevision: cleanupSessionEntry?.lifecycleRevision,
                   });
-                  launchTerminationConfirmed = true;
                   throw error;
                 }
               });
@@ -237,6 +252,12 @@ export function createSubagentRegistryRestorer(config: {
             onStartFailure: (error) => {
               if (error instanceof GatewayDrainingError) {
                 return false;
+              }
+              if (launchAcceptanceObserved && !launchTerminationConfirmed) {
+                // A possibly-live accepted run keeps the FIFO slot and replays the
+                // same persisted idempotency key, but only while this row still
+                // owns the queued work. Once another owner took it, release.
+                return !ownsRestoredQueuedLaunch(runId, entry);
               }
               return failAndCleanupRestoredQueuedRun(
                 runId,
@@ -283,7 +304,7 @@ export function createSubagentRegistryRestorer(config: {
     expectedSessionId?: string,
     expectedLifecycleRevision?: string,
   ): Promise<boolean> {
-    if (runs.get(runId) !== entry || entry.execution.status !== "queued") {
+    if (!ownsRestoredQueuedLaunch(runId, entry)) {
       return true;
     }
     const claim: RestoredQueuedFailureSettlementClaim = {

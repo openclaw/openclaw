@@ -5,6 +5,13 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
+import {
+  notifyActiveCommandTaskWaiters,
+  notifyAllCommandLaneIdleWaitersForState,
+  notifyCommandLaneIdleWaitersForState,
+  waitForActiveCommandTasks,
+  waitForCommandLaneIdleState,
+} from "./command-queue-waiters.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import {
   GatewayDrainingError,
@@ -28,7 +35,6 @@ import {
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
-  type ActiveTaskWaiter,
   type CommandLaneTaskMarker,
   getQueueState,
   type LaneState,
@@ -221,24 +227,21 @@ function hasPendingActiveTasks(taskIds: Set<number>): boolean {
   return false;
 }
 
-function resolveActiveTaskWaiter(waiter: ActiveTaskWaiter, result: { drained: boolean }): void {
-  const queueState = getQueueState();
-  if (!queueState.activeTaskWaiters.delete(waiter)) {
-    return;
-  }
-  if (waiter.timeout) {
-    clearTimeout(waiter.timeout);
-  }
-  waiter.resolve(result);
+function notifyActiveTaskWaiters(): void {
+  notifyActiveCommandTaskWaiters(hasPendingActiveTasks);
 }
 
-function notifyActiveTaskWaiters(): void {
-  const queueState = getQueueState();
-  for (const waiter of Array.from(queueState.activeTaskWaiters)) {
-    if (waiter.activeTaskIds.size === 0 || !hasPendingActiveTasks(waiter.activeTaskIds)) {
-      resolveActiveTaskWaiter(waiter, { drained: true });
-    }
-  }
+function isCommandLaneIdle(lane: string): boolean {
+  const state = getQueueState().lanes.get(lane);
+  return !state || getLaneDepth(state) === 0;
+}
+
+function notifyCommandLaneIdleWaiters(lane: string): void {
+  notifyCommandLaneIdleWaitersForState(lane, isCommandLaneIdle);
+}
+
+function notifyAllCommandLaneIdleWaiters(): void {
+  notifyAllCommandLaneIdleWaitersForState(isCommandLaneIdle);
 }
 
 function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
@@ -454,6 +457,7 @@ function drainLane(lane: string) {
                 `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
               );
               pump();
+              notifyCommandLaneIdleWaiters(lane);
               // Freed capacity belongs to the group, not to this lane.
               drainGroupSiblings(lane, drainLane);
             }
@@ -473,6 +477,7 @@ function drainLane(lane: string) {
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
               pump();
+              notifyCommandLaneIdleWaiters(lane);
               // A failed task releases group capacity exactly like a successful
               // one; siblings must be woken on both paths.
               drainGroupSiblings(lane, drainLane);
@@ -575,6 +580,7 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   if (state.maxConcurrent > 0) {
     drainLane(cleaned);
   }
+  notifyCommandLaneIdleWaiters(cleaned);
 }
 
 export function enqueueCommandInLane<T>(
@@ -690,6 +696,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   for (const entry of pending) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
+  notifyCommandLaneIdleWaiters(cleaned);
   return removed;
 }
 
@@ -714,6 +721,7 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   // Clearing activeTaskIds released group capacity; siblings may now admit.
   drainGroupSiblings(cleaned, drainLane);
   notifyActiveTaskWaiters();
+  notifyCommandLaneIdleWaiters(cleaned);
   return released;
 }
 
@@ -748,6 +756,7 @@ export function resetAllLanes(): void {
     drainLane(lane);
   }
   notifyActiveTaskWaiters();
+  notifyAllCommandLaneIdleWaiters();
 }
 
 /**
@@ -773,32 +782,34 @@ export function getActiveTaskCount(): number {
  * already executing are waited on.
  */
 export function waitForActiveTasks(timeoutMs?: number): Promise<{ drained: boolean }> {
-  const queueState = getQueueState();
   const activeAtStart = new Set<number>();
-  for (const state of queueState.lanes.values()) {
+  for (const state of getQueueState().lanes.values()) {
     for (const taskId of state.activeTaskIds) {
       activeAtStart.add(taskId);
     }
   }
 
-  if (activeAtStart.size === 0) {
-    return Promise.resolve({ drained: true });
-  }
-  if (timeoutMs !== undefined && timeoutMs <= 0) {
-    return Promise.resolve({ drained: false });
-  }
+  return waitForActiveCommandTasks({
+    activeTaskIds: activeAtStart,
+    hasPendingActiveTasks,
+    timeoutMs,
+  });
+}
 
-  return new Promise((resolve) => {
-    const waiter: ActiveTaskWaiter = {
-      activeTaskIds: activeAtStart,
-      resolve,
-    };
-    if (timeoutMs !== undefined) {
-      waiter.timeout = setTimeout(() => {
-        resolveActiveTaskWaiter(waiter, { drained: false });
-      }, timeoutMs);
-    }
-    queueState.activeTaskWaiters.add(waiter);
-    notifyActiveTaskWaiters();
+/**
+ * Wait for one command lane to become completely idle: no active task and no
+ * queued task. Same-session continuation wakes use this event-driven boundary
+ * so they cannot cut ahead of already admitted work.
+ */
+export function waitForCommandLaneIdle(
+  lane: string = CommandLane.Main,
+  timeoutMs?: number,
+  opts?: { signal?: AbortSignal },
+): Promise<{ idle: boolean }> {
+  return waitForCommandLaneIdleState({
+    lane: normalizeLane(lane),
+    isLaneIdle: isCommandLaneIdle,
+    timeoutMs,
+    signal: opts?.signal,
   });
 }

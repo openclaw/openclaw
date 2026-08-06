@@ -10,6 +10,7 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -35,12 +36,17 @@ import {
   type MessageToolDeliveryState,
 } from "./agent-runner-event-handler.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import {
+  computeRequestCompactionContextUsage,
+  releaseQueuedCompactionTolerant,
+} from "./agent-runner-post-compaction-release.js";
 import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
+import { resolveOperationalRunCompactionCount } from "./run-compaction-count.js";
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
@@ -94,6 +100,8 @@ export async function runEmbeddedFallbackCandidate(params: {
 }): Promise<{
   result: Awaited<ReturnType<typeof runEmbeddedAgent>>;
   bootstrapPromptWarningSignaturesSeen: string[];
+  continueWorkRequests: ContinueWorkRequest[];
+  compactionTraceparent?: string;
 }> {
   const turn = params.turn;
   const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
@@ -167,6 +175,9 @@ export async function runEmbeddedFallbackCandidate(params: {
         })
       : undefined;
   let attemptCompactionCount = 0;
+  const attemptContinueWorkRequests: ContinueWorkRequest[] = [];
+  let attemptCompactionTraceparent: string | undefined;
+  const continuationEnabled = params.runtimeConfig.agents?.defaults?.continuation?.enabled === true;
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
@@ -196,7 +207,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         messageActionTurnCapability,
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
-        trigger: turn.isHeartbeat ? "heartbeat" : "user",
+        trigger: turn.hookTrigger ?? (turn.isHeartbeat ? "heartbeat" : "user"),
         groupId: resolveGroupSessionKey(turn.sessionCtx)?.id,
         groupChannel:
           normalizeOptionalString(turn.sessionCtx.GroupChannel) ??
@@ -227,6 +238,71 @@ export async function runEmbeddedFallbackCandidate(params: {
           turn.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
         suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistenceForCandidate,
         onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+        drainsContinuationDelegateQueue: turn.followupRun.run.drainsContinuationDelegateQueue,
+        continueWorkOpts: continuationEnabled
+          ? {
+              requestContinuation: (request) => {
+                attemptContinueWorkRequests.push(request);
+              },
+            }
+          : undefined,
+        requestCompactionOpts: continuationEnabled
+          ? {
+              sessionId: turn.followupRun.run.sessionId,
+              getContextUsage: () =>
+                computeRequestCompactionContextUsage({
+                  entry: turn.getActiveSessionEntry(),
+                  cfg: params.runtimeConfig,
+                  provider: embeddedRunProvider,
+                  model: params.model,
+                }),
+              triggerCompaction: async (request) => {
+                attemptCompactionTraceparent = request.traceparent;
+                try {
+                  const { compactEmbeddedAgentSession } =
+                    await import("../../agents/embedded-agent-runner/compact.queued.js");
+                  const compactionResult = await compactEmbeddedAgentSession({
+                    sessionId: turn.followupRun.run.sessionId ?? "",
+                    runId: request.runId ?? params.runId,
+                    sessionKey: turn.sessionKey,
+                    sessionFile: turn.followupRun.run.sessionFile ?? "",
+                    workspaceDir: turn.followupRun.run.workspaceDir ?? process.cwd(),
+                    config: params.runtimeConfig,
+                    messageProvider: embeddedContext.messageProvider,
+                    provider: embeddedRunProvider,
+                    model: params.model,
+                    authProfileId: runBaseParams.authProfileId,
+                    customInstructions: request.customInstructions,
+                    trigger: request.trigger,
+                    diagId: request.diagId,
+                    traceparent: request.traceparent,
+                  });
+                  if (compactionResult.ok && compactionResult.compacted) {
+                    await releaseQueuedCompactionTolerant({
+                      activeSessionStore: turn.activeSessionStore,
+                      compactionResult,
+                      followupRun: turn.followupRun,
+                      getActiveSessionEntry: turn.getActiveSessionEntry,
+                      sessionKey: turn.sessionKey,
+                      storePath: turn.storePath,
+                      traceparent: request.traceparent,
+                    });
+                  }
+                  return {
+                    ok: compactionResult.ok,
+                    compacted: compactionResult.compacted,
+                    reason: compactionResult.reason,
+                  };
+                } catch (error) {
+                  return {
+                    ok: false,
+                    compacted: false,
+                    reason: error instanceof Error ? error.message : String(error),
+                  };
+                }
+              },
+            }
+          : undefined,
         toolResultFormat: (() => {
           const channel = resolveMessageChannel(turn.sessionCtx.Surface, turn.sessionCtx.Provider);
           return !channel || isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
@@ -393,13 +469,15 @@ export async function runEmbeddedFallbackCandidate(params: {
           : undefined,
       }),
     );
-    const resultCompactionCount = Math.max(0, result.meta?.agentMeta?.compactionCount ?? 0);
+    const resultCompactionCount = resolveOperationalRunCompactionCount(result.meta);
     attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
     return {
       result,
       bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
         result.meta?.systemPromptReport,
       ),
+      continueWorkRequests: attemptContinueWorkRequests,
+      compactionTraceparent: attemptCompactionTraceparent,
     };
   } finally {
     params.onCompactionCount(attemptCompactionCount);

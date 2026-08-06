@@ -6,10 +6,9 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
@@ -22,6 +21,7 @@ import {
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { createReplyContinuationController } from "./agent-runner-continuation.js";
 import {
   BLOCK_REPLY_SEND_TIMEOUT_MS,
   cleanupReplyAgentRun,
@@ -40,7 +40,9 @@ import {
   createShouldEmitToolResult,
   isAudioPayload,
 } from "./agent-runner-helpers.js";
+import { createPartialReplyTracker } from "./agent-runner-partial-reply.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+import { createTouchActiveSessionEntry } from "./agent-runner-session-touch.js";
 import { finalizeAcceptedSteer } from "./agent-runner-steer-adoption.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -66,6 +68,7 @@ import {
   retireTerminalRestartRecoverySourceClaim,
 } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
+import { resolveReplyHookTrigger } from "./run-provenance.js";
 import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
@@ -101,6 +104,7 @@ export async function runReplyAgent(
     typingMode,
     resetTriggered,
     replyThreadingOverride,
+    isContinuationWake,
     replyOperation: providedReplyOperation,
   } = params;
   // One lifecycle for all adoption sites in this run.
@@ -112,23 +116,16 @@ export async function runReplyAgent(
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
 
   const isHeartbeat = opts?.isHeartbeat === true;
-  let didDeliverVisiblePartialReply = false;
-  const runOpts = opts?.onPartialReply
-    ? {
-        ...opts,
-        onPartialReply: async (payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0]) => {
-          await opts.onPartialReply?.(payload);
-          if (hasOutboundReplyContent(payload, { trimText: true })) {
-            didDeliverVisiblePartialReply = true;
-          }
-        },
-      }
-    : opts;
+  const hookTrigger = resolveReplyHookTrigger(opts);
+  const partialReplyTracker = createPartialReplyTracker(opts);
   const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
   const traceAttributes = {
     provider: followupRun.run.provider,
     hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
-    isHeartbeat,
+    isHeartbeat:
+      isHeartbeat &&
+      opts?.reasoningPayloadsEnabled !== true &&
+      opts?.commentaryPayloadsEnabled !== true,
     queueMode: resolvedQueue.mode,
     isActive,
     blockStreamingEnabled,
@@ -202,20 +199,12 @@ export async function runReplyAgent(
 
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
-  const touchActiveSessionEntry = async () => {
-    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
-      return;
-    }
-    const updatedAt = Date.now();
-    activeSessionEntry.updatedAt = updatedAt;
-    activeSessionStore[sessionKey] = activeSessionEntry;
-    if (storePath) {
-      await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      });
-    }
-  };
+  const touchActiveSessionEntry = createTouchActiveSessionEntry({
+    getActiveSessionEntry: () => activeSessionEntry,
+    getActiveSessionStore: () => activeSessionStore,
+    sessionKey,
+    storePath,
+  });
 
   let shouldQueueAfterSteerRejection = false;
   let beforeAgentReplyDispatchedForSteer = false;
@@ -253,7 +242,7 @@ export async function runReplyAgent(
         normalizeOptionalString(opts?.runId),
       "steered turn id",
     );
-    const trigger = "user";
+    const trigger = hookTrigger;
     const hookResult = await runBeforeAgentReplyForTurn({
       runId: steerRunId,
       trigger,
@@ -592,11 +581,18 @@ export async function runReplyAgent(
     },
     storePath,
   });
-  type SessionResetOptions = {
-    failureLabel: string;
-    buildLogMessage: (nextSessionId: string) => string;
-    cleanupTranscripts?: boolean;
-  };
+  const continuation = createReplyContinuationController({
+    cfg,
+    sessionKey,
+    storePath,
+    isContinuationWake: isContinuationWake === true,
+    activeSessionStore,
+    getActiveSessionEntry: () => activeSessionEntry,
+    setActiveSessionEntry: (entry) => {
+      activeSessionEntry = entry;
+    },
+  });
+  type SessionResetOptions = Parameters<typeof resetReplyRunSession>[0]["options"];
   const resetSession = async ({
     failureLabel,
     buildLogMessage,
@@ -645,13 +641,16 @@ export async function runReplyAgent(
       checkpointBeforeAgentReply,
       confirmRestartRecoveryArmedAfterLeaseLoss,
       commandBody,
+      continuation,
       defaultModel,
       followupRun,
       getActiveIsNewSession: () => activeIsNewSession,
       getActiveSessionEntry: () => activeSessionEntry,
+      hookTrigger,
+      isContinuationWake: isContinuationWake === true,
       isHeartbeat,
       isRestartRecoveryArmed,
-      opts: runOpts,
+      opts: partialReplyTracker.options,
       pendingToolTasks,
       performSessionReset: resetSession,
       queueKey,
@@ -693,7 +692,7 @@ export async function runReplyAgent(
     return await handleReplyAgentRunError(error, {
       blockReplyPipeline,
       cfg,
-      didDeliverVisiblePartialReply: () => didDeliverVisiblePartialReply,
+      didDeliverVisiblePartialReply: partialReplyTracker.didDeliver,
       isHeartbeat,
       isRestartRecoveryArmed,
       replyOperation,
@@ -705,6 +704,7 @@ export async function runReplyAgent(
     await cleanupReplyAgentRun({
       blockReplyPipeline,
       clearRestartRecoveryDeliveryClaim,
+      postCompactionDelegatesToPreserve: continuation.postCompactionDelegatesToPreserve,
       providedReplyOperation,
       queueKey,
       replyOperation,

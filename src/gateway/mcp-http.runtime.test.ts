@@ -85,6 +85,20 @@ describe("resolveMcpLoopbackScopedTools", () => {
     expect(scoped.tools).toEqual([]);
   });
 
+  it("excludes self-scheduling continuation controls but keeps continue_delegate", () => {
+    resolveGatewayScopedTools.mockImplementation((params: { excludeToolNames?: Set<string> }) => {
+      const names = ["continue_work", "request_compaction", "continue_delegate", "message"];
+      return scopedToolFixture(names.filter((name) => !params.excludeToolNames?.has(name)));
+    });
+
+    const scoped = resolveMcpLoopbackScopedTools(scopeParams());
+
+    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
+      "continue_delegate",
+      "message",
+    ]);
+  });
+
   it("exposes explicitly granted coding tools through the mediated loopback surface", () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
 

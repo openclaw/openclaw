@@ -6,9 +6,12 @@
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
+import { isContinuationHeartbeatEquivalent } from "../auto-reply/reply/run-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
@@ -866,6 +869,8 @@ async function sendSubagentAnnounceDirectly(params: {
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   requesterIsSubagent: boolean;
+  continuationTriggerOverride?: ContinuationTrigger;
+  traceparent?: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
@@ -1083,6 +1088,8 @@ async function sendSubagentAnnounceDirectly(params: {
       ...(completionSourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
         : {}),
+      continuationTrigger: params.continuationTriggerOverride,
+      ...(params.traceparent ? { traceparent: params.traceparent } : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
     let directAnnounceResponse: unknown;
@@ -1340,6 +1347,8 @@ export async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
+  continuationTriggerOverride?: ContinuationTrigger;
+  traceparent?: string;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const sourceOwnerChanged = () => params.isSourceSessionEffectsAllowed?.() === false;
   if (sourceOwnerChanged()) {
@@ -1353,6 +1362,12 @@ export async function deliverSubagentAnnouncement(params: {
   let durableQueueClaimed = false;
   if (durableGeneratedMediaHandoff) {
     try {
+      const continuationTrigger = isContinuationHeartbeatEquivalent(
+        params.continuationTriggerOverride,
+      )
+        ? params.continuationTriggerOverride
+        : undefined;
+      const traceparent = normalizeDiagnosticTraceparent(params.traceparent);
       const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
       const canonicalSessionKey = resolveRequesterStoreKey(cfg, params.targetRequesterSessionKey);
       const queuedRoute = resolveGeneratedMediaSessionDeliveryRoute({
@@ -1400,6 +1415,8 @@ export async function deliverSubagentAnnouncement(params: {
         },
         sourceReplyDeliveryMode,
         expectedMediaUrls: collectExpectedMediaFromInternalEvents(params.internalEvents),
+        ...(continuationTrigger ? { continuationTrigger } : {}),
+        ...(traceparent ? { traceparent, traceparentProvenance: "internal" as const } : {}),
         idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
       } as const;
       const queued = params.sourceRunId
@@ -1490,6 +1507,8 @@ export async function deliverSubagentAnnouncement(params: {
         isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        continuationTriggerOverride: params.continuationTriggerOverride,
+        ...(params.traceparent ? { traceparent: params.traceparent } : {}),
         requireVisibleReply: params.requireVisibleReply,
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,

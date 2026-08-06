@@ -77,8 +77,11 @@ function prepareCatalogExecutor(
     onBlockReply: vi.fn(),
     onBlockReplyFlush: vi.fn(),
     sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
-    builtinToolNames: new Set(),
-    replaySafeToolNames: new Set(),
+    subscriptionToolTrust: {
+      builtinToolNames: new Set(),
+      replaySafeToolNames: new Set(),
+      trustedLocalMediaToolNames: new Set(),
+    },
   });
 }
 
@@ -136,8 +139,11 @@ describe("prepareEmbeddedAttemptStream", () => {
       onBlockReply: vi.fn(),
       onBlockReplyFlush: vi.fn(),
       sandboxSessionKey: "agent:main:main",
-      builtinToolNames: new Set(),
-      replaySafeToolNames: new Set(),
+      subscriptionToolTrust: {
+        builtinToolNames: new Set(),
+        replaySafeToolNames: new Set(),
+        trustedLocalMediaToolNames: new Set(),
+      },
     });
     const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
@@ -214,8 +220,11 @@ describe("prepareEmbeddedAttemptStream", () => {
       onBlockReply: vi.fn(),
       onBlockReplyFlush: vi.fn(),
       sandboxSessionKey: "agent:main:main",
-      builtinToolNames: new Set(),
-      replaySafeToolNames: new Set(),
+      subscriptionToolTrust: {
+        builtinToolNames: new Set(),
+        replaySafeToolNames: new Set(),
+        trustedLocalMediaToolNames: new Set(),
+      },
     });
     const queued = prepared.queueHandle.queueMessage("new user input");
     const subscriptionInput = mocks.buildSubscriptionParams.mock.calls.at(-1)?.[0] as {

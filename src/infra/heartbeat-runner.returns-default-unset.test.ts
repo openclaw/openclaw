@@ -1208,6 +1208,72 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("falls back to main session for untrusted continuation reason with subagent key", async () => {
+    const replySpy = vi.fn();
+    try {
+      const tmpDir = await createCaseDir("hb-subagent-continuation");
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const subagentKey = `agent:${agentId}:subagent:task-continuation`;
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "fixture-main-heartbeat-destination",
+          },
+          [subagentKey]: {
+            sessionId: "sid-subagent-cont",
+            updatedAt: Date.now() + 10_000,
+            lastChannel: "whatsapp",
+            lastTo: "fixture-subagent-heartbeat-destination",
+          },
+        }),
+      );
+
+      replySpy.mockClear();
+      replySpy.mockResolvedValue([{ text: "Continuation wake" }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: subagentKey,
+        reason: "continuation",
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+
+      // Untrusted continuation reasons are classification hints, not routing provenance.
+      expectReplyCall(replySpy, 0, { SessionKey: mainSessionKey });
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await createCaseDir("hb-dup-suppress");
     const storePath = path.join(tmpDir, "sessions.json");

@@ -5,6 +5,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
+  deriveContinuationDelegateChildRunId,
+  deriveContinuationDelegateChildSessionKey,
+} from "./subagent-continuation-ids.js";
+import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
   installSessionStoreCaptureMock,
@@ -19,6 +23,7 @@ const hoisted = vi.hoisted(() => ({
   loadPreparedModelCatalogMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
+  getSubagentRunByRunIdMock: vi.fn(),
   startQueuedSubagentRunMock: vi.fn(),
   settleFailedQueuedSubagentLaunchMock: vi.fn(),
   completeCollectorLaunchCleanupMock: vi.fn(),
@@ -34,6 +39,8 @@ const hoisted = vi.hoisted(() => ({
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let consumeSubagentTraceparentHandoff: typeof import("./subagent-traceparent-handoff.js").consumeSubagentTraceparentHandoff;
+let resetSubagentTraceparentHandoffsForTests: typeof import("./subagent-traceparent-handoff.js").resetSubagentTraceparentHandoffsForTests;
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
@@ -158,7 +165,12 @@ const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
 
 describe("spawnSubagentDirect seam flow", () => {
   beforeAll(async () => {
-    ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+    ({
+      resetSubagentRegistryForTests,
+      spawnSubagentDirect,
+      consumeSubagentTraceparentHandoff,
+      resetSubagentTraceparentHandoffsForTests,
+    } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       dispatchGatewayMethodInProcessMock: hoisted.dispatchGatewayMethodInProcessMock,
       hasInProcessGatewayContextMock: hoisted.hasInProcessGatewayContextMock,
@@ -167,6 +179,7 @@ describe("spawnSubagentDirect seam flow", () => {
       loadPreparedModelCatalogMock: hoisted.loadPreparedModelCatalogMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
+      getSubagentRunByRunIdMock: hoisted.getSubagentRunByRunIdMock,
       startQueuedSubagentRunMock: hoisted.startQueuedSubagentRunMock,
       settleFailedQueuedSubagentLaunchMock: hoisted.settleFailedQueuedSubagentLaunchMock,
       completeCollectorLaunchCleanupMock: hoisted.completeCollectorLaunchCleanupMock,
@@ -189,6 +202,9 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.loadPreparedModelCatalogMock.mockReset().mockResolvedValue([]);
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.getSubagentRunByRunIdMock
+      .mockReset()
+      .mockReturnValue({ execution: { status: "queued" } });
     hoisted.startQueuedSubagentRunMock.mockReset().mockReturnValue(true);
     hoisted.settleFailedQueuedSubagentLaunchMock.mockReset().mockReturnValue(true);
     hoisted.completeCollectorLaunchCleanupMock.mockReset();
@@ -206,6 +222,7 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.configOverride = createConfigOverride();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
     hoisted.loadSessionStoreMock.mockReturnValue({});
+    resetSubagentTraceparentHandoffsForTests();
 
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
@@ -486,6 +503,29 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(requireRecord(gatewayRequest("agent").params).idempotencyKey).toBe(result.runId);
   });
 
+  it("preserves continuation flow identity for the child run and session", async () => {
+    const flowId = "flow-after-swarm-merge";
+    const result = await spawnSubagentDirect(
+      {
+        task: "resume the durable continuation",
+        continuationDelegateFlowId: flowId,
+      },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      childSessionKey: deriveContinuationDelegateChildSessionKey("main", flowId),
+    });
+    expect(firstRegisteredSubagentRun()).toMatchObject({
+      runId: result.runId,
+    });
+    await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
+    expect(requireRecord(gatewayRequest("agent").params).idempotencyKey).toBe(
+      deriveContinuationDelegateChildRunId(flowId),
+    );
+  });
+
   it("carries explicit model authorization through a queued collector launch", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
 
@@ -634,6 +674,105 @@ describe("spawnSubagentDirect seam flow", () => {
     releaseDelete?.();
     await vi.waitFor(() => expect(agentCalls).toBe(2));
     expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledOnce();
+  });
+
+  it("releases the collector slot only once an unconfirmed accepted launch loses its queued row", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+    });
+    // No frozen child-session identity, so guarded deletion cannot confirm the
+    // accepted run stopped and termination stays unconfirmed.
+    hoisted.updateSessionStoreMock.mockImplementation(async () => ({}));
+    hoisted.startQueuedSubagentRunMock.mockReturnValue(false);
+    const launchedTasks: string[] = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          launchedTasks.push(String(requireRecord(request.params).message));
+          return { runId: "gateway-unowned" };
+        }
+        if (request.method === "chat.abort") {
+          return { aborted: true, runIds: ["a-different-run"] };
+        }
+        return {};
+      },
+    );
+
+    await spawnSubagentDirect(
+      { task: "unowned-first", collect: true, groupId: "unowned-release" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+    await spawnSubagentDirect(
+      { task: "unowned-second", collect: true, groupId: "unowned-release" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    // A still-owned queued row keeps its slot across repeated durable failures.
+    await vi.waitFor(() =>
+      expect(launchedTasks.filter((task) => task.includes("unowned-first")).length).toBeGreaterThan(
+        1,
+      ),
+    );
+    expect(launchedTasks.some((task) => task.includes("unowned-second"))).toBe(false);
+    expect(hoisted.settleFailedQueuedSubagentLaunchMock).not.toHaveBeenCalled();
+
+    hoisted.getSubagentRunByRunIdMock.mockReturnValue(undefined);
+    await vi.waitFor(() =>
+      expect(launchedTasks.some((task) => task.includes("unowned-second"))).toBe(true),
+    );
+  });
+
+  it("keeps accepted ownership when a retry fails before returning", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+    });
+    hoisted.updateSessionStoreMock.mockImplementation(async () => ({}));
+    hoisted.startQueuedSubagentRunMock.mockImplementation(
+      (_runId: string, gatewayRunId: string) => gatewayRunId === "gateway-next",
+    );
+    let firstAttempts = 0;
+    const launchedTasks: string[] = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        if (request.method === "agent") {
+          const task = String(requireRecord(request.params).message);
+          launchedTasks.push(task);
+          if (task.includes("attempt-local-first")) {
+            firstAttempts += 1;
+            if (firstAttempts === 1) {
+              return { runId: "gateway-first" };
+            }
+            throw new Error("retry failed before acceptance");
+          }
+          return { runId: "gateway-next" };
+        }
+        if (request.method === "chat.abort") {
+          return { aborted: true, runIds: ["another-run"] };
+        }
+        return {};
+      },
+    );
+
+    const first = await spawnSubagentDirect(
+      { task: "attempt-local-first", collect: true, groupId: "attempt-local" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+    await spawnSubagentDirect(
+      { task: "attempt-local-next", collect: true, groupId: "attempt-local" },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    await vi.waitFor(() => expect(firstAttempts).toBeGreaterThanOrEqual(2));
+    expect(launchedTasks.some((task) => task.includes("attempt-local-next"))).toBe(false);
+    expect(hoisted.settleFailedQueuedSubagentLaunchMock).not.toHaveBeenCalled();
+
+    hoisted.getSubagentRunByRunIdMock.mockReturnValue(undefined);
+    await vi.waitFor(() =>
+      expect(launchedTasks.some((task) => task.includes("attempt-local-next"))).toBe(true),
+    );
+    expect(first).toMatchObject({ status: "accepted" });
   });
 
   it("emits collector deletion after an asynchronous launch failure", async () => {
@@ -1128,6 +1267,7 @@ describe("spawnSubagentDirect seam flow", () => {
       {
         task: "inspect the spawn seam",
         model: "openai/gpt-5.4",
+        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -1173,6 +1313,9 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.workspaceDir).toBe("/tmp/requester-workspace");
     expect(registerInput.expectsCompletionMessage).toBe(true);
     expect(registerInput.spawnMode).toBe("run");
+    expect(registerInput.traceparent).toBe(
+      "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    );
     expect(hoisted.emitSessionLifecycleEventMock).toHaveBeenCalledWith({
       sessionKey: childSessionKey,
       reason: "create",
@@ -1198,6 +1341,42 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.provider).toBe("openai");
     expect(agentParams.model).toBe("gpt-5.4");
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
+  it("persists inherited continuation chain state into draining child sessions", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "drain continuation delegates",
+        drainsContinuationDelegateQueue: true,
+        continuationChainState: {
+          count: 7,
+          startedAt: 1_783_520_000_000,
+          tokens: 12_345,
+          chainId: "chain-from-parent",
+        },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const childSessionKey = result.childSessionKey as string;
+    expect(persistedStore?.[childSessionKey]).toMatchObject({
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      continuationChainCount: 7,
+      continuationChainStartedAt: 1_783_520_000_000,
+      continuationChainTokens: 12_345,
+      continuationChainId: "chain-from-parent",
+    });
   });
 
   it("dispatches spawned agent runs in process when a gateway context is available", async () => {
@@ -1823,6 +2002,56 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentCall = calls.find((call) => call.method === "agent");
     const params = requireRecord(agentCall?.params);
     expect(params.thinking).toBeUndefined();
+  });
+
+  it("forwards inherited traceparent to the child agent run", async () => {
+    const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-traceparent", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    let persistedTraceparent: unknown;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedTraceparent ??= Object.values(store).find(
+          (entry) => entry.continuationTraceparent,
+        )?.continuationTraceparent;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "verify traceparent forwarding",
+        traceparent,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    const params = requireRecord(agentCall?.params);
+    expect(params.traceparent).toBe(traceparent);
+    expect(
+      consumeSubagentTraceparentHandoff({
+        idempotencyKey: params.idempotencyKey as string,
+        sessionKey: params.sessionKey as string,
+      })?.traceparent,
+    ).toBe(traceparent);
+    expect(persistedTraceparent).toBe(traceparent);
+    const registerInput = requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+    expect(registerInput.traceparent).toBe(traceparent);
   });
 
   it("does not duplicate long subagent task text in the initial user message (#72019)", async () => {

@@ -693,6 +693,7 @@ export function createGatewayCloseHandler(
     dedupeCleanup: ReturnType<typeof setInterval>;
     stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
     worktreeCleanup: ReturnType<typeof setInterval> | null;
+    delegateArtifactCleanup: ReturnType<typeof setInterval> | null;
     skillCuratorCleanup: () => void;
     agentUnsub: (() => Promise<void> | void) | null;
     heartbeatUnsub: (() => void) | null;
@@ -942,6 +943,9 @@ export function createGatewayCloseHandler(
       clearInterval(params.dedupeCleanup);
       if (params.worktreeCleanup) {
         clearInterval(params.worktreeCleanup);
+      }
+      if (params.delegateArtifactCleanup) {
+        clearInterval(params.delegateArtifactCleanup);
       }
       params.skillCuratorCleanup();
       if (params.agentUnsub) {

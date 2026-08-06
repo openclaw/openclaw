@@ -310,6 +310,7 @@ function createMinimalRun(params?: {
     originatingTo: sessionCtx.OriginatingTo,
     originatingChatId: sessionCtx.NativeChannelId ?? sessionCtx.ChatId,
     run: {
+      agentId: "main",
       sessionId: "session",
       sessionKey,
       messageProvider: "whatsapp",
@@ -926,7 +927,21 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect((call as AgentRunParams).bootstrapContextRunKind).toBe("commitment-only");
   });
 
-  it("runs visible turns with the session id returned by admission", async () => {
+  it.each(["work-wake", "delegate-return", "subagent-return"] as const)(
+    "reports %s continuation provenance to the runner-owned hook path as heartbeat",
+    async (continuationTrigger) => {
+      const { run } = createMinimalRun({
+        opts: { continuationTrigger },
+      });
+
+      await run();
+
+      const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
+      expect((call as AgentRunParams).trigger).toBe("heartbeat");
+    },
+  );
+
+  it("runs visible turns with the session identity returned by admission", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "pre-compact-session",

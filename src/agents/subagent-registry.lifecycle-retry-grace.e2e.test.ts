@@ -5,6 +5,7 @@ import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import { testing as settleWakeTesting } from "./subagent-announce.requester-settle-wake.js";
+import { listAncestorSessionKeys } from "./subagent-registry-announce-read.js";
 import * as announceRead from "./subagent-registry-announce-read.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
@@ -109,6 +110,8 @@ vi.mock("../config/sessions.js", () => ({
 // entries (requester lookups included) from the same in-memory fixture.
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  listSessionEntriesReadOnly: () =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
 }));
 
@@ -131,9 +134,19 @@ const loadSubagentRegistryRuntimeForTest = async () =>
     countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
     hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
     getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
+    getSubagentRunByRunId: async (runId: string) => mod.getSubagentRunByRunId(runId),
     isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
+    listAncestorSessionKeys,
     listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-    replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
+    recordAcceptedSubagentSteerDispatch: async (
+      params: Parameters<typeof mod.recordAcceptedSubagentSteerDispatch>[0],
+    ) => mod.recordAcceptedSubagentSteerDispatch(params),
+    replaceSubagentRunAfterSteer: async (
+      params: Parameters<typeof mod.replaceSubagentRunAfterSteer>[0],
+    ) => mod.replaceSubagentRunAfterSteer(params),
+    clearSubagentRunSteerRestart: async (
+      ...args: Parameters<typeof mod.clearSubagentRunSteerRestart>
+    ) => mod.clearSubagentRunSteerRestart(...args),
     resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
     shouldIgnorePostCompletionAnnounceForSession: mod.shouldIgnorePostCompletionAnnounceForSession,
   }) as unknown as typeof import("./subagent-registry-runtime.js");
@@ -144,6 +157,15 @@ describe("subagent registry lifecycle error grace", () => {
   beforeEach(async () => {
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
+    // Other e2e files can start the process-global registry listener with the
+    // default event dependency before this file runs in the same worker.
+    // Reset first so the test override below owns the listener deterministically.
+    mod.resetSubagentRegistryForTests({ persist: false });
+    lifecycleHandler = undefined;
+    // The assembly announce path lazy-loads continuation coordination even
+    // when continuation is disabled. Warm that module before fake timers so
+    // this lifecycle test does not strand the detached announce on ESM I/O.
+    await import("./subagent-announce.continuation.runtime.js");
     vi.useFakeTimers();
     callGatewayMock.mockClear();
     onAgentEventMock.mockClear();
@@ -317,6 +339,7 @@ describe("subagent registry lifecycle error grace", () => {
       cleanup: "keep",
       expectsCompletionMessage: true,
     });
+    expect(lifecycleHandler).toBeTypeOf("function");
   }
 
   function emitLifecycleEvent(
@@ -371,7 +394,7 @@ describe("subagent registry lifecycle error grace", () => {
           (inputProvenance as { sourceSessionKey?: unknown }).sourceSessionKey === childSessionKey
         );
       })
-      .flatMap((request) => {
+      .map((request) => {
         const internalEvents = request.params?.internalEvents;
         const event =
           Array.isArray(internalEvents) &&
@@ -379,8 +402,9 @@ describe("subagent registry lifecycle error grace", () => {
           typeof internalEvents[0] === "object"
             ? (internalEvents[0] as { result?: string })
             : undefined;
-        return typeof event?.result === "string" ? [event.result] : [];
-      });
+        return event?.result;
+      })
+      .filter((result): result is string => typeof result === "string");
   }
 
   it("lets the delivered cleanup own a yielded batch after a stale wake loses generation", async () => {
@@ -741,7 +765,6 @@ describe("subagent registry lifecycle error grace", () => {
 
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("ok");
-    await waitForDeliveredCleanup("run-timeout-cancel");
 
     // Advance past the original grace window; no timeout completion or
     // requester-settle wake should be emitted after successful delivery.

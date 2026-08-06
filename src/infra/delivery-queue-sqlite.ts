@@ -5,14 +5,18 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   bindDeliveryQueueEntry,
-  inflateDeliveryQueueRow,
   loadDeliveryQueueEntryInDatabase,
   type DeliveryQueueDatabase,
-  type DeliveryQueueRowMetadata,
-  type DeliveryQueueSqliteRow,
   type UpsertDeliveryQueueEntryParams,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-bound.js";
+import {
+  inflateDeliveryQueueEntry,
+  inflateDeliveryQueueEntryResult,
+  type DeliveryQueueEntryLoadResult,
+  type DeliveryQueueRowMetadata,
+  type DeliveryQueueSqliteRow,
+} from "./delivery-queue-sqlite-codec.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueEntryState,
@@ -35,6 +39,12 @@ type QueueStatus = "pending" | "failed" | "completed";
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
 const BOUNDED_COMPLETION_RECOVERY_STATE = "completed_bounded";
+
+export type {
+  CorruptDeliveryQueueEntry,
+  DeliveryQueueEntryLoadResult,
+  DeliveryQueueRowMetadata,
+} from "./delivery-queue-sqlite-codec.js";
 
 type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not_pending" };
 
@@ -197,10 +207,10 @@ export function expireStagingAndLoadDeliveryQueueEntries(params: {
   );
   return {
     entries: snapshot.entryRows
-      .map(inflateDeliveryQueueRow)
+      .map(inflateDeliveryQueueEntry)
       .filter((entry): entry is DeliveryQueueEntryState => entry != null),
     stagingEntries: snapshot.stagingRows
-      .map(inflateDeliveryQueueRow)
+      .map(inflateDeliveryQueueEntry)
       .filter((entry): entry is DeliveryQueueEntryState => entry != null),
   };
 }
@@ -211,6 +221,16 @@ export function loadDeliveryQueueEntry(
   id: string,
   stateDir?: string,
 ): DeliveryQueueEntryState | null {
+  const result = loadDeliveryQueueEntryResult(queueName, id, stateDir);
+  return result?.status === "loaded" ? result.entry : null;
+}
+
+/** Load one pending entry while preserving structural metadata for invalid JSON. */
+export function loadDeliveryQueueEntryResult(
+  queueName: string,
+  id: string,
+  stateDir?: string,
+): DeliveryQueueEntryLoadResult | null {
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
@@ -220,6 +240,7 @@ export function loadDeliveryQueueEntry(
       .select([
         "id",
         "entry_json",
+        "entry_kind",
         "enqueued_at",
         "retry_count",
         "last_attempt_at",
@@ -231,7 +252,7 @@ export function loadDeliveryQueueEntry(
       .where("id", "=", id)
       .where("status", "=", "pending"),
   ) as DeliveryQueueSqliteRow | undefined;
-  return row ? inflateDeliveryQueueRow(row) : null;
+  return row ? inflateDeliveryQueueEntryResult(row) : null;
 }
 
 /** Load a queue entry regardless of pending/failed/completed status. */
@@ -305,6 +326,16 @@ export function loadDeliveryQueueEntries(
   queueName: string,
   stateDir?: string,
 ): DeliveryQueueEntryState[] {
+  return loadDeliveryQueueEntryResults(queueName, stateDir).flatMap((result) =>
+    result.status === "loaded" ? [result.entry] : [],
+  );
+}
+
+/** Load pending entries while preserving structural metadata for invalid JSON rows. */
+export function loadDeliveryQueueEntryResults(
+  queueName: string,
+  stateDir?: string,
+): DeliveryQueueEntryLoadResult[] {
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const rows = executeSqliteQuerySync(
@@ -314,6 +345,7 @@ export function loadDeliveryQueueEntries(
       .select([
         "id",
         "entry_json",
+        "entry_kind",
         "enqueued_at",
         "retry_count",
         "last_attempt_at",
@@ -326,9 +358,7 @@ export function loadDeliveryQueueEntries(
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows as DeliveryQueueSqliteRow[];
-  return rows
-    .map(inflateDeliveryQueueRow)
-    .filter((entry): entry is DeliveryQueueEntryState => entry != null);
+  return rows.map(inflateDeliveryQueueEntryResult);
 }
 
 /** Delete a pending delivery queue entry after successful delivery. */
@@ -593,6 +623,10 @@ export function failPendingDeliveryQueueEntry(params: {
   lastError: string;
   entry: DeliveryQueueEntryState;
   failedEntry?: DeliveryQueueEntryState;
+  /** Persisted text to guard on when the caller cannot re-serialize the row. */
+  expectedEntryJson?: string;
+  /** Clear separately indexed routing metadata when retaining only a scrubbed tombstone. */
+  clearIndexedMetadata?: boolean;
   stateDir?: string;
 }): FailPendingDeliveryQueueEntryResult {
   if (params.entry.id !== params.id) {
@@ -617,11 +651,20 @@ export function failPendingDeliveryQueueEntry(params: {
         entry_json: JSON.stringify(failedEntry),
         updated_at: now,
         failed_at: now,
+        ...(params.clearIndexedMetadata
+          ? {
+              entry_kind: null,
+              session_key: null,
+              channel: null,
+              target: null,
+              account_id: null,
+            }
+          : {}),
       })
       .where("queue_name", "=", params.queueName)
       .where("id", "=", params.id)
       .where("status", "=", params.expectedStatus)
-      .where("entry_json", "=", JSON.stringify(params.entry)),
+      .where("entry_json", "=", params.expectedEntryJson ?? JSON.stringify(params.entry)),
   );
   return result.numAffectedRows === 1n ? { status: "failed" } : { status: "not_pending" };
 }

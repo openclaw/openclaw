@@ -860,11 +860,34 @@ async function emitToolResultOutput(params: {
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
+  deliveryGeneration?: number;
 }) {
-  const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
+  const {
+    ctx,
+    toolName,
+    rawToolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+    deliveryGeneration,
+  } = params;
+  const isCurrentDeliveryGeneration = () =>
+    deliveryGeneration === undefined ||
+    deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const recordApprovalPromptDeliveryFailure = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     ctx.log.warn(`failed to deliver exec approval prompt: ${message}`);
+    // The generation can advance while the prompt delivery awaits. Keep the warn
+    // unconditional so the failure is never silent, but let a superseded
+    // generation stop here: writing lastToolError/approval state back would
+    // clobber the live generation's terminal outcome.
+    if (!isCurrentDeliveryGeneration()) {
+      return;
+    }
     const approvalMeta = meta ? `${meta} · approval prompt delivery` : "approval prompt delivery";
     ctx.state.lastToolError = (
       ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx)
@@ -895,6 +918,9 @@ async function emitToolResultOutput(params: {
     ctx.state.deterministicApprovalPromptPending = true;
     try {
       const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      if (!isCurrentDeliveryGeneration()) {
+        return;
+      }
       await ctx.params.onToolResult(
         buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
@@ -908,11 +934,15 @@ async function emitToolResultOutput(params: {
           warningText: approvalPending.warningText,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptSent = true;
+      }
     } catch (error) {
       recordApprovalPromptDeliveryFailure(error);
     } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptPending = false;
+      }
     }
     return;
   }
@@ -925,6 +955,9 @@ async function emitToolResultOutput(params: {
     ctx.state.deterministicApprovalPromptPending = true;
     try {
       const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
+      if (!isCurrentDeliveryGeneration()) {
+        return;
+      }
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,
@@ -937,11 +970,15 @@ async function emitToolResultOutput(params: {
           nodeId: approvalUnavailable.nodeId,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptSent = true;
+      }
     } catch (error) {
       recordApprovalPromptDeliveryFailure(error);
     } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
+      if (isCurrentDeliveryGeneration()) {
+        ctx.state.deterministicApprovalPromptPending = false;
+      }
     }
     return;
   }
@@ -1000,7 +1037,14 @@ export function handleToolExecutionStart(
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
   },
+  options?: { deliveryGeneration?: number },
 ): void | Promise<void> {
+  const isCurrentDeliveryGeneration = () =>
+    options?.deliveryGeneration === undefined ||
+    options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const startToolName = normalizeToolName(evt.toolName);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
@@ -1024,7 +1068,7 @@ export function handleToolExecutionStart(
     }
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(
-        () => continueToolExecutionStart(),
+        () => (isCurrentDeliveryGeneration() ? continueToolExecutionStart() : undefined),
         (error: unknown) => {
           cancelAskUserPromptReservation();
           throw error;
@@ -1035,6 +1079,10 @@ export function handleToolExecutionStart(
   };
 
   const continueToolExecutionStart = (): void | Promise<void> => {
+    if (!isCurrentDeliveryGeneration()) {
+      cancelAskUserPromptReservation();
+      return;
+    }
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
     const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -1249,7 +1297,7 @@ export function handleToolExecutionStart(
         const questionId = payload.questionId;
         void waitForAskUserPromptReady(questionId)
           .then((questions) => {
-            if (!questions) {
+            if (!questions || !isCurrentDeliveryGeneration()) {
               return;
             }
             return ctx.params.onToolResult?.(
@@ -1303,7 +1351,14 @@ export function handleToolExecutionUpdate(
     partialResult?: unknown;
     hideFromChannelProgress?: boolean;
   },
+  options?: { deliveryGeneration?: number },
 ) {
+  if (
+    options?.deliveryGeneration !== undefined &&
+    options.deliveryGeneration !== ctx.getBlockReplyDeliveryGeneration()
+  ) {
+    return;
+  }
   const toolName = normalizeToolName(evt.toolName);
   const toolCallId = evt.toolCallId;
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -1394,7 +1449,14 @@ export function handleToolExecutionUpdate(
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
+  options?: { deliveryGeneration?: number },
 ) {
+  const isCurrentDeliveryGeneration = () =>
+    options?.deliveryGeneration === undefined ||
+    options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
@@ -1884,13 +1946,23 @@ export async function handleToolExecutionEnd(
     isToolError,
     result,
     sanitizedResult,
+    deliveryGeneration: options?.deliveryGeneration,
   });
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     const hookEvent: PluginHookAfterToolCallEvent = {

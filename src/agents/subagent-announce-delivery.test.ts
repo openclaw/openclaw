@@ -309,6 +309,8 @@ async function deliverDiscordDirectMessageCompletion(params: {
   queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceTool?: string;
   signal?: AbortSignal;
+  continuationTriggerOverride?: "work-wake" | "delegate-return" | "subagent-return";
+  traceparent?: string;
   onDeliveryResult?: Parameters<typeof deliverSubagentAnnouncement>[0]["onDeliveryResult"];
   isSourceSessionEffectsAllowed?: () => boolean;
 }) {
@@ -347,6 +349,8 @@ async function deliverDiscordDirectMessageCompletion(params: {
     sourceRunId: "run-generated-media",
     sourceTool: params.sourceTool,
     signal: params.signal,
+    continuationTriggerOverride: params.continuationTriggerOverride,
+    traceparent: params.traceparent,
     onDeliveryResult: params.onDeliveryResult,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
   });
@@ -2577,6 +2581,55 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves continuation trigger and trace on the direct completion path", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const callGateway = createGatewayMock({
+      result: { payloads: [{ text: "The track is ready." }] },
+    });
+    const sendMessage = createSendMessageMock();
+
+    await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      continuationTriggerOverride: "delegate-return",
+      traceparent,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "task-continuation",
+        taskLabel: "continuation track",
+      }),
+    });
+
+    expectGatewayAgentParams(callGateway, {
+      continuationTrigger: "delegate-return",
+      traceparent,
+    });
+  });
+
+  it("persists continuation trigger and trusted trace for generated media", async () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const callGateway = createGatewayMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sourceTool: "music_generate",
+      continuationTriggerOverride: "delegate-return",
+      traceparent,
+      internalEvents: musicCompletionEvents(),
+    });
+
+    expectDeliveryPath(result, "queued");
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "agentTurn",
+        continuationTrigger: "delegate-return",
+        traceparent,
+        traceparentProvenance: "internal",
+      }),
+      expect.any(Number),
+    );
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("queues generated media group completions that miss required message-tool delivery", async () => {

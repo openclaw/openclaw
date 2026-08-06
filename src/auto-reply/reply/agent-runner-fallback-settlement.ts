@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
+import { isContinuationWrappedRunResult } from "./agent-runner-execution.types.js";
 import { buildControlUiAgentFailureText } from "./agent-runner-failure-copy.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCandidatesResult } from "./agent-runner-fallback-candidate.js";
@@ -33,7 +34,16 @@ export async function settleAgentFallbackCycle(params: {
 }): Promise<AgentFallbackCycleResult> {
   const { cycle, fallbackResult } = params;
   const turn = cycle.turn;
-  const runResult = fallbackResult.result;
+  const wrappedRunResult = fallbackResult.result;
+  const runResult = isContinuationWrappedRunResult(wrappedRunResult)
+    ? wrappedRunResult.result
+    : wrappedRunResult;
+  const continueWorkRequests = isContinuationWrappedRunResult(wrappedRunResult)
+    ? (wrappedRunResult.continueWorkRequests ?? [])
+    : [];
+  const compactionTraceparent = isContinuationWrappedRunResult(wrappedRunResult)
+    ? wrappedRunResult.compactionTraceparent
+    : undefined;
   const fallbackProvider = fallbackResult.provider;
   const fallbackModel = fallbackResult.model;
   const fallbackExhausted = fallbackResult.outcome === "exhausted";
@@ -160,5 +170,7 @@ export async function settleAgentFallbackCycle(params: {
     fallbackExhausted,
     fallbackAttempts,
     terminalRunFailed,
+    continueWorkRequests,
+    compactionTraceparent,
   };
 }

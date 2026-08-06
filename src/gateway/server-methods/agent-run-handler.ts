@@ -62,7 +62,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     isRawModelRun,
     agentDedupeKeys,
   } = preflight;
-  const idem = runId;
   let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
   let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
   let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
@@ -82,7 +81,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     context,
     respond,
   });
-  const reservePreAcceptedAgentDedupe = dedupeLifecycle.reserve;
   const clearUnacceptedAgentDedupe = dedupeLifecycle.clearUnaccepted;
   const abortForLifecycleRotation = dedupeLifecycle.abortForLifecycleRotation;
   const routing = await prepareAgentRequestRouting({
@@ -95,8 +93,8 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     agentDedupeKeys,
     context,
     respond,
-    reserveDedupe: reservePreAcceptedAgentDedupe,
-    clearDedupe: clearUnacceptedAgentDedupe,
+    reserveDedupe: dedupeLifecycle.reserve,
+    clearDedupe: dedupeLifecycle.clearUnaccepted,
   });
   if (!routing) {
     return;
@@ -167,6 +165,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     } = content;
     let resolvedSessionId = requestedSessionId;
     let sessionEntry: SessionEntry | undefined;
+    let sessionContinuationTraceparent: string | undefined;
     let effectiveBootstrapContextRunKind = request.bootstrapContextRunKind;
     let restoredCronContinuation: RestoredCronContinuation | undefined;
     let restoredCronContinuationIdentity:
@@ -392,6 +391,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         return;
       }
       sessionEntry = persistedSession.sessionEntry;
+      sessionContinuationTraceparent = persistedSession.consumedContinuationTraceparent;
       resolvedSessionId = persistedSession.resolvedSessionId;
       sessionPersistedBeforeGatewayAdmission =
         persistedSession.sessionPersistedBeforeGatewayAdmission;
@@ -485,6 +485,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       cfg,
       cfgForAgent,
       sessionEntry,
+      sessionContinuationTraceparent,
       resolvedSessionKey,
       requestedSessionKey,
       requestedSessionKeyRaw,
@@ -504,7 +505,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       effectiveTranscriptInputText,
       inputProvenance,
       runId,
-      idempotencyKey: idem,
+      idempotencyKey: runId,
       agentDedupeKeys,
       spawnedBy: spawnedByValue,
       groupId: resolvedGroupId,

@@ -6,6 +6,7 @@ import {
 } from "../../agent-tool-definition-adapter.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
+import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-subscribe.tools.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
 import { addClientToolsToToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
@@ -70,6 +71,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
     isPluginTool: (tool) =>
       Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
   });
+  const trustedPluginLocalMediaToolNames = new Set(
+    params.uncompactedEffectiveTools.flatMap((tool) => {
+      const name = tool.name?.trim();
+      const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
+      return name && meta?.trustedLocalMedia === true ? [name] : [];
+    }),
+  );
+  const trustedLocalMediaToolNames = new Set([
+    ...[...coreBuiltinToolNames].filter(isCoreToolResultMediaTrustedName),
+    ...trustedPluginLocalMediaToolNames,
+  ]);
   const isReplaySafeTool = (tool: { name?: string }) =>
     isAgentToolReplaySafe(tool, params.replaySafetyOptions);
   const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -160,12 +172,15 @@ export function prepareEmbeddedAttemptClientTools(params: {
   const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
   return {
     allCustomTools,
-    builtinToolNames,
     clientToolCallSlots,
     clientToolDefs,
     clientToolLoopDetection,
-    replaySafeToolNames,
     replaySafeTools,
     sessionToolAllowlist,
+    subscriptionToolTrust: {
+      builtinToolNames,
+      replaySafeToolNames,
+      trustedLocalMediaToolNames,
+    },
   };
 }

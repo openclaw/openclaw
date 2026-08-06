@@ -4540,7 +4540,7 @@ describe("createTelegramBot", () => {
     }
   });
   it("honors routed group activation from session store", async () => {
-    const storePath = "/tmp/openclaw-telegram-group-activation.json";
+    const storePath = path.join(createTelegramBotTestStateDir(), "sessions.json");
     const routedGroupEntry = {
       sessionId: "agent:ops:telegram:group:123",
       updatedAt: 0,
@@ -5225,7 +5225,20 @@ describe("createTelegramBot", () => {
   });
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
-    createTelegramBot({ token: "tok" });
+    // Isolate this bot's session store: the retry path lets the SECOND middleware
+    // chain run through the REAL patchSessionEntry, persisting modelOverride to disk.
+    // Without an explicit store this resolves to the process-shared default path
+    // (pid+pool keyed) and leaks the override into later files in the sequential
+    // shard (e.g. bot.test.ts "renders model callback lists"). A dedicated temp
+    // store keeps the real write contained to this test. Keep the default DM
+    // policy so the callback stays authorized.
+    const storePath = path.join(createTelegramBotTestStateDir(), "session-store.json");
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({ token: "tok", config });
     const callbackHandler = getOnHandler("callback_query");
     const runMiddlewareChain = (ctx: Record<string, unknown>) =>
       runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
