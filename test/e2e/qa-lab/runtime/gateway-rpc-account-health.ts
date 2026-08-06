@@ -6,6 +6,11 @@ import {
   startQaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import {
+  HEALTH_HOOK_DEADLINE_ACCOUNT_COUNT,
+  type HealthHookDeadlineProof,
+  runHealthHookDeadlineProof,
+} from "./gateway-rpc-account-health-hook-deadlines.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-rpc-account-health.ts";
@@ -22,13 +27,17 @@ type AccountState = {
   stateReason?: string;
 };
 
-type GatewayAccountHealthProof = {
+type GatewayAccountReloadProof = {
   initialHealthOk: boolean;
   initialStatusVisible: boolean;
   initialAccounts: Record<string, AccountState>;
   finalAccounts: Record<string, AccountState>;
   onlyTargetConfigChanged: boolean;
   finalStatusVisible: boolean;
+};
+
+type GatewayAccountHealthProof = GatewayAccountReloadProof & {
+  healthHookDeadlines: HealthHookDeadlineProof;
 };
 
 function sleep(ms: number) {
@@ -150,9 +159,9 @@ async function waitForAppliedConfig(
   throw new Error("Gateway did not apply patched account config");
 }
 
-export async function runGatewayRpcAccountHealthProof(
+async function runGatewayAccountReloadProof(
   repoRoot = path.resolve(import.meta.dirname, "../../../.."),
-): Promise<GatewayAccountHealthProof> {
+): Promise<GatewayAccountReloadProof> {
   const state = createQaBusState();
   const bus = await startQaBusServer({ state });
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
@@ -241,6 +250,15 @@ export async function runGatewayRpcAccountHealthProof(
   }
 }
 
+export async function runGatewayRpcAccountHealthProof(
+  repoRoot = path.resolve(import.meta.dirname, "../../../.."),
+): Promise<GatewayAccountHealthProof> {
+  return {
+    ...(await runGatewayAccountReloadProof(repoRoot)),
+    healthHookDeadlines: await runHealthHookDeadlineProof(repoRoot),
+  };
+}
+
 function parseArtifactBase(argv: readonly string[]) {
   const index = argv.indexOf("--artifact-base");
   const value = index >= 0 ? argv[index + 1] : undefined;
@@ -264,7 +282,11 @@ export async function main(argv = process.argv.slice(2)) {
       title: "Gateway RPC account health",
       sourcePath: SCENARIO_PATH,
       docsRefs: ["docs/gateway/health.md", "docs/gateway/protocol.md"],
-      codeRefs: [SOURCE_PATH, "src/gateway/server-methods/health.ts"],
+      codeRefs: [
+        SOURCE_PATH,
+        "test/e2e/qa-lab/runtime/gateway-rpc-account-health-hook-deadlines.ts",
+        "src/gateway/server-methods/health.ts",
+      ],
     },
   });
   const startedAt = Date.now();
@@ -284,6 +306,34 @@ export async function main(argv = process.argv.slice(2)) {
       proof.finalAccounts[TARGET_ACCOUNT_ID]?.running !== false &&
         "target account remained running",
       !proof.finalStatusVisible && "disabled target was not operator-visible",
+      proof.healthHookDeadlines.delayedCli.durationMs <= 10_000 &&
+        "delayed verbose health did not cross the legacy 10 second request deadline",
+      proof.healthHookDeadlines.delayedCli.durationMs > 20_000 &&
+        "delayed verbose health exceeded the bounded two-wave probe window",
+      proof.healthHookDeadlines.delayedCli.accountCount !== HEALTH_HOOK_DEADLINE_ACCOUNT_COUNT &&
+        "delayed verbose health omitted fixture accounts",
+      proof.healthHookDeadlines.delayedCli.timedOutCount !== 0 &&
+        "delayed verbose health timed out a settling account",
+      proof.healthHookDeadlines.delayedCli.skippedCount !== 0 &&
+        "delayed verbose health skipped a settling account",
+      proof.healthHookDeadlines.hangingRpc.firstTimedOutCount !== 6 &&
+        "hanging health RPC did not mark every incomplete account as timed out",
+      proof.healthHookDeadlines.hangingRpc.firstStartedTimedOutCount !== 5 &&
+        "hanging health RPC did not time out exactly five admitted hooks",
+      proof.healthHookDeadlines.hangingRpc.firstSkippedCount !== 1 &&
+        "hanging health RPC did not skip the sixth hook after capacity remained occupied",
+      proof.healthHookDeadlines.hangingRpc.firstDurationMs < 9_000 &&
+        "hanging health RPC returned before the Gateway-owned hook deadline",
+      proof.healthHookDeadlines.hangingRpc.firstDurationMs > 16_000 &&
+        "hanging health RPC exceeded the bounded Gateway-owned hook deadline",
+      proof.healthHookDeadlines.hangingRpc.secondTimedOutCount !== 6 &&
+        "follow-up health RPC did not report every capacity-held account as timed out",
+      proof.healthHookDeadlines.hangingRpc.secondSkippedCount !== 6 &&
+        "follow-up health RPC started work while all channel hook slots remained occupied",
+      proof.healthHookDeadlines.hangingRpc.secondStartedTimedOutCount !== 0 &&
+        "follow-up health RPC admitted work while all channel hook slots remained occupied",
+      proof.healthHookDeadlines.hangingRpc.secondDurationMs > 3_000 &&
+        "follow-up health RPC was not bounded while all channel hook slots remained occupied",
     ].filter((value): value is string => Boolean(value));
     writer.appendLog(`${JSON.stringify(proof, null, 2)}\n`);
     await writer.write({
