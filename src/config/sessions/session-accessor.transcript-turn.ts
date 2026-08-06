@@ -84,16 +84,15 @@ export async function persistSessionTranscriptTurn(
     throw new Error("Cannot patch session lifecycle without an expected session id");
   }
   const target = await resolveTranscriptTurnTarget(scope, options.config);
-  // Route through the guarded SQLite path when a durable (non-mirror) session
-  // entry is available to validate against, so a session-id rotation between
-  // resolve and append surfaces a visible session-rebound rejection instead of
-  // silently writing the stale transcript. Use the caller's session id
-  // (target.sessionId), not the resolved entry's. Mirror-only sessionStore
-  // scopes (entry from memory, not a persisted SQLite row) and transcript-only
-  // scopes (no session entry) keep the legacy append — the guarded transaction
+  // Route through the guarded SQLite path when the session entry was loaded
+  // from a persisted SQLite row (not an in-memory mirror), so a session-id
+  // rotation between resolve and append surfaces a visible session-rebound
+  // rejection. Use the caller's session id (target.sessionId). Mirror-only
+  // entries (from scope.sessionStore/scope.sessionEntry) and transcript-only
+  // scopes (no entry) keep the legacy append — the guarded transaction
   // requires a persisted row to validate. (#119221)
   if (
-    !scope.sessionStore &&
+    target.entryFromPersistedStore &&
     target.storePath &&
     target.sessionKey &&
     target.sessionEntry &&
@@ -298,6 +297,7 @@ async function resolveTranscriptTurnTarget(
 ): Promise<
   SessionTranscriptTurnWriteContext & {
     sessionEntry: SessionEntry | undefined;
+    entryFromPersistedStore: boolean;
   }
 > {
   const sessionKey = scope.sessionKey?.trim();
@@ -324,16 +324,23 @@ async function resolveTranscriptTurnTarget(
         sessionKey,
         storePath,
       });
-  const sessionEntry =
-    resolved?.existing ??
-    scope.sessionEntry ??
-    loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
+  // Track whether the session entry was loaded from a persisted SQLite row
+  // (vs an in-memory mirror from scope.sessionStore or scope.sessionEntry).
+  // The guarded transaction requires a persisted row to validate; a mirror-only
+  // entry must stay on the legacy append. (#119221)
+  let entryFromPersistedStore = !scope.sessionStore;
+  let sessionEntry = resolved?.existing ?? scope.sessionEntry;
+  if (!sessionEntry) {
+    sessionEntry = loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
+    entryFromPersistedStore = true;
+  }
   return {
     agentId,
     sessionId: scope.sessionId,
     sessionKey: resolved?.normalizedKey ?? sessionKey,
     storePath,
     sessionEntry,
+    entryFromPersistedStore,
   };
 }
 
