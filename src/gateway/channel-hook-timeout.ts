@@ -1,5 +1,5 @@
 /** Result of isolating a channel plugin hook behind a host-owned deadline. */
-export type ChannelHookTimeoutResult<T> =
+type ChannelHookTimeoutResult<T> =
   | { kind: "value"; value: T }
   | { kind: "error"; error: unknown }
   | { kind: "timeout" };
