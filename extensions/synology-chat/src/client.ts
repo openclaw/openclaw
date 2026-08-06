@@ -130,8 +130,8 @@ async function sendMessageChunk(
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       await waitForSendSlot();
-      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-      if (ok) {
+      const result = await doPost(incomingUrl, body, allowInsecureSsl);
+      if (result === "accepted") {
         return true;
       }
     } catch {
@@ -164,9 +164,7 @@ export async function sendHostedFileUrl(
 
   try {
     await waitForSendSlot();
-    return (await doPost(incomingUrl, body, allowInsecureSsl))
-      ? { status: "accepted" }
-      : { status: "rejected" };
+    return { status: await doPost(incomingUrl, body, allowInsecureSsl) };
   } catch {
     // Once the request starts, transport errors and timeouts cannot prove that
     // Synology did not queue the capability before the response was lost.
@@ -368,12 +366,16 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   return parseStrictNonNegativeInteger(userId);
 }
 
-function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
+function doPost(
+  url: string,
+  body: string,
+  allowInsecureSsl = false,
+): Promise<SynologyHostedFileSendResult["status"]> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let response: http.IncomingMessage | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (result: { ok?: boolean; error?: Error }) => {
+    const finish = (result: { status?: SynologyHostedFileSendResult["status"]; error?: Error }) => {
       if (settled) {
         return;
       }
@@ -386,7 +388,7 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
         reject(result.error);
         return;
       }
-      resolve(result.ok === true);
+      resolve(result.status ?? "rejected");
     };
     let parsedUrl: URL;
     try {
@@ -429,7 +431,13 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
                   Buffer.concat(responseChunks).toString("utf8"),
                 )
               : null;
-          finish({ ok: res.statusCode === 200 && result?.success !== false });
+          if (res.statusCode === 200) {
+            finish({ status: result?.success === false ? "rejected" : "accepted" });
+            return;
+          }
+          // A reverse proxy can emit a server error after forwarding the POST
+          // and losing Synology's response, so 5xx cannot prove non-acceptance.
+          finish({ status: (res.statusCode ?? 500) >= 500 ? "indeterminate" : "rejected" });
         });
         res.on("error", (error) => finish({ error }));
         res.resume();
