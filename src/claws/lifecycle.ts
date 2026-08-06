@@ -8,6 +8,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
+import { planWorkspaceAdoptionTargets } from "./lifecycle-adopt-plan.js";
 import { digestClawMcpServer } from "./mcp.js";
 import { clawManifestWorkspaceConflictsWithPath } from "./schema.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
@@ -43,6 +44,7 @@ export type ClawAddPlanContext = {
   agentId?: string;
   workspace?: string;
   resumableWorkspace?: string;
+  adoptExistingWorkspace?: boolean;
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
@@ -274,34 +276,58 @@ export async function buildClawAddPlan(params: {
     [...(context.existingWorkspacePaths ?? [])].map((path) => canonicalWorkspacePath(path)),
   );
   const configuredWorkspaceConflict = configuredWorkspacePaths.has(workspace);
-  const workspaceExistsOnDisk = await lstat(workspace)
-    .then(() => true)
-    .catch(() => false);
+  const workspaceDiskState = await lstat(workspace).catch(() => undefined);
+  const workspaceExistsOnDisk = workspaceDiskState !== undefined;
   const resumableWorkspace = context.resumableWorkspace
     ? canonicalWorkspacePath(context.resumableWorkspace)
     : undefined;
+  const workspaceAdoption =
+    context.adoptExistingWorkspace === true &&
+    workspaceExistsOnDisk &&
+    workspaceDiskState.isDirectory() &&
+    !configuredWorkspaceConflict;
   const workspaceBlocked =
-    configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace);
+    !workspaceAdoption &&
+    (configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace));
   if (workspaceBlocked) {
     blockers.push(
       blocker(
         "workspace_collision",
         "$.workspace",
-        `Workspace ${JSON.stringify(workspace)} already exists; a Claw requires a new workspace.`,
+        context.adoptExistingWorkspace === true && workspaceExistsOnDisk
+          ? `Workspace ${JSON.stringify(workspace)} cannot be adopted; it is ${
+              configuredWorkspaceConflict
+                ? "already configured for another agent"
+                : "not a directory"
+            }.`
+          : `Workspace ${JSON.stringify(workspace)} already exists; a Claw requires a new workspace.`,
       ),
     );
   }
   actions.push({
     kind: "workspace",
     id: finalId,
-    action: "create",
+    action: workspaceAdoption ? "adopt" : "create",
     target: workspace,
-    details: { expectedState: "absent" },
+    details: { expectedState: workspaceAdoption ? "existing-directory" : "absent" },
     blocked: workspaceBlocked,
     ...(workspaceBlocked
       ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
       : {}),
   });
+  if (workspaceAdoption) {
+    capabilityChanges.push(
+      capabilityChange({
+        kind: "agent",
+        id: finalId,
+        path: "workspace",
+        action: "configure",
+        reason:
+          "The Claw adopts an existing workspace directory; declared files must already match or be absent.",
+        effect: { workspace, adoptExistingWorkspace: true },
+      }),
+    );
+  }
 
   const pendingWorkspaceFiles: PendingWorkspaceFileAction[] = [];
   async function addWorkspaceFileInspection(fileParams: {
@@ -441,6 +467,12 @@ export async function buildClawAddPlan(params: {
         blockers.push(diagnostic);
       }
     }
+  }
+
+  if (workspaceAdoption) {
+    blockers.push(
+      ...(await planWorkspaceAdoptionTargets({ workspace, pendingFiles: pendingWorkspaceFiles })),
+    );
   }
 
   for (const pkg of params.manifest.packages) {

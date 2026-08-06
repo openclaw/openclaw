@@ -236,10 +236,36 @@ defaults collide with local state. For disposable profiles and parallel validati
 pass an explicit `--workspace`; `OPENCLAW_STATE_DIR` relocates runtime state but
 does not change the default workspace location.
 
-Adding a Claw creates the new agent and workspace configuration, writes declared
+Adding a Claw creates the agent and its workspace configuration, writes declared
 workspace files, installs or reuses declared skill and plugin artifacts, and
 records package, MCP, and cron provenance. Existing files are not overwritten,
 and retries fail closed when owned content drifted.
+
+By default an existing workspace directory is a `workspace_collision` blocker.
+Pass `--adopt-existing-workspace` during both preview and apply to install into
+an existing directory instead:
+
+```bash
+openclaw claws add ./incident-triage.claw.json \
+  --workspace ~/agents/incident-triage \
+  --adopt-existing-workspace \
+  --dry-run --json
+```
+
+At plan time each declared file is compared against the existing content:
+identical files become `adopt` actions and are recorded as managed without
+being rewritten, missing files are written normally, and differing content is a
+`workspace_file_conflict` blocker — adoption never overwrites existing files.
+Apply re-verifies content digests and fails closed when an adoptable file
+changed after planning. Adoption is disclosed as a distinct capability change
+in the plan, and a workspace already configured for another agent still
+blocks.
+
+Adoption transfers lifecycle ownership of matching declared files to Claws.
+After adoption, `claws update` may replace an unchanged adopted file with the
+content from the reviewed target package, and `claws remove` may delete an
+unchanged adopted file. Locally modified adopted files are retained and must be
+reconciled explicitly. Preview update and removal plans before applying them.
 
 ## Inspect installed state
 
@@ -359,7 +385,7 @@ credentials, sessions, and unowned local state are excluded.
 | Command                             | Purpose                                             |
 | ----------------------------------- | --------------------------------------------------- |
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
-| `claws add <source>`                | Preview or create one new agent and workspace.      |
+| `claws add <source>`                | Preview or create one agent and its workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
 | `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
 | `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |

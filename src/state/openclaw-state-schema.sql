@@ -2125,6 +2125,15 @@ CREATE TABLE IF NOT EXISTS claw_installs (
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
+-- Records the workspace directories a Claw adopted instead of creating. Removal reads this to
+-- retain an operator-owned directory that would otherwise look fully Claw-owned once every
+-- declared file in it is managed.
+CREATE TABLE IF NOT EXISTS claw_adopted_workspaces (
+  agent_id TEXT NOT NULL PRIMARY KEY,
+  workspace TEXT NOT NULL,
+  adopted_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS claw_workspace_files (
   agent_id TEXT NOT NULL,
   target_path TEXT NOT NULL,

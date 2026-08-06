@@ -256,6 +256,12 @@ export interface ChannelPairingRequests {
   request_id: string;
 }
 
+export interface ClawAdoptedWorkspaces {
+  adopted_at_ms: number;
+  agent_id: string;
+  workspace: string;
+}
+
 export interface ClawCronRefs {
   agent_id: string;
   created_at_ms: number;
@@ -1575,6 +1581,7 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  claw_adopted_workspaces: ClawAdoptedWorkspaces;
   claw_cron_refs: ClawCronRefs;
   claw_installs: ClawInstalls;
   claw_mcp_server_refs: ClawMcpServerRefs;

@@ -8,6 +8,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
+import {
+  deleteAdoptedWorkspaceRow,
+  planAdoptsWorkspace,
+  recordAdoptedWorkspaceRow,
+} from "./workspace-origin.js";
 
 const CLAW_INSTALL_RECORD_SCHEMA_VERSION = "openclaw.clawInstallRecord.v1" as const;
 
@@ -246,6 +251,18 @@ export function persistClawInstallRecord(
       added_at_ms: nowMs,
       updated_at_ms: nowMs,
     });
+    if (planAdoptsWorkspace(plan)) {
+      recordAdoptedWorkspaceRow({
+        db,
+        agentId: plan.agent.finalId,
+        workspace: plan.agent.workspace,
+        nowMs,
+      });
+    } else {
+      // A stale row can outlive its install through a downgrade; a created workspace must never
+      // inherit the adoption claim of whatever previously held this agent id.
+      deleteAdoptedWorkspaceRow(db, plan.agent.finalId);
+    }
     return {
       schemaVersion: CLAW_INSTALL_RECORD_SCHEMA_VERSION,
       claw: plan.claw,
@@ -306,6 +323,7 @@ export function deleteClawInstallRecord(
       db /* sqlite-allow-raw: this Claw prototype state-table delete is scoped to one owned row. */
         .prepare(`DELETE FROM claw_installs WHERE agent_id = ?${expectedClause}`)
         .run(agentId, ...expectedStatuses);
+    deleteAdoptedWorkspaceRow(db, agentId);
     if (result.changes !== 1) {
       throw new Error(
         `Claw install record for agent ${JSON.stringify(agentId)} did not match the expected phase.`,
