@@ -421,7 +421,8 @@ export function createExecTool(
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
-            timeoutSec: params.timeoutSeconds,
+            timeoutSec:
+              typeof params.timeoutSeconds === "number" ? params.timeoutSeconds : undefined,
             defaultTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
@@ -444,7 +445,8 @@ export function createExecTool(
             pathPrepend: defaultPathPrepend,
             requestedEnv,
             pty: params.pty === true && !sandbox,
-            timeoutSec: params.timeoutSeconds,
+            timeoutSec:
+              typeof params.timeoutSeconds === "number" ? params.timeoutSeconds : undefined,
             defaultTimeoutSec,
             security,
             ask,
