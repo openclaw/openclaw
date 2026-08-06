@@ -33,6 +33,7 @@ import { type CronServiceState, type DeferredCronNotifications, emit } from "./s
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryCreateCronTaskRun } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import { createCronCapacityRecheckTracker } from "./timer-capacity-recheck.js";
 import {
   MAX_TIMER_DELAY_MS,
   MIN_REFIRE_GAP_MS,
@@ -149,7 +150,7 @@ function setCronTimer(state: CronServiceState, delayMs: number): void {
 }
 
 /** Consume a released slot without routing overdue work through the refire floor. */
-function requestImmediateCronRecheck(state: CronServiceState): void {
+function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | undefined {
   if (
     state.stopped ||
     state.schedulingPaused ||
@@ -162,7 +163,7 @@ function requestImmediateCronRecheck(state: CronServiceState): void {
     clearTimeout(state.timer);
     state.timer = null;
   }
-  void onTimer(state).catch((err: unknown) => {
+  return onTimer(state).catch((err: unknown) => {
     state.deps.log.error({ err: String(err) }, "cron: immediate capacity recheck failed");
   });
 }
@@ -216,6 +217,9 @@ async function onAdmittedTimer(state: CronServiceState) {
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
+  const capacityRechecks = createCronCapacityRecheckTracker(() =>
+    requestImmediateCronRecheck(state),
+  );
   try {
     const hasSessionReaperStore = Boolean(
       state.deps.resolveSessionStorePath || state.deps.sessionStorePath,
@@ -255,19 +259,17 @@ async function onAdmittedTimer(state: CronServiceState) {
         return [];
       }
 
-      const batchAdmissionOwner = {};
-      const admissionReleases = tryAcquireCronRunSlots(state, due.length, {
-        releaseOwner: batchAdmissionOwner,
-      });
+      const admissionReleases = tryAcquireCronRunSlots(state, due.length);
       const admittedDue = due.slice(0, admissionReleases.length);
       if (admittedDue.length < due.length) {
         // A single replaceable listener keeps unreserved due work responsive:
         // no Gateway root, Promise waiter, or durable reservation is retained.
-        setCronRunCapacityListener(state, () => requestImmediateCronRecheck(state), {
-          // This batch already owns a bounded recursive drain. Only a slot
-          // released by other work needs to fork an immediate scheduler tick.
-          ignoredReleaseOwner: admittedDue.length > 0 ? batchAdmissionOwner : undefined,
-        });
+        setCronRunCapacityListener(
+          state,
+          admittedDue.length > 0
+            ? capacityRechecks.request
+            : () => void requestImmediateCronRecheck(state),
+        );
       }
       if (admittedDue.length === 0) {
         return [];
@@ -432,6 +434,7 @@ async function onAdmittedTimer(state: CronServiceState) {
     };
 
     const concurrency = Math.min(resolveRunConcurrency(), Math.max(1, dueJobs.length));
+    capacityRechecks.initializeActivations(dueJobs.length);
     const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state);
     const claimedIndexes = new Set<number>();
     let reservationReleaseError: unknown;
@@ -493,6 +496,7 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
     };
     if (state.stopped) {
+      capacityRechecks.abort();
       await releaseUnclaimedDueJobReservationsWithRetry();
       return;
     }
@@ -504,9 +508,18 @@ async function onAdmittedTimer(state: CronServiceState) {
       completedResults = await pMap(
         dueJobs,
         async (due, index): Promise<TimedCronRunOutcome | typeof pMapSkip> => {
+          let initialActivationSettled = false;
+          const settleThisInitialActivation = (allowRecheck: boolean) => {
+            if (initialActivationSettled) {
+              return;
+            }
+            initialActivationSettled = true;
+            capacityRechecks.settleActivation(allowRecheck);
+          };
           try {
             if (stopAdmittingDueJobs || state.stopped || state.restartRecoveryPending) {
               stopAdmittingDueJobs = true;
+              settleThisInitialActivation(false);
               return pMapSkip;
             }
             const currentDueJob = await locked(state, async () => {
@@ -550,8 +563,12 @@ async function onAdmittedTimer(state: CronServiceState) {
               return { ...due, job, startedAt: activation.startedAt };
             });
             if (!currentDueJob) {
+              settleThisInitialActivation(
+                !stopAdmittingDueJobs && !state.stopped && !state.restartRecoveryPending,
+              );
               return pMapSkip;
             }
+            settleThisInitialActivation(true);
             claimedIndexes.add(index);
             let result: TimedCronRunOutcome;
             try {
@@ -591,8 +608,10 @@ async function onAdmittedTimer(state: CronServiceState) {
           } catch (error) {
             stopAdmittingDueJobs = true;
             batchExecutionError ??= error;
+            settleThisInitialActivation(false);
             return pMapSkip;
           } finally {
+            settleThisInitialActivation(false);
             due.releaseAdmission();
           }
         },
@@ -676,6 +695,8 @@ async function onAdmittedTimer(state: CronServiceState) {
       }
     }
   } finally {
+    capacityRechecks.abort();
+    await capacityRechecks.drain();
     try {
       // Reaper discovery is maintenance: failure must never strand the timer
       // or leave the scheduler's execution slot permanently occupied.

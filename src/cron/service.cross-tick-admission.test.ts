@@ -7,7 +7,6 @@ import {
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
-import { runWithCronAdmission } from "./service/run-admission.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
@@ -154,7 +153,7 @@ describe("cron service cross-tick bounded admission", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
     expect(state.activeTimerTicks).toBe(1);
     expect(state.runAdmission.waiters).toHaveLength(0);
-    expect(state.runAdmission.capacityListener?.listener).toBeTypeOf("function");
+    expect(state.runAdmission.capacityListener).toBeTypeOf("function");
     expect(state.queuedRunReservationsByJobId.has(jobC.id)).toBe(false);
     const saturatedStore = await loadCronStore(store.storePath);
     expect(saturatedStore.jobs.find((job) => job.id === jobC.id)?.state.queuedAtMs).toBeUndefined();
@@ -178,31 +177,38 @@ describe("cron service cross-tick bounded admission", () => {
     expect(state.queuedRunReservationsByJobId.size).toBe(0);
   });
 
-  it("wakes unreserved due work when a partially occupied pool releases capacity", async () => {
+  it("wakes unreserved due work when a partially admitted job releases capacity", async () => {
     vi.useFakeTimers();
     const store = fixtures.makeStorePath();
     const t0 = Date.parse("2026-02-06T10:05:00.000Z");
     vi.setSystemTime(t0);
     const jobA = createDueIsolatedJob({ id: "partial-a", nowMs: t0, nextRunAtMs: t0 });
     const jobB = createDueIsolatedJob({ id: "partial-b", nowMs: t0, nextRunAtMs: t0 });
-    await saveCronStore(store.storePath, { version: 1, jobs: [jobA, jobB] });
+    const jobC = createDueIsolatedJob({ id: "partial-c", nowMs: t0, nextRunAtMs: t0 });
+    await saveCronStore(store.storePath, { version: 1, jobs: [jobA, jobB, jobC] });
 
     let active = 0;
     let peakActive = 0;
-    const aStarted = createDeferred<void>();
-    const bStarted = createDeferred<void>();
+    const firstTwoStarted = createDeferred<void>();
+    const cStarted = createDeferred<void>();
     const releaseA = createDeferred<{ status: "ok"; summary: string }>();
     const releaseB = createDeferred<{ status: "ok"; summary: string }>();
+    const releaseC = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
       active += 1;
       peakActive = Math.max(peakActive, active);
+      if (active === 2) {
+        firstTwoStarted.resolve();
+      }
       try {
         if (job.id === jobA.id) {
-          aStarted.resolve();
           return await releaseA.promise;
         }
-        bStarted.resolve();
-        return await releaseB.promise;
+        if (job.id === jobB.id) {
+          return await releaseB.promise;
+        }
+        cStarted.resolve();
+        return await releaseC.promise;
       } finally {
         active -= 1;
       }
@@ -218,32 +224,23 @@ describe("cron service cross-tick bounded admission", () => {
       runIsolatedAgentJob,
     });
 
-    const blockerStarted = createDeferred<void>();
-    const releaseBlocker = createDeferred<void>();
-    const blockerRun = runWithCronAdmission(state, async () => {
-      blockerStarted.resolve();
-      await releaseBlocker.promise;
-    });
-    await blockerStarted.promise;
-
     const firstTick = onTimer(state);
-    await aStarted.promise;
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    expect(state.runAdmission.capacityListener?.listener).toBeTypeOf("function");
+    await firstTwoStarted.promise;
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+    expect(state.runAdmission.capacityListener).toBeTypeOf("function");
     const partiallyReservedStore = await loadCronStore(store.storePath);
     expect(
-      partiallyReservedStore.jobs.find((job) => job.id === jobB.id)?.state.queuedAtMs,
+      partiallyReservedStore.jobs.find((job) => job.id === jobC.id)?.state.queuedAtMs,
     ).toBeUndefined();
 
-    releaseBlocker.resolve();
-    await blockerRun;
-    await bStarted.promise;
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+    releaseA.resolve({ status: "ok", summary: "a done" });
+    await cStarted.promise;
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(3);
     expect(peakActive).toBe(2);
     expect(state.runAdmission.capacityListener).toBeNull();
 
-    releaseA.resolve({ status: "ok", summary: "a done" });
     releaseB.resolve({ status: "ok", summary: "b done" });
+    releaseC.resolve({ status: "ok", summary: "c done" });
     await firstTick;
     await vi.waitFor(() => expect(state.activeTimerTicks).toBe(0));
     expect(state.queuedRunReservationsByJobId.size).toBe(0);

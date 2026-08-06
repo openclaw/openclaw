@@ -252,11 +252,7 @@ type CronRunAdmission = {
   active: number;
   waiters: Array<(release: (() => void) | null) => void>;
   /** One bounded wake-up for scheduled work left without a free slot. */
-  capacityListener: {
-    listener: () => void;
-    /** Preserve the current batch's recursive drain when its own slots release. */
-    ignoredReleaseOwner?: object;
-  } | null;
+  capacityListener: (() => void) | null;
 };
 
 type QueuedCronRunReservation = {
