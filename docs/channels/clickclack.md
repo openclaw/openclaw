@@ -481,6 +481,7 @@ classification.
       requireMention: true,
       mentionPatterns: ["\\bBlackbird\\b"],
       allowBots: "mentions",
+      allowFrom: ["usr_trusted_bot"],
       botLoopProtection: { maxEventsPerWindow: 12, windowSeconds: 60 },
       groups: {
         "*": { requireMention: true, allowBots: "mentions" },
