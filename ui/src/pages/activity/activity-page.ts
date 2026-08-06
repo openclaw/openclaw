@@ -1,8 +1,13 @@
 import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
-import { state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
-import type { GatewayEventFrame } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+} from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
@@ -10,12 +15,22 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { StreamAutoFollowController } from "../../lit/stream-auto-follow-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import type {
+  ActivityRouteData,
+  RunInspectorSelector,
+  RunInspectorState,
+} from "./run-inspector-model.ts";
+import { renderRunInspector } from "./run-inspector-view.ts";
 import {
   parseActivityEvent,
   updateToolActivity,
@@ -26,9 +41,15 @@ import { renderActivity } from "./view.ts";
 
 let activityClearBoundary: EventLogEntry | undefined;
 
+function selectorKey(selector: RunInspectorSelector | null): string | null {
+  return selector ? `${selector.kind}:${selector.id}` : null;
+}
+
 class ActivityPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
+
+  @property({ attribute: false }) routeData: ActivityRouteData | undefined;
 
   @state() private entries: ActivityEntry[] = [];
   @state() private filterText = "";
@@ -40,8 +61,13 @@ class ActivityPage extends OpenClawLightDomElement {
   @state() private toolFilter = "";
   @state() private expandedIds = new Set<string>();
   @state() private autoFollow = true;
+  @state() private runInspector: RunInspectorState = { status: "empty" };
 
   private sessionKey = "";
+  private inspectorAbort: AbortController | null = null;
+  private inspectorClient: GatewayBrowserClient | null = null;
+  private inspectorEpoch = 0;
+  private inspectorSelectorKey: string | null = null;
   private readonly streamFollow = new StreamAutoFollowController(this, {
     selector: ".activity-stream",
     isEnabled: () => this.autoFollow,
@@ -64,6 +90,9 @@ class ActivityPage extends OpenClawLightDomElement {
   );
 
   override updated(changed: PropertyValues) {
+    if (changed.has("routeData")) {
+      this.bindInspectorRoute();
+    }
     if (
       this.autoFollow &&
       this.streamFollow.atBottom &&
@@ -75,6 +104,7 @@ class ActivityPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
+    this.cancelInspectorRequest();
     super.disconnectedCallback();
   }
 
@@ -88,6 +118,141 @@ class ActivityPage extends OpenClawLightDomElement {
     if (sourceChanged || this.sessionKey !== previousSessionKey) {
       this.rebuildEntries(gateway, snapshot);
     }
+    this.syncRunInspector(gateway, snapshot, sourceChanged);
+  }
+
+  private bindInspectorRoute() {
+    const route = this.routeData;
+    const selector = route?.mode === "run" ? route.selector : null;
+    const nextSelectorKey = selectorKey(selector);
+    if (nextSelectorKey === this.inspectorSelectorKey && route?.mode === "run") {
+      return;
+    }
+    this.inspectorSelectorKey = nextSelectorKey;
+    this.cancelInspectorRequest();
+    this.inspectorClient = null;
+    this.runInspector = selector
+      ? { status: "loading", waitingForGateway: true }
+      : { status: "empty" };
+    if (route?.mode === "run") {
+      this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true);
+    }
+  }
+
+  private cancelInspectorRequest() {
+    this.inspectorEpoch += 1;
+    this.inspectorAbort?.abort();
+    this.inspectorAbort = null;
+  }
+
+  private syncRunInspector(
+    gateway: ApplicationContext["gateway"],
+    snapshot: ApplicationGatewaySnapshot,
+    force = false,
+  ) {
+    const route = this.routeData;
+    if (route?.mode !== "run") {
+      return;
+    }
+    const selector = route.selector;
+    if (!selector) {
+      this.runInspector = { status: "empty" };
+      return;
+    }
+    this.inspectorSelectorKey = selectorKey(selector);
+    if (snapshot.phase !== "connected" || !snapshot.client) {
+      this.cancelInspectorRequest();
+      this.inspectorClient = null;
+      this.runInspector = { status: "disconnected" };
+      return;
+    }
+    if (isGatewayMethodAdvertised(snapshot, "audit.run.inspect") === false) {
+      this.cancelInspectorRequest();
+      this.inspectorClient = snapshot.client;
+      this.runInspector = { status: "unsupported" };
+      return;
+    }
+    if (!canCallGatewayMethod(snapshot, "audit.run.inspect", "operator.read")) {
+      this.cancelInspectorRequest();
+      this.inspectorClient = snapshot.client;
+      this.runInspector = { status: "unauthorized" };
+      return;
+    }
+    if (
+      !force &&
+      this.inspectorClient === snapshot.client &&
+      (this.runInspector.status === "loading" || this.runInspector.status === "ready")
+    ) {
+      return;
+    }
+    void this.loadRunInspector(gateway, snapshot.client, selector);
+  }
+
+  private isUnknownInspectMethod(error: unknown): boolean {
+    return (
+      error instanceof GatewayRequestError &&
+      error.gatewayCode === "INVALID_REQUEST" &&
+      (error.message === "unknown method: audit.run.inspect" ||
+        error.message === "missing scope: operator.admin")
+    );
+  }
+
+  private async loadRunInspector(
+    gateway: ApplicationContext["gateway"],
+    client: GatewayBrowserClient,
+    selector: RunInspectorSelector,
+  ) {
+    this.cancelInspectorRequest();
+    const epoch = this.inspectorEpoch;
+    const abort = new AbortController();
+    this.inspectorAbort = abort;
+    this.inspectorClient = client;
+    this.runInspector = { status: "loading", waitingForGateway: false };
+    const requestSelectorKey = selectorKey(selector);
+    const isCurrent = () =>
+      this.inspectorEpoch === epoch &&
+      this.context.gateway === gateway &&
+      gateway.snapshot.client === client &&
+      gateway.snapshot.phase === "connected" &&
+      this.routeData?.mode === "run" &&
+      selectorKey(this.routeData.selector) === requestSelectorKey;
+    try {
+      const params =
+        selector.kind === "run"
+          ? { runId: selector.id, decisionLimit: 50, executionLimit: 50 }
+          : { executionId: selector.id, decisionLimit: 50 };
+      const result = await client.request<AuditRunInspectResult>("audit.run.inspect", params, {
+        signal: abort.signal,
+      });
+      if (isCurrent()) {
+        this.runInspector = { status: "ready", result };
+      }
+    } catch (error) {
+      if (!isCurrent() || abort.signal.aborted) {
+        return;
+      }
+      this.runInspector = isMissingOperatorReadScopeError(error)
+        ? { status: "unauthorized" }
+        : this.isUnknownInspectMethod(error)
+          ? { status: "unsupported" }
+          : { status: "error" };
+    } finally {
+      if (this.inspectorAbort === abort) {
+        this.inspectorAbort = null;
+      }
+    }
+  }
+
+  private selectMode(mode: "live" | "run") {
+    if (mode === "live") {
+      this.context.navigate("activity", { search: "" });
+      return;
+    }
+    const search = new URLSearchParams({ view: "run" });
+    if (this.routeData?.mode === "run" && this.routeData.selector) {
+      search.set(this.routeData.selector.kind, this.routeData.selector.id);
+    }
+    this.context.navigate("activity", { search: `?${search.toString()}` });
   }
 
   private rebuildEntries(
@@ -168,7 +333,7 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    const body = renderActivity({
+    const liveActivity = renderActivity({
       entries: this.entries,
       filterText: this.filterText,
       statusFilters: this.statusFilters,
@@ -204,6 +369,32 @@ class ActivityPage extends OpenClawLightDomElement {
       },
       onScroll: (event) => this.streamFollow.handleScroll(event),
     });
+    const mode = this.routeData?.mode ?? "live";
+    const body = html`
+      ${renderHubTabs({
+        id: "activity-mode",
+        active: mode,
+        tabs: [
+          { value: "live", label: t("activity.runInspector.liveMode") },
+          { value: "run", label: t("activity.runInspector.mode") },
+        ],
+        ariaLabel: t("activity.runInspector.activityView"),
+        panelId: "activity-mode-panel",
+        className: "activity-mode-tabs",
+        variant: "sub",
+        onSelect: (selected) => this.selectMode(selected),
+      })}
+      <div id="activity-mode-panel" role="tabpanel" aria-labelledby=${`activity-mode-tab-${mode}`}>
+        ${mode === "run"
+          ? renderRunInspector({
+              basePath: this.context.basePath,
+              state: this.runInspector,
+              onRetry: () =>
+                this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
+            })
+          : html`<div id="activity-live-panel">${liveActivity}</div>`}
+      </div>
+    `;
     return html`
       <section class="content-header">
         <div>
