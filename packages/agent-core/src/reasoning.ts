@@ -41,5 +41,5 @@ export function resolveAgentReasoningOption(
   return model.api === "anthropic-messages" &&
     (resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model))
     ? "off"
-    : undefined;
+    : "off";
 }

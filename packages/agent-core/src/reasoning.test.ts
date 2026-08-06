@@ -27,9 +27,12 @@ describe("resolveAgentReasoningOption", () => {
     expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "off")).toBe("low");
   });
 
-  it.each([undefined, null, "none"])("disables reasoning when off maps to %s", (offFallback) => {
-    expect(resolveAgentReasoningOption(makeModel({ off: offFallback }), "off")).toBeUndefined();
-  });
+  it.each([undefined, null, "none"])(
+    "preserves explicit off when off maps to %s",
+    (offFallback) => {
+      expect(resolveAgentReasoningOption(makeModel({ off: offFallback }), "off")).toBe("off");
+    },
+  );
 
   it("preserves enabled thinking levels", () => {
     expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "high")).toBe("high");
