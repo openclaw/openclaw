@@ -208,9 +208,13 @@ const TelegramAccountSchemaBase = z
     ),
     webhookPath: z
       .string()
+      .regex(/^(?!\/healthz$)\/[^#]*$/, {
+        message:
+          'channels.telegram.webhookPath must start with "/", must not be "/healthz", and must not contain "#"',
+      })
       .optional()
       .describe(
-        "Local webhook route path served by the gateway listener. Defaults to /telegram-webhook.",
+        'Local webhook route path served by the gateway listener. Must start with "/", must not be "/healthz" (which is reserved for health checks), and must not contain "#" (fragments are not part of an HTTP request target). Defaults to /telegram-webhook.',
       ),
     webhookHost: z
       .string()
