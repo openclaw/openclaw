@@ -220,6 +220,8 @@ async function runDelayedHealthHookCliProof(repoRoot: string, pluginDir: string)
       transportBaseUrl: "http://127.0.0.1",
       providerMode: "mock-openai",
       controlUiEnabled: false,
+      // This status-only fixture has no channel runtime; RPC startup is still verified.
+      allowUnhealthyStartup: true,
       mutateConfig: (config) => withHealthHookDeadlineFixture(config, pluginDir, "delayed"),
     });
     const startedAt = Date.now();
@@ -252,6 +254,8 @@ async function runHangingHealthHookRpcProof(repoRoot: string, pluginDir: string)
       transportBaseUrl: "http://127.0.0.1",
       providerMode: "mock-openai",
       controlUiEnabled: false,
+      // This status-only fixture has no channel runtime; RPC startup is still verified.
+      allowUnhealthyStartup: true,
       mutateConfig: (config) => withHealthHookDeadlineFixture(config, pluginDir, "hanging-probe"),
     });
     const firstStartedAt = Date.now();
