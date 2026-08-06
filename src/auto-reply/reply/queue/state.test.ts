@@ -1,8 +1,12 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueue,
+  FOLLOWUP_QUEUES,
   getFollowupQueue,
   hasPendingFollowupQueueWork,
   refreshQueuedFollowupSession,
@@ -10,9 +14,14 @@ import {
 import type { FollowupRun } from "./types.js";
 
 const QUEUE_KEY = "agent:main:dm:test";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
-  clearFollowupQueue(QUEUE_KEY);
+  try {
+    clearFollowupQueue(QUEUE_KEY);
+  } catch {
+    FOLLOWUP_QUEUES.delete(QUEUE_KEY);
+  }
 });
 
 function makeRun(): FollowupRun["run"] {
@@ -216,6 +225,67 @@ describe("getFollowupQueue", () => {
     expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
     clearFollowupQueue(QUEUE_KEY);
     expect(queuedRun.queueAbortSignal?.aborted).toBe(true);
+  });
+
+  it("restores the queue when clear persistence fails", () => {
+    const stateDir = tempDirs.make("openclaw-clear-persist-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const queuedRun: FollowupRun = {
+        prompt: "must survive clear failure",
+        enqueuedAt: Date.now(),
+        run: makeRun(),
+      };
+      enqueueFollowupRun(QUEUE_KEY, queuedRun, { mode: "followup" });
+      const blocker = path.join(stateDir, "not-a-directory");
+      fs.writeFileSync(blocker, "file");
+      process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+      expect(() => clearFollowupQueue(QUEUE_KEY)).toThrow();
+      expect(FOLLOWUP_QUEUES.get(QUEUE_KEY)?.items.map((item) => item.prompt)).toEqual([
+        "must survive clear failure",
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
+  it("restores run fields when refresh persistence fails", () => {
+    const stateDir = tempDirs.make("openclaw-refresh-persist-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      const queuedRun: FollowupRun = {
+        prompt: "queued message",
+        enqueuedAt: Date.now(),
+        run: makeRun(),
+      };
+      queue.items.push(queuedRun);
+      const blocker = path.join(stateDir, "not-a-directory");
+      fs.writeFileSync(blocker, "file");
+      process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+      expect(() =>
+        refreshQueuedFollowupSession({
+          key: QUEUE_KEY,
+          nextProvider: "openai",
+          nextModel: "gpt-4o",
+          nextRouteResolution: "resolved",
+        }),
+      ).toThrow();
+      expect(queue.items[0]?.run.provider).toBe("anthropic");
+      expect(queue.items[0]?.run.model).toBe("claude-opus-4-6");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
   });
 
   it("trims overflow metadata when a live queue cap shrinks", () => {

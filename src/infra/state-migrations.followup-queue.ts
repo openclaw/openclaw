@@ -58,12 +58,15 @@ export async function migrateLegacyFollowupQueueSidecar(params: {
 
   const jsonEntries = new Map<string, unknown>();
   let hasUnrestorableEntry = false;
+  let hasMalformedTuple = false;
   for (const entry of entriesRaw) {
     if (!Array.isArray(entry) || entry.length < 2) {
+      hasMalformedTuple = true;
       continue;
     }
     const key = typeof entry[0] === "string" ? entry[0] : undefined;
     if (!key) {
+      hasMalformedTuple = true;
       continue;
     }
     if (!canMigrateFollowupQueueEntryLosslessly(key, entry[1])) {
@@ -73,7 +76,7 @@ export async function migrateLegacyFollowupQueueSidecar(params: {
     jsonEntries.set(key, entry[1]);
   }
 
-  if (hasUnrestorableEntry) {
+  if (hasUnrestorableEntry || hasMalformedTuple) {
     warnings.push(
       `Left followup queue sidecar in place because one or more entries failed the full restore contract: ${sourcePath}`,
     );

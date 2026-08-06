@@ -220,6 +220,24 @@ describe("legacy followup queue sidecar doctor migration", () => {
     expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
   });
 
+  it("retains the sidecar when entry tuples are malformed rather than deleting as empty", async () => {
+    const stateDir = await useStateDir();
+    const sourcePath = await writeLegacySidecar(stateDir, {
+      version: 1,
+      entries: [["bad-tuple-only"], {}, null],
+    });
+
+    const detected = detectLegacyFollowupQueueSidecar({ stateDir });
+    const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
+
+    expect(result.warnings).toContain(
+      `Left followup queue sidecar in place because one or more entries failed the full restore contract: ${sourcePath}`,
+    );
+    expect(result.changes).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
+  });
+
   it("retains the sidecar when items are malformed rather than deleting as empty", async () => {
     const stateDir = await useStateDir();
     const sourcePath = await writeLegacySidecar(stateDir, {

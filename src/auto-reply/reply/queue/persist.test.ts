@@ -285,6 +285,39 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(hasPersistedFollowupQueues()).toBe(false);
   });
 
+  it("restores prior overflow mutations when admission persistence fails", () => {
+    const tight: QueueSettings = {
+      mode: "steer",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "old",
+    };
+    const kept = makeFollowupRun("keep-existing");
+    expect(enqueueFollowupRun(TEST_KEY, kept, tight, "none")).toBe(true);
+    expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items.map((item) => item.prompt)).toEqual([
+      "keep-existing",
+    ]);
+
+    const blocker = path.join(tmpDir, "not-a-directory");
+    fs.writeFileSync(blocker, "file");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+    try {
+      const admitted = enqueueFollowupRun(
+        TEST_KEY,
+        makeFollowupRun("overflow-admit"),
+        tight,
+        "none",
+      );
+      expect(admitted).toBe(false);
+      expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.items.map((item) => item.prompt)).toEqual([
+        "keep-existing",
+      ]);
+    } finally {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+  });
+
   it("keeps in-flight items in SQLite until settle-after-success", () => {
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
     const item = makeFollowupRun("in flight");

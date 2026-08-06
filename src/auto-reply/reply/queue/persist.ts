@@ -310,7 +310,7 @@ function resolveCurrentRunConfig(): OpenClawConfig {
   }
 }
 
-export function isPersistedRunFields(value: unknown): value is PersistedRunFields {
+function isPersistedRunFields(value: unknown): value is PersistedRunFields {
   return (
     isRecord(value) &&
     typeof value.agentId === "string" &&
@@ -324,7 +324,7 @@ export function isPersistedRunFields(value: unknown): value is PersistedRunField
   );
 }
 
-export function isPersistedFollowupRun(value: unknown): value is PersistedFollowupRun {
+function isPersistedFollowupRun(value: unknown): value is PersistedFollowupRun {
   return (
     isRecord(value) &&
     typeof value.prompt === "string" &&
@@ -345,7 +345,7 @@ function isPersistedSummaryElision(value: unknown): value is PersistedSummaryEli
   );
 }
 
-export function isPersistedQueueEntry(value: unknown): value is PersistedQueueEntry {
+function isPersistedQueueEntry(value: unknown): value is PersistedQueueEntry {
   if (
     !isRecord(value) ||
     !Array.isArray(value.items) ||

@@ -9,7 +9,7 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../thinking.js";
-import { persistFollowupQueues, restoreFollowupQueues } from "./persist.js";
+import { persistFollowupQueuesOrThrow, restoreFollowupQueues } from "./persist.js";
 import {
   completeFollowupRunLifecycle,
   type FollowupQueueState,
@@ -155,19 +155,27 @@ export function clearFollowupQueue(key: string): number {
   if (!queue) {
     return 0;
   }
+  const clearedItems = queue.items.slice();
+  const clearedSummarySources = queue.summarySources.slice();
+  const clearedSummaryElisions = queue.summaryElisions.map((elision) => ({
+    contextKey: elision.contextKey,
+    count: elision.count,
+    sources: elision.sources.slice(),
+    summaryLines: elision.summaryLines.slice(),
+    sourceRefs: elision.sourceRefs,
+  }));
+  const clearedSummaryLines = queue.summaryLines.slice();
+  const clearedInFlight = [...queue.inFlight];
+  const clearedDroppedCount = queue.droppedCount;
+  const clearedLastRun = queue.lastRun;
+  const clearedLastEnqueuedAt = queue.lastEnqueuedAt;
+  const clearedEvictedSummaryCount = queue.evictedSummaryCount;
+  const cleared = clearedItems.length + clearedDroppedCount;
+
+  // Abort the live admission signal, then wipe durable + memory state. Lifecycle
+  // completion waits until SQLite acknowledges the clear so a failed write can
+  // restore the prior queue without claiming cancellation.
   queue.abortController.abort();
-  const cleared = queue.items.length + queue.droppedCount;
-  for (const item of queue.items) {
-    completeFollowupRunLifecycle(item);
-  }
-  for (const item of queue.summarySources) {
-    completeFollowupRunLifecycle(item);
-  }
-  for (const entry of queue.summaryElisions) {
-    for (const source of entry.sources) {
-      completeFollowupRunLifecycle(source);
-    }
-  }
   queue.items.length = 0;
   queue.inFlight.clear();
   queue.droppedCount = 0;
@@ -178,7 +186,35 @@ export function clearFollowupQueue(key: string): number {
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
-  persistFollowupQueues();
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    queue.items.splice(0, 0, ...clearedItems);
+    queue.summarySources.splice(0, 0, ...clearedSummarySources);
+    queue.summaryElisions.splice(0, 0, ...clearedSummaryElisions);
+    queue.summaryLines.splice(0, 0, ...clearedSummaryLines);
+    for (const item of clearedInFlight) {
+      queue.inFlight.add(item);
+    }
+    queue.droppedCount = clearedDroppedCount;
+    queue.lastRun = clearedLastRun;
+    queue.lastEnqueuedAt = clearedLastEnqueuedAt;
+    queue.evictedSummaryCount = clearedEvictedSummaryCount;
+    queue.abortController = new AbortController();
+    FOLLOWUP_QUEUES.set(cleaned, queue);
+    throw err;
+  }
+  for (const item of clearedItems) {
+    completeFollowupRunLifecycle(item);
+  }
+  for (const item of clearedSummarySources) {
+    completeFollowupRunLifecycle(item);
+  }
+  for (const entry of clearedSummaryElisions) {
+    for (const source of entry.sources) {
+      completeFollowupRunLifecycle(source);
+    }
+  }
   return cleared;
 }
 
@@ -279,6 +315,28 @@ export function refreshQueuedFollowupSession(params: {
     }
   };
 
+  const snapshotRunFields = (run: FollowupRun["run"]) => ({
+    sessionId: run.sessionId,
+    sessionFile: run.sessionFile,
+    provider: run.provider,
+    model: run.model,
+    requestedRouteResolution: run.requestedRouteResolution,
+    hasAutoFallbackProvenance: run.hasAutoFallbackProvenance,
+    hasSessionModelOverride: run.hasSessionModelOverride,
+    modelOverrideSource: run.modelOverrideSource,
+    authProfileId: run.authProfileId,
+    authProfileIdSource: run.authProfileIdSource,
+    thinkingCatalog: run.thinkingCatalog,
+    thinkLevel: run.thinkLevel,
+  });
+  const priorRuns = [
+    ...(queue.lastRun ? [queue.lastRun] : []),
+    ...queue.items.map((item) => item.run),
+    ...queue.summarySources.map((item) => item.run),
+    ...queue.summaryElisions.flatMap((entry) => entry.sources.map((source) => source.run)),
+  ];
+  const priorSnapshots = priorRuns.map((run) => ({ run, fields: snapshotRunFields(run) }));
+
   rewriteRun(queue.lastRun);
   for (const item of queue.items) {
     rewriteRun(item.run);
@@ -291,7 +349,33 @@ export function refreshQueuedFollowupSession(params: {
       rewriteRun(source.run);
     }
   }
-  persistFollowupQueues();
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    for (const { run, fields } of priorSnapshots) {
+      run.sessionId = fields.sessionId;
+      run.sessionFile = fields.sessionFile;
+      run.provider = fields.provider;
+      run.model = fields.model;
+      run.requestedRouteResolution = fields.requestedRouteResolution;
+      if (fields.hasAutoFallbackProvenance === undefined) {
+        delete run.hasAutoFallbackProvenance;
+      } else {
+        run.hasAutoFallbackProvenance = fields.hasAutoFallbackProvenance;
+      }
+      if (fields.hasSessionModelOverride === undefined) {
+        delete run.hasSessionModelOverride;
+      } else {
+        run.hasSessionModelOverride = fields.hasSessionModelOverride;
+      }
+      run.modelOverrideSource = fields.modelOverrideSource;
+      run.authProfileId = fields.authProfileId;
+      run.authProfileIdSource = fields.authProfileIdSource;
+      run.thinkingCatalog = fields.thinkingCatalog;
+      run.thinkLevel = fields.thinkLevel;
+    }
+    throw err;
+  }
 }
 
 restoreFollowupQueues();

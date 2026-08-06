@@ -457,10 +457,13 @@ describe("server-runtime-services", () => {
     expect(secondStopped).toBe(false);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     const deliveryRecoveryWarn = log.child.mock.calls
-      .map((call, index) => ({
-        name: call[0],
-        warn: log.child.mock.results[index]?.value.warn as ReturnType<typeof vi.fn> | undefined,
-      }))
+      .map((call, index) => {
+        const args = call as unknown as unknown[];
+        return {
+          name: args[0],
+          warn: log.child.mock.results[index]?.value.warn as ReturnType<typeof vi.fn> | undefined,
+        };
+      })
       .find((entry) => entry.name === "delivery-recovery")?.warn;
     expect(deliveryRecoveryWarn).toHaveBeenCalledOnce();
     expect(deliveryRecoveryWarn).toHaveBeenCalledWith(
