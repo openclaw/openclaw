@@ -280,6 +280,9 @@ function isGatewayMethodAllowedDuringSuspension(
   if (method !== "gateway.restore.status") {
     return false;
   }
+  if (isGatewayRestartDraining()) {
+    return false;
+  }
   return context.getRestoredAdmissionStatus().status === "held";
 }
 
