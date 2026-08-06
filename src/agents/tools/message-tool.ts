@@ -262,6 +262,7 @@ function resolvePollVoteEchoRoute(params: {
 function sanitizeUserVisibleToolTextResult(
   text: string,
   bootPrompt: string | undefined,
+  options?: { stripHeartbeatToken?: boolean },
 ): {
   text: string;
   suppressionReason?: VisibleTextSuppressionReason;
@@ -273,18 +274,27 @@ function sanitizeUserVisibleToolTextResult(
   const strippedInbound = hasInboundMetadataSentinel(strippedBoot)
     ? stripInboundMetadata(strippedBoot)
     : strippedBoot;
-  const suppressionReason =
+  const heartbeat = options?.stripHeartbeatToken
+    ? stripHeartbeatToken(strippedInbound, { mode: "message" })
+    : undefined;
+  let suppressionReason: VisibleTextSuppressionReason | undefined;
+  if (heartbeat?.didStrip) {
+    suppressionReason = "heartbeat_token";
+  } else if (
     strippedBoot.trim().length === 0 &&
     strippedReasoning.trim().length > 0 &&
     (strippedInternal !== strippedReasoning || strippedBoot !== strippedInternal)
-      ? "internal_runtime_context_echo"
-      : strippedInbound.trim().length === 0 &&
-          strippedBoot.trim().length > 0 &&
-          strippedInbound !== strippedBoot
-        ? "inbound_metadata_echo"
-        : undefined;
+  ) {
+    suppressionReason = "internal_runtime_context_echo";
+  } else if (
+    strippedInbound.trim().length === 0 &&
+    strippedBoot.trim().length > 0 &&
+    strippedInbound !== strippedBoot
+  ) {
+    suppressionReason = "inbound_metadata_echo";
+  }
   return {
-    text: strippedInbound,
+    text: heartbeat?.text ?? strippedInbound,
     ...(suppressionReason ? { suppressionReason } : {}),
   };
 }
@@ -293,11 +303,12 @@ function sanitizeStringParam(
   params: Record<string, unknown>,
   field: string,
   bootPrompt: string | undefined,
+  options?: { stripHeartbeatToken?: boolean },
 ): VisibleTextSuppressionReason | undefined {
   if (typeof params[field] !== "string") {
     return undefined;
   }
-  const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPrompt);
+  const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPrompt, options);
   params[field] = sanitized.text;
   return sanitized.suppressionReason;
 }
@@ -306,10 +317,11 @@ function sanitizeStringArrayParam(
   params: Record<string, unknown>,
   field: string,
   bootPrompt: string | undefined,
+  options?: { stripHeartbeatToken?: boolean },
 ): VisibleTextSuppressionReason | undefined {
   const value = params[field];
   if (typeof value === "string") {
-    const sanitized = sanitizeUserVisibleToolTextResult(value, bootPrompt);
+    const sanitized = sanitizeUserVisibleToolTextResult(value, bootPrompt, options);
     params[field] = sanitized.text;
     return sanitized.suppressionReason;
   }
@@ -321,7 +333,7 @@ function sanitizeStringArrayParam(
     if (typeof entry !== "string") {
       return entry;
     }
-    const sanitized = sanitizeUserVisibleToolTextResult(entry, bootPrompt);
+    const sanitized = sanitizeUserVisibleToolTextResult(entry, bootPrompt, options);
     suppressionReason ??= sanitized.suppressionReason;
     return sanitized.text;
   });
@@ -331,14 +343,20 @@ function sanitizeStringArrayParam(
 function sanitizePresentationTextFieldsResult(
   value: unknown,
   bootPrompt: string | undefined,
+  options?: { stripHeartbeatToken?: boolean },
 ): { value: unknown; suppressionReason?: VisibleTextSuppressionReason } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { value };
   }
   let suppressionReason: VisibleTextSuppressionReason | undefined;
+  const sanitizeVisibleText = (text: string) =>
+    sanitizeUserVisibleToolTextResult(text, bootPrompt, options);
+  // URLs are actionable targets, not protocol-visible message text. Applying
+  // the heartbeat edge-token rule to them could corrupt a legitimate URL.
+  const sanitizeUrl = (text: string) => sanitizeUserVisibleToolTextResult(text, bootPrompt);
   const presentation = { ...(value as Record<string, unknown>) };
   if (typeof presentation.title === "string") {
-    const sanitized = sanitizeUserVisibleToolTextResult(presentation.title, bootPrompt);
+    const sanitized = sanitizeVisibleText(presentation.title);
     presentation.title = sanitized.text;
     suppressionReason ??= sanitized.suppressionReason;
   }
@@ -350,14 +368,14 @@ function sanitizePresentationTextFieldsResult(
       const sanitizedBlock = { ...(block as Record<string, unknown>) };
       for (const field of ["text", "placeholder", "title", "xLabel", "yLabel"]) {
         if (typeof sanitizedBlock[field] === "string") {
-          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock[field], bootPrompt);
+          const sanitized = sanitizeVisibleText(sanitizedBlock[field]);
           sanitizedBlock[field] = sanitized.text;
           suppressionReason ??= sanitized.suppressionReason;
         }
       }
       if (normalizeOptionalLowercaseString(sanitizedBlock.type) === "table") {
         if (typeof sanitizedBlock.caption === "string") {
-          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock.caption, bootPrompt);
+          const sanitized = sanitizeVisibleText(sanitizedBlock.caption);
           sanitizedBlock.caption = sanitized.text.trim();
           suppressionReason ??= sanitized.suppressionReason;
         }
@@ -366,7 +384,7 @@ function sanitizePresentationTextFieldsResult(
             if (typeof header !== "string") {
               return header;
             }
-            const sanitized = sanitizeUserVisibleToolTextResult(header, bootPrompt);
+            const sanitized = sanitizeVisibleText(header);
             suppressionReason ??= sanitized.suppressionReason;
             return sanitized.text.trim();
           });
@@ -380,7 +398,7 @@ function sanitizePresentationTextFieldsResult(
               if (typeof cell !== "string") {
                 return cell;
               }
-              const sanitized = sanitizeUserVisibleToolTextResult(cell, bootPrompt);
+              const sanitized = sanitizeVisibleText(cell);
               suppressionReason ??= sanitized.suppressionReason;
               return sanitized.text.trim();
             });
@@ -394,12 +412,12 @@ function sanitizePresentationTextFieldsResult(
           }
           const sanitizedButton = { ...(button as Record<string, unknown>) };
           if (typeof sanitizedButton.label === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.label, bootPrompt);
+            const sanitized = sanitizeVisibleText(sanitizedButton.label);
             sanitizedButton.label = sanitized.text;
             suppressionReason ??= sanitized.suppressionReason;
           }
           if (typeof sanitizedButton.url === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.url, bootPrompt);
+            const sanitized = sanitizeUrl(sanitizedButton.url);
             if (sanitized.text) {
               sanitizedButton.url = sanitized.text;
             } else {
@@ -416,7 +434,7 @@ function sanitizePresentationTextFieldsResult(
             if (typeof sanitizedWebApp.url !== "string") {
               continue;
             }
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedWebApp.url, bootPrompt);
+            const sanitized = sanitizeUrl(sanitizedWebApp.url);
             if (sanitized.text) {
               sanitizedWebApp.url = sanitized.text;
               sanitizedButton[webAppField] = sanitizedWebApp;
@@ -432,7 +450,7 @@ function sanitizePresentationTextFieldsResult(
               (sanitizedAction.type === "url" || sanitizedAction.type === "web-app") &&
               typeof sanitizedAction.url === "string"
             ) {
-              const sanitized = sanitizeUserVisibleToolTextResult(sanitizedAction.url, bootPrompt);
+              const sanitized = sanitizeUrl(sanitizedAction.url);
               if (sanitized.text) {
                 sanitizedAction.url = sanitized.text;
                 sanitizedButton.action = sanitizedAction;
@@ -465,7 +483,7 @@ function sanitizePresentationTextFieldsResult(
           }
           const sanitizedOption = { ...(option as Record<string, unknown>) };
           if (typeof sanitizedOption.label === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedOption.label, bootPrompt);
+            const sanitized = sanitizeVisibleText(sanitizedOption.label);
             sanitizedOption.label = sanitized.text;
             suppressionReason ??= sanitized.suppressionReason;
           }
@@ -477,7 +495,7 @@ function sanitizePresentationTextFieldsResult(
           if (typeof category !== "string") {
             return category;
           }
-          const sanitized = sanitizeUserVisibleToolTextResult(category, bootPrompt);
+          const sanitized = sanitizeVisibleText(category);
           suppressionReason ??= sanitized.suppressionReason;
           return sanitized.text;
         });
@@ -489,7 +507,7 @@ function sanitizePresentationTextFieldsResult(
           }
           const sanitizedSegment = { ...(segment as Record<string, unknown>) };
           if (typeof sanitizedSegment.label === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSegment.label, bootPrompt);
+            const sanitized = sanitizeVisibleText(sanitizedSegment.label);
             sanitizedSegment.label = sanitized.text;
             suppressionReason ??= sanitized.suppressionReason;
           }
@@ -503,7 +521,7 @@ function sanitizePresentationTextFieldsResult(
           }
           const sanitizedSeries = { ...(series as Record<string, unknown>) };
           if (typeof sanitizedSeries.name === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSeries.name, bootPrompt);
+            const sanitized = sanitizeVisibleText(sanitizedSeries.name);
             sanitizedSeries.name = sanitized.text;
             suppressionReason ??= sanitized.suppressionReason;
           }
@@ -1655,6 +1673,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       //    substantial chunk of the boot prompt content. Refs #53732.
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
+      // HEARTBEAT_OK is a send-only silence sentinel. Other actions can use
+      // the same parameter names for channel-owned values and must preserve them.
+      const visibleTextOptions = { stripHeartbeatToken: action === "send" };
       parseJsonMessageParam(params, "presentation");
       parseInteractiveParam(params);
       for (const field of [
@@ -1666,41 +1687,43 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         "quoteText",
         "quote_text",
       ]) {
-        const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
+        const suppressionReason = sanitizeStringParam(
+          params,
+          field,
+          bootPromptForSession,
+          visibleTextOptions,
+        );
         suppressedVisiblePayloadReason ??= suppressionReason;
       }
       for (const field of ["pollQuestion", "poll_question"]) {
-        const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
+        const suppressionReason = sanitizeStringParam(
+          params,
+          field,
+          bootPromptForSession,
+          visibleTextOptions,
+        );
         suppressedVisiblePayloadReason ??= suppressionReason;
       }
-      // Heartbeat acknowledgements are an internal turn-protocol token. The
-      // final-reply path strips them; the message tool must too, or a cron run
-      // that is told to reply exactly HEARTBEAT_OK and offered the message tool
-      // in the same prompt delivers the literal token into the user's chat.
-      let heartbeatStripped = false;
-      for (const field of ["text", "content", "message", "caption", "SendMessage"]) {
-        if (typeof params[field] !== "string") {
-          continue;
-        }
-        const stripped = stripHeartbeatToken(params[field], { mode: "message" });
-        if (stripped.didStrip) {
-          params[field] = stripped.text;
-          heartbeatStripped = true;
-        }
-      }
       for (const field of ["pollOption", "poll_option"]) {
-        const suppressionReason = sanitizeStringArrayParam(params, field, bootPromptForSession);
+        const suppressionReason = sanitizeStringArrayParam(
+          params,
+          field,
+          bootPromptForSession,
+          visibleTextOptions,
+        );
         suppressedVisiblePayloadReason ??= suppressionReason;
       }
       const sanitizedPresentation = sanitizePresentationTextFieldsResult(
         params.presentation,
         bootPromptForSession,
+        visibleTextOptions,
       );
       params.presentation = sanitizedPresentation.value;
       suppressedVisiblePayloadReason ??= sanitizedPresentation.suppressionReason;
       const sanitizedInteractive = sanitizePresentationTextFieldsResult(
         params.interactive,
         bootPromptForSession,
+        visibleTextOptions,
       );
       params.interactive = sanitizedInteractive.value;
       suppressedVisiblePayloadReason ??= sanitizedInteractive.suppressionReason;
@@ -1709,13 +1732,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       if (
-        (suppressedVisiblePayloadReason || heartbeatStripped) &&
+        suppressedVisiblePayloadReason &&
         action === "send" &&
         !hasSanitizedSendPayloadContent(params)
       ) {
-        const suppressedReason = heartbeatStripped
-          ? "heartbeat_token"
-          : suppressedVisiblePayloadReason;
+        const suppressedReason = suppressedVisiblePayloadReason;
         return jsonResult({
           status: "suppressed",
           reason: suppressedReason,
