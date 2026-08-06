@@ -10,6 +10,7 @@ import type {
   TranscriptStopRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
+import { startTranscripts } from "./transcripts-tool-runtime.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
 const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
@@ -811,6 +812,41 @@ describe("transcripts tool", () => {
     });
     await service.stop();
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not retain an explicit account when provider resolution returns undefined", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      accountBindingChannels: ["discord"],
+      resolveAccountId: () => ({ ok: true as const, value: undefined }),
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+    });
+    const store = storeFor(stateDir);
+
+    await expect(
+      startTranscripts({
+        ctx: {
+          config: { transcripts: { enabled: true } },
+          stateDir,
+          logger: { warn: vi.fn() },
+        },
+        store,
+        rawParams: {
+          providerId: "discord-voice",
+          accountId: "caller-account",
+          sessionId: "unresolved-account",
+        },
+        configuredLifecycle: true,
+      }),
+    ).rejects.toThrow(
+      "transcripts provider discord-voice could not resolve an account for configured auto-start",
+    );
+    expect(start).not.toHaveBeenCalled();
+    await expect(store.readSession("unresolved-account")).resolves.toBeUndefined();
   });
 
   it("allows only the resolved account to manage an auto-started source", async () => {
