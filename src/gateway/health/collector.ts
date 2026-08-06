@@ -21,12 +21,14 @@ import {
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
+import { raceChannelHookWithTimeout } from "../channel-hook-timeout.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
@@ -42,6 +44,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 10_000;
+const HEALTH_PROBE_CONCURRENCY = 5;
 const healthLog = createSubsystemLogger("health");
 
 type HealthSnapshotAudience = "public" | "admin";
@@ -274,9 +277,7 @@ export async function collectGatewayHealthSnapshot(params: {
       preferredAccountId,
       accountIdsToProbe,
     });
-    const accountSummaries: Record<string, ChannelAccountHealthSummary> = {};
-
-    for (const accountId of accountIdsToProbe) {
+    const accountTasks = accountIdsToProbe.map((accountId) => async () => {
       const { probeAccount, snapshotAccount, enabled, configured, diagnostics } =
         await resolveHealthAccountContext({
           plugin,
@@ -289,17 +290,25 @@ export async function collectGatewayHealthSnapshot(params: {
 
       let probe: unknown;
       let lastProbeAt: number | null = null;
-      if (enabled && configured && params.probe && plugin.status?.probeAccount) {
-        try {
-          probe = await plugin.status.probeAccount({
-            account: probeAccount,
-            timeoutMs: cappedTimeout,
-            cfg,
-          });
-          lastProbeAt = Date.now();
-        } catch (error) {
-          probe = { ok: false, error: formatErrorMessage(error) };
-          lastProbeAt = Date.now();
+      const probeAccountHook = plugin.status?.probeAccount;
+      if (enabled && configured && params.probe && probeAccountHook) {
+        // Adapters receive the timeout as a hint, but the Gateway owns the hard
+        // deadline so one non-compliant account cannot block the whole snapshot.
+        const result = await raceChannelHookWithTimeout({
+          timeoutMs: cappedTimeout,
+          run: () => probeAccountHook({ account: probeAccount, timeoutMs: cappedTimeout, cfg }),
+        });
+        lastProbeAt = Date.now();
+        if (result.kind === "value") {
+          probe = result.value;
+        } else if (result.kind === "error") {
+          probe = { ok: false, error: formatErrorMessage(result.error) };
+        } else {
+          probe = {
+            ok: false,
+            error: `Probe timed out after ${cappedTimeout}ms`,
+            timedOut: true,
+          };
         }
       }
 
@@ -375,8 +384,21 @@ export async function collectGatewayHealthSnapshot(params: {
         record.lastProbeAt = lastProbeAt;
       }
       record.accountId = accountId;
-      accountSummaries[accountId] = record;
+      return record;
+    });
+    const accountRun = await runTasksWithConcurrency({
+      tasks: accountTasks,
+      limit: params.probe ? HEALTH_PROBE_CONCURRENCY : 1,
+    });
+    if (accountRun.hasError) {
+      throw accountRun.firstError;
     }
+    const accountSummaries = Object.fromEntries(
+      accountIdsToProbe.map((accountId, index) => [
+        accountId,
+        expectDefined(accountRun.results[index], `health result for ${plugin.id}:${accountId}`),
+      ]),
+    );
 
     const defaultSummary =
       accountSummaries[preferredAccountId] ??

@@ -32,6 +32,7 @@ import {
   evaluateChannelHealth,
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
+import { raceChannelHookWithTimeout } from "../channel-hook-timeout.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
@@ -107,38 +108,6 @@ function channelStatusTimeoutPayload(step: string, timeoutMs: number): Record<st
   };
 }
 
-type TimeoutRaceResult<T> =
-  | { kind: "value"; value: T }
-  | { kind: "error"; error: unknown }
-  | { kind: "timeout" };
-
-async function raceWithTimeout<T>(params: {
-  timeoutMs: number;
-  run: () => Promise<T> | T;
-}): Promise<TimeoutRaceResult<T>> {
-  const timeoutMs = params.timeoutMs;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
-    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
-  });
-  const result = await Promise.race([
-    Promise.resolve()
-      .then(params.run)
-      .then(
-        (value) => ({ kind: "value" as const, value }),
-        (error: unknown) => ({ kind: "error" as const, error }),
-      ),
-    timeout,
-  ]);
-  if (timer) {
-    clearTimeout(timer);
-  }
-  return result;
-}
-
 async function runChannelStatusHook(params: {
   accountId: string;
   channelId: ChannelId;
@@ -150,7 +119,7 @@ async function runChannelStatusHook(params: {
   const timeoutMs = Math.max(1, params.timeoutMs);
   // Channel probes come from plugin code and external services. Convert slow or
   // failing hooks into partial status data so one channel cannot block the UI.
-  const result = await raceWithTimeout({
+  const result = await raceChannelHookWithTimeout({
     timeoutMs,
     run: params.run,
   });
@@ -179,7 +148,7 @@ async function runChannelStatusSummary(params: {
   run: () => unknown;
 }): Promise<Summary> {
   const timeoutMs = Math.max(1, params.timeoutMs);
-  const result = await raceWithTimeout({
+  const result = await raceChannelHookWithTimeout({
     timeoutMs,
     run: params.run,
   });

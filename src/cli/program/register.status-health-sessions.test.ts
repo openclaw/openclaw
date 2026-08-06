@@ -214,22 +214,22 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
-  it("allows verbose health probes a longer default timeout", async () => {
-    await runCli(["health", "--verbose"]);
+  it.each(["--verbose", "--debug"])("preserves an omitted timeout for health %s", async (flag) => {
+    await runCli(["health", flag]);
 
     expectCommandOptions(healthCommand, {
       json: false,
-      timeoutMs: 60_000,
+      timeoutMs: undefined,
       verbose: true,
     });
   });
 
-  it("keeps the short default timeout for cached health", async () => {
+  it("preserves an omitted timeout for cached health", async () => {
     await runCli(["health"]);
 
     expectCommandOptions(healthCommand, {
       json: false,
-      timeoutMs: 10_000,
+      timeoutMs: undefined,
       verbose: false,
     });
   });

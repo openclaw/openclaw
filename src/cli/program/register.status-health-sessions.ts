@@ -8,8 +8,6 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 import { parsePositiveIntOrUndefined, parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
-const DEFAULT_VERBOSE_HEALTH_TIMEOUT_MS = 60_000;
-
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
 }
@@ -254,7 +252,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show model provider usage/quota snapshots", false)
     .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
-    .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
+    .option("--timeout <ms>", "Probe timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
@@ -298,7 +296,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("health")
     .description("Fetch health from the running gateway")
     .option("--json", "Output JSON instead of text", false)
-    .option("--timeout <ms>", "Connection timeout in milliseconds", "10000")
+    .option("--timeout <ms>", "Connection timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
@@ -306,12 +304,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.openclaw.ai/cli/health")}\n`,
     )
-    .action(async (opts, command) => {
-      const timeout =
-        resolveVerbose(opts) && command.getOptionValueSource("timeout") === "default"
-          ? String(DEFAULT_VERBOSE_HEALTH_TIMEOUT_MS)
-          : opts.timeout;
-      await runWithVerboseAndTimeout({ ...opts, timeout }, async ({ verbose, timeoutMs }) => {
+    .action(async (opts) => {
+      await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
         const { healthCommand } = await import("../../commands/health.js");
         await healthCommand(
           {

@@ -162,6 +162,23 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
+  it.each([
+    { verbose: false, timeoutMs: undefined, expected: undefined },
+    { verbose: true, timeoutMs: undefined, expected: null },
+    { verbose: true, timeoutMs: 2500, expected: 2500 },
+  ])(
+    "uses the shared live-health response deadline for $verbose/$timeoutMs",
+    async ({ verbose, timeoutMs, expected }) => {
+      callGatewayMock.mockResolvedValueOnce(
+        createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
+      );
+
+      await healthCommand({ json: true, verbose, timeoutMs, config: {} }, runtime as never);
+
+      expect(requireFirstGatewayRequest().timeoutMs).toBe(expected);
+    },
+  );
+
   it("outputs JSON from gateway", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",

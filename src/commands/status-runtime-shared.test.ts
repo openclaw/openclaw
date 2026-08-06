@@ -341,6 +341,17 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("waits for complete live health when no deep-status timeout was supplied", async () => {
+    await resolveStatusGatewayHealth({ config: { gateway: {} } });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "health",
+      params: { probe: true },
+      timeoutMs: null,
+      config: { gateway: {} },
+    });
+  });
+
   it("returns a fallback health error when the gateway is unreachable", async () => {
     await expect(
       resolveStatusGatewayHealthSafe({

@@ -147,7 +147,9 @@ export async function resolveStatusGatewayHealth(params: {
   return await callGateway<HealthSummary>({
     method: "health",
     params: { probe: true },
-    timeoutMs: params.timeoutMs,
+    // Deep status requests the same variable-duration all-account health work as
+    // verbose health. An explicit operator deadline still wins.
+    timeoutMs: params.timeoutMs ?? null,
     config: params.config,
   });
 }
@@ -172,7 +174,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
   return await callGateway<HealthSummary>({
     method: "health",
     params: { probe: true },
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.timeoutMs ?? null,
     config: params.config,
     ...params.callOverrides,
   }).catch((err: unknown) => ({ error: String(err) }));

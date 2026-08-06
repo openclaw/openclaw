@@ -227,7 +227,9 @@ export async function healthCommand(
         await callGateway<HealthSummary>({
           method: "health",
           params: opts.verbose ? { probe: true } : undefined,
-          timeoutMs: opts.timeoutMs,
+          // Live all-account work has account-dependent duration. Keep connection
+          // startup bounded, but let the Gateway's per-account deadlines own completion.
+          timeoutMs: opts.verbose && opts.timeoutMs === undefined ? null : opts.timeoutMs,
           config: cfg,
           token: opts.token,
           password: opts.password,
