@@ -11,8 +11,8 @@ import {
   testing as facadeRuntimeTesting,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
-import { makePrivateQaSourceRoot } from "./qa-runtime.test-helpers.js";
 import { listQaRunnerCliContributions } from "./qa-runner-runtime.js";
+import { makePrivateQaSourceRoot } from "./qa-runtime.test-helpers.js";
 
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
 
@@ -150,17 +150,18 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       },
     ]);
   });
-
   it("ignores operator runner metadata and state during private QA discovery", () => {
     const sourceRoot = makePrivateQaSourceRoot(tempDirs, "openclaw-private-qa-source-root-");
     const stateDir = makeTempDir("openclaw-private-qa-operator-state-");
     const pluginDir = path.join(sourceRoot, "extensions", "qa-linked");
+    const operatorRunnerDir = path.join(stateDir, "extensions", "operator-runner");
     const stateDatabasePath = path.join(stateDir, "openclaw.sqlite");
     const stateDatabaseSentinel = "operator-state-must-remain-unopened";
 
     resolveOpenClawPackageRootSync.mockReturnValue(sourceRoot);
+
+    // Set up qa-linked source-root fixture with qa-runner-api.js
     fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(stateDatabasePath, stateDatabaseSentinel, "utf8");
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -185,17 +186,44 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
     );
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n", "utf8");
     fs.writeFileSync(
-      path.join(pluginDir, "runtime-api.js"),
+      path.join(pluginDir, "qa-runner-api.js"),
       [
         "export const qaRunnerCliRegistrations = [",
         "  {",
         '    commandName: "linked",',
-        '    register() {}',
+        "    register() {}",
         "  }",
         "];",
       ].join("\n"),
       "utf8",
     );
+
+    // Set up operator-runner state-dir fixture to test exclusion
+    fs.mkdirSync(operatorRunnerDir, { recursive: true });
+    fs.writeFileSync(stateDatabasePath, stateDatabaseSentinel, "utf8");
+    fs.writeFileSync(
+      path.join(operatorRunnerDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "operator-runner",
+        qaRunners: [{ commandName: "operator-sentinel" }],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(operatorRunnerDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/operator-runner",
+        type: "module",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(operatorRunnerDir, "index.js"), "export default {};\n", "utf8");
 
     process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
