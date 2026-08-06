@@ -224,6 +224,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
     thinkingTagStream: createThinkingTagStreamState(),
+    deltaBufferIsCommentary: false,
+    flushedVisibleCursor: 0,
+    flushedVisibleText: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
@@ -457,6 +460,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
     state.deltaBuffer = "";
     state.thinkingTagStream = createThinkingTagStreamState();
+    state.deltaBufferIsCommentary = false;
+    state.flushedVisibleCursor = 0;
+    state.flushedVisibleText = "";
     state.blockBuffer = "";
     blockChunker?.reset();
     replyDirectiveAccumulator.reset();
@@ -546,6 +552,28 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     chunkerHasBuffered: boolean;
   }) => {
     const { text, addedDuringMessage, chunkerHasBuffered } = args;
+
+    // A timeout flush may already have committed partial text for this message.
+    // When message_end later finalizes the complete text, replace the flushed
+    // partial instead of appending a duplicate (P1: avoid re-adding already
+    // emitted stream text). The partial stays when message_end never arrives
+    // (hard run-budget abort) — that is the salvage this flush exists for.
+    if (state.flushedVisibleCursor > 0 && text) {
+      if (assistantTexts.length > state.assistantTextBaseline) {
+        assistantTexts.splice(
+          state.assistantTextBaseline,
+          assistantTexts.length - state.assistantTextBaseline,
+          text,
+        );
+        rememberAssistantText(text);
+      } else {
+        pushAssistantText(text);
+      }
+      state.flushedVisibleCursor = 0;
+      state.flushedVisibleText = "";
+      state.assistantTextBaseline = assistantTexts.length;
+      return;
+    }
 
     // If we're not streaming block replies, ensure the final payload includes
     // the final text even when interim streaming was enabled.
@@ -1473,8 +1501,109 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     sessionUnsubscribe();
   };
 
+  /**
+   * Flushes partial streaming output to assistantTexts before a timeout abort.
+   * This reads the raw text accumulated in deltaBuffer, strips non-visible
+   * stream content (think/final blocks, downgraded tool call text), then
+   * commits the visible remainder, so any text the model generated before
+   * the timeout fired is preserved rather than discarded (see #113182).
+   * A no-op when there is no pending text after filtering.
+   *
+   * Normalizes the buffered streaming text at a terminal boundary (timeout
+   * abort). This mirrors the normal completion normalization: the buffer is
+   * treated as the final chunk (`final: true` resolves any trailing fence or
+   * block-tag fragment), and the subscription's configured final-tag policy
+   * (`params.enforceFinalTag`) is honored inside `stripBlockTags` — the same
+   * shared filter the normal streaming path applies before committing text.
+   * Fresh block state is used so an unclosed <think> or <final> tag from the
+   * live-stream boundary does not cause the earlier visible prefix to be
+   * treated as hidden content (see P1: Finalize the full buffer with fresh
+   * filter state).
+   */
+  const finalizeFlushedAssistantText = (text: string) =>
+    stripDowngradedToolCallText(
+      stripBlockTags(
+        text,
+        {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        // Terminal chunk: resolve any trailing fence/tag fragments. This does
+        // not change the final-tag policy — stripBlockTags still honors the
+        // configured params.enforceFinalTag (same as handleMessageEnd).
+        { final: true },
+      ),
+    ).trimEnd();
+
+  const flushPartialAssistantText = () => {
+    const text = state.deltaBuffer;
+    if (!text) {
+      return;
+    }
+    if (state.deltaBufferIsCommentary) {
+      // Commentary-phase items are deliberately excluded from reply buffers
+      // by the normal stream path; never commit them at the timeout boundary
+      // (see P1: Keep commentary out of timeout-flushed assistant text).
+      state.deltaBuffer = "";
+      state.flushedVisibleCursor = 0;
+      state.flushedVisibleText = "";
+      return;
+    }
+    // The buffer is retained (not cleared) between flushes so a queued suffix
+    // is re-filtered against the full buffer: an unclosed <think>/<final> tag
+    // from the first flush remains visible to the filter and cannot leak its
+    // continuation as visible output (P1: retain tag context across flushes).
+    // Only the uncommitted suffix is pushed when the refreshed text extends the
+    // previous flush (P1: avoid re-adding already emitted stream text).
+    const visibleText = finalizeFlushedAssistantText(text);
+    const previousVisibleText = state.flushedVisibleText;
+    if (previousVisibleText && !visibleText.startsWith(previousVisibleText)) {
+      // The sanitizer retracted or rewrote the previously flushed prefix — a
+      // later queued event (e.g. an orphan reasoning close) can turn text that
+      // looked visible into hidden content. Replace the flushed entry with the
+      // refreshed full text instead of extending it, so hidden reasoning never
+      // stays committed and the visible answer is not lost (P1: reconcile
+      // sanitizer retractions).
+      if (assistantTexts.length > state.assistantTextBaseline) {
+        if (visibleText) {
+          assistantTexts[assistantTexts.length - 1] = visibleText;
+          rememberAssistantText(visibleText);
+        } else {
+          assistantTexts.splice(-1, 1);
+          state.assistantTextBaseline = Math.min(
+            state.assistantTextBaseline,
+            assistantTexts.length,
+          );
+        }
+      } else if (visibleText) {
+        pushAssistantText(visibleText);
+      }
+      state.flushedVisibleText = visibleText;
+      state.flushedVisibleCursor = visibleText.length;
+      return;
+    }
+    const cursor = Math.min(state.flushedVisibleCursor, visibleText.length);
+    const uncommitted = visibleText.slice(cursor);
+    if (uncommitted) {
+      if (state.flushedVisibleCursor > 0 && assistantTexts.length > state.assistantTextBaseline) {
+        // Continuation of the text an earlier flush already committed for this
+        // message: append to the same entry so downstream "\n\n" joining does
+        // not split one streamed answer across entries.
+        const merged = `${assistantTexts[assistantTexts.length - 1]}${uncommitted}`;
+        assistantTexts[assistantTexts.length - 1] = merged;
+        rememberAssistantText(merged);
+      } else {
+        pushAssistantText(uncommitted);
+      }
+    }
+    state.flushedVisibleText = visibleText;
+    state.flushedVisibleCursor = visibleText.length;
+  };
+
   return {
     assistantTexts,
+    flushPartialAssistantText,
     getCurrentAttemptAssistant: () =>
       currentAttemptAssistant ? structuredClone(currentAttemptAssistant) : undefined,
     getLastAssistantTextMessageIndex: () =>
@@ -1585,7 +1714,22 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     getAssistantTurnCount: () => state.assistantTurnCount,
-    waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
+    waitForPendingEvents: async () => {
+      // Drain the serialized event chain until it is quiescent. The chain head
+      // reference changes whenever a successor handler attaches while the
+      // current promise is still running, so a single snapshot would flush
+      // before the successor writes its delta (P1: drain until stable).
+      for (;;) {
+        const chain = state.pendingEventChain;
+        if (!chain) {
+          return;
+        }
+        await chain;
+        if (!state.pendingEventChain || state.pendingEventChain === chain) {
+          return;
+        }
+      }
+    },
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

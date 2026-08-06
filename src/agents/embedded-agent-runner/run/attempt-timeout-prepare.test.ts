@@ -4,7 +4,11 @@ import { createEmbeddedAttemptRunAbort } from "./attempt-abort.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 
-function createTimeoutHarness(options?: { pendingCompaction?: boolean; timeoutMs?: number }) {
+function createTimeoutHarness(options?: {
+  pendingCompaction?: boolean;
+  timeoutMs?: number;
+  onFlushPartialOutput?: () => void;
+}) {
   const state = {
     pendingCompaction: options?.pendingCompaction ?? false,
     streaming: false,
@@ -34,6 +38,7 @@ function createTimeoutHarness(options?: { pendingCompaction?: boolean; timeoutMs
     abortRun,
     markTimedOutDuringCompaction,
     markTimedOutByRunBudget,
+    onFlushPartialOutput: options?.onFlushPartialOutput,
   });
   return {
     abortRun,
@@ -129,6 +134,18 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
     harness.state.pendingCompaction = false;
     await vi.advanceTimersByTimeAsync(50);
+    expect(harness.abortRun).toHaveBeenCalledWith(true);
+    harness.timeout.clearTimers();
+  });
+
+  it("flushes partial output via onFlushPartialOutput before abort", async () => {
+    const onFlushPartialOutput = vi.fn();
+    const harness = createTimeoutHarness({ onFlushPartialOutput });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(onFlushPartialOutput).toHaveBeenCalledOnce();
+    expect(harness.markTimedOutByRunBudget).toHaveBeenCalledOnce();
     expect(harness.abortRun).toHaveBeenCalledWith(true);
     harness.timeout.clearTimers();
   });

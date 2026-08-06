@@ -104,6 +104,13 @@ export type EmbeddedAgentSubscribeState = {
   deltaBuffer: string;
   /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
   thinkingTagStream: ThinkingTagStreamState;
+  /**
+   * True while the buffered stream text belongs to an explicit commentary
+   * item. Commentary is intentionally excluded from reply/assistant buffers
+   * by the normal stream path, so the timeout flush must skip it too
+   * (see PR #116253 P1: Keep commentary out of timeout-flushed assistant text).
+   */
+  deltaBufferIsCommentary: boolean;
   blockBuffer: string;
   blockState: {
     thinking: boolean;
@@ -170,6 +177,22 @@ export type EmbeddedAgentSubscribeState = {
   terminalAborted?: boolean;
   hadDeterministicSideEffect?: boolean;
   pendingEventChain: Promise<void> | null;
+  /**
+   * Number of visible characters already committed to assistantTexts by the
+   * timeout flush for the current message. Used to keep the flush idempotent
+   * (never re-append already-emitted text) while the raw deltaBuffer is
+   * retained across flushes so an unclosed hidden tag stays visible to the
+   * filter. Reset wherever deltaBuffer resets (message/item boundary).
+   */
+  flushedVisibleCursor: number;
+  /**
+   * Last full visible text produced by the timeout flush for the current
+   * message. Compared against the refreshed filter output on the next flush:
+   * when the sanitizer retracts or rewrites the previously flushed prefix
+   * (e.g. an orphan reasoning close arrives in a queued delta), the stored
+   * assistant entry is replaced instead of extended.
+   */
+  flushedVisibleText: string;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
