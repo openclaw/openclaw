@@ -1062,6 +1062,12 @@ describe("sessions tools", () => {
     const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        agents: {
+          list: [{ id: "main", default: true, identity: { name: "Stevo" } }],
+        },
+      } as OpenClawConfig,
     });
 
     const fire = await tool.execute("call5", {
@@ -1389,6 +1395,12 @@ describe("sessions tools", () => {
     const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        agents: {
+          list: [{ id: "main", default: true, identity: { name: "Stevo" } }],
+        },
+      } as OpenClawConfig,
     });
 
     const waited = await tool.execute("call7", {
@@ -1410,6 +1422,7 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(6);
     for (const call of agentCalls) {
       const params = agentParams(call);
+      expect(params.extraSystemPrompt).toContain("Agent 1 (requester) name: Stevo.");
       expect(params.lane).toMatch(/^nested(?::|$)/);
       expect(params.channel).toBe("webchat");
       expect(params.inputProvenance?.kind).toBe("inter_session");
