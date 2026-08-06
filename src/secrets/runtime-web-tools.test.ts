@@ -615,6 +615,32 @@ describe("runtime web tools resolution", () => {
     expect(resolveSpy).not.toHaveBeenCalled();
   });
 
+  it("does not invoke provider metadata hooks in inspection mode", async () => {
+    // Contract guard for PR #117128 P1: a selected provider with a
+    // resolveRuntimeMetadata hook must not have it invoked during config
+    // preflight (inspectSecretRef mode). The credential is a synthetic
+    // placeholder; a hook could side-effect or throw during `config validate`
+    // despite the non-executing contract. resolveRuntimeWebTools suppresses
+    // the mergeRuntimeMetadata call when inspectSecretRef is set; this locks
+    // that behavior so a future refactor cannot regress it.
+    const throwingHook = vi.fn(() => {
+      throw new Error("metadata hook must not run in inspection mode");
+    });
+    const perplexityWithThrowingHook = {
+      ...createTestProvider({ provider: "perplexity", pluginId: "perplexity", order: 50 }),
+      resolveRuntimeMetadata: throwingHook,
+    };
+    resolvePluginWebSearchProvidersMock.mockReturnValueOnce([perplexityWithThrowingHook]);
+
+    const { metadata } = await runRuntimeWebTools({
+      config: createProviderSecretRefConfig("perplexity", "PERPLEXITY_PROVIDER_REF"),
+      inspectSecretRef: () => "preflight-placeholder",
+    });
+
+    expect(metadata.search.selectedProvider).toBe("perplexity");
+    expect(throwingHook).not.toHaveBeenCalled();
+  });
+
   it("selects the configured keyless Firecrawl fetch provider without an API key", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
