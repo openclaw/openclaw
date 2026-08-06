@@ -38,6 +38,7 @@ export type ChatHost = ChatInputHistoryState &
     requestUpdate?: () => void;
     refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
     chatSubmitGuards?: Map<string, Promise<void>>;
+    chatSubmissionGuards?: Map<string, { promise: Promise<unknown>; settled: boolean }>;
     chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
     eventLogBuffer?: unknown[];
     assistantAgentId?: string | null;

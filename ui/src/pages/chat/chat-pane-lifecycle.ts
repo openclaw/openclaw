@@ -50,10 +50,11 @@ import { createPageState } from "./chat-state-page.ts";
 import { invalidateChatMetadataCache, refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow, canCreateChatSession } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
+import { submitChatWidgetPrompt } from "./chat-widget-prompt.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { toggleSessionWorkspace } from "./components/chat-session-workspace.ts";
-import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
+import { WIDGET_PROMPT_EVENT } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
@@ -538,11 +539,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     // the pane element keeps split-view routing correct — the prompt reaches
     // only the pane that owns the frame.
     const handleWidgetPrompt = (event: Event) => {
-      const detail = (event as CustomEvent<Partial<WidgetPromptEventDetail>>).detail;
-      const text = typeof detail?.text === "string" ? detail.text.trim() : "";
-      if (text) {
-        void this.state?.handleSendChat(text);
-      }
+      submitChatWidgetPrompt(this.state, event);
     };
     this.addEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt);
     chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));

@@ -97,7 +97,7 @@ export function createChatPaneSessionActionCallbacks(params: {
   hasLocalRun: () => boolean;
   sessionParticipationBlocked: boolean;
   onDenied: (reason: string) => void;
-  onCompact: () => void;
+  onCompact: (submissionId: string) => void;
   onAbort: () => void;
   onRewind: (entryId: string) => Promise<boolean>;
   onFork: (entryId: string) => Promise<void>;
@@ -114,9 +114,9 @@ export function createChatPaneSessionActionCallbacks(params: {
   };
   return {
     onCompact: access.compact.allowed
-      ? () => {
+      ? (submissionId) => {
           if (requireCurrent("compact")) {
-            params.onCompact();
+            params.onCompact(submissionId);
           }
         }
       : undefined,

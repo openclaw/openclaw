@@ -245,7 +245,7 @@ export class ChatPane extends ChatPaneHeader {
       hasLocalRun: () => Boolean(state.chatRunId),
       sessionParticipationBlocked,
       onDenied: (reason) => this.publishHeaderError(reason),
-      onCompact: () => void state.handleSendChat("/compact"),
+      onCompact: (submissionId) => void state.handleSendChat("/compact", { submissionId }),
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
       onRewind: (entryId) => this.rewindToMessage(entryId),
       onFork: (entryId) => this.forkFromMessage(entryId),
@@ -484,12 +484,12 @@ export class ChatPane extends ChatPaneHeader {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
-      onSend: () =>
+      onSend: (submissionId) =>
         catalogKey
-          ? void this.continueCatalogSession(catalogKey)
+          ? void this.continueCatalogSession(catalogKey, submissionId)
           : suggestionViewer
             ? void this.addCurrentSessionSuggestion()
-            : void state.handleSendChat(),
+            : void state.handleSendChat(undefined, { submissionId }),
       onCompact: sessionActionCallbacks.onCompact,
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });
@@ -520,7 +520,8 @@ export class ChatPane extends ChatPaneHeader {
       onQueueSteer: sessionParticipationBlocked
         ? undefined
         : (id) => void state.steerQueuedChatMessage(id),
-      onGoalCommand: (command) => void state.handleSendChat(command),
+      onGoalCommand: (command, submissionId) =>
+        void state.handleSendChat(command, { submissionId }),
       onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionPrefill: this.prefillSessionCompanionQuestion,
       replyTarget: state.chatReplyTarget ?? null,

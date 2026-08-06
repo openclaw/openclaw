@@ -10,6 +10,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { claimChatSubmissionAction } from "../chat-submission-action.ts";
 import { exportChatMarkdown } from "../export.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -132,6 +133,7 @@ export function selectSlashCommand(
   cmd: SlashCommandDef,
   props: ChatComposerProps,
   requestUpdate: () => void,
+  submissionId: string,
 ) {
   const state = getChatComposerState(props.paneId);
   if (cmd.argOptions?.length) {
@@ -150,7 +152,7 @@ export function selectSlashCommand(
     state.slashMenuOpen = false;
     resetSlashMenuState(state);
     commitComposerDraft(props, `/${cmd.name}`);
-    props.onSend();
+    props.onSend(submissionId);
   } else {
     commitComposerDraft(props, `/${cmd.name} `);
     closeSlashMenuIfNeeded(state, requestUpdate);
@@ -185,14 +187,15 @@ export function selectSlashArg(
   props: ChatComposerProps,
   requestUpdate: () => void,
   run: boolean,
+  submissionId?: string,
 ) {
   const state = getChatComposerState(props.paneId);
   const cmdName = state.slashMenuCommand?.name ?? "";
   state.slashMenuOpen = false;
   resetSlashMenuState(state);
   commitComposerDraft(props, `/${cmdName} ${arg}`);
-  if (run) {
-    props.onSend();
+  if (run && submissionId) {
+    props.onSend(submissionId);
   }
   requestUpdate();
 }
@@ -341,7 +344,12 @@ export function renderSlashMenu(
                   : ""}"
                 role="option"
                 aria-selected=${i === state.slashMenuIndex}
-                @click=${() => selectSlashArg(arg, props, requestUpdate, true)}
+                @click=${(event: MouseEvent) => {
+                  const claim = claimChatSubmissionAction(event);
+                  if (claim.firstUse) {
+                    selectSlashArg(arg, props, requestUpdate, true, claim.submissionId);
+                  }
+                }}
                 @mouseenter=${() => {
                   state.slashMenuIndex = i;
                   requestUpdate();
@@ -399,7 +407,12 @@ export function renderSlashMenu(
                 : ""}"
               role="option"
               aria-selected=${globalIdx === state.slashMenuIndex}
-              @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
+              @click=${(event: MouseEvent) => {
+                const claim = claimChatSubmissionAction(event);
+                if (claim.firstUse) {
+                  selectSlashCommand(cmd, props, requestUpdate, claim.submissionId);
+                }
+              }}
               @mouseenter=${() => {
                 state.slashMenuIndex = globalIdx;
                 requestUpdate();

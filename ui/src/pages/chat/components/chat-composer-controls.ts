@@ -4,6 +4,7 @@ import { icons } from "../../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
+import { claimChatSubmissionAction } from "../chat-submission-action.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
@@ -34,9 +35,9 @@ export type ChatRunControlsProps = {
   onAbort?: () => void;
   onExport: () => void;
   onNewSession: () => void;
-  onSend: () => void;
+  onSend: (submissionId: string) => void;
   onStoreDraft: (draft: string) => void;
-  onToggleVoice?: () => void;
+  onToggleVoice?: (action: Event) => void;
   onToggleCamera?: () => void;
   microphonePicker?: TemplateResult | typeof nothing;
   showPrimary?: boolean;
@@ -141,7 +142,7 @@ function renderComposerVoiceButton(props: ChatRunControlsProps) {
           type="button"
           @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           @click=${(event: MouseEvent) =>
-            props.dictation ? props.dictation.handleClick(event) : props.onToggleVoice?.()}
+            props.dictation ? props.dictation.handleClick(event) : props.onToggleVoice?.(event)}
           @contextmenu=${(event: MouseEvent) => props.dictation?.handleContextMenu(event)}
           ?disabled=${finalizing ||
           (!active && (!props.connected || props.sending || props.isBusy))}
@@ -190,11 +191,15 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         : interruptsActiveRun
           ? t("chat.runControls.sendMessage")
           : t("chat.runControls.queueMessage");
-  const storeDraftAndSend = () => {
+  const storeDraftAndSend = (action: Event) => {
+    const claim = claimChatSubmissionAction(action);
+    if (!claim.firstUse) {
+      return;
+    }
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
     }
-    props.onSend();
+    props.onSend(claim.submissionId);
   };
   const abortAction = props.canAbort
     ? html`

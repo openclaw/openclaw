@@ -1409,9 +1409,23 @@ describe("chat goal status", () => {
     container.querySelector<HTMLButtonElement>('button[aria-label="Pause goal"]')?.click();
     container.querySelector<HTMLButtonElement>('button[aria-label="Clear goal"]')?.click();
 
-    expect(onGoalCommand).toHaveBeenNthCalledWith(1, "/goal pause");
-    expect(onGoalCommand).toHaveBeenNthCalledWith(2, "/goal clear");
+    expect(onGoalCommand).toHaveBeenNthCalledWith(1, "/goal pause", expect.any(String));
+    expect(onGoalCommand).toHaveBeenNthCalledWith(2, "/goal clear", expect.any(String));
+    expect(onGoalCommand.mock.calls[0]?.[1]).not.toBe(onGoalCommand.mock.calls[1]?.[1]);
     expect(container.querySelector('button[aria-label="Resume goal"]')).toBeNull();
+  });
+
+  it("dispatches one goal command when a click action re-enters", () => {
+    const onGoalCommand = vi.fn();
+    const container = renderChatView({ sessions: goalSessions(), onGoalCommand });
+    const pause = container.querySelector<HTMLButtonElement>('button[aria-label="Pause goal"]');
+    const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    pause?.dispatchEvent(action);
+    pause?.dispatchEvent(action);
+
+    expect(onGoalCommand).toHaveBeenCalledOnce();
+    expect(onGoalCommand).toHaveBeenCalledWith("/goal pause", expect.any(String));
   });
 
   it("offers resume instead of pause for paused goals", () => {
@@ -1423,7 +1437,7 @@ describe("chat goal status", () => {
 
     expect(container.querySelector('button[aria-label="Pause goal"]')).toBeNull();
     container.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')?.click();
-    expect(onGoalCommand).toHaveBeenCalledWith("/goal resume");
+    expect(onGoalCommand).toHaveBeenCalledWith("/goal resume", expect.any(String));
   });
 
   it("prefills the composer draft when editing the goal", () => {
@@ -4240,6 +4254,55 @@ describe("chat slash menu accessibility", () => {
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
   });
 
+  it("applies and submits one local slash action once when its click handler re-enters", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    let container = renderChatView({ draft, onDraftChange, onSend });
+
+    inputDraft(container, "/cle");
+    container = renderChatView({ draft, onDraftChange, onSend });
+    onDraftChange.mockClear();
+    const option = container.querySelector<HTMLElement>('[role="option"]');
+    const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    option?.dispatchEvent(action);
+    option?.dispatchEvent(action);
+
+    expect(onDraftChange).toHaveBeenCalledOnce();
+    expect(onDraftChange).toHaveBeenCalledWith("/clear");
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend).toHaveBeenCalledWith(expect.any(String));
+  });
+
+  it("does not advance an argument command twice when its Enter action re-enters", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    let container = renderChatView({ draft, onDraftChange, onSend });
+
+    inputDraft(container, "/tools");
+    container = renderChatView({ draft, onDraftChange, onSend });
+    onDraftChange.mockClear();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const action = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+
+    textarea?.dispatchEvent(action);
+    textarea?.dispatchEvent(action);
+
+    expect(onDraftChange).toHaveBeenCalledOnce();
+    expect(onDraftChange).toHaveBeenCalledWith("/tools ");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("clears active descendant when suggestions close", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
@@ -4932,6 +4995,8 @@ describe("chat welcome", () => {
     onOpenSession?: (sessionKey: string) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
+    onDraftChange?: (next: string) => void;
+    onSend?: (submissionId: string) => void;
   }) {
     const container = document.createElement("div");
     render(
@@ -4945,8 +5010,8 @@ describe("chat welcome", () => {
         onOpenSession: params.onOpenSession,
         modelSetupRequired: params.modelSetupRequired,
         onModelSetup: params.onModelSetup,
-        onDraftChange: () => undefined,
-        onSend: () => undefined,
+        onDraftChange: params.onDraftChange ?? (() => undefined),
+        onSend: params.onSend ?? (() => undefined),
       }),
       container,
     );
@@ -5034,6 +5099,25 @@ describe("chat welcome", () => {
     expect(container.querySelector(".agent-chat__suggestion")?.textContent?.trim()).toBe(
       t("chat.welcome.suggestions.whatCanYouDo"),
     );
+  });
+
+  it("applies and submits a welcome suggestion once when its click handler re-enters", () => {
+    const onDraftChange = vi.fn();
+    const onSend = vi.fn();
+    const container = renderWelcome({
+      assistantAvatar: null,
+      onDraftChange,
+      onSend,
+    });
+    const suggestion = container.querySelector<HTMLButtonElement>(".agent-chat__suggestion");
+    const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+
+    suggestion?.dispatchEvent(action);
+    suggestion?.dispatchEvent(action);
+
+    expect(onDraftChange).toHaveBeenCalledOnce();
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onSend).toHaveBeenCalledWith(expect.any(String));
   });
 
   it("lists recent user chats instead of suggestions when any exist", () => {

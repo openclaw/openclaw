@@ -1062,8 +1062,12 @@ describe("renderChatComposer status", () => {
     expect(view.container.querySelector(".context-ring")?.classList).toContain(
       "context-ring--warning",
     );
-    view.container.querySelector<HTMLButtonElement>(".context-ring__action")?.click();
+    const compact = view.container.querySelector<HTMLButtonElement>(".context-ring__action");
+    const action = new MouseEvent("click", { bubbles: true, cancelable: true });
+    compact?.dispatchEvent(action);
+    compact?.dispatchEvent(action);
     expect(onCompact).toHaveBeenCalledOnce();
+    expect(onCompact).toHaveBeenCalledWith(expect.any(String));
 
     view = renderComposer({
       onCompact,

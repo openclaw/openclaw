@@ -17,6 +17,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
+import { claimChatSubmissionAction } from "../chat-submission-action.ts";
 
 type ChatWelcomeProps = {
   assistantName: string;
@@ -32,7 +33,7 @@ type ChatWelcomeProps = {
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
   onDraftChange: (next: string) => void;
-  onSend: () => void;
+  onSend: (submissionId: string) => void;
   onOpenSession?: (sessionKey: string) => void;
 };
 
@@ -135,9 +136,13 @@ function renderWelcomeSuggestions(props: Pick<ChatWelcomeProps, "onDraftChange" 
           <button
             type="button"
             class="agent-chat__suggestion"
-            @click=${() => {
+            @click=${(event: MouseEvent) => {
+              const claim = claimChatSubmissionAction(event);
+              if (!claim.firstUse) {
+                return;
+              }
               props.onDraftChange(text);
-              props.onSend();
+              props.onSend(claim.submissionId);
             }}
           >
             ${text}

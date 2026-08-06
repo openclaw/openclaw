@@ -4,6 +4,7 @@ import { loadSettings, normalizeChatSendShortcut, patchSettings } from "../../..
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { runClaimedChatSubmissionAction } from "../chat-submission-action.ts";
 import { ComposerDictationController, insertComposerDictation } from "../composer-dictation.ts";
 import { discoverRealtimeTalkInputs } from "../realtime-talk-input.ts";
 import { isLargePastedTextAttachment } from "./chat-attachments.ts";
@@ -341,7 +342,15 @@ export function renderChatComposer(props: ChatComposerProps) {
           state.slashMenuArgItems,
           props.paneId,
           requestUpdate,
-          (arg, submit) => selectSlashArg(arg, props, requestUpdate, submit),
+          (arg, submit) => {
+            if (submit) {
+              runClaimedChatSubmissionAction(event, (submissionId) =>
+                selectSlashArg(arg, props, requestUpdate, true, submissionId),
+              );
+            } else {
+              selectSlashArg(arg, props, requestUpdate, false);
+            }
+          },
           scrollActiveSlashMenuOptionIntoView,
         )
       ) {
@@ -357,10 +366,15 @@ export function renderChatComposer(props: ChatComposerProps) {
           state.slashMenuItems,
           props.paneId,
           requestUpdate,
-          (command, submit) =>
-            submit
-              ? selectSlashCommand(command, props, requestUpdate)
-              : tabCompleteSlashCommand(command, props, requestUpdate),
+          (command, submit) => {
+            if (submit) {
+              runClaimedChatSubmissionAction(event, (submissionId) =>
+                selectSlashCommand(command, props, requestUpdate, submissionId),
+              );
+            } else {
+              tabCompleteSlashCommand(command, props, requestUpdate);
+            }
+          },
           scrollActiveSlashMenuOptionIntoView,
         )
       ) {
@@ -403,10 +417,12 @@ export function renderChatComposer(props: ChatComposerProps) {
         return;
       }
       event.preventDefault();
-      const target = event.target as HTMLTextAreaElement;
-      commitComposerDraft(props, target.value);
-      props.onSend();
-      syncComposerDraftAfterSend(target);
+      runClaimedChatSubmissionAction(event, (submissionId) => {
+        const target = event.target as HTMLTextAreaElement;
+        commitComposerDraft(props, target.value);
+        props.onSend(submissionId);
+        syncComposerDraftAfterSend(target);
+      });
     }
   };
 
@@ -483,7 +499,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
     props.onTypingChange?.(false);
   };
-  const handleSend = () => {
+  const handleSend = (submissionId: string) => {
     const draft = state.composerTextarea?.value ?? props.draft;
     if (!canSubmitDraft(draft)) {
       return;
@@ -492,20 +508,16 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
-    props.onSend();
+    props.onSend(submissionId);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
-  const handleVoicePrimaryAction = () => {
-    if (props.realtimeTalkActive) {
+  const handleVoicePrimaryAction = (action: Event) => {
+    const liveDraft = state.composerTextarea?.value ?? visibleDraft;
+    if (props.realtimeTalkActive || (!liveDraft.trim() && !props.attachments?.length)) {
       props.onToggleRealtimeTalk?.();
       return;
     }
-    const liveDraft = state.composerTextarea?.value ?? visibleDraft;
-    if (liveDraft.trim() || props.attachments?.length) {
-      handleSend();
-      return;
-    }
-    props.onToggleRealtimeTalk?.();
+    runClaimedChatSubmissionAction(action, handleSend);
   };
   const openMicrophonePicker = () => {
     if (state.microphonePickerOpen) {

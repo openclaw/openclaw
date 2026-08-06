@@ -639,8 +639,11 @@ export async function deliverChatQueueItem(
       if (typeof parked === "string") {
         drainResult = parked;
         if (parked === "pending" && outbox.queue[0]?.id !== item.id) {
-          // Reconcile older restored rows without delaying this turn's active-run policy.
-          void scheduleOutboxDrain(host, outbox, chatOutboxDrainDependencies);
+          // Preserve this live admission while FIFO finishes the older in-flight row.
+          void scheduleOutboxDrain(host, outbox, chatOutboxDrainDependencies, item.id, {
+            ...sendOptions,
+            pendingSettings: undefined,
+          });
         }
       }
     }
