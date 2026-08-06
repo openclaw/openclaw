@@ -876,6 +876,42 @@ describe("media-understanding runtime", () => {
     expect(extractOptions?.agentDir).toBe("/tmp/agent");
   });
 
+  it("defaults structured extraction to the configured agent directory", async () => {
+    // An empty agentDir resolves to process.cwd() downstream, which matches no
+    // configured prepared-model-runtime owner inside a gateway. Callers that
+    // omit it -- Logbook's frame analysis among them -- must land on the
+    // configured default instead, the same as direct image description does.
+    const extractStructured = vi.fn(async () => ({
+      text: "{}",
+      parsed: {},
+      model: "vision-json",
+      provider: "vision-plugin",
+      contentType: "json" as const,
+    }));
+    mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin", extractStructured });
+
+    await extractStructuredWithModel({
+      input: [
+        {
+          type: "image",
+          buffer: Buffer.from("image-bytes"),
+          fileName: "fact.png",
+          mime: "image/png",
+        },
+      ],
+      instructions: "Return JSON.",
+      provider: "vision-plugin",
+      model: "vision-json",
+      cfg: {
+        agents: { list: [{ id: "main", agentDir: "/tmp/main-agent" }] },
+      } as OpenClawConfig,
+    });
+
+    expect(extractStructured).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/main-agent" }),
+    );
+  });
+
   it("caps explicit structured extraction timeouts before provider execution", async () => {
     const extractStructured = vi.fn(async () => ({
       text: "{}",

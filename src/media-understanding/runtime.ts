@@ -379,7 +379,14 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
     authStore: params.authStore,
     timeoutMs,
     cfg: params.cfg,
-    agentDir: params.agentDir ?? "",
+    // Fall back to the configured default agent directory, the way
+    // describePreparedImageWithModel already does. An empty string resolves to
+    // process.cwd(), and a long-lived gateway only holds prepared-model-runtime
+    // owners for its *configured* agent directories -- so cwd matches none of
+    // them and the model call fails with "prepared model runtime owner was not
+    // committed after replacement for <cwd>". Callers that omit agentDir are the
+    // norm here: Logbook's frame analysis is one.
+    agentDir: params.agentDir || resolveDefaultAgentDir(params.cfg),
   });
 }
 
