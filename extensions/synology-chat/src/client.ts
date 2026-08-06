@@ -9,13 +9,11 @@ import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sd
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import {
-  formatErrorMessage,
-  resolvePinnedHostnameWithPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { z } from "zod";
+import type { SynologyHostedMediaUrl } from "./outbound-media.js";
 
 const MIN_SEND_INTERVAL_MS = 500;
 export const SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT = 2_000;
@@ -144,17 +142,16 @@ async function sendMessageChunk(
 }
 
 /**
- * Send a file URL to Synology Chat.
+ * Send an OpenClaw-hosted immutable file URL to Synology Chat.
  */
-export async function sendFileUrl(
+export async function sendHostedFileUrl(
   incomingUrl: string,
-  fileUrl: string,
+  fileUrl: SynologyHostedMediaUrl,
   userId?: string | number,
   allowInsecureSsl = false,
 ): Promise<boolean> {
   try {
-    const safeFileUrl = await assertSafeWebhookFileUrl(fileUrl);
-    const body = buildWebhookBody({ file_url: safeFileUrl }, userId);
+    const body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
 
     await waitForSendSlot();
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
@@ -285,7 +282,7 @@ async function waitForSendSlot(): Promise<void> {
   await next;
 }
 
-async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+function assertHostedMediaUrl(fileUrl: SynologyHostedMediaUrl): string {
   let parsed: URL;
   try {
     parsed = new URL(fileUrl);
@@ -293,11 +290,17 @@ async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
     throw new Error(`Invalid Synology Chat file URL: ${formatErrorMessage(err)}`, { cause: err });
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Synology Chat file URL must use HTTP or HTTPS");
+  if (
+    parsed.protocol !== "https:" ||
+    !parsed.hostname ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash
+  ) {
+    throw new Error(
+      "Synology Chat hosted attachment URL must use HTTPS without credentials or a fragment",
+    );
   }
-
-  await resolvePinnedHostnameWithPolicy(parsed.hostname);
   return parsed.toString();
 }
 
