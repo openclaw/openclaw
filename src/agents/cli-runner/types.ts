@@ -49,6 +49,7 @@ import type {
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
+import type { AgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -222,6 +223,8 @@ export type RunCliAgentParams = {
   };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
+  /** Presents an OpenClaw ask_user prompt for bundle-MCP CLI runtimes. */
+  onAskUserPrompt?: (payload: AgentHarnessQuestionPromptPayload) => Promise<void> | void;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;

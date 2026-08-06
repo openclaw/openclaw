@@ -28,7 +28,7 @@ export type AgentHarnessUserInputPromptOptions = {
   presentation?: MessagePresentation;
 };
 
-type AgentHarnessQuestionPromptPayload = {
+export type AgentHarnessQuestionPromptPayload = {
   text: string;
   presentation?: MessagePresentation;
   presentationTextMode?: "fallback";

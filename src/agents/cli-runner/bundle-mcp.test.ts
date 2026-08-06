@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createMcpLoopbackServerConfig } from "../../gateway/mcp-http.loopback-runtime.js";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import {
@@ -105,6 +106,34 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
     expect(prepared.mcpResumeHash).toMatch(/^[0-9a-f]{64}$/);
 
+    await prepared.cleanup?.();
+  });
+
+  it("preserves the loopback tool timeout through Claude capture config rewriting", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-timeout-",
+    );
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir,
+      config: { plugins: { enabled: false } },
+      additionalConfig: createMcpLoopbackServerConfig(23119),
+    });
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+
+    await prepareCliBundleMcpCaptureAttempt({
+      mode: "claude-config-file",
+      backend: prepared.backend,
+      env: prepared.env,
+      captureKey: "capture-timeout",
+    });
+
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, { timeout?: number }>;
+    };
+    expect(raw.mcpServers?.openclaw?.timeout).toBe(3_610_000);
     await prepared.cleanup?.();
   });
 

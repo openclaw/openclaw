@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createMcpLoopbackServerConfig } from "../../gateway/mcp-http.loopback-runtime.js";
 import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 describe("prepareCliBundleMcpConfig gemini", () => {
@@ -77,6 +78,26 @@ describe("prepareCliBundleMcpConfig gemini", () => {
     expect(raw.tools?.exclude).toEqual(["google_web_search"]);
 
     await prepared.cleanup?.();
+  });
+
+  it("keeps the Claude request timeout out of Gemini loopback settings", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "gemini-system-settings",
+      backend: { command: "gemini" },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-gemini-timeout",
+      config: { plugins: { enabled: false } },
+      additionalConfig: createMcpLoopbackServerConfig(23119),
+    });
+
+    try {
+      const raw = JSON.parse(
+        await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
+      ) as { mcpServers?: Record<string, { timeout?: number }> };
+      expect(raw.mcpServers?.openclaw?.timeout).toBeUndefined();
+    } finally {
+      await prepared.cleanup?.();
+    }
   });
 
   it("translates user mcp.servers transport fields in Gemini system settings", async () => {

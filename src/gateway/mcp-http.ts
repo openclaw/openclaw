@@ -401,8 +401,9 @@ async function startMcpLoopbackServer(port = 0): Promise<{
               signal: requestAbort.signal,
               authorizeToolCall,
               onToolCallPrepared: cliCaptureHandle
-                ? ({ toolName: preparedToolName, args }) => {
+                ? ({ toolCallId, toolName: preparedToolName, args }) => {
                     updateMcpLoopbackToolCallCapture(cliCaptureHandle, {
+                      toolCallId,
                       toolName: preparedToolName,
                       args,
                     });

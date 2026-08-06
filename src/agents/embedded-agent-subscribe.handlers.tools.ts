@@ -89,7 +89,6 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
-import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
 import { readMcpAppChannelView } from "./mcp-ui-resource.js";
 import type { AgentEvent } from "./runtime/index.js";
 import {
@@ -100,13 +99,8 @@ import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
-import {
-  cancelAskUserPromptDelivery,
-  normalizeAskUserParams,
-  reserveAskUserPromptDelivery,
-  settleAskUserPromptDelivery,
-  waitForAskUserPromptReady,
-} from "./tools/ask-user-tool.js";
+import { reserveAskUserPrompt } from "./tools/ask-user-prompt-delivery.js";
+import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
@@ -153,31 +147,6 @@ function readUpdatePlanResult(
   const steps = normalizeAgentPlanSteps(details.plan) ?? [];
   const explanation = readStringValue(details.explanation);
   return { ...(explanation ? { explanation } : {}), steps };
-}
-
-function buildAskUserPromptPayload(
-  toolCallId: string,
-  sessionKey: string | undefined,
-  runId: string,
-  args: unknown,
-) {
-  try {
-    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId,
-      sessionKey,
-      runId,
-      questions,
-      timeoutSeconds,
-    });
-    if (!reservation) {
-      return undefined;
-    }
-    return reservation;
-  } catch {
-    // Argument validation owns malformed calls; do not deliver an unusable prompt first.
-    return undefined;
-  }
 }
 
 function isMiddlewareToolResultError(result: unknown): boolean {
@@ -1004,12 +973,19 @@ export function handleToolExecutionStart(
   const startToolName = normalizeToolName(evt.toolName);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
+      ? reserveAskUserPrompt({
+          toolCallId: evt.toolCallId,
+          sessionKey: ctx.params.sessionKey,
+          runId: ctx.params.runId,
+          args: evt.args,
+          deliver: ctx.params.onToolResult,
+          onDeliveryError: (error) => {
+            ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
+          },
+        })
       : undefined;
   const cancelAskUserPromptReservation = () => {
-    if (askUserPromptReservation) {
-      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId);
-    }
+    askUserPromptReservation?.cancel();
   };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     let onBlockReplyFlushResult: void | Promise<void>;
@@ -1242,36 +1218,7 @@ export function handleToolExecutionStart(
         }
       }
     }
-
-    if (toolName === "ask_user" && ctx.params.onToolResult) {
-      const payload = askUserPromptReservation;
-      if (payload) {
-        const questionId = payload.questionId;
-        void waitForAskUserPromptReady(questionId)
-          .then((questions) => {
-            if (!questions) {
-              return;
-            }
-            return ctx.params.onToolResult?.(
-              buildAgentHarnessQuestionPromptPayload({
-                questionId,
-                questions: questions.map(({ questionId: id, ...question }) => ({
-                  ...question,
-                  id,
-                })),
-                options: { intro: "Question for you:" },
-              }),
-            );
-          })
-          .then(
-            () => settleAskUserPromptDelivery(questionId),
-            (error: unknown) => {
-              settleAskUserPromptDelivery(questionId, error);
-              ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
-            },
-          );
-      }
-    }
+    askUserPromptReservation?.deliver();
   };
 
   // Flush pending block replies to preserve message boundaries before tool execution.

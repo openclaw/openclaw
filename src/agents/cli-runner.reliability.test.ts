@@ -1538,6 +1538,7 @@ describe("runCliAgent reliability", () => {
         throw new Error("Expected internal source reply capture");
       }
       updateMcpLoopbackToolCallCapture(captureHandle, {
+        toolCallId: "mcp-pending-internal-source-reply",
         toolName: "message",
         args: {
           action: "send",
@@ -1597,6 +1598,7 @@ describe("runCliAgent reliability", () => {
         throw new Error("Expected external session reply capture");
       }
       updateMcpLoopbackToolCallCapture(captureHandle, {
+        toolCallId: "mcp-pending-external-session-reply",
         toolName: "message",
         args: {
           action: "send",
@@ -1681,6 +1683,7 @@ describe("runCliAgent reliability", () => {
         throw new Error("Expected message delivery capture");
       }
       updateMcpLoopbackToolCallCapture(captureHandle, {
+        toolCallId: "mcp-possibly-sent",
         toolName: "message",
         args: {
           action: "send",
@@ -1840,6 +1843,7 @@ describe("runCliAgent reliability", () => {
         },
       });
       updateMcpLoopbackToolCallCapture(captureHandle, {
+        toolCallId: "mcp-dry-run-preview",
         toolName: "message",
         args: {
           action: "send",

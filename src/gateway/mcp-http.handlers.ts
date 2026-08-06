@@ -72,7 +72,11 @@ export async function handleMcpJsonRpc(params: {
       args: Record<string, unknown>;
     } & McpLoopbackToolCallOutcome,
   ) => void;
-  onToolCallPrepared?: (call: { toolName: string; args: Record<string, unknown> }) => void;
+  onToolCallPrepared?: (call: {
+    toolCallId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+  }) => void;
 }): Promise<object | null> {
   const { id, method, params: methodParams } = params.message;
 
@@ -188,7 +192,7 @@ export async function handleMcpJsonRpc(params: {
           hookResult.params;
         executedToolArgs = finalizedToolArgs as Record<string, unknown>;
         try {
-          params.onToolCallPrepared?.({ toolName, args: executedToolArgs });
+          params.onToolCallPrepared?.({ toolCallId, toolName, args: executedToolArgs });
         } catch {
           // Observability callbacks must never alter the tool result returned to the MCP client.
         }

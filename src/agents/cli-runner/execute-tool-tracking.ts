@@ -25,6 +25,10 @@ import {
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
 } from "../embedded-agent-subscribe.tools.js";
+import {
+  reserveAskUserPrompt,
+  type AskUserPromptDeliveryReservation,
+} from "../tools/ask-user-prompt-delivery.js";
 import { rotateClaudeLiveMcpCaptureKeyForContext } from "./claude-live-session.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
@@ -70,6 +74,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
+  const askUserPromptReservations = new Map<string, AskUserPromptDeliveryReservation>();
   const pendingMessagingCalls = new Map<
     string,
     { toolName: string; args: Record<string, unknown>; target?: MessagingToolSend }
@@ -355,6 +360,22 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         return matched?.[0];
       },
       onToolCallUpdate: ({ previous, current }) => {
+        if (
+          normalizeCliMessagingToolName(current.toolName) === "ask_user" &&
+          context.params.onAskUserPrompt
+        ) {
+          const reservation = reserveAskUserPrompt({
+            toolCallId: current.toolCallId,
+            sessionKey: context.params.sessionKey,
+            runId: context.params.runId,
+            args: current.args,
+            deliver: context.params.onAskUserPrompt,
+          });
+          if (reservation) {
+            askUserPromptReservations.set(current.toolCallId, reservation);
+            reservation.deliver();
+          }
+        }
         const candidates = cliLoopbackCalls.filter((candidate) =>
           matchesCliLoopbackCall(previous.toolName, previous.args, candidate.current),
         );
@@ -378,6 +399,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         }
       },
       onToolCallFinish: (call, { prepared }) => {
+        if ("toolCallId" in call) {
+          askUserPromptReservations.get(call.toolCallId)?.cancel();
+          askUserPromptReservations.delete(call.toolCallId);
+        }
         const isDelivery = prepared
           ? isPreparedDelivery(call.toolName, call.args)
           : isPotentialDelivery(call.toolName);

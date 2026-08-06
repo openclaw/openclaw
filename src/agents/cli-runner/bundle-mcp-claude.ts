@@ -4,7 +4,28 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import { withOpenClawMcpCaptureHeader } from "./bundle-mcp-runtime.js";
+
+const CLAUDE_MCP_TOOL_CALL_TIMEOUT_MS = 3_610_000;
+
+/** Give Claude's external MCP request enough time for ask_user's maximum wait plus RPC grace. */
+export function applyClaudeLoopbackToolTimeout(config: BundleMcpConfig): BundleMcpConfig {
+  const server = config.mcpServers.openclaw;
+  if (
+    !server ||
+    typeof server.url !== "string" ||
+    !/^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d+\/mcp$/.test(server.url.trim())
+  ) {
+    return config;
+  }
+  return {
+    mcpServers: {
+      ...config.mcpServers,
+      openclaw: { ...server, timeout: CLAUDE_MCP_TOOL_CALL_TIMEOUT_MS },
+    },
+  };
+}
 
 /** Find existing Claude `--mcp-config` argument values. */
 export function findClaudeMcpConfigPaths(args?: string[]): string[] {

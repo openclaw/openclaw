@@ -1,5 +1,6 @@
 /** Tests Codex CLI bundle-MCP config override generation. */
 import { describe, expect, it } from "vitest";
+import { createMcpLoopbackServerConfig } from "../../gateway/mcp-http.loopback-runtime.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 describe("prepareCliBundleMcpConfig codex", () => {
@@ -81,5 +82,20 @@ describe("prepareCliBundleMcpConfig codex", () => {
       'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", default_tools_approval_mode = "approve", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY", x-openclaw-cli-capture-key = "OPENCLAW_MCP_CLI_CAPTURE_KEY" } } }',
     ]);
     expect(prepared.cleanup).toBeUndefined();
+  });
+
+  it("keeps the Claude request timeout out of Codex loopback overrides", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "codex-config-overrides",
+      backend: { command: "codex", args: ["exec"] },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-codex-timeout",
+      config: { plugins: { enabled: false } },
+      additionalConfig: createMcpLoopbackServerConfig(23119),
+    });
+
+    expect(prepared.backend.args?.find((arg) => arg.startsWith("mcp_servers="))).not.toContain(
+      "timeout",
+    );
   });
 });

@@ -409,6 +409,7 @@ export async function runCliFallbackCandidate(params: {
             toolsAllow: turn.opts?.toolsAllow,
             disableTools: turn.opts?.disableTools,
             abortSignal: params.runAbortSignal,
+            onAskUserPrompt: turn.opts?.onToolResult,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,
           },
