@@ -24,9 +24,18 @@ export const execSchema = Type.Object({
     }),
   ),
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
+  timeoutSeconds: Type.Optional(
+    Type.Number({
+      description: "Timeout in SECONDS; kills process on expiry. Takes precedence over timeout.",
+    }),
+  ),
+  // Deprecated alias for timeoutSeconds. The bare name is unit-ambiguous: the
+  // sibling field above is milliseconds, and the process tool's identically
+  // named `timeout` is also milliseconds, so a caller seeing only the field
+  // name has no way to tell them apart. Kept for compatibility.
   timeout: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds; kills process on expiry.",
+      description: "Deprecated alias for timeoutSeconds. Timeout in SECONDS (not milliseconds).",
     }),
   ),
   pty: Type.Optional(
@@ -65,6 +74,7 @@ export const nodeExecSchema = Type.Object({
   command: execSchema.properties.command,
   workdir: execSchema.properties.workdir,
   env: execSchema.properties.env,
+  timeoutSeconds: execSchema.properties.timeoutSeconds,
   timeout: execSchema.properties.timeout,
   host: optionalStringEnum(["node"] as const, {
     description: "Exec target. Only node is available on this tool surface.",

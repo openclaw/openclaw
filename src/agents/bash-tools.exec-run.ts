@@ -62,6 +62,22 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 
+/**
+ * Resolve the exec timeout in seconds.
+ *
+ * `timeoutSeconds` is canonical; `timeout` is a deprecated alias kept for
+ * compatibility. The bare `timeout` name is unit-ambiguous - the sibling
+ * `yieldMs` field is milliseconds and the process tool's identically named
+ * `timeout` is also milliseconds - so callers that see only field names
+ * (for example code mode, which defers descriptions) cannot tell them apart.
+ */
+export function resolveExecTimeoutSeconds(params: {
+  timeoutSeconds?: number;
+  timeout?: number;
+}): number | undefined {
+  return typeof params.timeoutSeconds === "number" ? params.timeoutSeconds : params.timeout;
+}
+
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
@@ -421,7 +437,7 @@ export function createExecTool(
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
-            timeoutSec: params.timeout,
+            timeoutSec: resolveExecTimeoutSeconds(params),
             defaultTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
@@ -444,7 +460,7 @@ export function createExecTool(
             pathPrepend: defaultPathPrepend,
             requestedEnv,
             pty: params.pty === true && !sandbox,
-            timeoutSec: params.timeout,
+            timeoutSec: resolveExecTimeoutSeconds(params),
             defaultTimeoutSec,
             security,
             ask,
@@ -499,7 +515,9 @@ export function createExecTool(
           warnings.push(foregroundFallbackWarning);
         }
 
-        const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+        const resolvedTimeoutSec = resolveExecTimeoutSeconds(params);
+        const explicitTimeoutSec =
+          typeof resolvedTimeoutSec === "number" ? resolvedTimeoutSec : null;
         effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 
