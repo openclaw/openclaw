@@ -56,27 +56,12 @@ import {
 } from "./bash-tools.exec-task-tracking.js";
 import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
+import { resolveExecTimeoutSeconds } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
-
-/**
- * Resolve the exec timeout in seconds.
- *
- * `timeoutSeconds` is canonical; `timeout` is a deprecated alias kept for
- * compatibility. The bare `timeout` name is unit-ambiguous - the sibling
- * `yieldMs` field is milliseconds and the process tool's identically named
- * `timeout` is also milliseconds - so callers that see only field names
- * (for example code mode, which defers descriptions) cannot tell them apart.
- */
-export function resolveExecTimeoutSeconds(params: {
-  timeoutSeconds?: number;
-  timeout?: number;
-}): number | undefined {
-  return typeof params.timeoutSeconds === "number" ? params.timeoutSeconds : params.timeout;
-}
 
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(

@@ -7,27 +7,36 @@
  * canonical field carries its unit. These tests pin that contract.
  */
 import { describe, expect, it } from "vitest";
-import { resolveExecTimeoutSeconds } from "./bash-tools.exec-run.js";
-import { execSchema, nodeExecSchema, processSchema } from "./bash-tools.schemas.js";
+import {
+  execSchema,
+  nodeExecSchema,
+  processSchema,
+  resolveExecTimeoutSeconds,
+} from "./bash-tools.schemas.js";
+
+/** TypeBox optional wrappers do not surface `description` on their static type. */
+function describedAs(schema: unknown): string {
+  return String((schema as { description?: unknown } | undefined)?.description ?? "");
+}
 
 describe("exec timeout unit naming", () => {
   it("exposes a unit-bearing timeoutSeconds field", () => {
     const field = execSchema.properties.timeoutSeconds;
     expect(field).toBeDefined();
-    expect(String(field?.description)).toMatch(/SECONDS/);
+    expect(describedAs(field)).toMatch(/SECONDS/);
   });
 
   it("keeps timeout as a deprecated alias that still documents its unit", () => {
     const legacy = execSchema.properties.timeout;
     expect(legacy).toBeDefined();
-    expect(String(legacy?.description)).toMatch(/[Dd]eprecated/);
-    expect(String(legacy?.description)).toMatch(/SECONDS/);
+    expect(describedAs(legacy)).toMatch(/[Dd]eprecated/);
+    expect(describedAs(legacy)).toMatch(/SECONDS/);
   });
 
   it("documents that the process tool's timeout is a different unit", () => {
     // The collision this change exists to disambiguate: same field name,
     // different unit, in two tools used together in one workflow.
-    expect(String(processSchema.properties.timeout?.description)).toMatch(/millisecond/i);
+    expect(describedAs(processSchema.properties.timeout)).toMatch(/millisecond/i);
   });
 
   it("exposes timeoutSeconds on the node-only exec surface too", () => {

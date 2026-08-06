@@ -107,3 +107,19 @@ export const processSchema = Type.Object({
     }),
   ),
 });
+
+/**
+ * Resolve the exec timeout in seconds.
+ *
+ * `timeoutSeconds` is canonical; `timeout` is a deprecated alias kept for
+ * compatibility. The bare `timeout` name is unit-ambiguous - the sibling
+ * `yieldMs` field is milliseconds and the process tool's identically named
+ * `timeout` is also milliseconds - so callers that see only field names
+ * (for example code mode, which defers descriptions) cannot tell them apart.
+ */
+export function resolveExecTimeoutSeconds(params: {
+  timeoutSeconds?: number;
+  timeout?: number;
+}): number | undefined {
+  return typeof params.timeoutSeconds === "number" ? params.timeoutSeconds : params.timeout;
+}
