@@ -548,11 +548,47 @@ describe("createSessionVisibilityGuard", () => {
     });
   });
 
-  it("preserves cross-agent policy denials when the spawned lookup fails", async () => {
-    // A failed spawned ownership lookup must not relabel a deterministic
-    // cross-agent denial as retryable: retrying the lookup cannot make a known
-    // `agent:other:*` target eligible, so the cross-visibility refusal is
-    // preserved as-is (review P2: preserve cross-agent policy denials).
+  it("preserves cross-agent policy denials after a successful empty ownership lookup", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async () => ({ sessions: [] })) as never,
+    });
+    try {
+      const guard = await createSessionVisibilityGuard({
+        action: "history",
+        requesterSessionKey: "agent:main:main",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      });
+
+      expect(guard.check("agent:other:main")).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+      });
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
+  });
+
+  it.each([
+    {
+      name: "cross-agent ACP child",
+      target: "agent:codex:acp:child-1",
+      error:
+        "Session history denied because spawned-session ownership lookup failed (transient); retry the operation.",
+    },
+    {
+      name: "malformed agent key",
+      target: "agent:",
+      error: "Session history denied because target agent ownership is unavailable.",
+    },
+    {
+      name: "unscoped alias without a default agent",
+      target: "main",
+      error: "Session history denied because target agent ownership is unavailable.",
+    },
+  ])("handles $name when the ownership lookup fails", async ({ target, error }) => {
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async () => {
         throw new GatewayClientRequestError({
@@ -570,16 +606,11 @@ describe("createSessionVisibilityGuard", () => {
         a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
       });
 
-      const result = guard.check("agent:other:main");
-      expect(result).toEqual({
+      expect(guard.check(target)).toEqual({
         allowed: false,
         status: "forbidden",
-        error:
-          "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+        error,
       });
-      // The cross-agent refusal must not be relabeled as a retryable lookup failure.
-      expect(result.allowed ? "" : result.error).not.toMatch(/retry/i);
-      expect(result.allowed ? "" : result.error).not.toMatch(/ownership lookup failed/i);
     } finally {
       sessionsResolutionTesting.setDepsForTest();
     }
@@ -589,9 +620,6 @@ describe("createSessionVisibilityGuard", () => {
     loggerMocks.logWarn.mockClear();
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async () => {
-        // A retryable request-level transport failure must surface the
-        // "transient; retry" denial so callers can distinguish it from a
-        // genuine policy refusal (review P1: classify before prescribing retry).
         throw new GatewayClientRequestError({
           code: "UNAVAILABLE",
           message: "transport timeout Authorization: Bearer sk-evidence-secret-9f3a2c",
@@ -608,7 +636,6 @@ describe("createSessionVisibilityGuard", () => {
       });
 
       const result = guard.check("agent:main:subagent:child-1");
-      // Fail-closed: still denied, but distinguishable from a policy denial.
       expect(result.allowed).toBe(false);
       expect(result).toMatchObject({
         status: "forbidden",
@@ -617,9 +644,7 @@ describe("createSessionVisibilityGuard", () => {
         expect(result.error).toMatch(/ownership lookup failed/i);
         expect(result.error).toMatch(/transient\); retry/i);
       }
-      // The warn log must carry the requester key and the underlying error, but
-      // sensitive text inside the error must go through the repository's
-      // redacting formatter (P1 security finding).
+      // Diagnostics identify the requester without leaking sensitive error text.
       const warnText = loggerMocks.logWarn.mock.calls.map((call) => String(call[0])).join("\n");
       expect(warnText).toContain("requester=agent:main:main");
       expect(warnText).not.toContain("sk-evidence-secret-9f3a2c");
@@ -629,10 +654,6 @@ describe("createSessionVisibilityGuard", () => {
   });
 
   it("classifies a permanent credential lookup failure as non-retryable under tree visibility", async () => {
-    // A credentials/configuration failure surfaces before a socket is opened
-    // and will not recover through retry, so the guard must NOT prescribe retry
-    // (review P1: classify before prescribing retry). The denial still
-    // fail-closes.
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async () => {
         throw new GatewayCredentialsRequiredError({
@@ -728,8 +749,7 @@ describe("createSessionVisibilityGuard", () => {
           a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
         });
 
-        // The durable watched-group allowance does not depend on the spawned
-        // lookup; it must survive a failed lookup (P1 regression guard).
+        // Durable watched-group allowance does not depend on spawned ownership lookup.
         expect(guard.check(watchedSessionKey)).toEqual({ allowed: true });
         // A non-watched, non-spawned same-agent target still fails closed, but
         // the denial is distinguishable from a genuine policy denial.

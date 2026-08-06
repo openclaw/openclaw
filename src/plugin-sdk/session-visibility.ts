@@ -327,14 +327,15 @@ function createSessionVisibilityCheckerWithResult(
       spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
     });
     if (!result.allowed) {
-      // Preserve grants that do not depend on spawned ownership; otherwise fail closed with cause.
+      // Valid targets may still be requester-owned; malformed targets keep the row checker's
+      // deterministic ownership error instead of being relabeled as a lookup failure.
       const lookupFailed =
         spawnedKeys !== null &&
         !spawnedKeys.ok &&
         params.visibility === "tree" &&
         targetSessionKey !== params.requesterSessionKey &&
         targetSessionKey !== "current" &&
-        !isCrossAgentTarget(params, targetSessionKey);
+        hasResolvableTargetAgent(targetSessionKey, params.defaultAgentId);
       if (lookupFailed) {
         return {
           allowed: false,
@@ -349,38 +350,17 @@ function createSessionVisibilityCheckerWithResult(
   return { check };
 }
 
-/**
- * Whether a direct-key target resolves to a different agent than the requester.
- *
- * Mirrors the row checker's agent resolution so the lookup-failure override can
- * avoid clobbering deterministic cross-agent policy denials: retrying a spawned
- * ownership lookup cannot make a known `agent:other:*` target eligible, so those
- * denials must be preserved as-is instead of being relabeled as retryable lookup
- * failures. Returns true only when the target agent is known and differs.
- */
-function isCrossAgentTarget(
-  params: SessionVisibilityCheckerParams,
+function hasResolvableTargetAgent(
   targetSessionKey: string,
+  defaultAgentId: string | undefined,
 ): boolean {
-  const requesterAgentId =
-    normalizeLowercaseStringOrEmpty(params.requesterAgentId) ||
-    resolveAgentIdFromSessionKey(params.requesterSessionKey, params.defaultAgentId);
-  let targetAgentId: string | undefined;
   try {
-    targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey, params.defaultAgentId);
+    resolveAgentIdFromSessionKey(targetSessionKey, defaultAgentId);
+    return true;
   } catch {
-    // If the target agent cannot be resolved, the row checker has already
-    // returned a deterministic "agent ownership unavailable" denial that does
-    // not depend on spawned ownership; do not relabel it.
+    // The row checker already owns the deterministic target-ownership denial.
     return false;
   }
-  // Both ids are resolved strings here; an empty requester id means the
-  // requester itself is unscoped, in which case the row checker's own denial
-  // already applies and we must not relabel it.
-  if (!requesterAgentId || !targetAgentId) {
-    return false;
-  }
-  return targetAgentId !== requesterAgentId;
 }
 
 /** Create a direct session-key visibility checker for one requester/action pair. */
