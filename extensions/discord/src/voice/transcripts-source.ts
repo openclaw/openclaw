@@ -42,7 +42,7 @@ const resolveDiscordTranscriptsAccountId: NonNullable<
   // Falling back to it only supports direct provider calls that have no config.
   const capableAccountIds = (
     cfg ? configuredVoiceAccountIds : [...managersByAccountId.keys()]
-  ).sort();
+  ).toSorted();
 
   if (requestedAccountId) {
     // A provider can be called directly without config while its manager is starting.
