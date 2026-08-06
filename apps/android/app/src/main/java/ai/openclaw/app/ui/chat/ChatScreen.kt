@@ -1374,6 +1374,7 @@ private fun ChatMessageList(
               messageId = item.message.id,
               entryId = item.message.entryId,
               role = item.message.role,
+              senderLabel = item.message.senderLabel,
               live = false,
               content = item.message.content,
               timestampMs = item.message.timestampMs,
@@ -1420,6 +1421,7 @@ private fun ChatMessageList(
               messageId = null,
               entryId = null,
               role = "assistant",
+              senderLabel = null,
               live = true,
               content = listOf(ChatMessageContent(text = item.text)),
               timestampMs = null,
@@ -1672,6 +1674,7 @@ internal fun ChatBubble(
   messageId: String?,
   entryId: String?,
   role: String,
+  senderLabel: String?,
   live: Boolean,
   content: List<ChatMessageContent>,
   timestampMs: Long?,
@@ -1748,7 +1751,10 @@ internal fun ChatBubble(
             text =
               when {
                 live -> nativeString("OpenClaw · Live")
-                isUser -> nativeString("You")
+                // senderLabel carries the channel member's display name (Slack/Discord/Telegram); it is
+                // raw data, not translatable copy, so it bypasses nativeString and falls back to "You"
+                // for locally-typed operator turns, which never carry a senderLabel.
+                isUser -> senderLabel?.takeIf { it.isNotBlank() } ?: nativeString("You")
                 normalizedRole == "system" -> nativeString("System")
                 else -> nativeString("OpenClaw")
               },

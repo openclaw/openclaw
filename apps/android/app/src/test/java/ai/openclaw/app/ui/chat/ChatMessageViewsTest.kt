@@ -25,6 +25,7 @@ class ChatMessageViewsTest {
           messageId = "managed-image",
           entryId = null,
           role = "assistant",
+          senderLabel = null,
           live = false,
           content =
             listOf(
