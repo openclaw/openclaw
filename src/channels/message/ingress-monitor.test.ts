@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { sleep } from "../../utils/sleep.js";
+import { createChannelIngressError } from "./ingress-errors.js";
 import {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
@@ -484,6 +484,59 @@ describe("channel ingress monitor", () => {
         releaseSettlement();
         await stopping;
       }
+    });
+  });
+
+  it("completes deliveries whose terminal result races a stop abort", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        await new Promise<void>((resolve) => {
+          if (lifecycle.abortSignal.aborted) {
+            resolve();
+            return;
+          }
+          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { kind: "completed" as const };
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-stop-completed", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      // Side effects finished and the channel reported completed; settling the
+      // claim for retry would replay already-delivered work on restart.
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toEqual([]);
+    });
+  });
+
+  it("keeps deferred handoffs with their owner when a stop abort races the return", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        lifecycle.onDeferred();
+        await new Promise<void>((resolve) => {
+          if (lifecycle.abortSignal.aborted) {
+            resolve();
+            return;
+          }
+          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { kind: "deferred" as const };
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-stop-deferred-race", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      // The deferred owner still owns the claim; releasing it for retry would
+      // replay work the owner is completing.
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toHaveLength(1);
     });
   });
 

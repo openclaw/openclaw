@@ -10,9 +10,9 @@ export {
   createChannelIngressDrain,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
 } from "./ingress-drain.js";
+export { createChannelIngressError } from "./ingress-errors.js";
 export {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressError,
   createChannelIngressMonitor,
 } from "./ingress-monitor.js";
 export {
