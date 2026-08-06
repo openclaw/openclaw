@@ -1,5 +1,5 @@
 // Lmstudio plugin module implements models.fetch behavior.
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonArrayFieldResponse,
@@ -299,7 +299,7 @@ export async function ensureLmstudioModelLoaded(params: {
       if (!response.ok) {
         const body = await readResponseTextLimited(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES);
         throw new Error(
-          `LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`,
+          `LM Studio model load failed (${response.status})${body ? `: ${redactToolPayloadText(body)}` : ""}`,
         );
       }
       // Read the success body through the shared byte-capped reader so a misbehaving
