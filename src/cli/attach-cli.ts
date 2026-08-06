@@ -137,9 +137,21 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
         env: { ...process.env, ...grant.env },
       });
 
-      const onSigint = () => {};
+      let forceKillTimer: NodeJS.Timeout | undefined;
+      const onSigint = () => {
+        child.kill("SIGINT");
+        // Escalate to SIGKILL after a grace period so the child
+        // cannot keep the parent alive indefinitely by ignoring SIGINT.
+        forceKillTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+        }, 5_000).unref();
+      };
       const onSigterm = () => child.kill("SIGTERM");
       const finish = (code: number) => {
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = undefined;
+        }
         process.off("SIGINT", onSigint);
         process.off("SIGTERM", onSigterm);
         defaultRuntime.exit(code);

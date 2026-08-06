@@ -214,6 +214,54 @@ describe("openclaw attach (action)", () => {
     expect(process.listenerCount("SIGTERM")).toBe(baseTerm);
   });
 
+  it("forwards SIGINT to the child process", async () => {
+    await runAttach("--session", "agent:main:spawn");
+    const sigintListeners = process.listeners("SIGINT");
+    const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+    handler();
+    expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+    // Cleanup: a healthy child would exit on SIGINT
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
+  });
+
+  it("force-kills the child after a grace period when it ignores SIGINT", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      handler();
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+      // Child survives SIGINT — timer should escalate to SIGKILL
+      vi.advanceTimersByTime(5_000);
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGKILL");
+      // The SIGKILL triggers child exit → revoke + finish
+      spawnedChild.emit("exit", null, "SIGKILL");
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("revokes the grant after the force-kill timer triggers", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      handler();
+      vi.advanceTimersByTime(5_000);
+      spawnedChild.emit("exit", null, "SIGKILL");
+      await vi.runAllTimersAsync();
+      expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
+      expect(exitCode).toBe(128 + 9); // SIGKILL
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("errors on a grant with a non-numeric expiresAtMs instead of crashing on toISOString", async () => {
     vi.mocked(callGateway).mockResolvedValueOnce({
       sessionKey: "agent:main:x",
