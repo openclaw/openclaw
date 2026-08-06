@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { REMOTE_BRIDGE_GATEWAY_STAGING } from "../agents/sandbox/remote-fs-bridge.js";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
 import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
@@ -13,6 +14,8 @@ import {
 
 const sandboxMocks = vi.hoisted(() => ({
   ensureSandboxWorkspaceForSession: vi.fn(),
+  resolveSandboxConfigForAgent: vi.fn(),
+  resolveSandboxContext: vi.fn(),
   assertSandboxPath: vi.fn(),
 }));
 const childProcessMocks = vi.hoisted(() => ({
@@ -118,6 +121,9 @@ async function rootCopyFromForTest({
 
 beforeEach(() => {
   sandboxMocks.ensureSandboxWorkspaceForSession.mockReset();
+  sandboxMocks.resolveSandboxConfigForAgent.mockReset();
+  sandboxMocks.resolveSandboxContext.mockReset();
+  sandboxMocks.resolveSandboxConfigForAgent.mockReturnValue({ backend: "docker" });
   sandboxMocks.assertSandboxPath.mockReset().mockResolvedValue({ resolved: "", relative: "" });
   childProcessMocks.spawn.mockClear();
   fsSafeMocks.rootCopyFrom.mockReset().mockImplementation(rootCopyFromForTest);
@@ -130,6 +136,12 @@ beforeEach(() => {
         maxBytes: options?.maxBytes,
       }),
   }));
+  fsSafeMocks.readLocalFileSafely
+    .mockReset()
+    .mockImplementation(async (params: { filePath: string }) => {
+      const buffer = await fs.readFile(params.filePath);
+      return { buffer, stat: { size: buffer.byteLength } };
+    });
   mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots
     .mockReset()
     .mockReturnValue(["/Users/demo/Library/Messages/Attachments"]);
@@ -151,7 +163,6 @@ async function setupSandboxWorkspace(home: string): Promise<{
   await fs.mkdir(sandboxDir, { recursive: true });
   sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue({
     workspaceDir: sandboxDir,
-    containerWorkdir: "/work",
   });
   return { cfg, workspaceDir, sandboxDir };
 }
@@ -196,6 +207,158 @@ describe("stageSandboxMedia", () => {
       expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
       expect(sessionCtx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
       await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("pdf-bytes");
+    });
+  });
+
+  it("stages managed inbound media into a reused SSH sandbox runtime through the remote filesystem bridge", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const fileName = "report.pdf";
+      await writeInboundMedia(home, fileName, "pdf-bytes");
+      const mediaUri = `media://inbound/${fileName}`;
+      const writeFile = vi.fn().mockResolvedValue(undefined);
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue({
+        workspaceDir: sandboxDir,
+      });
+      sandboxMocks.resolveSandboxConfigForAgent.mockReturnValue({ backend: "ssh" });
+      sandboxMocks.resolveSandboxContext.mockResolvedValue({
+        workspaceDir: sandboxDir,
+        backendId: "ssh",
+        fsBridge: {
+          writeFile,
+          mkdirp: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+      ctx.media = [{ ...ctx.media?.[0], contentType: "application/pdf" }];
+      sessionCtx.media = ctx.media;
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = `media/inbound/${fileName}`;
+      expect(result.staged.get(0)).toBe(stagedPath);
+      expect(ctx.media?.[0]?.path).toBe(stagedPath);
+      expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
+      expect(writeFile).toHaveBeenCalledTimes(1);
+      const writeCall = writeFile.mock.calls[0]?.[0];
+      expect(writeCall).toMatchObject({
+        filePath: stagedPath,
+        mkdir: true,
+      });
+      expect(writeCall?.gatewayStaging).toBe(REMOTE_BRIDGE_GATEWAY_STAGING);
+      expect(Buffer.isBuffer(writeCall?.data)).toBe(true);
+      expect(writeCall?.data.toString("utf8")).toBe("pdf-bytes");
+      // Remote-canonical backends must not leave the attachment in the
+      // gateway-local workspace.
+      await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).rejects.toThrow();
+    });
+  });
+
+  it("rejects oversized inbound media before writing through the remote bridge", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const writeFile = vi.fn().mockResolvedValue(undefined);
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue({
+        workspaceDir: sandboxDir,
+      });
+      sandboxMocks.resolveSandboxConfigForAgent.mockReturnValue({ backend: "ssh" });
+      sandboxMocks.resolveSandboxContext.mockResolvedValue({
+        workspaceDir: sandboxDir,
+        backendId: "ssh",
+        fsBridge: {
+          writeFile,
+          mkdirp: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+      const oversized = join(home, ".openclaw", "media", "inbound", "oversized.bin");
+      await fs.mkdir(dirname(oversized), { recursive: true });
+      await fs.writeFile(oversized, Buffer.alloc(MEDIA_MAX_BYTES + 1, 0x61));
+      fsSafeMocks.readLocalFileSafely.mockRejectedValue(
+        new fsSafeMocks.FsSafeError("too-large", "file exceeds limit"),
+      );
+      const { ctx, sessionCtx } = createSandboxMediaContexts("media://inbound/oversized.bin");
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      expect(result.staged).toEqual(new Map());
+      expect(writeFile).not.toHaveBeenCalled();
+      expect(ctx.media?.[0]?.path).toBe("media://inbound/oversized.bin");
+    });
+  });
+
+  it("stages through the remote bridge only for OpenShell remote mode, keeping mirror mode local", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const fileName = "report.pdf";
+      await writeInboundMedia(home, fileName, "pdf-bytes");
+      const mediaUri = `media://inbound/${fileName}`;
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue({
+        workspaceDir: sandboxDir,
+      });
+      sandboxMocks.resolveSandboxConfigForAgent.mockReturnValue({ backend: "openshell" });
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+      ctx.media = [{ ...ctx.media?.[0], contentType: "application/pdf" }];
+      sessionCtx.media = ctx.media;
+
+      // OpenShell remote mode owns a remote workspace: stage via the bridge.
+      const remoteWriteFile = vi.fn().mockResolvedValue(undefined);
+      sandboxMocks.resolveSandboxContext.mockResolvedValue({
+        workspaceDir: sandboxDir,
+        backend: { mode: "remote" },
+        fsBridge: { writeFile: remoteWriteFile, mkdirp: vi.fn().mockResolvedValue(undefined) },
+      });
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+      expect(remoteWriteFile).toHaveBeenCalledTimes(1);
+      expect(remoteWriteFile.mock.calls[0]?.[0]).toMatchObject({
+        filePath: `media/inbound/${fileName}`,
+        mkdir: true,
+      });
+      expect(remoteWriteFile.mock.calls[0]?.[0]?.gatewayStaging).toBe(
+        REMOTE_BRIDGE_GATEWAY_STAGING,
+      );
+
+      // OpenShell mirror mode (the default) is locally canonical: keep the
+      // local staging path and never touch the mirror bridge before the
+      // attachment is acknowledged.
+      const mirrorWriteFile = vi.fn().mockResolvedValue(undefined);
+      sandboxMocks.resolveSandboxContext.mockResolvedValue({
+        workspaceDir: sandboxDir,
+        backend: { mode: "mirror" },
+        fsBridge: { writeFile: mirrorWriteFile, mkdirp: vi.fn().mockResolvedValue(undefined) },
+      });
+      const { ctx: mirrorCtx, sessionCtx: mirrorSessionCtx } = createSandboxMediaContexts(mediaUri);
+      mirrorCtx.media = [{ ...mirrorCtx.media?.[0], contentType: "application/pdf" }];
+      mirrorSessionCtx.media = mirrorCtx.media;
+      const mirrorResult = await stageSandboxMedia({
+        ctx: mirrorCtx,
+        sessionCtx: mirrorSessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+      expect(mirrorWriteFile).not.toHaveBeenCalled();
+      expect(mirrorResult.staged.get(0)).toBe(`media/inbound/${fileName}`);
+      await expect(
+        fs.readFile(join(sandboxDir, "media", "inbound", fileName), "utf8"),
+      ).resolves.toBe("pdf-bytes");
     });
   });
 
@@ -393,6 +556,35 @@ describe("stageSandboxMedia", () => {
       expect(ctx.media[blockedIndex]).toMatchObject({ path: blockedPath });
       expect(ctx.media[blockedIndex]).not.toHaveProperty("workspaceDir");
       expect(sessionCtx.media).toEqual(ctx.media);
+    });
+  });
+
+  it("does not provision the full sandbox context when staging for a local backend", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const fileName = "report.pdf";
+      await writeInboundMedia(home, fileName, "pdf-bytes");
+      const mediaUri = `media://inbound/${fileName}`;
+      sandboxMocks.resolveSandboxConfigForAgent.mockReturnValue({ backend: "docker" });
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+      ctx.media = [{ ...ctx.media?.[0], contentType: "application/pdf" }];
+      sessionCtx.media = ctx.media;
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = `media/inbound/${fileName}`;
+      expect(result.staged.get(0)).toBe(stagedPath);
+      // Local backends must stage with host-local helpers only: the full
+      // provisioned context (which constructs/creates the backend runtime)
+      // must not be resolved during attachment staging.
+      expect(sandboxMocks.resolveSandboxContext).not.toHaveBeenCalled();
+      await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("pdf-bytes");
     });
   });
 

@@ -8,6 +8,7 @@ import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
   createRemoteShellSandboxFsBridge,
+  REMOTE_BRIDGE_GATEWAY_STAGING,
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
 
@@ -99,7 +100,129 @@ function createWorkspaceReadBridge(workspaceDir: string) {
   });
 }
 
+type GatewayOwnedRemoteFsBridge = ReturnType<typeof createRemoteShellSandboxFsBridge> & {
+  writeFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+    gatewayStaging?: typeof REMOTE_BRIDGE_GATEWAY_STAGING;
+  }): Promise<void>;
+};
+
 describe("remote sandbox fs bridge", () => {
+  it.runIf(process.platform !== "win32").each(["none", "ro"])(
+    "allows gateway-owned staging writes on %s access while denying agent and forged writes",
+    async (workspaceAccess: string) => {
+      await withTempDir("openclaw-remote-fs-staging-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            workspaceAccess: workspaceAccess as "none" | "ro",
+          }),
+          runtime,
+        });
+
+        // Agent-tool writes stay denied on the configured access mode.
+        await expect(
+          bridge.writeFile({ filePath: "media/inbound/agent.txt", data: "x" }),
+        ).rejects.toThrow(/read-only/u);
+
+        // A forged gateway flag must never bypass the writable gate: an SDK
+        // caller can only pass ordinary runtime values, and none of them is the
+        // unforgeable core capability.
+        await expect(
+          (
+            bridge as unknown as {
+              writeFile: (params: {
+                filePath: string;
+                data: string;
+                gatewayOwned?: boolean;
+              }) => Promise<void>;
+            }
+          ).writeFile({
+            filePath: "media/inbound/forged.txt",
+            data: "x",
+            gatewayOwned: true,
+          }),
+        ).rejects.toThrow(/read-only/u);
+        await expect(
+          (
+            bridge as unknown as {
+              writeFile: (params: {
+                filePath: string;
+                data: string;
+                gatewayStaging?: string;
+              }) => Promise<void>;
+            }
+          ).writeFile({
+            filePath: "media/inbound/forged2.txt",
+            data: "x",
+            gatewayStaging: "forged",
+          }),
+        ).rejects.toThrow(/read-only/u);
+
+        // Gateway-owned inbound staging may populate the sandbox workspace.
+        await expect(
+          (bridge as GatewayOwnedRemoteFsBridge).writeFile({
+            filePath: "media/inbound/staged.txt",
+            data: "staged",
+            gatewayStaging: REMOTE_BRIDGE_GATEWAY_STAGING,
+          }),
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.readFile(path.join(workspaceDir, "media", "inbound", "staged.txt"), "utf8"),
+        ).resolves.toBe("staged");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects gateway-owned writes that resolve into protected skill roots through a symlink",
+    async () => {
+      await withTempDir("openclaw-remote-fs-protected-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const skillsDir = path.join(stateDir, "skills");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.mkdir(skillsDir, { recursive: true });
+        await fs.symlink(skillsDir, path.join(workspaceDir, "media"), "dir");
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            skillsWorkspaceDir: skillsDir,
+            workspaceAccess: "rw",
+          }),
+          runtime,
+        });
+
+        await expect(
+          (bridge as GatewayOwnedRemoteFsBridge).writeFile({
+            filePath: "media/inbound/attack.txt",
+            data: "x",
+            gatewayStaging: REMOTE_BRIDGE_GATEWAY_STAGING,
+          }),
+        ).rejects.toThrow(/protected|read-only|skills/u);
+        await expect(
+          fs.readFile(path.join(skillsDir, "inbound", "attack.txt"), "utf8"),
+        ).rejects.toThrow();
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "creates files exclusively and preserves existing entries",
     async () => {

@@ -38,6 +38,14 @@ import type { ResolvedRemotePath, RemoteShellSandboxHandle } from "./remote-fs-b
 
 export type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 
+/**
+ * Unforgeable gateway-staging capability for remote shell bridges. Held only
+ * by core inbound-media staging (imported from this internal module) and never
+ * re-exported through the plugin SDK, so an SDK caller holding the public
+ * filesystem bridge cannot request the workspace-access bypass at runtime.
+ */
+export const REMOTE_BRIDGE_GATEWAY_STAGING = Symbol("openclaw.remoteFsBridge.gatewayStaging");
+
 /** Create the filesystem bridge for remote shell-backed sandbox runtimes. */
 export function createRemoteShellSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
@@ -158,14 +166,25 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     encoding?: BufferEncoding;
     mkdir?: boolean;
     signal?: AbortSignal;
+    /** Unforgeable core capability; a forged value never bypasses the gate. */
+    gatewayStaging?: typeof REMOTE_BRIDGE_GATEWAY_STAGING;
   }): Promise<void> {
     const target = this.resolveTarget(params);
-    await this.ensureRemoteWritable(target, "write files", params.signal);
+    const gatewayStaging = params.gatewayStaging === REMOTE_BRIDGE_GATEWAY_STAGING;
+    if (gatewayStaging) {
+      // Gateway-owned inbound staging populates the sandbox workspace even when
+      // the agent workspaceAccess is none/ro. Keep the pinned-parent and
+      // post-canonical protected-root guards so generic agent tool writes stay
+      // denied and symlinked workspace paths cannot reach protected skill roots.
+    } else {
+      await this.ensureRemoteWritable(target, "write files", params.signal);
+    }
     const pinned = await this.resolvePinnedParent({
       containerPath: target.containerPath,
       mountRootPath: target.mountRootPath,
       action: "write files",
-      requireWritable: true,
+      requireWritable: !gatewayStaging,
+      checkProtectedPath: gatewayStaging,
       signal: params.signal,
     });
     await this.assertNoHardlinkedFile({
@@ -624,6 +643,12 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     mountRootPath: string;
     action: string;
     requireWritable?: boolean;
+    /**
+     * Run the post-canonical protected-root check even when the writable gate
+     * is bypassed (gateway-owned inbound staging). Keeps symlinked workspace
+     * paths from resolving into protected skill roots.
+     */
+    checkProtectedPath?: boolean;
     allowFinalSymlinkForUnlink?: boolean;
     signal?: AbortSignal;
   }): Promise<{ mountRootPath: string; relativeParentPath: string; basename: string }> {
@@ -649,7 +674,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         `Sandbox path is read-only; cannot ${params.action}: ${params.containerPath}`,
       );
     }
-    if (params.requireWritable) {
+    if (params.requireWritable || params.checkProtectedPath) {
       await this.assertRemoteProtectedPathWritable({
         containerPath: logicalPath,
         action: params.action,
