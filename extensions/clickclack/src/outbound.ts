@@ -19,7 +19,11 @@ import {
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
 import { resolveClickClackAccount } from "./accounts.js";
-import { createClickClackClient, type ClickClackClient } from "./http-client.js";
+import {
+  createClickClackClient,
+  isClickClackCommittedMessageCreateError,
+  type ClickClackClient,
+} from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
 import { parseClickClackTarget } from "./target.js";
 import type { ClickClackMessage, ClickClackMessageProvenance, CoreConfig } from "./types.js";
@@ -172,7 +176,7 @@ function createOutboundContext(params: {
  * Sends visible text to a normalized ClickClack target and returns the created
  * message id, or undefined when sanitization removes all content.
  */
-export async function sendClickClackText(params: {
+type SendClickClackTextParams = {
   cfg: CoreConfig;
   accountId?: string | null;
   to: string;
@@ -189,7 +193,11 @@ export async function sendClickClackText(params: {
   deliveryPartIndex?: number;
   /** Persists unknown-send state immediately before the first platform write. */
   onPlatformSendDispatch?: () => Promise<void>;
-}): Promise<string | undefined> {
+};
+
+export async function sendClickClackText(
+  params: SendClickClackTextParams,
+): Promise<string | undefined> {
   // Custom inbound replies bypass shared outbound normalization, so this private
   // sender owns ClickClack assistant-text sanitization for every delivery path.
   const text = renderClickClackMarkdown(sanitizeAssistantVisibleText(params.text));
@@ -214,6 +222,32 @@ export async function sendClickClackText(params: {
     onPlatformSendDispatch: dispatch,
   });
   return message.id;
+}
+
+/** Sends one retry-safe model-mode reply without requiring a delivery receipt. */
+export async function sendClickClackModelReply(
+  params: Omit<
+    SendClickClackTextParams,
+    "deliveryQueueId" | "deliveryPartIndex" | "onPlatformSendDispatch"
+  > & { sourceMessageId: string },
+): Promise<void> {
+  const { sourceMessageId, ...sendParams } = params;
+  try {
+    // ClickClack message ids are server-global. Keep the nonce stable even if
+    // the local account name changes before the gateway replays this event.
+    await sendClickClackText({
+      ...sendParams,
+      deliveryQueueId: `clickclack-model-reply:${sourceMessageId}`,
+      deliveryPartIndex: 0,
+    });
+  } catch (error) {
+    // The gateway advances its cursor only after this returns. An accepted
+    // response or nonce conflict proves this source message already has a reply.
+    if (isClickClackCommittedMessageCreateError(error)) {
+      return;
+    }
+    throw error;
+  }
 }
 
 /** Resolves, uploads, sends, then attaches one file to a ClickClack message. */

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   reconcileClickClackUnknownSend,
   sendClickClackMedia,
+  sendClickClackModelReply,
   sendClickClackText,
 } from "./outbound.js";
 import type { CoreConfig } from "./types.js";
@@ -24,6 +25,7 @@ const message = vi.hoisted(() =>
 );
 const createClientOptions = vi.hoisted(() => vi.fn());
 const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
+const isClickClackCommittedMessageCreateError = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({ loadOutboundMediaFromUrl }));
 
@@ -37,6 +39,7 @@ vi.mock("./accounts.js", () => ({
 }));
 
 vi.mock("./http-client.js", () => ({
+  isClickClackCommittedMessageCreateError,
   createClickClackClient: (options: unknown) => {
     createClientOptions(options);
     return {
@@ -73,6 +76,7 @@ describe("sendClickClackText routing", () => {
     message.mockClear();
     createClientOptions.mockClear();
     loadOutboundMediaFromUrl.mockReset();
+    isClickClackCommittedMessageCreateError.mockReset().mockReturnValue(false);
   });
 
   it("sanitizes a top-level channel quote-reply", async () => {
@@ -198,6 +202,74 @@ describe("sendClickClackText routing", () => {
         nonce: "openclaw-text:4a171ee0c18d243d8d3c510320ab1b1d317afd95b0204abec18312e57307fb24",
       }),
     );
+  });
+
+  it("uses one source-stable nonce across regenerated model replies", async () => {
+    await sendClickClackModelReply({
+      cfg,
+      accountId: "service",
+      to: "channel:general",
+      text: "first model output",
+      replyToId: "msg_1",
+      sourceMessageId: "msg_1",
+    });
+    await sendClickClackModelReply({
+      cfg,
+      accountId: "service",
+      to: "channel:general",
+      text: "different replay output",
+      replyToId: "msg_1",
+      sourceMessageId: "msg_1",
+    });
+
+    const nonce = "openclaw-text:b8e1b0a9daa9b9da866c685eccb8315bc711f4887aab5137a1373c251218ec29";
+    expect(createChannelMessage).toHaveBeenNthCalledWith(
+      1,
+      "general",
+      "first model output",
+      expect.objectContaining({ nonce }),
+    );
+    expect(createChannelMessage).toHaveBeenNthCalledWith(
+      2,
+      "general",
+      "different replay output",
+      expect.objectContaining({ nonce }),
+    );
+  });
+
+  it("accepts a committed stable-nonce model reply without a response receipt", async () => {
+    const error = new Error("request timed out after response headers");
+    createChannelMessage.mockRejectedValueOnce(error);
+    isClickClackCommittedMessageCreateError.mockReturnValueOnce(true);
+
+    await expect(
+      sendClickClackModelReply({
+        cfg,
+        accountId: "service",
+        to: "channel:general",
+        text: "model output",
+        replyToId: "msg_1",
+        sourceMessageId: "msg_1",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(isClickClackCommittedMessageCreateError).toHaveBeenCalledWith(error);
+  });
+
+  it("still rejects model reply failures without commit proof", async () => {
+    const error = new Error("connection failed before response headers");
+    createChannelMessage.mockRejectedValueOnce(error);
+
+    await expect(
+      sendClickClackModelReply({
+        cfg,
+        accountId: "service",
+        to: "channel:general",
+        text: "model output",
+        replyToId: "msg_1",
+        sourceMessageId: "msg_1",
+      }),
+    ).rejects.toThrow("connection failed before response headers");
   });
 });
 

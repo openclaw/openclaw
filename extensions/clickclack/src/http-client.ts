@@ -59,6 +59,11 @@ type ClientOptions = {
   fetch?: typeof fetch;
 };
 
+type ClickClackRequestMetadata = {
+  method: string;
+  path: string;
+};
+
 const CLICKCLACK_REST_REQUEST_TIMEOUT_MS = 30_000;
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_CORRELATION_ID_MAX_LENGTH = 128;
@@ -96,9 +101,46 @@ export class ClickClackHttpError extends Error {
     readonly status: number,
     detail: string,
     readonly headers: Headers,
+    readonly request?: ClickClackRequestMetadata,
   ) {
     super(`ClickClack ${status}: ${detail}`);
   }
+}
+
+class ClickClackResponseReadError extends Error {
+  constructor(
+    readonly status: number,
+    readonly headers: Headers,
+    readonly request: ClickClackRequestMetadata,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
+function isMessageCreateRequest(request: ClickClackRequestMetadata | undefined): boolean {
+  if (request?.method !== "POST") {
+    return false;
+  }
+  return (
+    /^\/api\/channels\/[^/]+\/messages$/u.test(request.path) ||
+    /^\/api\/messages\/[^/]+\/thread\/replies$/u.test(request.path) ||
+    /^\/api\/dms\/[^/]+\/messages$/u.test(request.path)
+  );
+}
+
+/** A stable-nonce message create either committed or found that nonce already committed. */
+export function isClickClackCommittedMessageCreateError(error: unknown): boolean {
+  if (error instanceof ClickClackResponseReadError) {
+    return isMessageCreateRequest(error.request) && (error.status === 200 || error.status === 201);
+  }
+  if (!(error instanceof ClickClackHttpError) || !isMessageCreateRequest(error.request)) {
+    return false;
+  }
+  return (
+    (error.status === 400 || error.status === 409) &&
+    error.message.toLowerCase().includes("client nonce was already used for a different message")
+  );
 }
 
 /** Matches the workspace/name uniqueness error returned by current ClickClack servers. */
@@ -148,6 +190,10 @@ export function createClickClackClient(options: ClientOptions) {
     requestOptions: { timeoutMs?: number; responseMode?: "json" | "none" } = {},
   ): Promise<T> {
     const url = `${baseUrl}${path}`;
+    const requestMetadata = {
+      method: (init.method ?? "GET").toUpperCase(),
+      path,
+    } satisfies ClickClackRequestMetadata;
     const requestHeaders = new Headers(init.headers);
     const isMultipartUpload = init.body instanceof FormData;
     for (const [key, value] of Object.entries(headers)) {
@@ -179,6 +225,7 @@ export function createClickClackClient(options: ClientOptions) {
           response.status,
           redactToolPayloadText(detail),
           new Headers(response.headers),
+          requestMetadata,
         );
       }
       if (requestOptions.responseMode === "none") {
@@ -189,9 +236,18 @@ export function createClickClackClient(options: ClientOptions) {
         }
         return undefined as T;
       }
-      return await readProviderJsonResponse<T>(response, "ClickClack response", {
-        maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
-      });
+      try {
+        return await readProviderJsonResponse<T>(response, "ClickClack response", {
+          maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+        });
+      } catch (error) {
+        throw new ClickClackResponseReadError(
+          response.status,
+          new Headers(response.headers),
+          requestMetadata,
+          error,
+        );
+      }
     } finally {
       cleanup();
     }

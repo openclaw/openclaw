@@ -18,6 +18,7 @@ import { setClickClackRuntime } from "./runtime.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
+const sendClickClackModelReplyMock = vi.hoisted(() => vi.fn());
 const VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fav";
 const SECOND_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5faw";
 const THIRD_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fax";
@@ -35,6 +36,7 @@ type LlmCompleteMock = ReturnType<
 >;
 
 vi.mock("./outbound.js", () => ({
+  sendClickClackModelReply: sendClickClackModelReplyMock,
   sendClickClackText: sendClickClackTextMock,
 }));
 
@@ -186,6 +188,7 @@ function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMe
 
 describe("handleClickClackInbound", () => {
   beforeEach(() => {
+    sendClickClackModelReplyMock.mockReset();
     sendClickClackTextMock.mockReset();
   });
 
@@ -256,12 +259,14 @@ describe("handleClickClackInbound", () => {
     expect(completionRequest?.purpose).toBe("clickclack bot reply");
     expect(completionRequest?.messages).toEqual([{ role: "user", content: "hello bot" }]);
 
-    const sendRequest = sendClickClackTextMock.mock.calls[0]?.[0];
+    const sendRequest = sendClickClackModelReplyMock.mock.calls[0]?.[0];
     expect(sendRequest?.accountId).toBe("service");
     expect(sendRequest?.to).toBe("channel:chn_1");
     expect(sendRequest?.text).toBe("service bot online");
     expect(sendRequest?.replyToId).toBe("msg_1");
     expect(sendRequest?.correlationId).toBe("fakeco.case_1");
+    expect(sendRequest?.sourceMessageId).toBe("msg_1");
+    expect(sendClickClackTextMock).not.toHaveBeenCalled();
   });
 
   it("uses the selected runtime model budget", async () => {
@@ -284,7 +289,7 @@ describe("handleClickClackInbound", () => {
 
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest).not.toHaveProperty("maxTokens");
-    expect(sendClickClackTextMock).toHaveBeenCalledWith(
+    expect(sendClickClackModelReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "service", text: "service bot online" }),
     );
   });
@@ -315,6 +320,7 @@ describe("handleClickClackInbound", () => {
       message: createMessage({ body: "hello bot" }),
     });
 
+    expect(sendClickClackModelReplyMock).not.toHaveBeenCalled();
     expect(sendClickClackTextMock).not.toHaveBeenCalled();
     expect(runtime.logging.getChildLogger).toHaveBeenCalledWith({
       plugin: "clickclack",

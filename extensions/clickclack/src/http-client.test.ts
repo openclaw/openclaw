@@ -578,6 +578,10 @@ describe("ClickClack HTTP client", () => {
 
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe("request timed out");
+      expect(error).toMatchObject({
+        status: 200,
+        request: { method: "GET", path: "/api/me" },
+      });
       expect(body?.wasAborted()).toBe(true);
     } finally {
       vi.useRealTimers();

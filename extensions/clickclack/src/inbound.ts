@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
 import { createClickClackClient } from "./http-client.js";
-import { sendClickClackText } from "./outbound.js";
+import { sendClickClackModelReply, sendClickClackText } from "./outbound.js";
 import {
   createClickClackAgentProgressPublisher,
   type ClickClackItemEventPayload,
@@ -66,7 +66,7 @@ async function dispatchModelReply(params: {
       .warn(`[${params.account.accountId}] ClickClack model reply produced no sendable text`);
     return;
   }
-  await sendClickClackText({
+  await sendClickClackModelReply({
     cfg: params.cfg as CoreConfig,
     accountId: params.account.accountId,
     to: params.target,
@@ -74,6 +74,7 @@ async function dispatchModelReply(params: {
     threadId: params.message.parent_message_id ? params.message.thread_root_id : undefined,
     replyToId: params.message.id,
     correlationId: params.correlationId,
+    sourceMessageId: params.message.id,
   });
 }
 
