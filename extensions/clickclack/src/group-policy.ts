@@ -18,7 +18,7 @@ type ClickClackAccountGroupPolicyParams = {
   groups?: Record<string, { requireMention?: boolean; mentionPatterns?: string[] }>;
 };
 
-export type ClickClackBotPolicy = {
+type ClickClackBotPolicy = {
   allowBots: boolean | "mentions";
   botLoopProtection?: ChannelBotLoopProtectionConfig;
 };

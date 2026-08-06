@@ -10,7 +10,12 @@ import {
 } from "./discussions/binding-store.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
-import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
+import type {
+  ClickClackMessage,
+  ClickClackUser,
+  CoreConfig,
+  ResolvedClickClackAccount,
+} from "./types.js";
 
 function configureDiscussionStore(runtime: PluginRuntime): void {
   const createStore = <T>(): PluginStateSyncKeyedStore<T> => {
@@ -134,6 +139,18 @@ function createAgentAccount(
   };
 }
 
+function createAuthor(overrides: Partial<ClickClackUser> = {}): ClickClackUser {
+  return {
+    id: "usr_owner",
+    kind: "human",
+    display_name: "Peter",
+    handle: "steipete",
+    avatar_url: "",
+    created_at: "2026-05-09T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
 function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMessage {
   return {
     id: "msg_1",
@@ -144,14 +161,7 @@ function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMe
     body: "/fast on",
     body_format: "markdown",
     created_at: "2026-05-09T12:00:00.000Z",
-    author: {
-      id: "usr_owner",
-      kind: "human",
-      display_name: "Peter",
-      handle: "steipete",
-      avatar_url: "",
-      created_at: "2026-05-09T12:00:00.000Z",
-    },
+    author: createAuthor(),
     ...overrides,
   };
 }
@@ -232,7 +242,7 @@ describe("ClickClack inbound mention gating", () => {
       config: {} satisfies CoreConfig,
       message: createMessage({
         author_id: "usr_sender",
-        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+        author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
       }),
     });
 
@@ -265,7 +275,7 @@ describe("ClickClack inbound mention gating", () => {
       } satisfies CoreConfig,
       message: createMessage({
         author_id: "usr_sender",
-        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+        author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
       }),
     });
 
@@ -290,7 +300,7 @@ describe("ClickClack inbound mention gating", () => {
       config: {} satisfies CoreConfig,
       message: createMessage({
         author_id: "usr_sender",
-        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+        author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
       }),
     });
 
@@ -302,7 +312,7 @@ describe("ClickClack inbound mention gating", () => {
     setClickClackRuntime(runtime);
     const firstMessage = createMessage({
       author_id: "usr_sender",
-      author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+      author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
       created_at: "2026-05-09T12:00:00.000Z",
     });
 
@@ -352,7 +362,7 @@ describe("ClickClack inbound mention gating", () => {
       message: createMessage({
         author_id: "usr_sender",
         body: "hello from another agent",
-        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+        author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
       }),
     });
 
@@ -369,7 +379,7 @@ describe("ClickClack inbound mention gating", () => {
       message: createMessage({
         author_id: "usr_sender",
         body: "@blackbird please coordinate",
-        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+        author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
       }),
     });
 
@@ -388,7 +398,7 @@ describe("ClickClack inbound mention gating", () => {
         channel_id: undefined,
         direct_conversation_id: "dm_1",
         body: "hello directly",
-        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+        author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
       }),
     });
 
@@ -411,7 +421,7 @@ describe("ClickClack inbound mention gating", () => {
         channel_id: undefined,
         direct_conversation_id: "dm_1",
         body: "hello directly",
-        author: { ...createMessage().author, id: "usr_sender", kind: "bot", handle: "sender" },
+        author: createAuthor({ id: "usr_sender", kind: "bot", handle: "sender" }),
       }),
     });
 
