@@ -125,6 +125,24 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
 });
 
 describe("applyCustomApiConfig", () => {
+  it("preserves the existing primary when custom setup is not selecting a default", () => {
+    const result = applyCustomApiConfig({
+      config: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      },
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "local-model",
+      compatibility: "openai",
+      providerId: "custom",
+      setAsPrimary: false,
+    });
+
+    expect(result.config.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(result.config.models?.providers?.custom?.models).toEqual([
+      expect.objectContaining({ id: "local-model" }),
+    ]);
+  });
+
   it.each([
     {
       name: "uses stable default context window for newly added custom models",

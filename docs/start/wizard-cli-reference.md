@@ -32,8 +32,9 @@ not install or modify anything on the remote host.
 
 <Steps>
   <Step title="Existing config detection">
-    - If `~/.openclaw/openclaw.json` exists, choose **Keep current values**, **Review and update**, or **Reset before setup**.
-    - Re-running the wizard does not wipe anything unless you explicitly choose Reset (or pass `--reset`).
+    - If `~/.openclaw/openclaw.json` already defines a default model, **Setup mode** defaults to **Keep existing model config**. You can instead choose **QuickStart** or **Manual setup**.
+    - Keeping the existing model normally skips model and auth setup. An explicit non-skip `--auth-choice` still runs the requested provider auth flow. Providers that require model selection can still prompt for a compatible model; other choices preserve the current default model.
+    - Re-running the wizard does not wipe anything unless you pass `--reset`.
     - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full` to also remove the workspace.
     - If config is invalid or contains legacy keys, the wizard stops and asks you to run `openclaw doctor` before continuing.
     - Reset moves state to Trash (never deletes directly) and offers scopes:
