@@ -774,16 +774,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     interactive: {
       blocks: [
         {
-          type: "buttons",
+          type: "buttons" as const,
           buttons: [
-            { label: "Allow once", value: "allow-once", style: "success" },
-            { label: "Always allow", value: "always-allow", style: "primary" },
-            { label: "Deny", value: "deny", style: "danger" },
+            { label: "Allow once", value: "allow-once", style: "success" as const },
+            { label: "Always allow", value: "always-allow", style: "primary" as const },
+            { label: "Deny", value: "deny", style: "danger" as const },
           ],
         },
       ],
     },
-  } as const;
+  };
 
   it("delivers interactive button payloads as native Feishu cards on the reply path", async () => {
     resolveFeishuAccountMock.mockReturnValue({
