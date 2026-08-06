@@ -1134,7 +1134,7 @@ describe("Tool Search", () => {
       "search(query: string, options?)",
     );
     expect(byName.get(TOOL_SEARCH_CODE_MODE_TOOL_NAME)?.description).toContain(
-      "JSON values normally live in `result.details`",
+      "Use `callValue` for ordinary data",
     );
     expect(byName.get(TOOL_SEARCH_RAW_TOOL_NAME)?.description).toContain(
       "use tool_describe only when you need its input schema",
@@ -1524,7 +1524,7 @@ describe("Tool Search", () => {
         code: `
         const hits = await openclaw.tools.search("ticket", { limit: 1 });
         const described = await openclaw.tools.describe(hits[0].id);
-        return await openclaw.tools.call(described.id, { value: "ship" });
+        return await openclaw.tools.callValue(described.id, { value: "ship" });
       `,
       },
     );
@@ -1537,6 +1537,7 @@ describe("Tool Search", () => {
     expect(alphaCall[4]).toBeUndefined();
     const details = resultDetails(result);
     expect(details.ok).toBe(true);
+    expect(details.value).toEqual({ name: "fake_create_ticket", input: { value: "ship" } });
     const telemetry = details.telemetry as {
       catalogSize?: number;
       counterScope?: string;
