@@ -329,27 +329,27 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     // shadow is named in the change line so the dropped intent stays recoverable.
     const applied: string[] = [];
     const kept: string[] = [];
+    // Resolve both legacy halves before deciding, so the receipt compares the
+    // same effective values the assignment would have written — an omitted
+    // emoji still resolves through agent identity or the default.
+    const legacyAgents = getRecord(raw.agents)?.list;
+    const agentEntries = Array.isArray(legacyAgents)
+      ? legacyAgents.filter((value): value is Record<string, unknown> => Boolean(getRecord(value)))
+      : [];
+    const defaultAgent =
+      agentEntries.find((value) => getRecord(value)?.default === true) ?? agentEntries[0];
+    const identityEmoji = getRecord(getRecord(defaultAgent)?.identity)?.emoji;
+    const emoji =
+      typeof ack.emoji === "string"
+        ? ack.emoji
+        : typeof identityEmoji === "string"
+          ? identityEmoji
+          : "👀";
     if (messages.ackReaction === undefined) {
-      const legacyAgents = getRecord(raw.agents)?.list;
-      const agentEntries = Array.isArray(legacyAgents)
-        ? legacyAgents.filter((value): value is Record<string, unknown> =>
-            Boolean(getRecord(value)),
-          )
-        : [];
-      const defaultAgent =
-        agentEntries.find((value) => getRecord(value)?.default === true) ?? agentEntries[0];
-      const identityEmoji = getRecord(getRecord(defaultAgent)?.identity)?.emoji;
-      messages.ackReaction =
-        typeof ack.emoji === "string"
-          ? ack.emoji
-          : typeof identityEmoji === "string"
-            ? identityEmoji
-            : "👀";
-      if (typeof ack.emoji === "string") {
-        applied.push(`applied legacy emoji "${ack.emoji}" to messages.ackReaction`);
-      }
-    } else if (typeof ack.emoji === "string" && ack.emoji !== messages.ackReaction) {
-      kept.push(`kept existing messages.ackReaction over legacy emoji "${ack.emoji}"`);
+      messages.ackReaction = emoji;
+      applied.push(`applied effective legacy emoji "${emoji}" to messages.ackReaction`);
+    } else if (emoji !== messages.ackReaction) {
+      kept.push(`kept existing messages.ackReaction over effective legacy emoji "${emoji}"`);
     }
     const direct = ack.direct !== false;
     const group = ack.group ?? "mentions";

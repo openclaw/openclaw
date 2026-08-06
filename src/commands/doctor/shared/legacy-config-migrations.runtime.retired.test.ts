@@ -556,7 +556,7 @@ describe("retired runtime config migrations", () => {
     expect(result.raw).toHaveProperty("messages.ackReaction", "✅");
     expect(result.raw).toHaveProperty("messages.ackReactionScope", "group-mentions");
     expect(result.changes).toContain(
-      'Removed channels.whatsapp.ackReaction; applied legacy emoji "✅" to messages.ackReaction; kept existing messages.ackReactionScope over legacy scope "direct".',
+      'Removed channels.whatsapp.ackReaction; applied effective legacy emoji "✅" to messages.ackReaction; kept existing messages.ackReactionScope over legacy scope "direct".',
     );
     expect(result.changes).not.toContain(
       "Moved translatable channels.whatsapp.ackReaction settings to messages ack settings.",
@@ -574,7 +574,44 @@ describe("retired runtime config migrations", () => {
     expect(result.raw).toHaveProperty("messages.ackReaction", "🔥");
     expect(result.raw).toHaveProperty("messages.ackReactionScope", "group-all");
     expect(result.changes).toContain(
-      'Removed channels.whatsapp.ackReaction; applied legacy scope "group-all" to messages.ackReactionScope; kept existing messages.ackReaction over legacy emoji "✅".',
+      'Removed channels.whatsapp.ackReaction; applied legacy scope "group-all" to messages.ackReactionScope; kept existing messages.ackReaction over effective legacy emoji "✅".',
+    );
+  });
+
+  it("reports the derived fallback emoji a different canonical emoji shadows", () => {
+    const result = applyAll({
+      messages: { ackReaction: "🔥" },
+      channels: { whatsapp: { ackReaction: { direct: false, group: "always" } } },
+      agents: { list: [{ default: true, identity: { emoji: "🤖" } }] },
+    });
+
+    expect(result.raw).toHaveProperty("messages.ackReaction", "🔥");
+    expect(result.changes).toContain(
+      'Removed channels.whatsapp.ackReaction; applied legacy scope "group-all" to messages.ackReactionScope; kept existing messages.ackReaction over effective legacy emoji "🤖".',
+    );
+  });
+
+  it("reports the default fallback emoji when no legacy emoji or identity exists", () => {
+    const result = applyAll({
+      messages: { ackReaction: "🔥" },
+      channels: { whatsapp: { ackReaction: { direct: false, group: "always" } } },
+    });
+
+    expect(result.changes).toContain(
+      'Removed channels.whatsapp.ackReaction; applied legacy scope "group-all" to messages.ackReactionScope; kept existing messages.ackReaction over effective legacy emoji "👀".',
+    );
+  });
+
+  it("stays on the clean-move message when the canonical emoji equals the fallback", () => {
+    const result = applyAll({
+      messages: { ackReaction: "👀" },
+      channels: { whatsapp: { ackReaction: { direct: false, group: "always" } } },
+    });
+
+    expect(result.raw).toHaveProperty("messages.ackReaction", "👀");
+    expect(result.raw).toHaveProperty("messages.ackReactionScope", "group-all");
+    expect(result.changes).toContain(
+      "Moved translatable channels.whatsapp.ackReaction settings to messages ack settings.",
     );
   });
 
@@ -590,7 +627,7 @@ describe("retired runtime config migrations", () => {
     expect(result.raw).toHaveProperty("messages.ackReaction", "🔥");
     expect(result.raw).toHaveProperty("messages.ackReactionScope", "group-mentions");
     expect(result.changes).toContain(
-      'Removed channels.whatsapp.ackReaction; kept existing messages.ackReaction over legacy emoji "✅"; kept existing messages.ackReactionScope over legacy scope "direct".',
+      'Removed channels.whatsapp.ackReaction; kept existing messages.ackReaction over effective legacy emoji "✅"; kept existing messages.ackReactionScope over legacy scope "direct".',
     );
   });
 
