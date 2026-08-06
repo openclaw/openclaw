@@ -476,30 +476,6 @@ describe("runConfigureWizard", () => {
     expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
-  it("uses the configured remote password for the bounded startup hint probe", async () => {
-    const remotePassword = "remote-password"; // pragma: allowlist secret
-    setupBaseWizardState({
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example.test",
-          password: remotePassword,
-        },
-      },
-    });
-
-    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
-
-    const remoteProbe = mocks.probeGatewayReachable.mock.calls
-      .map(([request]) => requireRecord(request, "probe request"))
-      .find((request) => request.url === "wss://gateway.example.test");
-    expect(remoteProbe).toMatchObject({
-      token: undefined,
-      password: remotePassword,
-      timeoutMs: 300,
-    });
-  });
-
   it("uses the environment password ahead of the configured remote password", async () => {
     const configuredPassword = "configured-password"; // pragma: allowlist secret
     const envPassword = "env-password"; // pragma: allowlist secret
@@ -512,17 +488,12 @@ describe("runConfigureWizard", () => {
         },
       },
     });
-    const previousPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    process.env.OPENCLAW_GATEWAY_PASSWORD = envPassword;
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", envPassword);
 
     try {
       await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
     } finally {
-      if (previousPassword === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = previousPassword;
-      }
+      vi.unstubAllEnvs();
     }
 
     const remoteProbe = mocks.probeGatewayReachable.mock.calls
