@@ -31,7 +31,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
-import { toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { isUnscopedSessionKeySentinel, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import {
   createHooksRequestHandler,
@@ -314,11 +314,23 @@ export function createGatewayHooksRequestHandler(params: {
         // an unscoped wake would run heartbeat turns for every heartbeat-enabled agent.
         const failureAgentId = normalizeOptionalString(value.agentId);
         const failureSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
+        // Global-scope events land on the unscoped "global" key, which carries
+        // no agent identity, so the scheduler cannot resolve a target from it
+        // and the queued failure event would sit unread. Carry the fresh
+        // default agent alongside the global key so the event is consumed.
+        const failureWakeAgentId =
+          failureAgentId && hookEventSessionKey
+            ? failureAgentId
+            : !failureAgentId &&
+                hookEventSessionKey &&
+                isUnscopedSessionKeySentinel(failureSessionKey)
+              ? resolveDefaultAgentId(getRuntimeConfig())
+              : undefined;
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
-          ...(failureAgentId && hookEventSessionKey ? { agentId: failureAgentId } : {}),
+          ...(failureWakeAgentId ? { agentId: failureWakeAgentId } : {}),
           ...(failureSessionKey ? { sessionKey: failureSessionKey } : {}),
         });
       }
@@ -482,12 +494,20 @@ export function createGatewayHooksRequestHandler(params: {
               // pass an agentId when the hook explicitly named one: an unnamed
               // hook resolves its event session from fresh config at announce
               // time, and pairing a frozen default agent with that session can
-              // wake a stale agent after a default-agent reload.
+              // wake a stale agent after a default-agent reload. The global
+              // scope is the one exception: its unscoped "global" key carries
+              // no agent identity, so the scheduler cannot resolve a target
+              // from it — carry the fresh default agent so the announced
+              // event is actually consumed.
               requestHeartbeat({
                 source: "hook",
                 intent: "immediate",
                 reason: `hook:${jobId}`,
-                ...(acceptedValue.agentId ? { agentId: acceptedValue.agentId } : {}),
+                ...(acceptedValue.agentId
+                  ? { agentId: acceptedValue.agentId }
+                  : isUnscopedSessionKeySentinel(eventSessionKey)
+                    ? { agentId: resolveDefaultAgentId(cfg) }
+                    : {}),
                 ...(eventSessionKey ? { sessionKey: eventSessionKey } : {}),
               });
             }
