@@ -16,21 +16,21 @@ import {
 
 /** TypeBox optional wrappers do not surface `description` on their static type. */
 function describedAs(schema: unknown): string {
-  return String((schema as { description?: unknown } | undefined)?.description ?? "");
+  return (schema as { description?: string } | undefined)?.description ?? "";
 }
 
 describe("exec timeout unit naming", () => {
   it("exposes a unit-bearing timeoutSeconds field", () => {
     const field = execSchema.properties.timeoutSeconds;
     expect(field).toBeDefined();
-    expect(describedAs(field)).toMatch(/SECONDS/);
+    expect(describedAs(field)).toMatch(/seconds/);
   });
 
   it("keeps timeout as a deprecated alias that still documents its unit", () => {
     const legacy = execSchema.properties.timeout;
     expect(legacy).toBeDefined();
     expect(describedAs(legacy)).toMatch(/[Dd]eprecated/);
-    expect(describedAs(legacy)).toMatch(/SECONDS/);
+    expect(describedAs(legacy)).toMatch(/seconds/);
   });
 
   it("documents that the process tool's timeout is a different unit", () => {

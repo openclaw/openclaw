@@ -26,7 +26,7 @@ export const execSchema = Type.Object({
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
   timeoutSeconds: Type.Optional(
     Type.Number({
-      description: "Timeout in SECONDS; kills process on expiry. Takes precedence over timeout.",
+      description: "Timeout in seconds.",
     }),
   ),
   // Deprecated alias for timeoutSeconds. The bare name is unit-ambiguous: the
@@ -35,7 +35,7 @@ export const execSchema = Type.Object({
   // name has no way to tell them apart. Kept for compatibility.
   timeout: Type.Optional(
     Type.Number({
-      description: "Deprecated alias for timeoutSeconds. Timeout in SECONDS (not milliseconds).",
+      description: "Deprecated; seconds.",
     }),
   ),
   pty: Type.Optional(
