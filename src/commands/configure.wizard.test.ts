@@ -500,6 +500,41 @@ describe("runConfigureWizard", () => {
     });
   });
 
+  it("uses the environment password ahead of the configured remote password", async () => {
+    const configuredPassword = "configured-password"; // pragma: allowlist secret
+    const envPassword = "env-password"; // pragma: allowlist secret
+    setupBaseWizardState({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          password: configuredPassword,
+        },
+      },
+    });
+    const previousPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    process.env.OPENCLAW_GATEWAY_PASSWORD = envPassword;
+
+    try {
+      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+    } finally {
+      if (previousPassword === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = previousPassword;
+      }
+    }
+
+    const remoteProbe = mocks.probeGatewayReachable.mock.calls
+      .map(([request]) => requireRecord(request, "probe request"))
+      .find((request) => request.url === "wss://gateway.example.test");
+    expect(remoteProbe).toMatchObject({
+      token: undefined,
+      password: envPassword,
+      timeoutMs: 300,
+    });
+  });
+
   it("ignores blank gateway env credentials when probing the local gateway", async () => {
     setupBaseWizardState({
       gateway: {

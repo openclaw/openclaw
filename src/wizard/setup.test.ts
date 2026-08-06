@@ -886,6 +886,40 @@ describe("runSetupWizard", () => {
     });
   });
 
+  it("does not use an ambient gateway token for the setup remote probe", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example.test",
+          },
+        },
+      }),
+    );
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "ambient-token"; // pragma: allowlist secret
+
+    try {
+      await runSetupWizard(
+        { acceptRisk: true, flow: "advanced", mode: "remote" },
+        createRuntime(),
+        buildWizardPrompter({}),
+      );
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    expect(probeGatewayReachable).toHaveBeenCalledWith({
+      url: "wss://gateway.example.test",
+      token: undefined,
+    });
+  });
+
   it("does not reuse stored remote credentials for an overridden URL", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",

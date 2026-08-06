@@ -9,7 +9,7 @@ import { createMergePatch } from "../config/merge-patch.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayProbeSurfaceAuth } from "../gateway/auth-surface-resolution.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -418,26 +418,25 @@ async function runSetupWizardOnce(
       ? seededRemoteUrl
       : "";
   const remoteProbeAuth = remoteUrl
-    ? await resolveGatewayProbeSurfaceAuth({
-        config: remoteSeedConfig,
+    ? await resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg: remoteSeedConfig,
         env: process.env,
-        surface: "remote",
+        mode: "remote",
       })
     : null;
-  if (remoteProbeAuth?.diagnostics?.length) {
+  if (remoteProbeAuth?.warning) {
     await prompter.note(
-      [
-        "Could not resolve remote gateway SecretRef for setup probe.",
-        ...remoteProbeAuth.diagnostics,
-      ].join("\n"),
+      ["Could not resolve remote gateway SecretRef for setup probe.", remoteProbeAuth.warning].join(
+        "\n",
+      ),
       "Gateway auth",
     );
   }
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
         url: remoteUrl,
-        token: remoteProbeAuth?.token,
-        ...(remoteProbeAuth?.password ? { password: remoteProbeAuth.password } : {}),
+        token: remoteProbeAuth?.auth.token,
+        ...(remoteProbeAuth?.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
       })
     : null;
 
