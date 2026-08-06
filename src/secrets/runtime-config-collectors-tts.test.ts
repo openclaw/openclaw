@@ -78,4 +78,61 @@ describe("collectTtsApiKeyAssignments", () => {
     ]);
     expect(tts.providers.elevenlabs.apiKey).toEqual(TTS_KEY_REF);
   });
+
+  it("assigns persona-level TTS provider SecretRefs under pathPrefix.personas", () => {
+    const tts = {
+      personas: {
+        narrator: {
+          providers: {
+            elevenlabs: {
+              apiKey: TTS_KEY_REF,
+            },
+          },
+        },
+      },
+    };
+    const context = createContext();
+
+    collectTtsApiKeyAssignments({
+      tts,
+      pathPrefix: "tts",
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments).toHaveLength(1);
+    expect(context.assignments[0]).toMatchObject({
+      path: "tts.personas.narrator.providers.elevenlabs.apiKey",
+      expected: "string",
+      ownerKind: "capability",
+      ownerId: "tts",
+    });
+  });
+
+  it("assigns agent entry persona TTS SecretRefs", () => {
+    const tts = {
+      personas: {
+        narrator: {
+          providers: {
+            elevenlabs: {
+              apiKey: TTS_KEY_REF,
+            },
+          },
+        },
+      },
+    };
+    const context = createContext();
+
+    collectTtsApiKeyAssignments({
+      tts,
+      pathPrefix: "agents.entries.main.tts",
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments).toHaveLength(1);
+    expect(context.assignments[0]?.path).toBe(
+      "agents.entries.main.tts.personas.narrator.providers.elevenlabs.apiKey",
+    );
+  });
 });
