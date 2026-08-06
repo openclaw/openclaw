@@ -54,9 +54,9 @@ const HOOK_AGENT_SESSION_CONFLICT_ERROR =
 const HOOK_AGENT_PREPARATION_ERROR = "hook agent run failed before entering the agent runner";
 
 function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
-  return params.agentId
-    ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
-    : resolveMainSessionKey(params.cfg);
+  return params.cfg.session?.scope === "global" || !params.agentId
+    ? resolveMainSessionKey(params.cfg)
+    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
 }
 
 function shouldAnnounceHookRunResult(params: {
@@ -314,14 +314,9 @@ export function createGatewayHooksRequestHandler(params: {
         // an unscoped wake would run heartbeat turns for every heartbeat-enabled agent.
         const failureAgentId = normalizeOptionalString(value.agentId);
         const failureSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
-        // Global-scope events land on the unscoped "global" key, which carries
-        // no agent identity, so the scheduler cannot resolve a target from it
-        // and the queued failure event would sit unread. Carry the explicit
-        // agent, or the fresh default agent, alongside the global key so the
-        // event is consumed. Use the recovered session key for the sentinel
-        // check: when initial event-key resolution fails (early config
-        // failure), hookEventSessionKey is absent but recovery still yields
-        // the global sentinel, and the wake must not lose its agent.
+        // The shared global queue cannot identify an agent and is unsafe as a wake key.
+        // Carry an explicit/fresh default agent without the sentinel to prevent coalescing.
+        // Check the recovered key because initial resolution can fail before assignment.
         const failureWakeAgentId =
           failureAgentId && hookEventSessionKey
             ? failureAgentId
@@ -333,7 +328,9 @@ export function createGatewayHooksRequestHandler(params: {
           intent: "immediate",
           reason: `hook:${jobId}:error`,
           ...(failureWakeAgentId ? { agentId: failureWakeAgentId } : {}),
-          ...(failureSessionKey ? { sessionKey: failureSessionKey } : {}),
+          ...(!isUnscopedSessionKeySentinel(failureSessionKey)
+            ? { sessionKey: failureSessionKey }
+            : {}),
         });
       }
     };
@@ -491,16 +488,9 @@ export function createGatewayHooksRequestHandler(params: {
               sessionKey: eventSessionKey,
             });
             if (value.wakeMode === "now") {
-              // Target the wake at the agent/session the announcement landed on
-              // instead of fanning out to every heartbeat-enabled agent. Only
-              // pass an agentId when the hook explicitly named one: an unnamed
-              // hook resolves its event session from fresh config at announce
-              // time, and pairing a frozen default agent with that session can
-              // wake a stale agent after a default-agent reload. The global
-              // scope is the one exception: its unscoped "global" key carries
-              // no agent identity, so the scheduler cannot resolve a target
-              // from it — carry the fresh default agent so the announced
-              // event is actually consumed.
+              // Target the event's agent/session; unnamed non-global hooks rely on the
+              // fresh session key so a default-agent reload cannot wake a stale agent.
+              // Global wakes carry the agent but omit the shared key to prevent coalescing.
               requestHeartbeat({
                 source: "hook",
                 intent: "immediate",
@@ -510,7 +500,9 @@ export function createGatewayHooksRequestHandler(params: {
                   : isUnscopedSessionKeySentinel(eventSessionKey)
                     ? { agentId: resolveDefaultAgentId(cfg) }
                     : {}),
-                ...(eventSessionKey ? { sessionKey: eventSessionKey } : {}),
+                ...(!isUnscopedSessionKeySentinel(eventSessionKey)
+                  ? { sessionKey: eventSessionKey }
+                  : {}),
               });
             }
           } else if (result.status === "ok" && !value.deliver) {
