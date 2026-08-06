@@ -73,12 +73,15 @@ import {
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   createModelStreamCooperativeScheduler,
+  isOpenAICompletionsThinkingEnabled,
   log,
   parseOpenAICompletionsUsage,
+  readOpenAICompletionsContentDeltas,
   resolvePromptCacheKey,
   sortTransportToolsByName,
   throwIfModelStreamAborted,
   type MutableAssistantOutput,
+  type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 import { failTransportStream, finalizeTransportStream } from "./transport-stream-shared.js";
@@ -452,7 +455,7 @@ async function processOpenAICompletionsStream(
     }
     previous.text += next.text;
   };
-  const appendThinkingDeltaInternal = (reasoningDelta: { signature: string; text: string }) => {
+  const appendThinkingDeltaInternal = (reasoningDelta: { signature?: string; text: string }) => {
     if (!currentBlock || currentBlock.type !== "thinking") {
       currentBlock = {
         type: "thinking",
@@ -504,7 +507,7 @@ async function processOpenAICompletionsStream(
     }
     isFlushingPendingPostToolCallDeltas = false;
   };
-  const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
+  const appendThinkingDelta = (reasoningDelta: { signature?: string; text: string }) => {
     flushPendingPostToolCallDeltas();
     appendThinkingDeltaInternal(reasoningDelta);
   };
@@ -626,7 +629,7 @@ async function processOpenAICompletionsStream(
     if (latestBlock?.type === "text" || latestBlock?.type === "toolCall") {
       return;
     }
-    appendThinkingDelta({ signature: "", text: "" });
+    appendThinkingDelta({ text: "" });
   };
   const flushReasoningTagTextPartitionerAtEnd = () => {
     for (const delta of reasoningTagTextPartitioner.flush()) {
@@ -701,49 +704,52 @@ async function processOpenAICompletionsStream(
       if (hasMirroredReasoning) {
         reasoningTagTextPartitioner.markStrict();
       }
-      if (choiceDelta.content) {
-        // Structured content can contain visible text and thinking blocks in the
-        // same delta, so route each extracted block through the normal stream path.
-        const contentDeltas = getCompletionsContentDeltas(choiceDelta.content);
-        for (const contentDelta of contentDeltas) {
-          if (contentDelta.kind === "text") {
-            const routedDeltas = hasMirroredReasoning
-              ? reasoningTagTextPartitioner.push(contentDelta.text)
-              : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
-            for (const routedDelta of routedDeltas) {
-              appendPartitionedVisibleDelta(routedDelta);
-            }
-          } else {
-            reasoningTagTextPartitioner.markStrict();
-            appendRoutedContentDelta(contentDelta);
+      // Share the content/refusal owner to avoid duplicate mirrored refusals.
+      const contentDeltas = readOpenAICompletionsContentDeltas(
+        choiceDelta.content,
+        choiceDelta.refusal,
+        reasoningDeltas
+          .filter((reasoningDelta) => reasoningDelta.kind === "thinking")
+          .map((reasoningDelta) => reasoningDelta.text),
+      );
+      const appendReasoningDeltas = () => {
+        for (const reasoningDelta of reasoningDeltas) {
+          if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+            continue;
+          }
+          if (currentBlock?.type === "toolCall") {
+            queuePostToolCallDelta({ ...reasoningDelta });
+            continue;
+          }
+          if (reasoningDelta.kind === "text") {
+            appendTextDelta(reasoningDelta.text);
+          } else if (emitReasoning) {
+            appendThinkingDelta(reasoningDelta);
           }
         }
+      };
+      // The dedicated field owns reasoning order/signature; a distinct content
+      // thought follows it, while an exact mirror was removed by the decoder.
+      if (hasMirroredReasoning) {
+        appendReasoningDeltas();
       }
-      // Chat Completions can put safety/structured-output refusals in a top-level
-      // `refusal` field with content null. Surface that as visible text so the
-      // assistant turn is not empty (Responses path already routes refusal deltas).
-      const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
-      if (refusalText) {
-        const routedDeltas = hasMirroredReasoning
-          ? reasoningTagTextPartitioner.push(refusalText)
-          : reasoningTagTextPartitioner.pushVisible(refusalText);
-        for (const routedDelta of routedDeltas) {
-          appendPartitionedVisibleDelta(routedDelta);
+      for (const contentDelta of contentDeltas) {
+        if (contentDelta.kind === "text") {
+          const routedDeltas = hasMirroredReasoning
+            ? reasoningTagTextPartitioner.push(contentDelta.text)
+            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
+          for (const routedDelta of routedDeltas) {
+            appendPartitionedVisibleDelta(routedDelta);
+          }
+        } else {
+          if (reasoningTagTextPartitioner.hasPending()) {
+            reasoningTagTextPartitioner.markStrict();
+          }
+          appendRoutedContentDelta(contentDelta);
         }
       }
-      for (const reasoningDelta of reasoningDeltas) {
-        if (reasoningDelta.kind === "thinking" && !emitReasoning) {
-          continue;
-        }
-        if (currentBlock?.type === "toolCall") {
-          queuePostToolCallDelta({ ...reasoningDelta });
-          continue;
-        }
-        if (reasoningDelta.kind === "text") {
-          appendTextDelta(reasoningDelta.text);
-        } else if (emitReasoning) {
-          appendThinkingDelta(reasoningDelta);
-        }
+      if (!hasMirroredReasoning) {
+        appendReasoningDeltas();
       }
       const toolCallDeltas = normalizedDelta.toolCalls;
       if (toolCallDeltas.length > 0) {
@@ -854,17 +860,6 @@ async function processOpenAICompletionsStream(
   }
 }
 
-type CompletionsReasoningDelta =
-  | {
-      kind: "thinking";
-      signature: string;
-      text: string;
-    }
-  | {
-      kind: "text";
-      text: string;
-    };
-
 function shouldFilterDeepSeekDsmlText(compat: ReturnType<typeof getCompat>) {
   return compat.thinkingFormat === "deepseek";
 }
@@ -886,63 +881,153 @@ const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_BARS.flatMap((bar) =>
 const DEEPSEEK_DSML_TOOL_CLOSE_TOKENS = DEEPSEEK_DSML_BARS.flatMap((bar) =>
   DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `</${bar}DSML${bar}${kind}>`),
 );
+const DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES = DEEPSEEK_DSML_BARS.map(
+  (bar) => `<${bar}DSML${bar}invoke`,
+);
+const DEEPSEEK_DSML_INVOKE_CLOSE_TOKENS = DEEPSEEK_DSML_BARS.map(
+  (bar) => `</${bar}DSML${bar}invoke>`,
+);
 const DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN = Math.max(
   ...DEEPSEEK_DSML_TOOL_OPEN_TOKENS.map((token) => token.length),
 );
+const DEEPSEEK_DSML_RECOVERY_MAX_BOUNDARY_LEN = Math.max(
+  ...DEEPSEEK_DSML_TOOL_OPEN_TOKENS.map((token) => token.length),
+  ...DEEPSEEK_DSML_TOOL_CLOSE_TOKENS.map((token) => token.length),
+  ...DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES.map((token) => token.length),
+  ...DEEPSEEK_DSML_INVOKE_CLOSE_TOKENS.map((token) => token.length),
+);
+
+// Match MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES / MAX_POST_TOOL_CALL_BUFFER_BYTES.
+const MAX_DSML_RECOVERY_BUFFER_BYTES = 256_000;
+const DEEPSEEK_DSML_SCAN_BATCH_CHARS = 64 * 1_024;
+
+type DeepSeekDsmlToolBlockScanState = {
+  offset: number;
+  mode: "outer" | "invoke-open" | "invoke-body";
+  invokeOpenStart: number;
+};
 
 function createDeepSeekDsmlToolCallRecoverer() {
   let buffer = "";
+  let bufferBytes = 0;
+  let bufferEndsWithHighSurrogate = false;
+  let pendingScanChars = 0;
+  let activeOpenToken: string | null = null;
+  let blockScanState: DeepSeekDsmlToolBlockScanState = {
+    offset: 0,
+    mode: "outer",
+    invokeOpenStart: -1,
+  };
+  const resetBlockScan = () => {
+    activeOpenToken = null;
+    pendingScanChars = 0;
+    blockScanState = { offset: 0, mode: "outer", invokeOpenStart: -1 };
+  };
 
   const consume = (final: boolean): DeepSeekDsmlRecoveredPart[] => {
     const output: DeepSeekDsmlRecoveredPart[] = [];
     while (buffer) {
-      const open = findEarliestStringToken(buffer, DEEPSEEK_DSML_TOOL_OPEN_TOKENS);
+      const open = activeOpenToken
+        ? { index: 0, token: activeOpenToken }
+        : findEarliestStringToken(buffer, DEEPSEEK_DSML_TOOL_OPEN_TOKENS);
       if (!open) {
+        resetBlockScan();
         if (final) {
           output.push({ kind: "text", text: buffer });
           buffer = "";
+          bufferBytes = 0;
+          bufferEndsWithHighSurrogate = false;
           return output;
         }
         const keep = longestDeepSeekDsmlToolOpenPrefixSuffixLength(buffer);
         const emitLength = buffer.length - keep;
         if (emitLength > 0) {
-          output.push({ kind: "text", text: buffer.slice(0, emitLength) });
-          buffer = buffer.slice(emitLength);
+          const emitted = buffer.slice(0, emitLength);
+          output.push({ kind: "text", text: emitted });
+          bufferBytes -= Buffer.byteLength(emitted, "utf8");
+          buffer = buffer.slice(emitted.length);
+          if (!buffer) {
+            bufferEndsWithHighSurrogate = false;
+          }
         }
         return output;
       }
 
       if (open.index > 0) {
-        output.push({ kind: "text", text: buffer.slice(0, open.index) });
-        buffer = buffer.slice(open.index);
+        const prefix = buffer.slice(0, open.index);
+        output.push({ kind: "text", text: prefix });
+        bufferBytes -= Buffer.byteLength(prefix, "utf8");
+        buffer = buffer.slice(prefix.length);
+        resetBlockScan();
       }
 
-      const afterOpen = buffer.slice(open.token.length);
-      const close = findEarliestStringToken(afterOpen, DEEPSEEK_DSML_TOOL_CLOSE_TOKENS);
+      activeOpenToken = open.token;
+      if (blockScanState.offset === 0) {
+        blockScanState.offset = open.token.length;
+      }
+      const blockScan = scanDeepSeekDsmlToolBlock(
+        buffer,
+        open.token.replace("<", "</"),
+        open.token.length,
+        blockScanState,
+      );
+      if (blockScan.kind === "nested-open") {
+        throw new Error("Nested DeepSeek DSML recovery wrappers are not supported");
+      }
+      const close = blockScan.kind === "close" ? blockScan : null;
       if (!close) {
         if (final) {
           output.push({ kind: "text", text: buffer });
           buffer = "";
+          bufferBytes = 0;
+          bufferEndsWithHighSurrogate = false;
+          return output;
+        }
+        if (bufferBytes > MAX_DSML_RECOVERY_BUFFER_BYTES) {
+          throw new Error("Exceeded DeepSeek DSML recovery buffer limit");
         }
         return output;
       }
 
-      const body = afterOpen.slice(0, close.index);
-      const blockLength = open.token.length + close.index + close.token.length;
+      resetBlockScan();
+      const body = buffer.slice(open.token.length, close.index);
+      const blockText = buffer.slice(0, close.index + close.token.length);
+      const blockBytes = Buffer.byteLength(blockText, "utf8");
+      if (blockBytes > MAX_DSML_RECOVERY_BUFFER_BYTES) {
+        throw new Error("Exceeded DeepSeek DSML recovery buffer limit");
+      }
       const recoveredToolCalls = parseDeepSeekDsmlToolCallBlock(body);
       if (recoveredToolCalls.length > 0) {
         output.push(...recoveredToolCalls);
       } else {
-        output.push({ kind: "text", text: buffer.slice(0, blockLength) });
+        output.push({ kind: "text", text: blockText });
       }
-      buffer = buffer.slice(blockLength);
+      bufferBytes -= Buffer.byteLength(blockText, "utf8");
+      buffer = buffer.slice(blockText.length);
+      if (!buffer) {
+        bufferEndsWithHighSurrogate = false;
+      }
     }
     return output;
   };
 
   return {
     push(chunk: string) {
+      const append = utf8ByteLengthForAppend(bufferEndsWithHighSurrogate, chunk);
+      bufferBytes += append.bytes;
+      bufferEndsWithHighSurrogate = append.endsWithHighSurrogate;
       buffer += chunk;
+      pendingScanChars += chunk.length;
+      if (
+        activeOpenToken &&
+        pendingScanChars < DEEPSEEK_DSML_SCAN_BATCH_CHARS &&
+        !chunk.includes("<") &&
+        !chunk.includes(">") &&
+        bufferBytes <= MAX_DSML_RECOVERY_BUFFER_BYTES
+      ) {
+        return [];
+      }
+      pendingScanChars = 0;
       return consume(false);
     },
     flush() {
@@ -953,23 +1038,23 @@ function createDeepSeekDsmlToolCallRecoverer() {
 
 function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlToolCall[] {
   const toolCalls: RecoveredDeepSeekDsmlToolCall[] = [];
-  const invokeOpenRegex = /<[|｜]DSML[|｜]invoke\b([^>]*)>/g;
+  const invokeOpenRegex = /<[|｜]DSML[|｜]invoke\b([^<>]*)>/g;
   let openMatch: RegExpExecArray | null;
   while ((openMatch = invokeOpenRegex.exec(body)) !== null) {
-    const invokeName = parseXmlAttribute(openMatch[1] ?? "", "name");
-    if (!invokeName) {
-      continue;
-    }
     const invokeBodyStart = openMatch.index + openMatch[0].length;
     const invokeClose = findEarliestStringToken(body.slice(invokeBodyStart), [
       "</|DSML|invoke>",
       "</｜DSML｜invoke>",
     ]);
     if (!invokeClose) {
-      continue;
+      break;
     }
     const invokeBody = body.slice(invokeBodyStart, invokeBodyStart + invokeClose.index);
     invokeOpenRegex.lastIndex = invokeBodyStart + invokeClose.index + invokeClose.token.length;
+    const invokeName = parseXmlAttribute(openMatch[1] ?? "", "name");
+    if (!invokeName) {
+      continue;
+    }
     const parsedArguments = parseDeepSeekDsmlInvokeArguments(invokeBody);
     if (!parsedArguments) {
       continue;
@@ -1048,15 +1133,117 @@ function decodeDeepSeekDsmlText(value: string): string {
     .replaceAll("&amp;", "&");
 }
 
-function findEarliestStringToken(text: string, tokens: readonly string[]) {
+function findEarliestStringToken(text: string, tokens: readonly string[], fromIndex = 0) {
   let best: { index: number; token: string } | null = null;
   for (const token of tokens) {
-    const index = text.indexOf(token);
+    const index = text.indexOf(token, fromIndex);
     if (index !== -1 && (!best || index < best.index)) {
       best = { index, token };
     }
   }
   return best;
+}
+
+function scanDeepSeekDsmlToolBlock(
+  text: string,
+  closeToken: string,
+  contentStartIndex: number,
+  state: DeepSeekDsmlToolBlockScanState,
+):
+  | { kind: "close"; index: number; token: string }
+  | { kind: "nested-open"; index: number; token: string }
+  | { kind: "incomplete" } {
+  while (state.offset < text.length) {
+    if (state.mode === "invoke-open") {
+      const nextOpen = text.indexOf("<", state.offset);
+      const nextClose = text.indexOf(">", state.offset);
+      if (nextClose === -1 && nextOpen === -1) {
+        state.offset = text.length;
+        return { kind: "incomplete" };
+      }
+      if (nextOpen !== -1 && (nextClose === -1 || nextOpen < nextClose)) {
+        state.mode = "outer";
+        state.offset = nextOpen;
+        state.invokeOpenStart = -1;
+        continue;
+      }
+      const invokeOpenTag = text.slice(state.invokeOpenStart, nextClose + 1);
+      if (!/^<[|｜]DSML[|｜]invoke\b[^<>]*>$/.test(invokeOpenTag)) {
+        state.mode = "outer";
+        state.offset = state.invokeOpenStart + 1;
+        state.invokeOpenStart = -1;
+        continue;
+      }
+      state.mode = "invoke-body";
+      state.offset = nextClose + 1;
+      state.invokeOpenStart = -1;
+      continue;
+    }
+
+    if (state.mode === "invoke-body") {
+      const invokeClose = findEarliestStringToken(
+        text,
+        DEEPSEEK_DSML_INVOKE_CLOSE_TOKENS,
+        state.offset,
+      );
+      if (!invokeClose) {
+        state.offset = Math.max(0, text.length - DEEPSEEK_DSML_RECOVERY_MAX_BOUNDARY_LEN + 1);
+        return { kind: "incomplete" };
+      }
+      state.mode = "outer";
+      state.offset = invokeClose.index + invokeClose.token.length;
+      continue;
+    }
+
+    const toolOpen = findEarliestStringToken(text, DEEPSEEK_DSML_TOOL_OPEN_TOKENS, state.offset);
+    const toolCloseIndex = text.indexOf(closeToken, state.offset);
+    const invokeOpen = findEarliestStringToken(
+      text,
+      DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES,
+      state.offset,
+    );
+    const next = [
+      toolOpen ? { kind: "nested-open" as const, ...toolOpen } : null,
+      toolCloseIndex === -1
+        ? null
+        : { kind: "close" as const, index: toolCloseIndex, token: closeToken },
+      invokeOpen ? { kind: "invoke-open" as const, ...invokeOpen } : null,
+    ]
+      .filter((candidate) => candidate !== null)
+      .toSorted((left, right) => left.index - right.index)[0];
+    if (!next) {
+      state.offset = Math.max(
+        contentStartIndex,
+        text.length - DEEPSEEK_DSML_RECOVERY_MAX_BOUNDARY_LEN + 1,
+      );
+      return { kind: "incomplete" };
+    }
+    if (next.kind === "invoke-open") {
+      state.mode = "invoke-open";
+      state.invokeOpenStart = next.index;
+      state.offset = next.index + next.token.length;
+      continue;
+    }
+    return next;
+  }
+  return { kind: "incomplete" };
+}
+
+function utf8ByteLengthForAppend(bufferEndsWithHighSurrogate: boolean, chunk: string) {
+  let bytes = Buffer.byteLength(chunk, "utf8");
+  if (!chunk) {
+    return { bytes, endsWithHighSurrogate: bufferEndsWithHighSurrogate };
+  }
+  const nextCodeUnit = chunk.charCodeAt(0);
+  if (bufferEndsWithHighSurrogate && nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+    // Each isolated surrogate counts as three UTF-8 bytes; the joined scalar is four.
+    bytes -= 2;
+  }
+  const finalCodeUnit = chunk.charCodeAt(chunk.length - 1);
+  return {
+    bytes,
+    endsWithHighSurrogate: finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff,
+  };
 }
 
 function longestDeepSeekDsmlToolOpenPrefixSuffixLength(text: string) {
@@ -1068,49 +1255,6 @@ function longestDeepSeekDsmlToolOpenPrefixSuffixLength(text: string) {
     }
   }
   return 0;
-}
-
-function getCompletionsContentDeltas(content: unknown): CompletionsReasoningDelta[] {
-  if (typeof content === "string") {
-    return content ? [{ kind: "text", text: content }] : [];
-  }
-  if (Array.isArray(content)) {
-    return content.flatMap((item) => getCompletionsContentDeltas(item));
-  }
-  if (!content || typeof content !== "object") {
-    return [];
-  }
-  const record = content as Record<string, unknown>;
-  const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
-  // Some OpenAI-compatible providers, notably Mistral thinking models, stream
-  // `delta.content` as typed objects. Never coerce those objects directly or
-  // they become persisted visible text like "[object Object]".
-  const extractText = (value: unknown): string => {
-    if (typeof value === "string") {
-      return value;
-    }
-    if (Array.isArray(value)) {
-      return value.map((item) => extractText(item)).join("");
-    }
-    if (value && typeof value === "object") {
-      const nested = value as Record<string, unknown>;
-      return extractText(nested.text ?? nested.content ?? nested.thinking);
-    }
-    return "";
-  };
-  const text = extractText(record.text ?? record.content ?? record.thinking);
-  if (!text) {
-    return [];
-  }
-  // Preserve provider reasoning as OpenClaw thinking blocks so channel/UI
-  // surfaces can decide whether to show it instead of leaking it as answer text.
-  if (type.includes("thinking") || type.includes("reasoning")) {
-    return [{ kind: "thinking", signature: "content", text }];
-  }
-  if (type === "text" || type === "output_text" || type.endsWith(".output_text")) {
-    return [{ kind: "text", text }];
-  }
-  return [];
 }
 
 function getCompletionsReasoningDeltas(
@@ -1322,11 +1466,6 @@ function resolveOpenAICompletionsEffectiveContextTokens(
 
 function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
   return format === "qwen" || format === "qwen-chat-template";
-}
-
-function isOpenAICompletionsThinkingEnabled(effort: OpenAIReasoningEffort): boolean {
-  const normalized = effort.trim().toLowerCase();
-  return normalized !== "off" && normalized !== "none";
 }
 
 function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {

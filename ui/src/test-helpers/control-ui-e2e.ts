@@ -10,12 +10,6 @@ import type { Locator, Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import {
-  controlUiBrowserOnlySharedModuleAliases,
-  resolveExternalPackageAliasesForVite,
-  resolveSourcePackageAliasesForVite,
-  resolveTsconfigPathAliasesForVite,
-} from "../../vite.config.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
 export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
@@ -141,6 +135,33 @@ const commonJsOptimizeDeps = [
   "highlight.js/lib/languages/typescript",
   "highlight.js/lib/languages/xml",
   "highlight.js/lib/languages/yaml",
+] as const;
+
+const defaultControlUiFeatureMethods = [
+  "chat.abort",
+  "chat.metadata",
+  "chat.startup",
+  "session.members.add",
+  "session.members.list",
+  "session.members.remove",
+  "session.visibility.set",
+  "sessions.abort",
+  "sessions.branches.switch",
+  "sessions.compact",
+  "sessions.compaction.branch",
+  "sessions.compaction.restore",
+  "sessions.create",
+  "sessions.delete",
+  "sessions.dispatch",
+  "sessions.fork",
+  "sessions.groups.delete",
+  "sessions.groups.list",
+  "sessions.groups.put",
+  "sessions.groups.rename",
+  "sessions.patch",
+  "sessions.reclaim",
+  "sessions.reset",
+  "sessions.rewind",
 ] as const;
 
 export type MockGatewayRequest = {
@@ -312,7 +333,22 @@ export async function startControlUiE2eServer(
     buildId: "e2e",
   },
 ): Promise<ControlUiE2eServer> {
-  const { createServer } = await import("vite");
+  // Shared browser fixtures import this helper; load filesystem-bound Vite
+  // configuration only when its Node-owned development server actually starts.
+  const [
+    { createServer },
+    { controlUiLocaleModulesPlugin },
+    {
+      controlUiBrowserOnlySharedModuleAliases,
+      resolveExternalPackageAliasesForVite,
+      resolveSourcePackageAliasesForVite,
+      resolveTsconfigPathAliasesForVite,
+    },
+  ] = await Promise.all([
+    import("vite"),
+    import("../../config/control-ui-locales.ts"),
+    import("../../vite.config.ts"),
+  ]);
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
   const port = await resolveAvailableLoopbackPort();
@@ -334,7 +370,7 @@ export async function startControlUiE2eServer(
       ],
     },
     publicDir: path.join(uiRoot, "public"),
-    plugins: [controlUiBrowserOnlySharedModuleAliases()],
+    plugins: [controlUiLocaleModulesPlugin(), controlUiBrowserOnlySharedModuleAliases()],
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },
@@ -422,7 +458,9 @@ function normalizeScenario(
     devGitBranch: scenario.devGitBranch?.trim() || "",
     deviceAuthMigrationPending: scenario.deviceAuthMigrationPending ?? false,
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
-    featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
+    // Baseline scenarios represent a current Gateway. Tests for unsupported or
+    // mixed-version methods provide an explicit narrower catalog.
+    featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     inFlightRun: scenario.inFlightRun ?? null,

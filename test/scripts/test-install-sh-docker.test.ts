@@ -296,7 +296,7 @@ function normalizeInstallE2eAgentOutput(output: string) {
 function extractInstallSmokeUpdateJsonParser(): string {
   const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
   const match = script.match(
-    /UPDATE_JSON="\$UPDATE_JSON" \\\n[\s\S]*?node - <<'NODE'\n([\s\S]*?)\nNODE\n\n  echo "==> Verify updated version"/u,
+    /UPDATE_JSON="\$UPDATE_JSON" \\\n[\s\S]*?node - <<'NODE'\n([\s\S]*?)\nNODE\n\n {2}echo "==> Verify updated version"/u,
   );
   if (!match) {
     throw new Error("install smoke update JSON parser was not found");
@@ -463,7 +463,9 @@ async function waitForCondition(
     if (predicate()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -590,6 +592,9 @@ docker_e2e_docker_cmd() {
       return 2
       ;;
   esac
+}
+docker_e2e_docker_run_cmd() {
+  docker_e2e_docker_cmd "$@"
 }
 mv() {
   if [[ "$FAIL_AI_SWAP" == "1" && "$1" == */ai-dist && "$2" == */packages/ai/dist ]]; then

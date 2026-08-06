@@ -16,7 +16,6 @@ import {
   buildSlackMpimHistoryBotReply,
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
-  type MockScenarioState,
 } from "./mock-openai-contracts.js";
 import {
   extractExactReplyDirective,
@@ -66,11 +65,15 @@ function readCompletedImageGenerationMediaPath(prompt: string): string | undefin
   return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
 }
 
-export function buildAssistantText(
-  input: ResponsesInputItem[],
-  body: Record<string, unknown>,
-  scenarioState: MockScenarioState,
-) {
+export const QA_COMPACTION_RETRY_FINAL_MARKER = "Protocol note: replay unsafe after write.";
+
+export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boolean {
+  return /^Successfully wrote \d+ bytes to compaction-retry-summary\.txt\.?$/i.test(
+    toolOutput.trim(),
+  );
+}
+
+export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const latestRawUserText = extractAllUserTexts(input).at(-1) ?? "";
   const completedImageMediaPath = readCompletedImageGenerationMediaPath(latestRawUserText);
@@ -321,11 +324,6 @@ export function buildAssistantText(
   if (/report the visible code/i.test(prompt) && /FORKED-CONTEXT-ALPHA/i.test(allInputText)) {
     return "FORKED-CONTEXT-ALPHA";
   }
-  const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
-    return fanoutCompleteReply;
-  }
   if (
     /forked subagent context qa check/i.test(prompt) &&
     /FORKED-CONTEXT-ALPHA/i.test(allInputText)
@@ -361,13 +359,8 @@ export function buildAssistantText(
     (/compaction retry mutating tool check/i.test(allInputText) ||
       /compaction-retry-summary\.txt/i.test(toolOutput))
   ) {
-    if (
-      toolOutput.includes("Replay safety: unsafe after write.") ||
-      /compaction-retry-summary\.txt/i.test(toolOutput) ||
-      /successfully (?:wrote|replaced)/i.test(toolOutput) ||
-      /\bwrote\b.*\bcompaction-retry-summary\.txt\b/i.test(toolOutput)
-    ) {
-      return "Protocol note: replay unsafe after write.";
+    if (isCanonicalCompactionRetryWriteResult(toolOutput)) {
+      return QA_COMPACTION_RETRY_FINAL_MARKER;
     }
     return "";
   }

@@ -172,7 +172,7 @@ export async function readOllamaModelShowInfo(
     init: {
       method: "POST",
       headers,
-      body: JSON.stringify({ name: modelName }),
+      body: JSON.stringify({ model: modelName }),
     },
     // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
     timeoutMs: Math.min(opts?.timeoutMs ?? OLLAMA_SHOW_TIMEOUT_MS, OLLAMA_SHOW_TIMEOUT_MS),
@@ -182,7 +182,9 @@ export async function readOllamaModelShowInfo(
   });
   try {
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // Capture can retain a cloned tee branch, so cancellation must not delay
+      // the guard's bounded dispatcher release.
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`Ollama model inspection failed with HTTP ${response.status}`);
     }
     const data = await readProviderJsonResponse<{
@@ -440,7 +442,9 @@ export async function fetchOllamaModels(
     });
     try {
       if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
+        // Capture can retain a cloned tee branch, so cancellation must not delay
+        // the guard's bounded dispatcher release.
+        void response.body?.cancel().catch(() => undefined);
         return { reachable: true, models: [] };
       }
       const data = await readProviderJsonResponse<OllamaTagsResponse>(

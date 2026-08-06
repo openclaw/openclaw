@@ -26,6 +26,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { logError } from "../logger.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -34,7 +35,6 @@ import {
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
-  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
   resolveAssistantLiveChatInput,
   resolveMergedAssistantText,
@@ -448,9 +448,9 @@ export function createAgentEventHandler({
     }
   };
 
-  // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
-  // sessions-patch.ts). Short-circuit everyone else so high-volume chat streams
-  // do not touch the session store. Results are cached per sessionKey because
+  // Native, ACP, and spawn-owned dashboard sessions can carry spawnedBy.
+  // Short-circuit everyone else so high-volume chat streams do not touch the
+  // session store. Results are cached per sessionKey because
   // spawnedBy is immutable once set and resolveSpawnedBy sits on the hot event
   // path (delta, flush, final, agent, seq-gap).
   const spawnedByCache = new Map<string, string | null>();
@@ -458,9 +458,11 @@ export function createAgentEventHandler({
     if (spawnedByCache.has(sessionKey)) {
       return spawnedByCache.get(sessionKey)!;
     }
-    // Non-lineage keys return null without polluting the cache; only
-    // subagent/ACP results (positive or null) are worth memoising.
-    if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey)) {
+    // Non-lineage keys return null without polluting the cache; only eligible
+    // child-session results (positive or null) are worth memoising.
+    const isDashboardSession =
+      parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
+    if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey) && !isDashboardSession) {
       return null;
     }
     let result: string | null = null;
@@ -486,6 +488,8 @@ export function createAgentEventHandler({
       !isStaleLifecycleEventForSession({
         owningSessionId: evt.sessionId,
         currentSessionId: row?.sessionId,
+        eventStartedAt: evt.data?.startedAt,
+        currentStartedAt: row?.startedAt,
       })
         ? deriveGatewaySessionLifecycleProjectionPatch({
             entry: row
@@ -904,20 +908,13 @@ export function createAgentEventHandler({
     const now = Date.now();
     run.rawBuffer = mergedRawText;
     run.bufferUpdatedAt = now;
-    // Sanitize only after merging. Protected blocks and directive tags can span
-    // delta frames; cleaning each frame independently can expose their contents.
-    const normalizedText = normalizeLiveAssistantBufferedText(mergedRawText);
-    const projected = projectLiveAssistantBufferedText(normalizedText);
-    const mergedText = projected.text;
-    run.buffer = mergedText;
-    if (projected.suppress) {
-      return;
-    }
-    if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
-      return;
-    }
     const last = run.deltaSentAt ?? 0;
     if (now - last < 150) {
+      return;
+    }
+    const projected = chatRunState.resolveBuffer(clientRunId);
+    const mergedText = projected.text;
+    if (projected.suppress || shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
     const broadcastDelta = resolveBroadcastDelta({
@@ -959,7 +956,7 @@ export function createAgentEventHandler({
     sourceRunId: string,
     options?: { suppressLeadFragments?: boolean },
   ) => {
-    const bufferedText = (chatRunState.runs.get(clientRunId)?.buffer ?? "").trim();
+    const bufferedText = chatRunState.resolveBuffer(clientRunId).text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
