@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../../browser/act-policy.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import {
@@ -129,13 +130,13 @@ export async function readFields(opts: {
   });
 }
 
-/** Cap on batch action JSON read from stdin; keeps a runaway pipe from filling memory. */
-const ACTIONS_STDIN_MAX_BYTES = 1_000_000;
+/** Cap on batch action JSON read from files or stdin. */
+const ACTIONS_INPUT_MAX_BYTES = 1_000_000;
 
 /** Reads stdin to a UTF-8 string, throwing once the byte cap is exceeded. */
 async function readStdinText(
   stream: NodeJS.ReadableStream = process.stdin,
-  maxBytes = ACTIONS_STDIN_MAX_BYTES,
+  maxBytes = ACTIONS_INPUT_MAX_BYTES,
 ): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -159,7 +160,18 @@ export async function readActionsPayload(opts: {
     throw new Error("Specify only one of --actions or --actions-file");
   }
   if (opts.actionsFile) {
-    return opts.actionsFile === "-" ? await readStdinText() : await readFile(opts.actionsFile);
+    if (opts.actionsFile === "-") {
+      return await readStdinText();
+    }
+    // Resolve symlinks so an --actions-file that points to a regular file keeps
+    // working, while the bounded regular-file read still rejects directories,
+    // FIFOs, and oversized targets.
+    const resolvedActionsPath = await fs.realpath(opts.actionsFile);
+    const { buffer } = await readRegularFile({
+      filePath: resolvedActionsPath,
+      maxBytes: ACTIONS_INPUT_MAX_BYTES,
+    });
+    return buffer.toString("utf8");
   }
   return opts.actions ?? "";
 }
