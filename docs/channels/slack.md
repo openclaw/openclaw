@@ -954,6 +954,8 @@ Surface different features that extend the above defaults.
 
 The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. Each visible Agent View root routes to its own OpenClaw thread session, and Slack's ordered active-view entities reach the agent only as untrusted context.
 
+To replace the default Home view, set `channels.slack.appHome.view` to an inline Block Kit Home view object. Account-level `appHome` overrides the top-level value. Views that fail validation or that Slack rejects at publish time are logged and fall back to the built-in default. Keep the view free of secrets because Slack shows Home-tab content to workspace members who can open the app.
+
 Existing apps that already use `features.assistant_view` can keep their current manifest. OpenClaw continues to handle `assistant_thread_started` and `assistant_thread_context_changed` for those installs. Slack makes migration from Assistant View to Agent View irreversible and requires users to hard refresh afterward, so do not replace `assistant_view` on an existing app until you intend to migrate the whole workspace.
 
 <AccordionGroup>

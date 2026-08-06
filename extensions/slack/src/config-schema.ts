@@ -44,6 +44,12 @@ const SlackPresenceEventsSchema = z
   })
   .strict();
 
+const SlackAppHomeSchema = z
+  .object({
+    view: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
 const SlackChannelSchema = buildGroupEntrySchema(
   {
     ignoreOtherMentions: z.boolean().optional(),
@@ -137,6 +143,7 @@ const SlackAccountSchema = z
       })
       .strict()
       .optional(),
+    appHome: SlackAppHomeSchema.optional(),
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     typingReaction: z.string().optional(),
