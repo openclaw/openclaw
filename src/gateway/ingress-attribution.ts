@@ -1,7 +1,11 @@
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
-import { buildRateLimitIdentityKey, type AuthRateLimitSubject } from "./auth-rate-limit.js";
+import {
+  buildRateLimitIdentityKey,
+  normalizeRateLimitClientIp,
+  type AuthRateLimitSubject,
+} from "./auth-rate-limit.js";
 import {
   hasForwardedRequestHeaders,
   isLoopbackAddress,
@@ -169,7 +173,7 @@ function managedTailscaleProxySubject(req: IncomingMessage): AuthRateLimitSubjec
   return {
     key: buildRateLimitIdentityKey(
       "managed-tailscale-proxy",
-      req.socket.remoteAddress ?? "unknown",
+      normalizeRateLimitClientIp(req.socket.remoteAddress),
     ),
     exemption: "none",
   };

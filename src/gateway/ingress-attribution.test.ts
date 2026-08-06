@@ -183,6 +183,21 @@ describe("gateway ingress attribution", () => {
     limiter.dispose();
   });
 
+  it("canonicalizes equivalent managed proxy peer address forms", async () => {
+    const resolvePeer = async (remoteAddress: string) =>
+      await resolveGatewayIngressAttribution({
+        req: request({ remoteAddress, headers: proxyHeaders }),
+        tailscaleMode: "serve",
+      });
+    const ipv4 = await resolvePeer("127.0.0.1");
+    const mapped = await resolvePeer("::ffff:127.0.0.1");
+    if (ipv4.kind === "unattributable-proxy" || mapped.kind === "unattributable-proxy") {
+      throw new Error("expected attributed ingress");
+    }
+
+    expect(mapped.rateLimit.subject).toEqual(ipv4.rateLimit.subject);
+  });
+
   it("keeps tagged managed Serve clients eligible for shared-secret auth", async () => {
     const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
     const attribution = await resolveGatewayIngressAttribution({
