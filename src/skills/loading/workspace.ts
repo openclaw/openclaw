@@ -34,6 +34,7 @@ import type {
   SkillUsagePath,
 } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
+import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import {
@@ -1228,6 +1229,14 @@ function loadSkillEntries(
         dir: managedSkillsDir,
         source: "openclaw-managed",
       });
+  const workshopWritableSkills = workspaceOnly
+    ? []
+    : resolveSkillWorkshopConfig(opts?.config).writableRoots.flatMap((dir) =>
+        loadSkills({
+          dir,
+          source: "openclaw-workshop",
+        }),
+      );
   const osHomeDir = resolveUserHomeDir();
   const personalAgentsSkillsDir = osHomeDir
     ? path.resolve(osHomeDir, ".agents", "skills")
@@ -1259,7 +1268,7 @@ function loadSkillEntries(
     }
     merged.set(record.skill.name, record);
   };
-  // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
+  // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace < workshop roots
   for (const record of extraSkills) {
     mergeRecord(record);
   }
@@ -1276,6 +1285,9 @@ function loadSkillEntries(
     mergeRecord(record);
   }
   for (const record of workspaceSkills) {
+    mergeRecord(record);
+  }
+  for (const record of workshopWritableSkills) {
     mergeRecord(record);
   }
 

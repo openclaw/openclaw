@@ -19,6 +19,7 @@ import { clearSkillProposalRollback, readSkillProposalRollback } from "./store-s
 import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
 import { commitPendingSkillProposalTransition } from "./store-sqlite-transition.js";
 import { withSkillProposalTargetLock } from "./target-lock.js";
+import { assertWritableProposalTarget } from "./target.js";
 import type { SkillProposalRecord, SkillProposalRollback } from "./types.js";
 
 export async function reconcileInterruptedSkillProposalApply(params: {
@@ -99,6 +100,11 @@ export async function reconcileInterruptedSkillProposalApply(params: {
             pluginValidation: "skip",
           }).readBestEffortConfig());
         const workshopConfig = resolveSkillWorkshopConfig(config);
+        const allowedExternalRootRealPaths = assertWritableProposalTarget({
+          workspaceDir: params.workspaceDir,
+          target: stored.record.target,
+          config,
+        });
         const restoration = await prepareWorkspaceSkillRestoration({
           workspaceDir: params.workspaceDir,
           skillDir: stored.record.target.skillDir,
@@ -109,6 +115,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
           mode: stored.record.kind,
           symlinkPolicy: {
             allowWrites: workshopConfig.allowSymlinkTargetWrites,
+            allowedExternalRootRealPaths,
             allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
               ? resolveAllowedSkillSymlinkTargetRealPaths(config)
               : [],
