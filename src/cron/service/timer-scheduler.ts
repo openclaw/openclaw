@@ -262,8 +262,9 @@ async function onAdmittedTimer(state: CronServiceState) {
       const admissionReleases = tryAcquireCronRunSlots(state, due.length);
       const admittedDue = due.slice(0, admissionReleases.length);
       if (admittedDue.length < due.length) {
-        // A single replaceable listener keeps unreserved due work responsive:
-        // no Gateway root, Promise waiter, or durable reservation is retained.
+        // A single listener keeps unreserved due work responsive without a
+        // Gateway root, Promise waiter, or durable reservation. Preserve an
+        // earlier partial batch's activation gate across later saturated ticks.
         setCronRunCapacityListener(
           state,
           admittedDue.length > 0
@@ -690,7 +691,6 @@ async function onAdmittedTimer(state: CronServiceState) {
         return collectRunnableJobs(state, state.deps.nowMs()).length > 0;
       });
       if (hasMoreDueJobs) {
-        setCronRunCapacityListener(state, null);
         await onAdmittedTimer(state);
       }
     }

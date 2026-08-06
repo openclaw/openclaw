@@ -228,6 +228,12 @@ describe("cron service cross-tick bounded admission", () => {
     await firstTwoStarted.promise;
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
     expect(state.runAdmission.capacityListener).toBeTypeOf("function");
+    const partialBatchListener = state.runAdmission.capacityListener;
+
+    // A later tick with no free slots must not replace the partial batch's
+    // activation-gated wake-up with an unconditional recheck.
+    await onTimer(state);
+    expect(state.runAdmission.capacityListener).toBe(partialBatchListener);
     const partiallyReservedStore = await loadCronStore(store.storePath);
     expect(
       partiallyReservedStore.jobs.find((job) => job.id === jobC.id)?.state.queuedAtMs,

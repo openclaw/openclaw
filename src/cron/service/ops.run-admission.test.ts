@@ -166,6 +166,10 @@ describe("cron service run admission", () => {
     });
 
     let now = dueAt;
+    const reservationsPersistReached = createDeferred<void>();
+    const releaseReservationsPersist = createDeferred<void>();
+    const failingActivationReached = createDeferred<void>();
+    const releaseFailingActivation = createDeferred<void>();
     const completingStarted = createDeferred<void>();
     const releaseCompleting = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
@@ -190,22 +194,40 @@ describe("cron service run admission", () => {
       .mockImplementation(async (storePath, nextStore, opts) => {
         const nextFailingJob = nextStore.jobs.find((job) => job.id === failingJob.id);
         if (reservationsPersisted && nextFailingJob?.state.runningAtMs === dueAt + 1) {
+          failingActivationReached.resolve();
+          await releaseFailingActivation.promise;
           throw new Error("scheduled sibling activation failed");
         }
-        await realSave(storePath, nextStore, opts);
         if (
           !reservationsPersisted &&
           nextStore.jobs.filter((job) => job.state.queuedAtMs === dueAt).length === 2
         ) {
           reservationsPersisted = true;
+          reservationsPersistReached.resolve();
+          await releaseReservationsPersist.promise;
           now = dueAt + 1;
         }
+        await realSave(storePath, nextStore, opts);
       });
 
     try {
       const timerRun = onTimer(state);
+      await reservationsPersistReached.promise;
+      const activationGatedListener = state.runAdmission.capacityListener;
+      expect(activationGatedListener).toBeTypeOf("function");
+
+      // Queue a later saturated tick ahead of the admitted mappers. It must
+      // retain the first batch's activation gate instead of replacing it with
+      // an unconditional capacity recheck.
+      const saturatedTick = onTimer(state);
+      releaseReservationsPersist.resolve();
+      await saturatedTick;
+      expect(state.runAdmission.capacityListener).toBe(activationGatedListener);
+
       await completingStarted.promise;
+      await failingActivationReached.promise;
       releaseCompleting.resolve({ status: "ok", summary: "completed sibling" });
+      releaseFailingActivation.resolve();
       await expect(timerRun).rejects.toThrow();
     } finally {
       saveSpy.mockRestore();

@@ -60,11 +60,11 @@ export function tryAcquireCronRunSlots(
   return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
 }
 
-/** Keep at most one wake-up for due scheduled work left without a free slot. */
-export function setCronRunCapacityListener(
-  state: CronServiceState,
-  listener: (() => void) | null,
-): void {
+/** Keep the first wake-up until capacity release consumes or cancellation clears it. */
+export function setCronRunCapacityListener(state: CronServiceState, listener: () => void): void {
+  if (state.runAdmission.capacityListener) {
+    return;
+  }
   state.runAdmission.capacityListener = listener;
 }
 
