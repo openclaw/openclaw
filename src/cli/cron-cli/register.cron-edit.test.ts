@@ -880,4 +880,38 @@ describe("cron edit command", () => {
     errorSpy.mockRestore();
     exitSpy.mockRestore();
   });
+
+  it("rejects chat delivery flags when the existing job is already main", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "tick" },
+        };
+      }
+      return { ok: true };
+    });
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(
+        ["edit", "job-1", "--channel", "telegram", "--to", "123"],
+        { from: "user" },
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+        ),
+      );
+      expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
+        false,
+      );
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
 });

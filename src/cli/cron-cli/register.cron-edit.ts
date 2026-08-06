@@ -209,14 +209,22 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.to === "string" ||
             typeof opts.account === "string" ||
             typeof opts.threadId === "string";
-          if (
-            sessionTarget === "main" &&
-            typeof opts.systemEvent === "string" &&
-            hasExplicitChatDelivery
-          ) {
-            throw new Error(
-              "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
-            );
+          const hasDeliveryClear =
+            Boolean(opts.clearChannel) ||
+            Boolean(opts.clearTo) ||
+            Boolean(opts.clearThreadId) ||
+            Boolean(opts.clearAccount);
+          if (hasExplicitChatDelivery && !hasDeliveryClear) {
+            // Fail before RPC for existing main jobs too — not only when the
+            // edit also passes --session main --system-event. Skip when a
+            // clear-* mutex pair is present so that validator still owns it.
+            const effectiveSessionTarget =
+              sessionTarget ?? (await readExistingCronJob()).sessionTarget;
+            if (effectiveSessionTarget === "main") {
+              throw new Error(
+                "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+              );
+            }
           }
           const hasWebhookDelivery = typeof opts.webhook === "string";
           const deliveryModeFlagCount = [

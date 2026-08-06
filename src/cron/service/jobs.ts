@@ -43,6 +43,7 @@ import {
   assertStreamScheduleSupport,
   assertSupportedJobSpec,
   assertTriggerSupport,
+  hasConcreteChatDeliveryTarget,
   hasConcreteFailureDestination,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
@@ -374,13 +375,17 @@ export function applyJobPatch(
     );
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
-    // Main-session jobs cannot auto-announce; keep only an empty failure
-    // destination object when the patch is clearing nested fields.
-    const failureDestination = job.delivery?.failureDestination;
-    job.delivery =
-      failureDestination && !hasConcreteFailureDestination(failureDestination)
-        ? { mode: "none", failureDestination }
-        : undefined;
+    // Main-session jobs cannot auto-announce. Strip benign shells (bestEffort-only
+    // or empty failureDestination opt-outs) so those edits stay no-ops, but do
+    // not swallow concrete chat routing — create rejects those via
+    // assertDeliverySupport, and silent drop made update look successful.
+    if (!hasConcreteChatDeliveryTarget(job.delivery)) {
+      const failureDestination = job.delivery?.failureDestination;
+      job.delivery =
+        failureDestination && !hasConcreteFailureDestination(failureDestination)
+          ? { mode: "none", failureDestination }
+          : undefined;
+    }
   }
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;

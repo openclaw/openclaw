@@ -345,6 +345,39 @@ describe("applyJobPatch delivery merge", () => {
       }),
     ).toBeNull();
   });
+
+  it("rejects concrete chat delivery on main instead of silently dropping it", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+        },
+      }),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+
+  it("rejects retargeting an announce job onto main while keeping chat routing", () => {
+    const job = makeJob({
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
 });
 
 describe("applyJobPatch failure alert merge", () => {

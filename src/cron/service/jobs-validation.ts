@@ -292,6 +292,23 @@ export function hasConcreteFailureDestination(
   );
 }
 
+/** True when delivery names a chat route (channel/to/thread/account), not just mode/bestEffort. */
+export function hasConcreteChatDeliveryTarget(
+  delivery: Pick<CronDelivery, "channel" | "to" | "threadId" | "accountId"> | undefined,
+): boolean {
+  if (!delivery) {
+    return false;
+  }
+  return Boolean(
+    (typeof delivery.channel === "string" && delivery.channel.trim() !== "") ||
+    (typeof delivery.to === "string" && delivery.to.trim() !== "") ||
+    (delivery.threadId !== undefined &&
+      delivery.threadId !== null &&
+      String(delivery.threadId).trim() !== "") ||
+    (typeof delivery.accountId === "string" && delivery.accountId.trim() !== ""),
+  );
+}
+
 export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   const failureDestination = job.delivery?.failureDestination;
   if (!failureDestination) {
