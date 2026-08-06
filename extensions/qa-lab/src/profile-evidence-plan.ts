@@ -5,7 +5,7 @@ import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
 
 const idSchema = z.string().trim().min(1);
-const cellSchema = z.strictObject({
+export const qaProfileEvidenceCellSchema = z.strictObject({
   scenarioId: idSchema,
   executionKind: z.enum(["flow", "script", "vitest", "playwright"]),
   channel: idSchema.nullable(),
@@ -29,15 +29,15 @@ const planShape = z.strictObject({
       reasons: z.array(idSchema).min(1),
     }),
   ),
-  expectedCells: z.array(cellSchema),
-  observedCells: z.array(cellSchema),
-  missingCells: z.array(cellSchema),
+  expectedCells: z.array(qaProfileEvidenceCellSchema),
+  observedCells: z.array(qaProfileEvidenceCellSchema),
+  missingCells: z.array(qaProfileEvidenceCellSchema),
   counts: z.record(z.enum(listNames), z.number().int().nonnegative()),
 });
 
 type PlanShape = z.infer<typeof planShape>;
 
-function cellKey(cell: z.infer<typeof cellSchema>) {
+function cellKey(cell: z.infer<typeof qaProfileEvidenceCellSchema>) {
   return `${cell.scenarioId}\u0000${cell.executionKind}\u0000${cell.channel ?? ""}`;
 }
 

@@ -11,6 +11,7 @@ import {
 } from "./runtime-parity-timing.js";
 import { captureRuntimeParityCell } from "./runtime-parity.js";
 import {
+  buildQaSuiteScenarioEvidence,
   type QaSuiteGatewayHeapSnapshot,
   type QaSuiteGatewayRssSample,
   writeQaSuiteArtifacts,
@@ -238,6 +239,7 @@ export async function runQaFlowSuiteStandard(
     };
     await captureGatewayHeapCheckpoint("suite-start");
     for (const [index, scenario] of selectedScenarios.entries()) {
+      await params?.profileCheckpoint?.start(scenario.id, params.profileCheckpointChannel);
       startedScenarioIds.push(scenario.id);
       const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
       writeQaSuiteProgress(
@@ -302,6 +304,25 @@ export async function runQaFlowSuiteStandard(
             },
           ],
         };
+      }
+      if (params?.profileCheckpoint) {
+        await params.profileCheckpoint.complete({
+          scenarioId: scenario.id,
+          channel: params.profileCheckpointChannel,
+          evidence: buildQaSuiteScenarioEvidence({
+            channelDriver: transportFactoryResult.driver,
+            channelId: params.channelId ?? params.channelDriverSelection?.channel ?? transport.id,
+            evidenceMode: params.evidenceMode,
+            primaryModel,
+            providerMode,
+            profileCheckpointChannel: params.profileCheckpointChannel,
+            repoRoot,
+            scenarioDefinition: scenario,
+            scenarioResult,
+          }),
+          result: scenarioResult.status === "skip" ? "skipped" : scenarioResult.status,
+          reason: scenarioResult.details,
+        });
       }
       if (params?.captureRuntimeParityCell && selectedScenarios.length === 1) {
         runtimeParityCellTiming = measureRuntimeParityCellTiming({

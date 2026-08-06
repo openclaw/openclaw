@@ -13,6 +13,7 @@ import {
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
+import { createQaProfileRunCheckpoint } from "./profile-run-checkpoint.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
@@ -37,13 +38,8 @@ import {
   scenarioRequiresIsolatedQaSuiteWorker,
 } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
-import {
-  buildQaSuiteSummaryJson,
-  type QaSuiteResult,
-  type QaSuiteRunParams,
-  type QaSuiteScenarioResult,
-  type QaSuiteSummaryJson,
-} from "./suite.js";
+import type { QaSuiteResult, QaSuiteRunParams, QaSuiteScenarioResult } from "./suite-types.js";
+import { buildQaSuiteSummaryJson, type QaSuiteSummaryJson } from "./suite.js";
 import {
   isQaTestFileScenario,
   runQaTestFileScenarios,
@@ -67,6 +63,7 @@ export type QaSuiteRuntimeResult = {
 );
 
 type QaUnifiedSuiteResult = {
+  evidence: QaEvidenceSummaryJson;
   evidencePath: string;
   outputDir: string;
   report: string;
@@ -431,6 +428,8 @@ async function runQaTestFileSuiteFromRuntime(params: {
     primaryModel,
     scenarios: params.scenarios,
     writeEvidenceFile: runParams?.writeEvidenceFile,
+    profileCheckpoint: runParams?.profileCheckpoint,
+    profileCheckpointChannel: runParams?.profileCheckpointChannel,
   });
 }
 
@@ -726,6 +725,7 @@ async function writeUnifiedQaSuiteArtifacts(params: {
   await fs.writeFile(reportPath, report, "utf8");
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   return {
+    evidence: params.evidence,
     evidencePath,
     outputDir: params.outputDir,
     report,
@@ -984,6 +984,7 @@ async function runUnifiedQaSuite(params: {
               concurrency: partition.concurrency,
               channelId: channelGroup.channelId,
               channelDriverSelection: channelGroup.channelDriverSelection,
+              profileCheckpointChannel: channelGroup.channel,
               workerStartStaggerMs: isolatedPartition
                 ? (params.runParams?.workerStartStaggerMs ??
                   resolveQaSuiteWorkerStartStaggerMs(
@@ -1408,27 +1409,57 @@ async function runUnifiedQaSuite(params: {
 }
 
 export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
-  const runParams = args[0];
+  const input = args[0];
+  const runParams = input?.profileRun
+    ? {
+        ...input,
+        repoRoot: path.resolve(input.repoRoot ?? process.cwd()),
+        outputDir: await resolveQaSuiteOutputDir(
+          path.resolve(input.repoRoot ?? process.cwd()),
+          input.outputDir,
+        ),
+      }
+    : input;
   const plan = await resolveSuiteExecutionPlan(runParams);
+  const checkpoint =
+    runParams?.profileRun && runParams.outputDir
+      ? await createQaProfileRunCheckpoint({
+          outputDir: runParams.outputDir,
+          expectedCells: plan.expectedCells,
+          spec: runParams.profileRun,
+        })
+      : undefined;
+  const effectiveParams = checkpoint
+    ? { ...runParams, profileCheckpoint: checkpoint.reporter }
+    : runParams;
   if (plan.kind === "unified") {
     const { observedCells, ...result } = await runUnifiedQaSuite({
-      runParams,
+      runParams: effectiveParams,
       plan,
     });
+    const finalizedEvidence = checkpoint
+      ? await checkpoint.finalize(result.evidence)
+      : result.evidence;
     return {
       executionKind: "suite",
       expectedCells: plan.expectedCells,
       observedCells,
-      result,
+      result: { ...result, evidence: finalizedEvidence },
     };
   }
-  const result = await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(...args));
+  const result = await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(effectiveParams));
+  const authoritativeEvidence =
+    result.evidence ??
+    validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(result.evidencePath, "utf8")));
+  const finalizedEvidence = checkpoint
+    ? await checkpoint.finalize(authoritativeEvidence)
+    : result.evidence;
   const startedScenarioIds = new Set(result.startedScenarioIds);
   return {
     executionKind: "flow",
     expectedCells: plan.expectedCells,
     observedCells: plan.expectedCells.filter((cell) => startedScenarioIds.has(cell.scenarioId)),
-    result,
+    result: finalizedEvidence ? { ...result, evidence: finalizedEvidence } : result,
   };
 }
 

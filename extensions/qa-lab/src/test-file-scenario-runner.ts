@@ -5,6 +5,7 @@ import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtim
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import { toRepoRelativePath } from "./cli-paths.js";
 import {
+  bindQaEvidenceSummaryToProfileCell,
   buildPlaywrightEvidenceSummary,
   buildScriptEvidenceSummary,
   buildVitestEvidenceSummary,
@@ -16,6 +17,7 @@ import {
   resolveQaEvidenceProfile,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import type { QaProfileRunCheckpointReporter } from "./profile-run-checkpoint.js";
 import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
@@ -57,6 +59,8 @@ type QaTestFileScenarioRunParams = {
   runCommand?: QaScenarioCommandRunner;
   scenarios: readonly QaSeedScenarioWithSource[];
   writeEvidenceFile?: boolean;
+  profileCheckpoint?: QaProfileRunCheckpointReporter;
+  profileCheckpointChannel?: string;
 };
 
 type QaScenarioCommandRunner = (
@@ -575,6 +579,40 @@ export async function runQaTestFileScenarios(
     ...params.env,
   };
   const results: QaTestFileScenarioResult[] = [];
+  const completeProfileScenario = async (result: QaTestFileScenarioResult) => {
+    const profileCheckpoint = params.profileCheckpoint;
+    if (!profileCheckpoint) {
+      return;
+    }
+    const evidence = bindQaEvidenceSummaryToProfileCell({
+      summary: buildTestFileEvidence({
+        artifactPaths: buildScenarioArtifactPaths({
+          repoRoot: params.repoRoot,
+          results: [result],
+        }),
+        evidenceMode: params.evidenceMode,
+        env,
+        generatedAt: new Date().toISOString(),
+        kind,
+        primaryModel: params.primaryModel,
+        providerMode: params.providerMode,
+        repoRoot: params.repoRoot,
+        results: [result],
+      }),
+      cell: {
+        scenarioId: result.scenario.id,
+        executionKind: result.scenario.execution.kind,
+        channel: params.profileCheckpointChannel ?? null,
+      },
+    });
+    await profileCheckpoint.complete({
+      scenarioId: result.scenario.id,
+      channel: params.profileCheckpointChannel,
+      evidence,
+      result: result.status,
+      reason: result.failureMessage,
+    });
+  };
   const dockerBatchScenarios =
     kind === "script" && !params.failFast ? scenarios.filter(isDockerE2eScenario) : [];
   const dockerBatchGroups = new Map<number, typeof dockerBatchScenarios>();
@@ -590,22 +628,33 @@ export async function runQaTestFileScenarios(
   for (const [scenarioTimeoutMs, group] of dockerBatchGroups) {
     // A scheduler invocation shares one fallback lane timeout, so timeout overrides
     // stay in separate batches instead of borrowing another scenario's budget.
-    results.push(
-      ...(await runDockerE2eBatch({
-        commandTimeoutMs: scenarioTimeoutMs,
-        env,
-        outputDir: params.outputDir,
-        repoRoot: params.repoRoot,
-        runCommand,
-        scenarios: group,
-      })),
-    );
+    const profileCheckpoint = params.profileCheckpoint;
+    if (profileCheckpoint) {
+      await Promise.all(
+        group.map((scenario) =>
+          profileCheckpoint.start(scenario.id, params.profileCheckpointChannel),
+        ),
+      );
+    }
+    const batchResults = await runDockerE2eBatch({
+      commandTimeoutMs: scenarioTimeoutMs,
+      env,
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+      runCommand,
+      scenarios: group,
+    });
+    for (const result of batchResults) {
+      await completeProfileScenario(result);
+    }
+    results.push(...batchResults);
   }
   const dockerBatchScenarioIds = new Set(dockerBatchScenarios.map((scenario) => scenario.id));
   for (const scenario of scenarios) {
     if (dockerBatchScenarioIds.has(scenario.id)) {
       continue;
     }
+    await params.profileCheckpoint?.start(scenario.id, params.profileCheckpointChannel);
     const result = await runQaTestFileScenario({
       env,
       commandTimeoutMs,
@@ -614,6 +663,7 @@ export async function runQaTestFileScenarios(
       runCommand,
       scenario,
     });
+    await completeProfileScenario(result);
     results.push(result);
     if (params.failFast && result.status !== "pass") {
       break;

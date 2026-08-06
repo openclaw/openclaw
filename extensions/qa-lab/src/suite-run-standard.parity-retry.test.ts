@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -37,7 +38,7 @@ const mocks = vi.hoisted(() => ({
     stop: vi.fn(async () => {}),
   })),
   writeQaSuiteArtifacts: vi.fn(async () => ({
-    evidence: undefined,
+    evidence: undefined as QaEvidenceSummaryJson | undefined,
     evidencePath: "/qa-output/qa-evidence.json",
     report: "",
     reportPath: "/qa-output/qa-suite-report.md",
@@ -61,7 +62,8 @@ vi.mock("./providers/server-runtime.js", () => ({
 vi.mock("./runtime-parity.js", () => ({
   captureRuntimeParityCell: mocks.captureRuntimeParityCell,
 }));
-vi.mock("./suite-artifacts.js", () => ({
+vi.mock("./suite-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite-artifacts.js")>()),
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 vi.mock("./suite-runtime-gateway.js", () => ({
@@ -200,8 +202,112 @@ describe("QA suite Control UI ownership", () => {
 });
 
 describe("QA runtime parity scenario retry isolation", () => {
-  it("does not report terminal success when cleanup fails after writing artifacts", async () => {
+  it("checkpoints a standard scenario around its durable evidence", async () => {
+    const events: string[] = [];
+    const profileCheckpoint = {
+      start: vi.fn(async (scenarioId: string) => {
+        events.push(`start:${scenarioId}`);
+      }),
+      complete: vi.fn(async ({ scenarioId }: { scenarioId: string }) => {
+        events.push(`complete:${scenarioId}`);
+      }),
+    };
+    mocks.writeQaSuiteArtifacts.mockResolvedValueOnce({
+      evidence: {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-08-06T00:00:00.000Z",
+        evidenceMode: "full",
+        entries: [],
+      },
+      evidencePath: "/qa-output/qa-evidence.json",
+      report: "",
+      reportPath: "/qa-output/qa-suite-report.md",
+      summaryPath: "/qa-output/qa-suite-summary.json",
+    });
+
+    await runQaFlowSuiteStandard(
+      { lab: makeRetryTestLab(), profileCheckpoint },
+      makeRetryTestContext(),
+      vi.fn<QaSuiteScenarioRunner>().mockImplementation(async () => {
+        events.push("run");
+        return makeRetryTestResult("pass");
+      }),
+    );
+
+    expect(events).toEqual([
+      "start:runtime-soak-100-turn",
+      "run",
+      "complete:runtime-soak-100-turn",
+    ]);
+    expect(profileCheckpoint.complete).toHaveBeenCalledWith(
+      expect.objectContaining({ result: "pass", evidence: expect.any(Object) }),
+    );
+  });
+
+  it("persists the first terminal scenario before a later start interruption", async () => {
+    const context = makeRetryTestContext();
+    const firstScenario = context.selectedScenarios[0]!;
+    const laterScenario = makeQaSuiteTestScenario("runtime-soak-later");
+    context.selectedScenarios = [firstScenario, laterScenario];
+    const interruption = new Error("interrupted after first terminal cell");
+    const events: string[] = [];
+    const profileCheckpoint = {
+      start: vi.fn(async (scenarioId: string) => {
+        events.push(`start:${scenarioId}`);
+        if (scenarioId === laterScenario.id) {
+          throw interruption;
+        }
+      }),
+      complete: vi.fn(async ({ scenarioId }: { scenarioId: string }) => {
+        events.push(`complete:${scenarioId}`);
+      }),
+    };
+    mocks.runQaFlowSuiteCleanupPlan.mockImplementationOnce(async () => {
+      events.push("cleanup");
+      return [];
+    });
+    const runScenario = vi
+      .fn<QaSuiteScenarioRunner>()
+      .mockImplementation(async (_env, scenario) => {
+        events.push(`run:${scenario.id}`);
+        return makeRetryTestResult("pass");
+      });
+
+    await expect(
+      runQaFlowSuiteStandard({ lab: makeRetryTestLab(), profileCheckpoint }, context, runScenario),
+    ).rejects.toBe(interruption);
+
+    expect(events).toEqual([
+      `start:${firstScenario.id}`,
+      `run:${firstScenario.id}`,
+      `complete:${firstScenario.id}`,
+      `start:${laterScenario.id}`,
+      "cleanup",
+    ]);
+    expect(runScenario).toHaveBeenCalledOnce();
+    expect(profileCheckpoint.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioId: firstScenario.id,
+        evidence: expect.objectContaining({
+          entries: [
+            expect.objectContaining({
+              test: expect.objectContaining({ id: firstScenario.id }),
+              result: expect.objectContaining({ status: "pass" }),
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("persists scenario success before parent cleanup failure without completing the run", async () => {
     const lab = makeRetryTestLab();
+    const profileCheckpoint = {
+      start: vi.fn(async () => {}),
+      complete: vi.fn(async () => {}),
+    };
     const cleanupError = Object.assign(new Error("gateway shutdown socket reset"), {
       code: "ECONNRESET",
     });
@@ -210,7 +316,7 @@ describe("QA runtime parity scenario retry isolation", () => {
     ]);
 
     const thrown = await runQaFlowSuiteStandard(
-      { lab },
+      { lab, profileCheckpoint },
       makeRetryTestContext(),
       vi.fn<QaSuiteScenarioRunner>().mockResolvedValue(makeRetryTestResult("pass")),
     ).catch((error: unknown) => error);
@@ -231,6 +337,11 @@ describe("QA runtime parity scenario retry isolation", () => {
     expect((thrown as Error).cause).toBe(cleanupError);
     expect(lab.setLatestReport).toHaveBeenCalledWith(
       expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
+    );
+    expect(profileCheckpoint.start).toHaveBeenCalledOnce();
+    expect(profileCheckpoint.complete).toHaveBeenCalledOnce();
+    expect(profileCheckpoint.complete.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.runQaFlowSuiteCleanupPlan.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(
       mocks.writeQaSuiteProgress.mock.calls.filter(([, message]) =>

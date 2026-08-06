@@ -1,15 +1,7 @@
 // QA Lab tests cover profile scorecard evidence math.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  validateQaEvidenceSummaryJson,
-  type QaEvidenceSummaryJson,
-  type QaEvidenceSummaryEntry,
-} from "./evidence-summary.js";
-import type { QaProfileEvidencePlan } from "./profile-evidence-plan.js";
-import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
+import type { QaEvidenceSummaryJson, QaEvidenceSummaryEntry } from "./evidence-summary.js";
+import { buildQaProfileScorecardEvidence } from "./scorecard-evidence.js";
 import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js";
 
 function evidenceEntry(
@@ -58,46 +50,15 @@ function categoryInventory(coverageIds: string[]): QaScorecardCategoryCoverageRe
   };
 }
 
-async function buildQaProfileScorecardEvidence(params: {
+function buildScorecardFixture(params: {
   evidence: QaEvidenceSummaryJson;
   filters: { surface?: string; category?: string };
   categories: readonly QaScorecardCategoryCoverageReport[];
 }) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-scorecard-evidence-"));
-  const evidencePath = path.join(tempRoot, "qa-evidence-summary.json");
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence)}\n`, "utf8");
-  try {
-    const scorecard = await attachQaProfileScorecardEvidenceToFile({
-      evidencePath,
-      profile: "release",
-      profilePlan: {
-        profile: "release",
-        membership: [],
-        selected: [],
-        excluded: [],
-        expectedCells: [],
-        observedCells: [],
-        missingCells: [],
-        counts: {
-          membership: 0,
-          selected: 0,
-          excluded: 0,
-          expectedCells: 0,
-          observedCells: 0,
-          missingCells: 0,
-        },
-      } satisfies QaProfileEvidencePlan,
-      filters: params.filters,
-      categories: params.categories,
-    });
-    const writtenEvidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(evidencePath, "utf8")),
-    );
-    expect(writtenEvidence.profilePlan?.profile).toBe("release");
-    return { scorecard, writtenEvidence };
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+  return {
+    scorecard: buildQaProfileScorecardEvidence(params),
+    sourceEvidence: params.evidence,
+  };
 }
 
 describe("profile scorecard evidence", () => {
@@ -120,7 +81,7 @@ describe("profile scorecard evidence", () => {
       missingInventoryRefs: [],
     };
 
-    const { scorecard } = await buildQaProfileScorecardEvidence({
+    const { scorecard } = buildScorecardFixture({
       evidence: evidenceSummary([
         evidenceEntry([
           {
@@ -194,7 +155,7 @@ describe("profile scorecard evidence", () => {
       missingCoverageIds: [],
     };
 
-    const { scorecard } = await buildQaProfileScorecardEvidence({
+    const { scorecard } = buildScorecardFixture({
       evidence: evidenceSummary([
         evidenceEntry([
           {
@@ -233,7 +194,7 @@ describe("profile scorecard evidence", () => {
   ] as const)(
     "scores %s primary evidence from its execution result",
     async (status, fulfilled, categoryStatus) => {
-      const { scorecard, writtenEvidence } = await buildQaProfileScorecardEvidence({
+      const { scorecard, sourceEvidence } = buildScorecardFixture({
         evidence: evidenceSummary([
           evidenceEntry([{ id: "coverage.one", role: "primary" }], status),
         ]),
@@ -252,7 +213,7 @@ describe("profile scorecard evidence", () => {
         fulfilled,
         missing: 1 - fulfilled,
       });
-      expect(writtenEvidence.entries[0]?.test.id).toBe("coverage-fixture");
+      expect(sourceEvidence.entries[0]?.test.id).toBe("coverage-fixture");
     },
   );
 
@@ -266,7 +227,7 @@ describe("profile scorecard evidence", () => {
     ];
     const statuses = ["pass", "fail", "blocked", "skipped"] as const;
 
-    const { scorecard, writtenEvidence } = await buildQaProfileScorecardEvidence({
+    const { scorecard, sourceEvidence } = buildScorecardFixture({
       evidence: evidenceSummary([
         evidenceEntry([{ id: "coverage.pass", role: "primary" }], "pass", "scenario-a"),
         evidenceEntry(
@@ -314,8 +275,8 @@ describe("profile scorecard evidence", () => {
       missing: 4,
       fulfillmentPercent: 20,
     });
-    expect(writtenEvidence.entries.map((entry) => entry.result.status)).toStrictEqual(statuses);
-    expect(writtenEvidence.entries[1]?.coverage).toContainEqual({
+    expect(sourceEvidence.entries.map((entry) => entry.result.status)).toStrictEqual(statuses);
+    expect(sourceEvidence.entries[1]?.coverage).toContainEqual({
       id: "coverage.diagnostic",
       role: "secondary",
     });

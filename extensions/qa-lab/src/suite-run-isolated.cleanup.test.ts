@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { runQaFlowSuiteIsolated } from "./suite-run-isolated.js";
@@ -26,7 +27,7 @@ const mocks = vi.hoisted(() => ({
     stop: vi.fn(async () => {}),
   })),
   writeQaSuiteArtifacts: vi.fn(async () => ({
-    evidence: undefined,
+    evidence: undefined as QaEvidenceSummaryJson | undefined,
     evidencePath: "/qa-output/qa-evidence.json",
     report: "",
     reportPath: "/qa-output/qa-suite-report.md",
@@ -46,7 +47,8 @@ vi.mock("./gateway-child.js", () => ({
 vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer: vi.fn(async () => undefined),
 }));
-vi.mock("./suite-artifacts.js", () => ({
+vi.mock("./suite-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite-artifacts.js")>()),
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 vi.mock("./suite-runtime-gateway.js", () => ({
@@ -88,6 +90,22 @@ function createCleanupTestContext(): QaSuiteResolvedRunContext {
     concurrency: 1,
     progressEnabled: false,
     gatewayHeapCheckpointsEnabled: false,
+  };
+}
+
+function createCheckpointEvidence(scenarioId: string): QaEvidenceSummaryJson {
+  return {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-08-06T00:00:00.000Z",
+    evidenceMode: "full",
+    entries: [
+      {
+        test: { kind: "qa-scenario", id: scenarioId, title: scenarioId },
+        coverage: [],
+        result: { status: "pass" },
+      },
+    ],
   };
 }
 
@@ -170,6 +188,110 @@ describe("isolated QA suite transport cleanup", () => {
     expect((thrown as Error).cause).toBe(cleanupError);
     expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
     stderrWrite.mockRestore();
+  });
+
+  it("records child cleanup failure from the parent without exposing the reporter", async () => {
+    const lab = createCleanupTestLab();
+    const profileCheckpoint = {
+      start: vi.fn(async () => {}),
+      complete: vi.fn(async () => {}),
+    };
+    mocks.writeQaSuiteArtifacts.mockResolvedValue({
+      evidence: {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-08-06T00:00:00.000Z",
+        evidenceMode: "full",
+        entries: [],
+      },
+      evidencePath: "/qa-output/qa-evidence.json",
+      report: "",
+      reportPath: "/qa-output/qa-suite-report.md",
+      summaryPath: "/qa-output/qa-suite-summary.json",
+    });
+    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (childParams) => {
+      expect(childParams?.profileCheckpoint).toBeUndefined();
+      throw new Error("child cleanup failed");
+    });
+
+    const result = await runQaFlowSuiteIsolated(
+      {
+        lab,
+        profileCheckpoint,
+        startLab: async () => lab,
+      },
+      createCleanupTestContext(),
+      runChild,
+    );
+
+    expect(profileCheckpoint.start).toHaveBeenCalledOnce();
+    expect(profileCheckpoint.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: "fail",
+        reason: "child cleanup failed",
+      }),
+    );
+    expect(result.scenarios).toMatchObject([{ status: "fail", details: "child cleanup failed" }]);
+  });
+
+  it("persists the first isolated result before a later start interruption", async () => {
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    const firstScenario = context.selectedScenarios[0]!;
+    const laterScenario = makeQaSuiteTestScenario("later-isolated-scenario");
+    context.selectedScenarios = [firstScenario, laterScenario];
+    context.concurrency = 1;
+    const interruption = new Error("interrupted after first isolated cell");
+    const profileCheckpoint = {
+      start: vi.fn(async (scenarioId: string) => {
+        if (scenarioId === laterScenario.id) {
+          throw interruption;
+        }
+      }),
+      complete: vi.fn(async () => {}),
+    };
+    const runChild = vi.fn<QaSuiteRunner>().mockResolvedValue({
+      outputDir: "/qa-child",
+      evidence: createCheckpointEvidence(firstScenario.id),
+      evidencePath: "/qa-child/qa-evidence.json",
+      reportPath: "/qa-child/qa-suite-report.md",
+      summaryPath: "/qa-child/qa-suite-summary.json",
+      report: "",
+      scenarios: [{ name: firstScenario.title, status: "pass", steps: [] }],
+      startedScenarioIds: [firstScenario.id],
+      watchUrl: lab.baseUrl,
+    });
+
+    await expect(
+      runQaFlowSuiteIsolated(
+        {
+          lab,
+          profileCheckpoint,
+          startLab: async () => lab,
+        },
+        context,
+        runChild,
+      ),
+    ).rejects.toBe(interruption);
+
+    expect(runChild).toHaveBeenCalledOnce();
+    expect(profileCheckpoint.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioId: firstScenario.id,
+        evidence: expect.objectContaining({
+          entries: createCheckpointEvidence(firstScenario.id).entries,
+          profileCell: {
+            scenarioId: firstScenario.id,
+            executionKind: firstScenario.execution.kind,
+            channel: null,
+          },
+        }),
+        result: "pass",
+      }),
+    );
+    expect(profileCheckpoint.complete.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.disposeRegisteredAgentHarnesses.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("prints one generic completion after a real nested standard run and parent cleanup", async () => {

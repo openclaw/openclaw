@@ -17,7 +17,7 @@ import {
 } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
+import { buildQaSuiteScenarioEvidence, writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import {
   collectQaSuiteTransportPolicy,
   mapQaSuiteWithConcurrency,
@@ -69,6 +69,8 @@ export async function runQaRuntimeParitySuite(params: {
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
   writeEvidenceFile?: boolean;
+  profileCheckpoint?: QaSuiteRunParams["profileCheckpoint"];
+  profileCheckpointChannel?: string;
 }) {
   const ownsLab = !params.lab;
   const startLab = requireQaSuiteStartLab(params.startLab);
@@ -122,6 +124,7 @@ export async function runQaRuntimeParitySuite(params: {
       params.selectedScenarios,
       params.concurrency,
       async (scenario, index): Promise<QaSuiteScenarioResult> => {
+        await params.profileCheckpoint?.start(scenario.id, params.profileCheckpointChannel);
         const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
         writeQaSuiteProgress(
           params.progressEnabled,
@@ -227,6 +230,26 @@ export async function runQaRuntimeParitySuite(params: {
           scenarioName: scenario.title,
           result: parity,
         });
+        if (params.profileCheckpoint) {
+          await params.profileCheckpoint.complete({
+            scenarioId: scenario.id,
+            channel: params.profileCheckpointChannel,
+            evidence: buildQaSuiteScenarioEvidence({
+              channelDriver: transportFactoryResult.driver,
+              channelId: params.channelId ?? params.channelDriverSelection?.channel ?? transport.id,
+              evidenceMode: params.evidenceMode,
+              primaryModel: params.primaryModel,
+              providerMode: params.providerMode,
+              profileCheckpointChannel: params.profileCheckpointChannel,
+              repoRoot: params.repoRoot,
+              scenarioDefinition: scenario,
+              scenarioResult: parityScenarioResult,
+            }),
+            result:
+              parityScenarioResult.status === "skip" ? "skipped" : parityScenarioResult.status,
+            reason: parityScenarioResult.details,
+          });
+        }
         liveScenarioOutcomes[index] = {
           id: scenario.id,
           name: scenario.title,

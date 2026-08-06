@@ -3,9 +3,14 @@ import { z } from "zod";
 import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
-import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
+import {
+  qaProfileEvidenceCellSchema,
+  qaProfileEvidencePlan,
+  type QaProfileEvidencePlan,
+} from "./profile-evidence-plan.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
 import { qaRuntimePairLaneSchema, type QaRuntimePairLane } from "./scenario-catalog.js";
+import type { QaScenarioExecutionCell } from "./scenario-lane.js";
 import {
   qaScorecardEvidenceModeSchema,
   readQaScorecardProfileOptions,
@@ -165,6 +170,7 @@ const qaEvidenceSummarySchema = z.strictObject({
   evidenceMode: qaScorecardEvidenceModeSchema,
   entries: z.array(qaEvidenceSummaryEntrySchema),
   profile: qaEvidenceProfileIdSchema.optional(),
+  profileCell: qaProfileEvidenceCellSchema.optional(),
   profilePlan: qaProfileEvidencePlan.schema.optional(),
   scorecard: qaEvidenceScorecardSchema.optional(),
 });
@@ -435,6 +441,7 @@ function buildQaEvidenceSummary(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   generatedAt: string;
   profile?: QaEvidenceProfile;
+  profileCell?: QaScenarioExecutionCell;
   profilePlan?: QaProfileEvidencePlan;
   scorecard?: QaEvidenceScorecardJson;
 }): QaEvidenceSummaryJson {
@@ -454,6 +461,7 @@ function buildQaEvidenceSummary(params: {
     evidenceMode,
     entries,
     profile: params.profile,
+    profileCell: params.profileCell,
     profilePlan: params.profilePlan,
     scorecard: params.scorecard,
   });
@@ -461,6 +469,19 @@ function buildQaEvidenceSummary(params: {
 
 export function validateQaEvidenceSummaryJson(summary: unknown): QaEvidenceSummaryJson {
   return qaEvidenceSummarySchema.parse(summary);
+}
+
+export function bindQaEvidenceSummaryToProfileCell(params: {
+  summary: QaEvidenceSummaryJson;
+  cell: QaScenarioExecutionCell;
+}): QaEvidenceSummaryJson {
+  return qaEvidenceSummarySchema.parse({
+    ...validateQaEvidenceSummaryJson(params.summary),
+    profileCell: qaProfileEvidenceCellSchema.parse({
+      ...params.cell,
+      channel: params.cell.channel ?? null,
+    }),
+  });
 }
 
 export function attachQaEvidenceScorecard(params: {
@@ -475,6 +496,7 @@ export function attachQaEvidenceScorecard(params: {
     evidenceMode: params.evidenceMode,
     generatedAt: params.summary.generatedAt,
     profile: params.profile,
+    profileCell: params.summary.profileCell,
     profilePlan: params.profilePlan,
     scorecard: params.scorecard,
   });

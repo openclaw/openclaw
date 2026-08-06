@@ -4,6 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
+import type { QaProfileRunCheckpointReporter } from "./profile-run-checkpoint.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
@@ -331,6 +332,64 @@ describe("qa test file scenario runner", () => {
       result: {
         status: "pass",
       },
+    });
+  });
+
+  it("persists the first test-file result before aggregate write and later interruption", async () => {
+    const repoRoot = await makeTempRepo("qa-test-file-checkpoint-");
+    const events: string[] = [];
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "checkpoint");
+    const firstScenario = {
+      ...makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts"),
+      id: "first-playwright-scenario",
+    };
+    const laterScenario = {
+      ...makeTestFileScenario("playwright", "ui/src/e2e/later.e2e.test.ts"),
+      id: "later-playwright-scenario",
+    };
+    const interruption = new Error("interrupted after first test-file cell");
+
+    await expect(
+      runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [firstScenario, laterScenario],
+        profileCheckpoint: {
+          start: async (scenarioId) => {
+            events.push(`start:${scenarioId}`);
+            if (scenarioId === laterScenario.id) {
+              throw interruption;
+            }
+          },
+          complete: async ({ scenarioId, evidence }) => {
+            await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).rejects.toMatchObject(
+              {
+                code: "ENOENT",
+              },
+            );
+            expect(evidence.entries.map((entry) => entry.test.id)).toEqual([firstScenario.id]);
+            events.push(`complete:${scenarioId}`);
+          },
+        },
+        runCommand: async (command) => {
+          events.push("run");
+          await writeNativeVitestReport(command, { passed: 1 });
+          return { exitCode: 0, stdout: "pass\n", stderr: "" };
+        },
+      }),
+    ).rejects.toBe(interruption);
+
+    expect(events).toEqual([
+      `start:${firstScenario.id}`,
+      "run",
+      "run",
+      `complete:${firstScenario.id}`,
+      `start:${laterScenario.id}`,
+    ]);
+    await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).rejects.toMatchObject({
+      code: "ENOENT",
     });
   });
 
@@ -819,12 +878,17 @@ describe("qa test file scenario runner", () => {
   it("runs script scenarios and imports producer QA evidence artifacts", async () => {
     const repoRoot = await makeTempRepo("qa-script-scenario-");
     const commands: QaScenarioCommandExecution[] = [];
+    const profileCheckpoint = {
+      start: vi.fn(async () => {}),
+      complete: vi.fn(async () => {}),
+    };
     const result = await runQaTestFileScenarios({
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      profileCheckpoint,
       runCommand: async (command) => {
         commands.push(command);
         const scenarioArtifactBase = path.join(
@@ -946,6 +1010,18 @@ describe("qa test file scenario runner", () => {
         status: "pass",
       },
     });
+    expect(profileCheckpoint.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioId: "scenario-script",
+        evidence: expect.objectContaining({
+          entries: [
+            expect.objectContaining({
+              test: expect.objectContaining({ id: "script-producer.web-ui.smoke" }),
+            }),
+          ],
+        }),
+      }),
+    );
   });
 
   it("runs Docker script scenarios through one aggregate scheduler invocation", async () => {
@@ -961,12 +1037,24 @@ describe("qa test file scenario runner", () => {
       makeDockerE2eScenario("prefix-lane", "gateway"),
       makeDockerE2eScenario("failing-lane", "gateway-network"),
     ];
+    const profileCheckpoint = {
+      start: vi.fn(async () => {}),
+      complete: vi.fn(
+        async ({ evidence }: Parameters<QaProfileRunCheckpointReporter["complete"]>[0]) => {
+          await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(evidence.entries).toHaveLength(1);
+        },
+      ),
+    };
     const result = await runQaTestFileScenarios({
       repoRoot,
       outputDir,
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios,
+      profileCheckpoint,
       runCommand: async (command) => {
         commands.push(command);
         await expect(fs.access(staleSummaryPath)).rejects.toThrow();
@@ -1019,6 +1107,19 @@ describe("qa test file scenario runner", () => {
       { scenario: { id: "failing-lane" }, status: "fail" },
     ]);
     expect(result.results[3]?.failureMessage).toBe("gateway-network exited with 1");
+    expect(profileCheckpoint.start).toHaveBeenCalledTimes(scenarios.length);
+    expect(
+      profileCheckpoint.complete.mock.calls.map(([input]) => ({
+        evidenceId: input.evidence.entries[0]?.test.id,
+        result: input.result,
+        scenarioId: input.scenarioId,
+      })),
+    ).toEqual([
+      { evidenceId: "openai-tools", result: "pass", scenarioId: "openai-tools" },
+      { evidenceId: "bundled-plugins", result: "pass", scenarioId: "bundled-plugins" },
+      { evidenceId: "prefix-lane", result: "pass", scenarioId: "prefix-lane" },
+      { evidenceId: "failing-lane", result: "fail", scenarioId: "failing-lane" },
+    ]);
   });
 
   it("uses script scenario timeout overrides when running producer commands", async () => {

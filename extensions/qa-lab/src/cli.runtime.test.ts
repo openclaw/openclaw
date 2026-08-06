@@ -758,50 +758,19 @@ describe("qa cli runtime", () => {
         channelDriver: "crabline",
       });
       expect(suiteArgs.scenarioIds).toEqual(["telegram-commands-command"]);
-      expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
-      const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
-        evidenceMode?: unknown;
-        entries?: unknown[];
-        profile?: unknown;
-        profilePlan?: {
-          counts?: Record<string, unknown>;
-          expectedCells?: unknown[];
-          observedCells?: unknown[];
-        };
-        scorecard?: {
-          run?: { evidenceEntryCount?: unknown };
-          coverageIds?: { fulfilled?: unknown };
-          categoryReports?: Array<{
-            id?: unknown;
-            coverageIds?: { fulfilled?: unknown };
-            missingCoverageIds?: unknown;
-          }>;
-        };
-      };
-      expect(evidence.profile).toBe("smoke-ci");
-      expect(evidence.profilePlan?.counts).toMatchObject({
-        membership: 1,
-        selected: 1,
-        excluded: 0,
-        expectedCells: 1,
-        observedCells: 1,
-        missingCells: 0,
-      });
-      expect(evidence.profilePlan?.observedCells).toEqual(evidence.profilePlan?.expectedCells);
-      expect(evidence.evidenceMode).toBe("slim");
-      expect(evidence.scorecard).toMatchObject({
-        run: {
-          evidenceEntryCount: 1,
+      expect(suiteArgs.profileRun).toMatchObject({
+        profile: "smoke-ci",
+        evidenceMode: "slim",
+        filters: {
+          surface: "telegram",
+          category: "telegram.native-controls-and-approvals",
         },
+        membershipScenarios: [{ id: "telegram-commands-command" }],
+        selectedScenarios: [{ id: "telegram-commands-command" }],
+        excludedScenarios: [],
+        categories: [{ id: "telegram.native-controls-and-approvals" }],
       });
-      expect(evidence.scorecard).not.toHaveProperty("kind");
-      expect(evidence.scorecard).not.toHaveProperty("taxonomy");
-      expect(evidence.scorecard).not.toHaveProperty("profile");
-      expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
-        id: "telegram.native-controls-and-approvals",
-      });
-      expect(evidence.entries?.[0]).not.toHaveProperty("execution");
-      expect(JSON.stringify(evidence.scorecard)).not.toContain("telegram-commands-command");
+      expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
       expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
     } finally {

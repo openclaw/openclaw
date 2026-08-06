@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
+import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
+import type { QaSuiteRunParams } from "./suite-types.js";
 import type { QaSuiteScenarioResult } from "./suite.js";
 import { throwQaSuiteCleanupErrors } from "./suite.js";
 import type {
@@ -55,6 +58,18 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
     await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
   }
   return evidence;
+}
+
+function profileRunFor(scenarioIds: readonly string[]) {
+  const scenarios = scenarioIds.map(readQaScenarioById);
+  return {
+    profile: "release",
+    membershipScenarios: scenarios,
+    selectedScenarios: scenarios,
+    excludedScenarios: [],
+    filters: {},
+    categories: [],
+  };
 }
 
 function trackMaxActiveFlowRuns() {
@@ -203,6 +218,60 @@ describe("qa suite runtime launcher", () => {
       }),
     );
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
+  it("returns finalized profile evidence to flow callers", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-flow-profile-evidence-");
+    const scenario = readQaScenarioById("channel-chat-baseline");
+    const run = runQaFlowSuite.getMockImplementation();
+    if (!run) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementationOnce(async (params: QaSuiteRunParams | undefined) => {
+      const result = await run(params);
+      const evidence = validateQaEvidenceSummaryJson({
+        ...result.evidence,
+        entries: [
+          {
+            test: { kind: "qa-scenario", id: scenario.id, title: scenario.title },
+            coverage: [],
+            refs: [],
+            result: { status: "pass" },
+          },
+        ],
+      });
+      await params?.profileCheckpoint?.start(scenario.id);
+      await params?.profileCheckpoint?.complete({
+        scenarioId: scenario.id,
+        evidence,
+        result: "pass",
+      });
+      return { ...result, evidence };
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/flow-profile-evidence",
+      providerMode: "mock-openai",
+      scenarioIds: [scenario.id],
+      profileRun: profileRunFor([scenario.id]),
+    });
+
+    expect(result.executionKind).toBe("flow");
+    if (result.executionKind !== "flow") {
+      throw new Error("expected flow suite result");
+    }
+    expect(result.result.evidence).toMatchObject({
+      profile: "release",
+      profilePlan: {
+        observedCells: [{ scenarioId: scenario.id, executionKind: "flow", channel: "qa-channel" }],
+        missingCells: [],
+      },
+      scorecard: { run: { evidenceEntryCount: 1 } },
+    });
+    expect(JSON.parse(await fs.readFile(result.result.evidencePath, "utf8"))).toEqual(
+      result.result.evidence,
+    );
   });
 
   it("forces the declared runtime for a single runtime-specific flow scenario", async () => {
@@ -540,6 +609,8 @@ describe("qa suite runtime launcher", () => {
       adapterFactories: [{ id: "portable-driver", matches: () => true, create: vi.fn() }],
       concurrency: 2,
       scenarioIds: ["telegram-help-command", "whatsapp-status-command"],
+      expandScenarioChannels: true,
+      profileRun: profileRunFor(["telegram-help-command", "whatsapp-status-command"]),
     });
 
     expect(attempts.get("telegram-help-command")).toBe(1);
@@ -550,7 +621,7 @@ describe("qa suite runtime launcher", () => {
     }
     expect(result.result.scenarios).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: "telegram-help-command", status: "pass" }),
+        expect.objectContaining({ status: "pass" }),
         expect.objectContaining({
           status: "fail",
           details: "suite partition failed: approval-turn timed out waiting for post-approval read",
@@ -581,6 +652,19 @@ describe("qa suite runtime launcher", () => {
         }),
       ]),
     );
+    expect(result.result.evidence).toMatchObject({
+      profile: "release",
+      profilePlan: {
+        missingCells: expect.arrayContaining([
+          {
+            scenarioId: "whatsapp-status-command",
+            executionKind: "flow",
+            channel: "whatsapp",
+          },
+        ]),
+      },
+      scorecard: { run: { evidenceEntryCount: 1 } },
+    });
     await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
   });
 
@@ -1027,6 +1111,7 @@ describe("qa suite runtime launcher", () => {
 
   it("routes selected Playwright scenarios to the Playwright scenario runner", async () => {
     const repoRoot = await makeTempRepo("qa-suite-launch-");
+    const profileScenario = readQaScenarioById("control-ui-chat-flow-playwright");
     const setScenarioRun = vi.fn<QaLabServerHandle["setScenarioRun"]>();
     const lab = {
       baseUrl: "http://127.0.0.1:43124",
@@ -1043,11 +1128,32 @@ describe("qa suite runtime launcher", () => {
       repoRoot,
       outputDir: ".artifacts/qa-e2e/scenario-test",
       scenarioIds: ["control-ui-chat-flow-playwright"],
+      profileRun: {
+        profile: "release",
+        membershipScenarios: [profileScenario],
+        selectedScenarios: [profileScenario],
+        excludedScenarios: [],
+        filters: {},
+        categories: [],
+      },
     });
 
     expect(result).toMatchObject({
       executionKind: "suite",
       result: {
+        evidence: {
+          profile: "release",
+          profilePlan: {
+            missingCells: [
+              {
+                scenarioId: "control-ui-chat-flow-playwright",
+                executionKind: "playwright",
+                channel: null,
+              },
+            ],
+          },
+          scorecard: { run: { evidenceEntryCount: 0 } },
+        },
         evidencePath: path.join(
           repoRoot,
           ".artifacts",
@@ -1072,6 +1178,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-test", "playwright"),
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.6-luna",
+      profileCheckpoint: expect.any(Object),
     });
     expect(
       call.scenarios.map((scenario: { id: string; execution: { kind: string } }) => ({
@@ -1087,6 +1194,22 @@ describe("qa suite runtime launcher", () => {
         ],
       }),
     );
+    const checkpoint = JSON.parse(
+      await fs.readFile(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-test",
+          "qa-profile-run-checkpoint.json",
+        ),
+        "utf8",
+      ),
+    ) as { cells: Array<{ state: string }>; run: { finalized: boolean } };
+    expect(checkpoint).toMatchObject({
+      cells: [{ state: "pending" }],
+      run: { finalized: true },
+    });
   });
 
   it("serializes test-file runner partitions in one checkout", async () => {
@@ -2250,6 +2373,12 @@ describe("qa suite runtime launcher", () => {
         "whatsapp-access-control-dm-open",
         "control-ui-chat-flow-playwright",
       ],
+      expandScenarioChannels: true,
+      profileRun: profileRunFor([
+        "whatsapp-status-command",
+        "whatsapp-access-control-dm-open",
+        "control-ui-chat-flow-playwright",
+      ]),
     });
 
     expect(result.executionKind).toBe("suite");
@@ -2276,6 +2405,24 @@ describe("qa suite runtime launcher", () => {
       });
       expect(blocked?.execution?.channel?.driver).toBeUndefined();
     }
+    expect(result.result.evidence).toMatchObject({
+      profile: "release",
+      profilePlan: {
+        missingCells: expect.arrayContaining([
+          {
+            scenarioId: "whatsapp-status-command",
+            executionKind: "flow",
+            channel: "whatsapp",
+          },
+          {
+            scenarioId: "whatsapp-access-control-dm-open",
+            executionKind: "flow",
+            channel: "whatsapp",
+          },
+        ]),
+      },
+      scorecard: { run: { evidenceEntryCount: 2 } },
+    });
     expect(result.observedCells).not.toEqual(
       expect.arrayContaining([
         { scenarioId: "whatsapp-status-command", executionKind: "flow", channel: "whatsapp" },

@@ -3,6 +3,7 @@ import type { QaEvidenceTiming, QaEvidenceSummaryJson } from "./evidence-summary
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
 import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
 import type { QaProviderMode } from "./model-selection.js";
+import type { QaProfileRunCheckpointReporter, QaProfileRunSpec } from "./profile-run-checkpoint.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import type {
   QaTransportAdapterFactory,
@@ -62,9 +63,15 @@ export type QaSuiteRunParams = {
   runtimePair?: [RuntimeId, RuntimeId];
   captureRuntimeParityCell?: boolean;
   roundTripProbe?: QaSuiteRoundTripProbe;
+  // Profile runs prove every applicable declared channel. Direct channel lanes
+  // still treat execution.channels as an OR eligibility list.
+  expandScenarioChannels?: boolean;
   // Unified suite partitions consume child evidence in memory; only the
   // parent should write the aggregate qa-evidence.json artifact.
   writeEvidenceFile?: boolean;
+  profileRun?: QaProfileRunSpec;
+  profileCheckpoint?: QaProfileRunCheckpointReporter;
+  profileCheckpointChannel?: string;
 };
 
 export type QaSuiteResult = {

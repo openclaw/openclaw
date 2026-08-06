@@ -1,9 +1,10 @@
 import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { bindQaEvidenceSummaryToProfileCell } from "./evidence-summary.js";
 import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.types.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
-import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
+import { buildQaSuiteScenarioEvidence, writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { mapQaSuiteWithConcurrency, resolveQaSuiteWorkerStartStaggerMs } from "./suite-planning.js";
 import { buildQaIsolatedScenarioWorkerParams } from "./suite-support.js";
 import type {
@@ -156,6 +157,7 @@ export async function runQaFlowSuiteIsolated(
       selectedScenarios,
       concurrency,
       async (scenario, index): Promise<QaSuiteScenarioResult> => {
+        await params?.profileCheckpoint?.start(scenario.id, params.profileCheckpointChannel);
         const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
         writeQaSuiteProgress(
           progressEnabled,
@@ -168,6 +170,8 @@ export async function runQaFlowSuiteIsolated(
           startedAt: new Date().toISOString(),
         };
         updateScenarioRun();
+        let checkpointEvidence: QaSuiteResult["evidence"];
+        let scenarioResult: QaSuiteScenarioResult;
         try {
           const scenarioOutputDir = path.join(outputDir, "scenarios", scenario.id);
           const childSuiteResult: QaSuiteResult = await runQaFlowSuite(
@@ -191,8 +195,9 @@ export async function runQaFlowSuiteIsolated(
           for (const scenarioId of childSuiteResult.startedScenarioIds) {
             startedScenarioIds.add(scenarioId);
           }
-          const scenarioResult: QaSuiteScenarioResult =
-            childSuiteResult.scenarios[0] ??
+          const childScenarioResult = childSuiteResult.scenarios[0];
+          scenarioResult =
+            childScenarioResult ??
             ({
               name: scenario.title,
               status: "fail",
@@ -205,26 +210,20 @@ export async function runQaFlowSuiteIsolated(
                 },
               ],
             } satisfies QaSuiteScenarioResult);
-          liveScenarioOutcomes[index] = {
-            id: scenario.id,
-            name: scenario.title,
-            status: scenarioResult.status,
-            details: scenarioResult.details,
-            steps: scenarioResult.steps,
-            startedAt: liveScenarioOutcomes[index]?.startedAt,
-            finishedAt: new Date().toISOString(),
-          };
-          updateScenarioRun();
-          writeQaSuiteProgress(
-            progressEnabled,
-            `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
-          );
-          completedScenarioResults[index] = scenarioResult;
-          writePartialArtifacts();
-          return scenarioResult;
+          checkpointEvidence =
+            childScenarioResult && childSuiteResult.evidence
+              ? bindQaEvidenceSummaryToProfileCell({
+                  summary: childSuiteResult.evidence,
+                  cell: {
+                    scenarioId: scenario.id,
+                    executionKind: scenario.execution.kind,
+                    channel: params?.profileCheckpointChannel ?? null,
+                  },
+                })
+              : undefined;
         } catch (error) {
           const details = formatErrorMessage(error);
-          const scenarioResult = {
+          scenarioResult = {
             name: scenario.title,
             status: "fail",
             details,
@@ -236,24 +235,46 @@ export async function runQaFlowSuiteIsolated(
               },
             ],
           } satisfies QaSuiteScenarioResult;
-          liveScenarioOutcomes[index] = {
-            id: scenario.id,
-            name: scenario.title,
-            status: "fail",
-            details,
-            steps: scenarioResult.steps,
-            startedAt: liveScenarioOutcomes[index]?.startedAt,
-            finishedAt: new Date().toISOString(),
-          };
-          updateScenarioRun();
-          writeQaSuiteProgress(
-            progressEnabled,
-            `scenario fail (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
-          );
-          completedScenarioResults[index] = scenarioResult;
-          writePartialArtifacts();
-          return scenarioResult;
         }
+        liveScenarioOutcomes[index] = {
+          id: scenario.id,
+          name: scenario.title,
+          status: scenarioResult.status,
+          details: scenarioResult.details,
+          steps: scenarioResult.steps,
+          startedAt: liveScenarioOutcomes[index]?.startedAt,
+          finishedAt: new Date().toISOString(),
+        };
+        updateScenarioRun();
+        writeQaSuiteProgress(
+          progressEnabled,
+          `scenario ${scenarioResult.status} (${index + 1}/${selectedScenarios.length}): ${scenarioIdForLog}`,
+        );
+        completedScenarioResults[index] = scenarioResult;
+        if (params?.profileCheckpoint) {
+          await params.profileCheckpoint.complete({
+            scenarioId: scenario.id,
+            channel: params.profileCheckpointChannel,
+            evidence:
+              checkpointEvidence ??
+              buildQaSuiteScenarioEvidence({
+                channelDriver: transportFactoryResult.driver,
+                channelId:
+                  params.channelId ?? params.channelDriverSelection?.channel ?? transport.id,
+                evidenceMode: params.evidenceMode,
+                primaryModel,
+                providerMode,
+                profileCheckpointChannel: params.profileCheckpointChannel,
+                repoRoot,
+                scenarioDefinition: scenario,
+                scenarioResult,
+              }),
+            result: scenarioResult.status === "skip" ? "skipped" : scenarioResult.status,
+            reason: scenarioResult.details,
+          });
+        }
+        writePartialArtifacts();
+        return scenarioResult;
       },
       {
         startStaggerMs: workerStartStaggerMs,

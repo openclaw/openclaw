@@ -7,7 +7,11 @@ import {
   resolveQaCrablineChannelDriverArtifactPaths,
   type QaSuiteChannelDriverSelection,
 } from "./crabline-artifacts.js";
-import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
+import {
+  bindQaEvidenceSummaryToProfileCell,
+  buildQaSuiteEvidenceSummary,
+  QA_EVIDENCE_FILENAME,
+} from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -56,6 +60,39 @@ export type QaSuiteGatewayRssSample = NonNullable<
 export type QaSuiteGatewayHeapSnapshot = NonNullable<
   NonNullable<QaSuiteSummaryJson["metrics"]>["gatewayHeapSnapshots"]
 >[number];
+
+export function buildQaSuiteScenarioEvidence(params: {
+  channelDriver?: QaTransportDriver;
+  channelId: string;
+  evidenceMode?: QaScorecardEvidenceMode;
+  primaryModel: string;
+  providerMode: QaProviderMode;
+  profileCheckpointChannel?: string;
+  repoRoot: string;
+  scenarioDefinition: QaSeedScenarioWithSource;
+  scenarioResult: QaSuiteScenarioResult;
+}) {
+  return bindQaEvidenceSummaryToProfileCell({
+    summary: buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      evidenceMode: params.evidenceMode,
+      channelDriver: params.channelDriver,
+      channelId: params.channelId,
+      env: process.env,
+      generatedAt: new Date().toISOString(),
+      primaryModel: params.primaryModel,
+      providerMode: params.providerMode,
+      repoRoot: params.repoRoot,
+      scenarioDefinitions: [params.scenarioDefinition],
+      scenarioResults: [params.scenarioResult],
+    }),
+    cell: {
+      scenarioId: params.scenarioDefinition.id,
+      executionKind: params.scenarioDefinition.execution.kind,
+      channel: params.profileCheckpointChannel ?? null,
+    },
+  });
+}
 
 /**
  * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.6 Luna

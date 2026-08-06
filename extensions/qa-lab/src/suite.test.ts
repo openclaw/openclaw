@@ -890,6 +890,10 @@ describe("qa suite", () => {
 
   it("forwards run options into isolated scenario worker params", () => {
     const startLab = vi.fn();
+    const profileCheckpoint = {
+      start: vi.fn(async () => {}),
+      complete: vi.fn(async () => {}),
+    };
     const adapterFactory = {
       id: "telegram",
       matches: vi.fn(() => true),
@@ -910,31 +914,32 @@ describe("qa suite", () => {
       usePackagedPlugins: true,
     };
 
-    expect(
-      qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
-        repoRoot: "/repo",
-        outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
-        providerMode: "mock-openai",
-        transportId: "qa-channel",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        fastMode: true,
-        scenario,
-        startLab,
-        input: {
-          adapterFactories: [adapterFactory],
-          channelId: "telegram",
-          adapterOptions: { repoRoot: "/repo" },
-          sutOpenClawCommand,
-          thinkingDefault: "minimal",
-          claudeCliAuthMode: "subscription",
-          enabledPluginIds: ["acpx"],
-          transportReadyTimeoutMs: 180_000,
-          forcedRuntime: "codex",
-          writeEvidenceFile: false,
-        },
-      }),
-    ).toMatchObject({
+    const workerParams = qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
+      repoRoot: "/repo",
+      outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
+      providerMode: "mock-openai",
+      transportId: "qa-channel",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      fastMode: true,
+      scenario,
+      startLab,
+      input: {
+        adapterFactories: [adapterFactory],
+        channelId: "telegram",
+        adapterOptions: { repoRoot: "/repo" },
+        sutOpenClawCommand,
+        thinkingDefault: "minimal",
+        claudeCliAuthMode: "subscription",
+        enabledPluginIds: ["acpx"],
+        transportReadyTimeoutMs: 180_000,
+        forcedRuntime: "codex",
+        writeEvidenceFile: false,
+        profileCheckpoint,
+        profileCheckpointChannel: "telegram",
+      },
+    });
+    expect(workerParams).toMatchObject({
       scenarioIds: ["patched-control-ui"],
       adapterFactories: [adapterFactory],
       channelId: "telegram",
@@ -950,6 +955,8 @@ describe("qa suite", () => {
       forcedRuntime: "codex",
       writeEvidenceFile: false,
     });
+    expect(workerParams).not.toHaveProperty("profileCheckpoint");
+    expect(workerParams).not.toHaveProperty("profileCheckpointChannel");
   });
 
   it.each([
