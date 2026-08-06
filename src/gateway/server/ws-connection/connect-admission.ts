@@ -79,7 +79,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     sendFrame,
   } = context;
 
-  if (isStartupPending?.()) {
+  if (isStartupPending?.() && !context.allowStartupPendingConnect) {
     markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
     await sendFrame({
       type: "res",

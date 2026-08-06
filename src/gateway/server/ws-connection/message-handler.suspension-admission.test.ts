@@ -58,7 +58,11 @@ function createLogger() {
 }
 
 function attachHarness(
-  params: { deferSocketSend?: boolean; restoredAdmissionHeld?: boolean } = {},
+  params: {
+    deferSocketSend?: boolean;
+    restoredAdmissionHeld?: boolean;
+    startupPending?: boolean;
+  } = {},
 ) {
   let onMessage: ((data: string) => void) | undefined;
   let finishSocketSend: (() => void) | undefined;
@@ -100,6 +104,7 @@ function attachHarness(
     requestHost: "127.0.0.1:19001",
     connectNonce: "suspension-connect-nonce",
     getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
+    isStartupPending: () => params.startupPending === true,
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
@@ -256,6 +261,24 @@ describe("WebSocket connect suspension admission", () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
     const harness = attachHarness({ restoredAdmissionHeld: true });
+
+    harness.sendConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.setClient).toHaveBeenCalledOnce();
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as { ok?: boolean };
+    expect(response).toMatchObject({ ok: true });
+    expect(harness.close).not.toHaveBeenCalled();
+    expect(harness.client).not.toBeNull();
+    suspension?.release();
+  });
+
+  it("admits the restored-hold operator probe while startup is still pending", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ restoredAdmissionHeld: true, startupPending: true });
 
     harness.sendConnect();
 
