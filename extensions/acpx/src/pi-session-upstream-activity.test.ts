@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPiStoreFixture } from "./pi-session-catalog.test-support.js";
 import { checkPiUpstreamActivity, linkContinuedPiSession } from "./pi-session-upstream-activity.js";
 
@@ -9,6 +9,7 @@ const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (originalSessionDir === undefined) {
     delete process.env.PI_CODING_AGENT_SESSION_DIR;
   } else {
@@ -25,6 +26,22 @@ afterEach(async () => {
     }),
   );
 });
+
+function injectFileShortReads(filePath: string, maxBytes: number): void {
+  const realOpen = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    const handle = await realOpen(...args);
+    if (args[0] === filePath) {
+      const realRead = handle.read.bind(handle);
+      Object.defineProperty(handle, "read", {
+        configurable: true,
+        value: (buffer: Buffer, offset: number, length: number, position: number) =>
+          realRead(buffer, offset, Math.min(length, maxBytes), position),
+      });
+    }
+    return handle;
+  });
+}
 
 describe("Pi session upstream activity", () => {
   it("detects external turns, suppresses own echoes, and confirms deletion", async () => {
@@ -109,6 +126,49 @@ describe("Pi session upstream activity", () => {
         },
       ]),
     ).resolves.toEqual([]);
+  });
+
+  it("completes bounded scan windows across positional short reads", async () => {
+    const sessionDirectory = await createPiStoreFixture(
+      temporaryDirectories,
+      "hi",
+      "Pi catalog session",
+      { command: "pwd" },
+      true,
+    );
+    const continued = await linkContinuedPiSession("agent:main:pi", "pi-session");
+    const file = path.join(sessionDirectory, "session.jsonl");
+    const marker = continued.upstream!.marker;
+    await fs.appendFile(
+      file,
+      `${JSON.stringify({
+        type: "message",
+        timestamp: "2026-07-13T10:00:05.000Z",
+        message: { role: "user", content: "short-read Pi turn" },
+      })}\n`,
+    );
+    injectFileShortReads(file, 17);
+
+    await expect(
+      checkPiUpstreamActivity([
+        {
+          sessionKey: continued.sessionKey,
+          agentId: "main",
+          threadId: "pi-session",
+          hostId: "gateway",
+          upstreamKind: continued.upstream!.kind,
+          upstreamRef: continued.upstream!.ref,
+          marker,
+          ownRecentUserTexts: [],
+        },
+      ]),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        kind: "activity",
+        humanTurns: 1,
+        nextMarker: { offset: (await fs.stat(file)).size },
+      }),
+    ]);
   });
 
   it("stops the cursor before the first unclassifiable complete row", async () => {
