@@ -334,9 +334,45 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
 
     try {
       await page.goto(`${server.baseUrl}custodian`);
+      await page.addStyleTag({
+        content: ".custodian__wizard-step * { transition: none !important; }",
+      });
       await page.getByLabel("Twitch").waitFor();
       expect(await page.locator("openclaw-option-card").count()).toBe(0);
       expect(await page.locator(".agent-chat__composer-shell").count()).toBe(0);
+
+      const twitchOption = page.locator(".wizard-step__option", { hasText: "Twitch" });
+      const continueButton = page.getByRole("button", { name: "Continue" });
+      const cancelButton = page.getByRole("button", { name: "Cancel" });
+      const readInteractionStyle = (element: Element) => {
+        const style = getComputedStyle(element);
+        return {
+          backgroundColor: style.backgroundColor,
+          borderColor: style.borderColor,
+          cursor: style.cursor,
+        };
+      };
+
+      const optionRestingStyle = await twitchOption.evaluate(readInteractionStyle);
+      await twitchOption.hover();
+      const optionHoverStyle = await twitchOption.evaluate(readInteractionStyle);
+      expect(optionRestingStyle.cursor).toBe("pointer");
+      expect(optionHoverStyle.borderColor).not.toBe(optionRestingStyle.borderColor);
+
+      const disabledContinueStyle = await continueButton.evaluate(readInteractionStyle);
+      await continueButton.hover();
+      expect(await continueButton.evaluate(readInteractionStyle)).toEqual(disabledContinueStyle);
+      expect(disabledContinueStyle.cursor).toBe("not-allowed");
+      expect(await cancelButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+        "pointer",
+      );
+      expect(
+        await Promise.all(
+          [continueButton, cancelButton].map((button) =>
+            button.evaluate((element) => element.getBoundingClientRect().height),
+          ),
+        ),
+      ).toEqual([44, 44]);
 
       await gateway.setMethodResponse("openclaw.chat", {
         sessionId: "e2e-rich-wizard",
@@ -355,6 +391,9 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
         },
       });
       await page.getByLabel("Twitch").check();
+      expect(await continueButton.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+        "pointer",
+      );
       await page.getByRole("button", { name: "Continue" }).click();
       await page.getByLabel("Announcements").waitFor();
 
@@ -386,11 +425,37 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
 
       await gateway.setMethodResponse("openclaw.chat", {
         sessionId: "e2e-rich-wizard",
-        reply: "Setup complete.",
+        reply: "Confirm setup.",
         action: "none",
+        wizardInputPending: true,
+        step: {
+          id: "confirm",
+          type: "confirm",
+          message: "Connect Twitch now?",
+        },
       });
       await secretInput.fill("fake-client-secret");
       await page.getByRole("button", { name: "Submit" }).click();
+      const noButton = page.getByRole("button", { name: "No" });
+      const yesButton = page.getByRole("button", { name: "Yes" });
+      await noButton.waitFor();
+
+      await gateway.deferNext("openclaw.chat");
+      await yesButton.click();
+      await expect.poll(() => noButton.isDisabled()).toBe(true);
+      await expect.poll(() => yesButton.isDisabled()).toBe(true);
+      for (const button of [noButton, yesButton]) {
+        const restingStyle = await button.evaluate(readInteractionStyle);
+        await button.hover();
+        expect(await button.evaluate(readInteractionStyle)).toEqual(restingStyle);
+        expect(restingStyle.cursor).toBe("not-allowed");
+      }
+
+      await gateway.resolveDeferred("openclaw.chat", {
+        sessionId: "e2e-rich-wizard",
+        reply: "Setup complete.",
+        action: "none",
+      });
       await page.getByText("Setup complete.").waitFor();
 
       const requests = await gateway.getRequests("openclaw.chat");
@@ -404,6 +469,9 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
         }),
         expect.objectContaining({
           wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
+        }),
+        expect.objectContaining({
+          wizardAnswer: { stepId: "confirm", value: true },
         }),
       ]);
       expect(
