@@ -886,6 +886,37 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(cardJson).toMatch(/Allow once|allow-once/i);
   });
 
+  it("keeps envelope-safe cards when required mentions would exceed 200 elements", async () => {
+    useNonStreamingAutoAccount();
+    const requiredMentionTargets = [{ openId: "ou_peer_bot", name: "Peer Bot", key: "" }];
+    const { options } = createDispatcherHarness({ requiredMentionTargets });
+    const elements = Array.from({ length: 200 }, (_entry, index) => ({
+      tag: "markdown",
+      content: String(index),
+    }));
+    const fullCard = {
+      schema: "2.0",
+      config: { width_mode: "fill" },
+      body: { elements },
+    };
+
+    await options.deliver(
+      {
+        text: "envelope boundary",
+        channelData: { feishu: { card: fullCard } },
+      },
+      { kind: "final" },
+    );
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    const sent = firstMockArg(sendCardFeishuMock, "envelope-safe card") as {
+      card?: { body?: { elements?: unknown[] } };
+    };
+    // Mention injection would make 201 elements; fall back to validated card without mention.
+    expect(sent.card?.body?.elements).toHaveLength(200);
+    expect(JSON.stringify(sent.card)).not.toContain("<at id=ou_peer_bot></at>");
+  });
+
   it("renders presentation replies as a native card with title and fallback text", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness();

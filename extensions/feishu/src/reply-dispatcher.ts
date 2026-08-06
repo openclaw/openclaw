@@ -30,6 +30,7 @@ import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { buildFeishuPayloadCard } from "./outbound.js";
+import { isFeishuCardWithinEnvelope } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -1385,13 +1386,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             Array.isArray((body as { elements?: unknown }).elements)
           ) {
             const bodyRecord = body as { elements: unknown[] };
-            cardToSend = {
+            const withMentions = {
               ...cardToSend,
               body: {
                 ...bodyRecord,
                 elements: [{ tag: "markdown", content: mentionContent }, ...bodyRecord.elements],
               },
             };
+            // buildFeishuPayloadCard already enforced the envelope; revalidate after
+            // mutation so a 200-element card + mention never becomes a 201-element send.
+            cardToSend = isFeishuCardWithinEnvelope(withMentions) ? withMentions : interactiveCard;
           }
         }
         deliveredResults.push(
