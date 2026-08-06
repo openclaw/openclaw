@@ -52,6 +52,57 @@ export type GatewayIngressAttribution =
 
 export type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
+const MANUAL_SERVE_WHOIS_MAX_CONCURRENT = 8;
+const MANUAL_SERVE_WHOIS_MAX_KEYS_PER_WINDOW = 64;
+const MANUAL_SERVE_WHOIS_WINDOW_MS = 60_000;
+
+type ManualServeWhoisAdmissionState = {
+  inFlight: Map<string, Promise<TailscaleWhoisIdentity | null>>;
+  admittedAt: Map<string, number>;
+};
+
+const manualServeWhoisAdmission = new WeakMap<
+  TailscaleWhoisLookup,
+  ManualServeWhoisAdmissionState
+>();
+
+function runManualServeWhois(
+  lookup: TailscaleWhoisLookup,
+  clientIp: string,
+): Promise<TailscaleWhoisIdentity | null> {
+  let state = manualServeWhoisAdmission.get(lookup);
+  if (!state) {
+    state = { inFlight: new Map(), admittedAt: new Map() };
+    manualServeWhoisAdmission.set(lookup, state);
+  }
+  const existing = state.inFlight.get(clientIp);
+  if (existing) {
+    return existing;
+  }
+
+  const now = Date.now();
+  for (const [key, admittedAt] of state.admittedAt) {
+    if (now - admittedAt >= MANUAL_SERVE_WHOIS_WINDOW_MS) {
+      state.admittedAt.delete(key);
+    }
+  }
+  if (
+    state.inFlight.size >= MANUAL_SERVE_WHOIS_MAX_CONCURRENT ||
+    (!state.admittedAt.has(clientIp) &&
+      state.admittedAt.size >= MANUAL_SERVE_WHOIS_MAX_KEYS_PER_WINDOW)
+  ) {
+    return Promise.resolve(null);
+  }
+
+  state.admittedAt.delete(clientIp);
+  state.admittedAt.set(clientIp, now);
+  const pending = lookup(clientIp).finally(() => {
+    state?.inFlight.delete(clientIp);
+  });
+  state.inFlight.set(clientIp, pending);
+  return pending;
+}
+
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -109,6 +160,7 @@ async function resolveTailscaleIngress(params: {
   req: IncomingMessage;
   effectiveMode: GatewayTailscaleIngressMode;
   tailscaleWhois: TailscaleWhoisLookup;
+  manualServe: boolean;
 }): Promise<GatewayIngressAttribution | undefined> {
   const { req, effectiveMode } = params;
   if (effectiveMode === "off" || !hasTailscaleProxyHeaders(req)) {
@@ -131,7 +183,9 @@ async function resolveTailscaleIngress(params: {
     // the identity header plus WhoIs proves this request used that identity path.
     return unattributableProxy(req.socket.remoteAddress ?? "unknown");
   }
-  const whois = await params.tailscaleWhois(clientIp);
+  const whois = await (params.manualServe
+    ? runManualServeWhois(params.tailscaleWhois, clientIp)
+    : params.tailscaleWhois(clientIp));
   if (!whois?.login) {
     return unattributableProxy(req.socket.remoteAddress ?? "unknown");
   }
@@ -183,6 +237,7 @@ export async function resolveGatewayIngressAttribution(params: {
       effectiveMode:
         managedTailscaleMode !== "off" || !params.allowTailscale ? managedTailscaleMode : "serve",
       tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
+      manualServe: managedTailscaleMode === "off" && params.allowTailscale === true,
     });
     if (tailscale) {
       return tailscale;

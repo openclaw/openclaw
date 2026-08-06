@@ -249,6 +249,7 @@ type TailscaleWhoisCacheEntry = {
 };
 
 const whoisCache = new Map<string, TailscaleWhoisCacheEntry>();
+const TAILSCALE_WHOIS_CACHE_MAX_ENTRIES = 256;
 
 function extractExecErrorText(err: unknown) {
   const errOutput = err as ExecErrorDetails;
@@ -482,6 +483,20 @@ function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null
 function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number): void {
   const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs);
   if (expiresAt !== undefined) {
+    const now = Date.now();
+    for (const [key, cached] of whoisCache) {
+      if (cached.expiresAt <= now) {
+        whoisCache.delete(key);
+      }
+    }
+    whoisCache.delete(ip);
+    while (whoisCache.size >= TAILSCALE_WHOIS_CACHE_MAX_ENTRIES) {
+      const oldest = whoisCache.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      whoisCache.delete(oldest);
+    }
     whoisCache.set(ip, { value, expiresAt });
   }
 }

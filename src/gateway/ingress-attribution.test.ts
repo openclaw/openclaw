@@ -138,6 +138,40 @@ describe("gateway ingress attribution", () => {
     expect(attribution.kind).toBe("unattributable-proxy");
   });
 
+  it("bounds and deduplicates manual Serve WhoIs for complete spoofable headers", async () => {
+    const resolvers: Array<() => void> = [];
+    const tailscaleWhois = vi.fn(
+      async (ip: string) =>
+        await new Promise<{ login: string; name: string } | null>((resolve) => {
+          resolvers.push(() => resolve({ login: `${ip}@example.test`, name: ip }));
+        }),
+    );
+    const lookup = (client: number) =>
+      resolveGatewayIngressAttribution({
+        req: request({
+          headers: {
+            ...proxyHeaders,
+            "x-forwarded-for": `100.64.0.${client}`,
+            "tailscale-user-login": `100.64.0.${client}@example.test`,
+          },
+        }),
+        allowTailscale: true,
+        tailscaleWhois,
+      });
+
+    const first = lookup(20);
+    const duplicate = lookup(20);
+    const admitted = Array.from({ length: 7 }, (_, index) => lookup(21 + index));
+    const rejected = await lookup(28);
+
+    expect(tailscaleWhois).toHaveBeenCalledTimes(8);
+    expect(rejected.kind).toBe("unattributable-proxy");
+    for (const resolve of resolvers) {
+      resolve();
+    }
+    await expect(Promise.all([first, duplicate, ...admitted])).resolves.toHaveLength(9);
+  });
+
   it("requires active Funnel provenance and the sanitized marker", async () => {
     const attributed = await resolveGatewayIngressAttribution({
       req: request({
