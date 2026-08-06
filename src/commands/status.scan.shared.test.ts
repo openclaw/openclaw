@@ -695,6 +695,78 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
   });
 
+  it("hardens vector.storeAvailable when builtin store probe throws", async () => {
+    const manager = {
+      probeVectorStoreAvailability: vi.fn(async () => {
+        throw new Error("SQLITE_IOERR: disk full");
+      }),
+      probeVectorAvailability: vi.fn(async () => true),
+      status: vi.fn(() => ({
+        backend: "builtin" as const,
+        provider: "local",
+        files: 10,
+        chunks: 20,
+        vector: { enabled: true, storeAvailable: undefined, semanticAvailable: undefined },
+        fts: { enabled: true, available: true },
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const resolveMemoryConfig = vi.fn(() => ({
+      store: { databasePath: `/tmp/openclaw-status-store-throw-${process.pid}.sqlite` },
+    }));
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { memory: { search: { provider: "local" } } },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "memory-core" },
+      resolveMemoryConfig,
+      getMemorySearchManager,
+      requireDefaultDatabasePath: () =>
+        `/tmp/openclaw-status-store-throw-default-${process.pid}.sqlite`,
+    });
+
+    expect(manager.probeVectorStoreAvailability).toHaveBeenCalled();
+    expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
+    expect(manager.close).toHaveBeenCalled();
+    expect(result?.vector?.storeAvailable).toBe(false);
+    // Semantic availability is not affected by the store probe alone.
+    expect(result?.vector?.semanticAvailable).toBe(undefined);
+    expect(result?.vector?.available).toBe(undefined);
+  });
+
+  it("hardens vector.semanticAvailable when non-builtin vector probe throws", async () => {
+    const manager = {
+      probeVectorStoreAvailability: vi.fn(async () => true),
+      probeVectorAvailability: vi.fn(async () => {
+        throw new Error("embedding provider unavailable");
+      }),
+      status: vi.fn(() => ({
+        backend: "qmd" as const,
+        provider: "qmd",
+        files: 5,
+        chunks: 5,
+        vector: { enabled: true, available: true, semanticAvailable: true },
+      })),
+      close: vi.fn(async () => {}),
+    };
+    const getMemorySearchManager = vi.fn(async () => ({ manager }));
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { plugins: { slots: { memory: "qmd" } } },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "qmd" },
+      resolveMemoryConfig: vi.fn(() => null),
+      getMemorySearchManager,
+      requireDefaultDatabasePath: vi.fn(),
+    });
+
+    expect(manager.probeVectorAvailability).toHaveBeenCalled();
+    expect(manager.close).toHaveBeenCalled();
+    expect(result?.vector?.semanticAvailable).toBe(false);
+    expect(result?.vector?.available).toBe(false);
+  });
+
   it("keeps default memory-core on the cold-start store shortcut", async () => {
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
