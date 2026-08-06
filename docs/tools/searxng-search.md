@@ -94,11 +94,13 @@ export SEARXNG_BASE_URL="http://localhost:8888"
 ```
 
 Resolution order: configured `baseUrl` string, then an inline env SecretRef on
-`baseUrl`, then `SEARXNG_BASE_URL` only when no `baseUrl` is configured. A
-configured SecretRef that cannot be resolved is treated as unavailable instead
-of falling through to the ambient environment variable. When none of the config
-paths are set and `SEARXNG_BASE_URL` is present with no explicit provider
-chosen, auto-detection picks SearXNG.
+`baseUrl`, then `SEARXNG_BASE_URL` only when no `baseUrl` is configured. Any
+explicit `baseUrl` is authoritative. If it is unusable -- blank or `null`, a
+malformed or unresolved SecretRef, or an invalid URL -- OpenClaw fails before
+making a network request and does not fall back to `SEARXNG_BASE_URL`. Remove
+`baseUrl` to enable environment fallback. When none of the config paths are set
+and `SEARXNG_BASE_URL` is present with no explicit provider chosen,
+auto-detection picks SearXNG.
 
 ## Plugin config reference
 
