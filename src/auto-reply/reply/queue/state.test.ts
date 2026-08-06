@@ -238,13 +238,15 @@ describe("getFollowupQueue", () => {
         run: makeRun(),
       };
       enqueueFollowupRun(QUEUE_KEY, queuedRun, { mode: "followup" });
+      expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
       const blocker = path.join(stateDir, "not-a-directory");
       fs.writeFileSync(blocker, "file");
       process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
       expect(() => clearFollowupQueue(QUEUE_KEY)).toThrow();
-      expect(FOLLOWUP_QUEUES.get(QUEUE_KEY)?.items.map((item) => item.prompt)).toEqual([
-        "must survive clear failure",
-      ]);
+      const restored = FOLLOWUP_QUEUES.get(QUEUE_KEY);
+      expect(restored?.items.map((item) => item.prompt)).toEqual(["must survive clear failure"]);
+      expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
+      expect(restored?.items[0]?.queueAbortSignal?.aborted).toBe(false);
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

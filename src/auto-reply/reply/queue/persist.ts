@@ -423,6 +423,14 @@ export function canMigrateFollowupQueueEntryLosslessly(
   if (!isPersistedQueueEntry(value)) {
     return false;
   }
+  for (const elision of value.summaryElisions ?? []) {
+    if (
+      elision.count !== elision.sources.length ||
+      elision.sources.length !== elision.summaryLines.length
+    ) {
+      return false;
+    }
+  }
   const summarySources = value.summarySources ?? [];
   const elisionSources = (value.summaryElisions ?? []).flatMap((elision) => elision.sources);
   return [...value.items, ...summarySources, ...elisionSources].every((item) =>
@@ -574,7 +582,9 @@ export function restoreFollowupQueues(): void {
           run: rehydrateRun(persisted.run, currentConfig),
         })),
       );
-      if (rehydratedItems.length === 0 && data.droppedCount === 0) {
+      const hasSummaryPayload =
+        (data.summarySources?.length ?? 0) > 0 || (data.summaryElisions?.length ?? 0) > 0;
+      if (rehydratedItems.length === 0 && data.droppedCount === 0 && !hasSummaryPayload) {
         continue;
       }
       const rehydratedSummarySources = filterRestorableFollowupItems(
@@ -620,7 +630,11 @@ export function restoreFollowupQueues(): void {
           : {}),
       };
       FOLLOWUP_QUEUES.set(key, restored);
-      if (restored.items.length > 0) {
+      const hasPendingRestoredWork =
+        restored.items.length > 0 ||
+        restored.droppedCount > 0 ||
+        restored.summarySources.length > 0;
+      if (hasPendingRestoredWork) {
         restoredPendingDrainKeys.add(key);
       }
     }

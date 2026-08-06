@@ -552,6 +552,48 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(false);
   });
 
+  it("registers summary-only restored queues in the pending-drain set", () => {
+    const summarySource = makeFollowupRun("summarized-only");
+    replaceFollowupQueueEntries({
+      entries: [
+        [
+          TEST_KEY,
+          {
+            items: [],
+            mode: "steer",
+            droppedCount: 1,
+            summaryLines: ["summarized-only"],
+            summarySources: [
+              {
+                prompt: summarySource.prompt,
+                enqueuedAt: summarySource.enqueuedAt,
+                originatingChannel: "telegram",
+                originatingTo: "12345",
+                run: {
+                  agentId: "main",
+                  sessionId: "sess-persist",
+                  sessionKey: TEST_KEY,
+                  sessionFile: "/tmp/sess.jsonl",
+                  workspaceDir: "/tmp/ws",
+                  provider: "anthropic",
+                  model: "claude",
+                  timeoutMs: 30000,
+                  blockReplyBreak: "message_end",
+                },
+              },
+            ],
+            lastEnqueuedAt: 1,
+          },
+        ],
+      ],
+    });
+    restoreFollowupQueues();
+    expect(FOLLOWUP_QUEUES.get(TEST_KEY)?.summarySources.map((item) => item.prompt)).toEqual([
+      "summarized-only",
+    ]);
+    expect(peekRestoredPendingDrainKeys().has(TEST_KEY)).toBe(true);
+  });
+
   it("persists queue data in shared SQLite state", () => {
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
     queue.items.push(makeFollowupRun("private"));

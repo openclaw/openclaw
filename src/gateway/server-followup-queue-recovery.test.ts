@@ -87,4 +87,66 @@ describe("wakeRestoredFollowupQueueSessions", () => {
       }
     }
   });
+
+  it("wakes summary-only restored queues using retained routing facts", () => {
+    const tmpDir = tempDirs.make("openclaw-followup-summary-recovery-");
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const key = `agent:main:telegram:direct:summary-${Date.now()}`;
+
+    try {
+      const queueKey = key;
+      FOLLOWUP_QUEUES.set(queueKey, {
+        abortController: new AbortController(),
+        items: [],
+        draining: false,
+        inFlight: new Set(),
+        lastEnqueuedAt: Date.now(),
+        mode: "followup",
+        debounceMs: 0,
+        cap: 50,
+        dropPolicy: "summarize",
+        droppedCount: 1,
+        summaryLines: ["summarized overflow"],
+        summarySources: [
+          createRun({
+            prompt: "summarized overflow",
+            originatingChannel: "telegram",
+            originatingTo: "6300969793",
+          }),
+        ],
+        activeSummarySources: new WeakSet(),
+        summaryElisions: [],
+        evictedSummaryCount: 0,
+        lastRun: createRun({ prompt: "anchor" }).run,
+      });
+      // Ensure routing sessionKey matches wake target.
+      const queue = FOLLOWUP_QUEUES.get(queueKey)!;
+      queue.summarySources[0]!.run.sessionKey = queueKey;
+      queue.lastRun!.sessionKey = queueKey;
+      persistFollowupQueues();
+      FOLLOWUP_QUEUES.delete(queueKey);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+
+      expect(wakeRestoredFollowupQueueSessions()).toBe(1);
+      expect(enqueueSystemEvent).toHaveBeenCalledWith(
+        expect.stringContaining("Restored 1 pending followup message"),
+        { sessionKey: queueKey },
+      );
+      expect(requestHeartbeat).toHaveBeenCalledWith({
+        source: "followup-queue-restore",
+        intent: "immediate",
+        reason: "restored-followup-queue",
+        sessionKey: queueKey,
+      });
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+    }
+  });
 });

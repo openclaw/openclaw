@@ -255,6 +255,60 @@ describe("legacy followup queue sidecar doctor migration", () => {
     expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
   });
 
+  it("retains the sidecar when summary elision arrays are misaligned", async () => {
+    const stateDir = await useStateDir();
+    const queueKey = "agent:main:dm:elision-misaligned";
+    const sourcePath = await writeLegacySidecar(stateDir, {
+      version: 1,
+      entries: [
+        [
+          queueKey,
+          {
+            items: [
+              {
+                prompt: "ok item",
+                enqueuedAt: 1,
+                originatingChannel: "telegram",
+                originatingTo: "999",
+                run: makeRestorableRun({ sessionKey: queueKey }),
+              },
+            ],
+            summaryElisions: [
+              {
+                contextKey: "route-a",
+                count: 2,
+                sources: [
+                  {
+                    prompt: "only one source",
+                    enqueuedAt: 2,
+                    originatingChannel: "telegram",
+                    originatingTo: "999",
+                    run: makeRestorableRun({ sessionKey: queueKey }),
+                  },
+                ],
+                summaryLines: ["line-a", "line-b"],
+              },
+            ],
+            mode: "steer",
+            lastEnqueuedAt: 2,
+            droppedCount: 0,
+            summaryLines: [],
+          },
+        ],
+      ],
+    });
+
+    const detected = detectLegacyFollowupQueueSidecar({ stateDir });
+    const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
+
+    expect(result.warnings).toContain(
+      `Left followup queue sidecar in place because one or more entries failed the full restore contract: ${sourcePath}`,
+    );
+    expect(result.changes).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
+  });
+
   it("retains the sidecar when summarySources fail session/route deliverability", async () => {
     const stateDir = await useStateDir();
     const queueKey = "agent:main:dm:summary-source-bad";

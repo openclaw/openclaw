@@ -6,6 +6,25 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("gateway/followup-queue-recovery");
 
+function resolveRestoredQueueWakeTarget(params: {
+  key: string;
+  queue: NonNullable<ReturnType<typeof getExistingFollowupQueue>>;
+}): { sessionKey: string; pendingCount: number } | null {
+  const itemCount = params.queue.items.length;
+  const summaryCount = Math.max(params.queue.droppedCount, params.queue.summarySources.length);
+  const pendingCount = itemCount > 0 ? itemCount : summaryCount;
+  if (pendingCount <= 0) {
+    return null;
+  }
+  const routingRun =
+    params.queue.items[0]?.run ??
+    params.queue.summarySources[0]?.run ??
+    params.queue.summaryElisions[0]?.sources[0]?.run ??
+    params.queue.lastRun;
+  const sessionKey = routingRun?.sessionKey?.trim() || params.key;
+  return { sessionKey, pendingCount };
+}
+
 /**
  * After a cold gateway restart, followup queues are restored from SQLite but
  * drain callbacks are empty until agent-runner registers one for the route.
@@ -21,13 +40,16 @@ export function wakeRestoredFollowupQueueSessions(): number {
   let woke = 0;
   for (const key of pendingKeys) {
     const queue = getExistingFollowupQueue(key);
-    if (!queue || queue.items.length === 0) {
+    if (!queue) {
       continue;
     }
-    const sessionKey = queue.items[0]?.run?.sessionKey?.trim() || key;
-    const count = queue.items.length;
+    const wakeTarget = resolveRestoredQueueWakeTarget({ key, queue });
+    if (!wakeTarget) {
+      continue;
+    }
+    const { sessionKey, pendingCount } = wakeTarget;
     enqueueSystemEvent(
-      `Restored ${count} pending followup message${count === 1 ? "" : "s"} after gateway restart; they will drain on the next agent turn for this route.`,
+      `Restored ${pendingCount} pending followup message${pendingCount === 1 ? "" : "s"} after gateway restart; they will drain on the next agent turn for this route.`,
       { sessionKey },
     );
     requestHeartbeat({

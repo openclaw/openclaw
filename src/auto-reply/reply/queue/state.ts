@@ -172,10 +172,8 @@ export function clearFollowupQueue(key: string): number {
   const clearedEvictedSummaryCount = queue.evictedSummaryCount;
   const cleared = clearedItems.length + clearedDroppedCount;
 
-  // Abort the live admission signal, then wipe durable + memory state. Lifecycle
-  // completion waits until SQLite acknowledges the clear so a failed write can
-  // restore the prior queue without claiming cancellation.
-  queue.abortController.abort();
+  // Wipe durable + memory state first. Abort only after SQLite acknowledges the
+  // clear so a failed write can restore prior work with live queue abort signals.
   queue.items.length = 0;
   queue.inFlight.clear();
   queue.droppedCount = 0;
@@ -200,10 +198,10 @@ export function clearFollowupQueue(key: string): number {
     queue.lastRun = clearedLastRun;
     queue.lastEnqueuedAt = clearedLastEnqueuedAt;
     queue.evictedSummaryCount = clearedEvictedSummaryCount;
-    queue.abortController = new AbortController();
     FOLLOWUP_QUEUES.set(cleaned, queue);
     throw err;
   }
+  queue.abortController.abort();
   for (const item of clearedItems) {
     completeFollowupRunLifecycle(item);
   }
