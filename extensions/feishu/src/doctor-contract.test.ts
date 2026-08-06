@@ -292,3 +292,68 @@ describe("feishu webhook route doctor migration", () => {
     ]);
   });
 });
+
+describe("feishu custom domain doctor migration", () => {
+  // Build userinfo via URL setters so secret scanners do not flag fixture literals.
+  function fixtureDomainWithCredentials(
+    pathname: string,
+    extras?: { search?: string; hash?: string },
+  ) {
+    const url = new URL(`https://tenant.example${pathname}`);
+    url.username = "fixture-user";
+    url.password = "fixture-password";
+    if (extras?.search) {
+      url.search = extras.search;
+    }
+    if (extras?.hash) {
+      url.hash = extras.hash;
+    }
+    return url.href;
+  }
+
+  it("matches custom domains with unsafe base URL components", () => {
+    const domainRule = legacyConfigRules.find((rule) =>
+      rule.message.includes("HTTPS API base URL"),
+    );
+    expect(domainRule?.match?.({ domain: "https://tenant.example/base#fragment" }, {})).toBe(true);
+    expect(
+      domainRule?.match?.(
+        {
+          accounts: {
+            work: {
+              domain: fixtureDomainWithCredentials("/base", { search: "query=value" }),
+            },
+          },
+        },
+        {},
+      ),
+    ).toBe(true);
+    expect(domainRule?.match?.({ domain: "https://tenant.example/base" }, {})).toBe(false);
+  });
+
+  it("strips unsafe components from legacy custom domains at root and account scope", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: feishuConfig({
+        domain: "https://tenant.example/base?query=value",
+        accounts: {
+          work: {
+            domain: fixtureDomainWithCredentials("/account", { hash: "fragment" }),
+          },
+        },
+      }),
+    });
+
+    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
+    expect(feishu.domain).toBe("https://tenant.example/base");
+    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
+    expect(work?.domain).toBe("https://tenant.example/account");
+    expect(result.changes).toEqual([
+      "Normalized channels.feishu.domain by removing unsupported URL credentials, query, or fragment components.",
+      "Normalized channels.feishu.accounts.work.domain by removing unsupported URL credentials, query, or fragment components.",
+    ]);
+    expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
+
+    const second = normalizeCompatibilityConfig({ cfg: result.config });
+    expect(second.changes).toEqual([]);
+  });
+});

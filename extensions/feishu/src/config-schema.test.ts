@@ -150,6 +150,52 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.groupPolicy).toBe("open");
   });
 
+  it("accepts custom HTTPS domains with a case-insensitive scheme", () => {
+    expect(FeishuConfigSchema.parse({ domain: "HTTPS://tenant.example/" }).domain).toBe(
+      "https://tenant.example",
+    );
+    expect(
+      FeishuConfigSchema.parse({
+        accounts: { work: { domain: "HTTPS://tenant.example/base/" } },
+      }).accounts?.work?.domain,
+    ).toBe("https://tenant.example/base");
+  });
+
+  it("rejects custom HTTP domains", () => {
+    expectSchemaIssue(FeishuConfigSchema.safeParse({ domain: "http://tenant.example" }), "domain");
+    expectSchemaIssue(
+      FeishuConfigSchema.safeParse({
+        accounts: { work: { domain: "http://tenant.example" } },
+      }),
+      "accounts.work.domain",
+    );
+  });
+
+  it("rejects custom HTTPS domains with credentials, query, or fragment", () => {
+    // Build userinfo via URL setters so secret scanners do not flag fixture literals.
+    const credentialDomain = new URL("https://tenant.example");
+    credentialDomain.username = "fixture-user";
+    credentialDomain.password = "fixture-password";
+    const usernameOnlyDomain = new URL("https://tenant.example/base");
+    usernameOnlyDomain.username = "fixture-user";
+
+    expectSchemaIssue(FeishuConfigSchema.safeParse({ domain: credentialDomain.href }), "domain");
+    expectSchemaIssue(
+      FeishuConfigSchema.safeParse({ domain: "HTTPS://tenant.example/?token=1" }),
+      "domain",
+    );
+    expectSchemaIssue(
+      FeishuConfigSchema.safeParse({ domain: "https://tenant.example/#frag" }),
+      "domain",
+    );
+    expectSchemaIssue(
+      FeishuConfigSchema.safeParse({
+        accounts: { work: { domain: usernameOnlyDomain.href } },
+      }),
+      "accounts.work.domain",
+    );
+  });
+
   it("accepts the canonical disabled DM policy", () => {
     expect(FeishuConfigSchema.parse({ dmPolicy: "disabled" }).dmPolicy).toBe("disabled");
     expect(
