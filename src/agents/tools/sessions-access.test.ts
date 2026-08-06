@@ -516,19 +516,26 @@ describe("createSessionVisibilityGuard", () => {
   });
 
   it("blocks cross-agent send when agent-to-agent is disabled", async () => {
-    const guard = await createSessionVisibilityGuard({
-      action: "send",
-      requesterSessionKey: "agent:main:main",
-      visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async () => ({ sessions: [] })) as never,
     });
+    try {
+      const guard = await createSessionVisibilityGuard({
+        action: "send",
+        requesterSessionKey: "agent:main:main",
+        visibility: "all",
+        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      });
 
-    expect(guard.check("agent:ops:main")).toEqual({
-      allowed: false,
-      status: "forbidden",
-      error:
-        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-    });
+      expect(guard.check("agent:ops:main")).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+      });
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
   });
 
   it("enforces self visibility for same-agent sessions", async () => {
@@ -573,22 +580,32 @@ describe("createSessionVisibilityGuard", () => {
 
   it.each([
     {
-      name: "cross-agent ACP child",
+      name: "cross-agent ACP child under tree visibility",
       target: "agent:codex:acp:child-1",
+      visibility: "tree" as const,
+      error:
+        "Session history denied because spawned-session ownership lookup failed (transient); retry the operation.",
+    },
+    {
+      name: "cross-agent ACP child under all visibility",
+      target: "agent:codex:acp:child-1",
+      visibility: "all" as const,
       error:
         "Session history denied because spawned-session ownership lookup failed (transient); retry the operation.",
     },
     {
       name: "malformed agent key",
       target: "agent:",
+      visibility: "tree" as const,
       error: "Session history denied because target agent ownership is unavailable.",
     },
     {
       name: "unscoped alias without a default agent",
       target: "main",
+      visibility: "tree" as const,
       error: "Session history denied because target agent ownership is unavailable.",
     },
-  ])("handles $name when the ownership lookup fails", async ({ target, error }) => {
+  ])("handles $name when the ownership lookup fails", async ({ target, visibility, error }) => {
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async () => {
         throw new GatewayClientRequestError({
@@ -602,7 +619,7 @@ describe("createSessionVisibilityGuard", () => {
       const guard = await createSessionVisibilityGuard({
         action: "history",
         requesterSessionKey: "agent:main:main",
-        visibility: "tree",
+        visibility,
         a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
       });
 

@@ -332,7 +332,6 @@ function createSessionVisibilityCheckerWithResult(
       const lookupFailed =
         spawnedKeys !== null &&
         !spawnedKeys.ok &&
-        params.visibility === "tree" &&
         targetSessionKey !== params.requesterSessionKey &&
         targetSessionKey !== "current" &&
         hasResolvableTargetAgent(targetSessionKey, params.defaultAgentId);
