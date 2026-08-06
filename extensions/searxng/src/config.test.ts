@@ -100,6 +100,41 @@ describe("resolveSearxngBaseUrl", () => {
     ).toBe("https://configured.search");
   });
 
+  it("resolves configured env SecretRefs allowed by their provider", () => {
+    const config = {
+      secrets: {
+        providers: {
+          "searxng-env": {
+            source: "env",
+            allowlist: ["CUSTOM_SEARXNG_BASE_URL"],
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: {
+                  source: "env",
+                  provider: "searxng-env",
+                  id: "CUSTOM_SEARXNG_BASE_URL",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      resolveSearxngBaseUrl(config, {
+        CUSTOM_SEARXNG_BASE_URL: "https://configured.search///",
+        SEARXNG_BASE_URL: "https://ambient.search",
+      }),
+    ).toBe("https://configured.search");
+  });
+
   it("does not fall back to ambient env when a configured SecretRef is unavailable", () => {
     const config = {
       plugins: {
@@ -147,6 +182,76 @@ describe("resolveSearxngBaseUrl", () => {
 
     expect(() =>
       resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search",
+      }),
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
+  });
+
+  it("does not bypass an env provider allowlist", () => {
+    const config = {
+      secrets: {
+        providers: {
+          "searxng-env": {
+            source: "env",
+            allowlist: ["OTHER_SEARXNG_BASE_URL"],
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: {
+                  source: "env",
+                  provider: "searxng-env",
+                  id: "CUSTOM_SEARXNG_BASE_URL",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(() =>
+      resolveSearxngBaseUrl(config, {
+        CUSTOM_SEARXNG_BASE_URL: "https://configured.search",
+        SEARXNG_BASE_URL: "https://ambient.search",
+      }),
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
+  });
+
+  it("does not read env values through a non-env provider", () => {
+    const config = {
+      secrets: {
+        providers: {
+          "searxng-file": {
+            source: "file",
+            path: "/secrets/searxng.json",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: {
+                  source: "env",
+                  provider: "searxng-file",
+                  id: "CUSTOM_SEARXNG_BASE_URL",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(() =>
+      resolveSearxngBaseUrl(config, {
+        CUSTOM_SEARXNG_BASE_URL: "https://configured.search",
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
     ).toThrow("Configured SearXNG base URL is unavailable or invalid.");

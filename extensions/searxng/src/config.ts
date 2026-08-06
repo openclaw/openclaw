@@ -1,5 +1,6 @@
 // Searxng helper module supports config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeSecretInput, resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 type SearxngPluginConfig = {
@@ -52,6 +53,15 @@ function resolveConfiguredBaseUrl(
     return valueConfigured ? { status: "blocked" } : { status: "missing" };
   }
   if (resolved.ref.source !== "env") {
+    return { status: "blocked" };
+  }
+  if (
+    !canResolveEnvSecretRefInReadOnlyPath({
+      cfg: config,
+      provider: resolved.ref.provider,
+      id: resolved.ref.id,
+    })
+  ) {
     return { status: "blocked" };
   }
   const normalized = normalizeBaseUrl(normalizeSecretInput(env[resolved.ref.id]));
