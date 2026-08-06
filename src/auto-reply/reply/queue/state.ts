@@ -9,43 +9,14 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../thinking.js";
+import { persistFollowupQueues, restoreFollowupQueues } from "./persist.js";
 import {
   completeFollowupRunLifecycle,
+  type FollowupQueueState,
   type FollowupRun,
   type QueueDropPolicy,
-  type QueueMode,
   type QueueSettings,
 } from "./types.js";
-
-type FollowupQueueState = {
-  abortController: AbortController;
-  items: FollowupRun[];
-  draining: boolean;
-  /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
-  inFlight: Set<FollowupRun>;
-  lastEnqueuedAt: number;
-  mode: QueueMode;
-  debounceMs: number;
-  cap: number;
-  dropPolicy: QueueDropPolicy;
-  droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
-  /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
-  activeSummarySources: WeakSet<FollowupRun>;
-  summaryElisions: Array<{
-    contextKey: string;
-    count: number;
-    /** Compact sources stay strong so cancellation follows summarized content until delivery. */
-    sources: FollowupRun[];
-    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
-    summaryLines: string[];
-    /** Weak source mapping keeps concurrent summary consumption identity-safe. */
-    sourceRefs: WeakMap<FollowupRun, FollowupRun>;
-  }>;
-  evictedSummaryCount: number;
-  lastRun?: FollowupRun["run"];
-};
 
 export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
@@ -64,7 +35,18 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   if (!cleaned) {
     return undefined;
   }
-  return FOLLOWUP_QUEUES.get(cleaned);
+  const queue = FOLLOWUP_QUEUES.get(cleaned);
+  if (!queue) {
+    return undefined;
+  }
+  ensureFollowupQueueSummaryState(queue);
+  return queue;
+}
+
+function ensureFollowupQueueSummaryState(queue: FollowupQueueState): void {
+  queue.summarySources ??= [];
+  queue.summaryElisions ??= [];
+  queue.evictedSummaryCount ??= 0;
 }
 
 export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
@@ -127,6 +109,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
+    ensureFollowupQueueSummaryState(existing);
     applyQueueRuntimeSettings({
       target: existing,
       settings,
@@ -195,6 +178,7 @@ export function clearFollowupQueue(key: string): number {
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
+  persistFollowupQueues();
   return cleared;
 }
 
@@ -307,4 +291,7 @@ export function refreshQueuedFollowupSession(params: {
       rewriteRun(source.run);
     }
   }
+  persistFollowupQueues();
 }
+
+restoreFollowupQueues();

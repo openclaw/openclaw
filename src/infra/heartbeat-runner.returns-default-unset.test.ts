@@ -1509,6 +1509,7 @@ describe("runHeartbeatOnce", () => {
     | "actionable"
     | "fenced-empty"
     | "fenced-actionable"
+    | "legacy-comment-only"
     | "missing";
 
   async function runHeartbeatScratchScenario(params: {
@@ -1516,8 +1517,10 @@ describe("runHeartbeatOnce", () => {
     source?: "notifications-event";
     reason?: "interval" | "wake";
     unscheduled?: boolean;
+    wakeSource?: "hook" | "followup-queue-restore";
     queueCronEvent?: boolean;
     queueSystemEvent?: boolean;
+    queueRestoreEvent?: boolean;
     replyText?: string;
   }) {
     const tmpDir = await createCaseDir("openclaw-hb");
@@ -1546,7 +1549,9 @@ describe("runHeartbeatOnce", () => {
 - Check server logs
 \`\`\`
 `
-              : null;
+              : params.fileState === "legacy-comment-only"
+                ? "# Heartbeat scratch\n\n<!-- no heartbeat tasks -->\n"
+                : null;
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -1570,6 +1575,12 @@ describe("runHeartbeatOnce", () => {
     if (params.queueSystemEvent) {
       enqueueSystemEvent("Discord online-presence event", { sessionKey });
     }
+    if (params.queueRestoreEvent) {
+      enqueueSystemEvent(
+        "Restored 1 pending followup message after gateway restart; they will drain on the next agent turn for this route.",
+        { sessionKey },
+      );
+    }
 
     const replySpy = vi.fn();
     replySpy.mockResolvedValue({ text: params.replyText ?? "Checked logs and PRs" });
@@ -1582,12 +1593,20 @@ describe("runHeartbeatOnce", () => {
       cfg,
       ...(params.source
         ? { source: params.source, intent: "immediate" as const }
-        : params.reason === "wake"
-          ? { source: "hook" as const, intent: "immediate" as const }
-          : params.reason === "interval"
-            ? { source: "interval" as const, intent: "scheduled" as const }
-            : {}),
-      reason: params.reason,
+        : params.wakeSource === "followup-queue-restore"
+          ? {
+              source: "followup-queue-restore" as const,
+              intent: "immediate" as const,
+              reason: "restored-followup-queue",
+            }
+          : params.reason === "wake" || params.wakeSource === "hook"
+            ? { source: "hook" as const, intent: "immediate" as const }
+            : params.reason === "interval"
+              ? { source: "interval" as const, intent: "scheduled" as const }
+              : {}),
+      reason:
+        params.reason ??
+        (params.wakeSource === "followup-queue-restore" ? "restored-followup-queue" : undefined),
       ...(params.source ? { sessionKey } : {}),
       ...(params.source ? { heartbeat: { target: "last" as const } } : {}),
       deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
@@ -1768,8 +1787,10 @@ tasks:
       reason?: "interval" | "wake";
       source?: "notifications-event";
       unscheduled?: boolean;
+      wakeSource?: "hook" | "followup-queue-restore";
       queueCronEvent?: boolean;
       queueSystemEvent?: boolean;
+      queueRestoreEvent?: boolean;
       expectedStatus: "ran" | "skipped";
       expectedSkipReason?: "empty-heartbeat-file";
       expectedSendCalls: number;
@@ -1813,6 +1834,26 @@ tasks:
         expectedSendCalls: 1,
         expectedReplyCalls: 1,
         replyText: "post-update event processed",
+      },
+      {
+        name: "empty file + followup-queue-restore runs",
+        fileState: "empty",
+        wakeSource: "followup-queue-restore",
+        queueRestoreEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        replyText: "restored followup processed",
+      },
+      {
+        name: "legacy comment-only + followup-queue-restore runs",
+        fileState: "legacy-comment-only",
+        wakeSource: "followup-queue-restore",
+        queueRestoreEvent: true,
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        replyText: "restored followup processed",
       },
       {
         name: "empty file + queued cron interval runs",

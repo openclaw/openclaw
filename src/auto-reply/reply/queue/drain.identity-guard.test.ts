@@ -27,7 +27,11 @@
 // scheduleFollowupDrain, and FOLLOWUP_QUEUES are imported. The Deferred gate
 // mirrors the pattern in queue.drain-restart.test.ts:207-234.
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadFollowupQueueEntries } from "../../../infra/followup-queue-sqlite.js";
 import {
   clearSessionQueues,
   enqueueFollowupRun,
@@ -160,5 +164,52 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
 
     await expect.poll(() => callbacks.length).toBe(2);
     expect(callbacks).toEqual([firstCallback, secondCallback]);
+  });
+
+  it("persists the shortened queue after each delivered item", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-drain-ack-test-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const key = "test-drain-ack-" + Date.now() + "-" + Math.random();
+    keysToCleanup.push(key);
+    try {
+      const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+      const secondEntered = createDeferred<void>();
+      const releaseSecond = createDeferred<void>();
+      const calls: string[] = [];
+      const runFollowup = async (run: FollowupRun) => {
+        calls.push(run.prompt);
+        if (run.prompt === "msg2") {
+          secondEntered.resolve();
+          await releaseSecond.promise;
+        }
+      };
+
+      enqueueFollowupRun(key, createRun({ prompt: "msg1" }), settings, "message-id", runFollowup);
+      enqueueFollowupRun(key, createRun({ prompt: "msg2" }), settings, "message-id", runFollowup);
+      scheduleFollowupDrain(key, runFollowup);
+      await secondEntered.promise;
+
+      const persistedEntry = loadFollowupQueueEntries().find(
+        ([entryKey]) => entryKey === key,
+      )?.[1] as { items: FollowupRun[] } | undefined;
+      expect(persistedEntry).toBeDefined();
+      expect(persistedEntry!.items.map((item) => item.prompt)).toEqual(["msg2"]);
+      expect(calls).toEqual(["msg1", "msg2"]);
+
+      releaseSecond.resolve();
+      for (let i = 0; i < 20; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

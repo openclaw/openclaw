@@ -160,6 +160,61 @@ describe("drainNextQueueItem", () => {
     expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
   });
 
+  it("acknowledges before run while keeping the in-memory identity for overflow policy", async () => {
+    type Item = { id: string };
+    const item: Item = { id: "ack-first" };
+    const items: Item[] = [item];
+    const inFlight = new Set<Item>();
+    const events: string[] = [];
+
+    await drainNextQueueItem(
+      items,
+      async () => {
+        events.push(`run:items=${items.length}:inFlight=${inFlight.has(item)}`);
+      },
+      {
+        inFlight,
+        acknowledgeBeforeRun: () => {
+          events.push(`ack:items=${items.length}:inFlight=${inFlight.has(item)}`);
+        },
+      },
+    );
+
+    expect(events).toEqual(["ack:items=1:inFlight=true", "run:items=1:inFlight=true"]);
+    expect(items).toEqual([]);
+    expect(inFlight.size).toBe(0);
+  });
+
+  it("re-acknowledges after clearing in-flight when acknowledge-before-run delivery fails", async () => {
+    type Item = { id: string };
+    const item: Item = { id: "retry-me" };
+    const items: Item[] = [item];
+    const inFlight = new Set<Item>();
+    const acknowledgements: Array<{ items: number; inFlight: boolean }> = [];
+
+    await expect(
+      drainNextQueueItem(
+        items,
+        async () => {
+          throw new Error("send failed");
+        },
+        {
+          inFlight,
+          acknowledgeBeforeRun: () => {
+            acknowledgements.push({ items: items.length, inFlight: inFlight.has(item) });
+          },
+        },
+      ),
+    ).rejects.toThrow("send failed");
+
+    expect(acknowledgements).toEqual([
+      { items: 1, inFlight: true },
+      { items: 1, inFlight: false },
+    ]);
+    expect(items).toEqual([item]);
+    expect(inFlight.size).toBe(0);
+  });
+
   it("keeps overflow survivors when the queue mutates during an awaited drain", async () => {
     type Item = { id: string };
     const queue = {

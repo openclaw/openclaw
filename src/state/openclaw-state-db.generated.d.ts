@@ -682,6 +682,12 @@ export interface FlowRuns {
   wait_json: string | null;
 }
 
+export interface FollowupQueueEntries {
+  queue_json: string;
+  queue_key: string;
+  updated_at: number;
+}
+
 export interface GatewayBootLifecycle {
   boot_id: string;
   completed_at_ms: number | null;
@@ -1601,6 +1607,7 @@ export interface DB {
   execution_identity_contexts: ExecutionIdentityContexts;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
+  followup_queue_entries: FollowupQueueEntries;
   gateway_boot_lifecycle: GatewayBootLifecycle;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;

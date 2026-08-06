@@ -12,6 +12,11 @@ import {
   testServiceAuditCodes,
 } from "./doctor-service-audit.test-helpers.js";
 import type { LegacyStateDetection } from "./doctor-state-migrations.js";
+import {
+  createCommandWithTimeoutResult,
+  createGatewayUpdateResult,
+  createLegacyConfigSnapshot,
+} from "./doctor.e2e-harness.fixtures.js";
 
 let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
@@ -27,38 +32,6 @@ function setStdinTty(value: boolean | undefined) {
   } catch {
     // ignore
   }
-}
-
-function createGatewayUpdateResult() {
-  return {
-    status: "skipped",
-    mode: "unknown",
-    steps: [],
-    durationMs: 0,
-  } as const;
-}
-
-function createCommandWithTimeoutResult() {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-  } as const;
-}
-
-function createLegacyConfigSnapshot() {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: false,
-    raw: null,
-    parsed: {},
-    valid: true,
-    config: {},
-    issues: [],
-    legacyIssues: [],
-  } as const;
 }
 
 export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
@@ -350,6 +323,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       knownChannelIds: [],
       defaultAccountIds: {},
       accountIds: {},
+      hasLegacy: false,
+    },
+    followupQueueSidecar: {
+      sourcePath: "/tmp/state/live-chat-followup-queues.json",
       hasLegacy: false,
     },
     channelPlans: {

@@ -14,6 +14,7 @@ import {
   resolveFollowupDeliveryContextKey,
   resolveFollowupReplyAnchor,
 } from "./drain.js";
+import { persistFollowupQueues } from "./persist.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
@@ -203,6 +204,7 @@ export function enqueueFollowupRun(
   } else {
     queue.items.push(run);
   }
+  persistFollowupQueues();
   if (recentMessageIdKey) {
     recordRecentQueueMessageId(run, recentMessageIdKey);
   }

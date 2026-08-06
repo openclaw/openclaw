@@ -20,6 +20,7 @@ import {
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
+import { scheduleRestoredFollowupQueueRecovery } from "./server-followup-queue-recovery.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import {
   createNoopHeartbeatRunner,
@@ -320,6 +321,11 @@ function startPendingSessionDeliveryRuntime(params: {
   };
 }
 
+function recoverRestoredFollowupQueues(params: { log: GatewayRuntimeServiceLogger }): void {
+  scheduleRestoredFollowupQueueRecovery({
+    log: params.log.child("followup-queue-recovery"),
+  });
+}
 /** Activates background gateway services after core runtime startup is ready. */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;
@@ -375,6 +381,7 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
+  recoverRestoredFollowupQueues({ log: params.log });
   const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {
     updateConfig: heartbeatRunner.updateConfig,
     stop: () => {
