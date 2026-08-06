@@ -856,7 +856,11 @@ export async function resolveRuntimeWebTools(params: {
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
-          hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
+          // External SecretRef fields are already owned by manifest configContracts in the
+          // assignment plan. Inspection must stay on trusted bundled public artifacts so a
+          // config command cannot import or register external plugin runtime.
+          hasCustomWebSearchPluginRisk:
+            materializeResolvedCredentials && (await getHasCustomWebSearchRisk()),
         }),
       sortProviders: sortWebSearchProvidersForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
@@ -1003,7 +1007,10 @@ export async function resolveRuntimeWebTools(params: {
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
-          hasCustomWebFetchPluginRisk: await getHasCustomWebFetchRisk(),
+          // Keep control-plane inspection manifest-backed; normal startup still discovers
+          // eligible external provider runtime when credentials are being materialized.
+          hasCustomWebFetchPluginRisk:
+            materializeResolvedCredentials && (await getHasCustomWebFetchRisk()),
         }),
       sortProviders: sortWebFetchProvidersForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>

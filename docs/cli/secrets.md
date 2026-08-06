@@ -117,7 +117,7 @@ Notes:
 
 ### Exec provider safety
 
-Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`. Symlinked command paths are rejected — point `command` at the regular target file instead (for example `python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' /opt/homebrew/bin/vault`; re-resolve after each `brew upgrade`), paired with `trustedDirs` (for example `["/opt/homebrew"]`) so only package-manager paths qualify. On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed.
+On POSIX systems, `command` must be a regular, non-symlink file that is executable by and owned by the current user, with closed permissions; an owner-owned `0600` file is not executable and is rejected. Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`. Point `command` at the regular target file instead (for example `python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' /opt/homebrew/bin/vault`; re-resolve after each `brew upgrade`), paired with `trustedDirs` (for example `["/opt/homebrew"]`) so only package-manager paths qualify. On Windows, if ACL verification is unavailable for a provider path, OpenClaw fails closed.
 
 ## Apply a saved plan
 
