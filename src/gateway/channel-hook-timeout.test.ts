@@ -46,7 +46,9 @@ describe("raceChannelHookWithTimeout", () => {
     let started = 0;
     const tasks = Array.from({ length: 6 }, () => async () => {
       started += 1;
-      await new Promise<void>((resolve) => releases.push(resolve));
+      await new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
       return started;
     });
 

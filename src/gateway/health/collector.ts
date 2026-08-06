@@ -55,7 +55,7 @@ function buildPartialAccountHealthSummary(params: {
   skipped: boolean;
 }): ChannelAccountHealthSummary {
   return redactChannelStatusSummaryBaseUrl({
-    ...(params.runtime ?? {}),
+    ...params.runtime,
     accountId: params.accountId,
     lastError: params.error,
     timedOut: true,
