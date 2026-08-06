@@ -6,7 +6,6 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
   assertOkOrThrowHttpError,
-  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
@@ -631,8 +630,10 @@ export async function downloadDashscopeGeneratedVideos(params: {
         }
       } catch (error) {
         // Header rejection happens before the body reader, so explicitly cancel
-        // unread streams before their guarded dispatcher and timeout release.
-        await result.response.body?.cancel(error).catch(() => undefined);
+        // unread streams before their guarded dispatcher and timeout release. A
+        // debug-capture clone can keep the tee open, so waiting for that cancel
+        // would hang before the rejected response is released.
+        void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }
 
@@ -646,20 +647,9 @@ export async function downloadDashscopeGeneratedVideos(params: {
         );
       } catch (error) {
         // The body reader normally owns cancellation. If deadline resolution
-        // fails first, cancel here before release clears the guarded abort.
-        await result.response.body?.cancel(error).catch(() => undefined);
-        throw error;
-      }
-      try {
-        assertProviderBinaryResponseContent(
-          result.response,
-          `${params.providerLabel} generated video download`,
-          "video",
-        );
-      } catch (error) {
-        // A debug-capture clone can keep the tee open, so waiting for cancel would hang
-        // before the rejected response and its dispatcher can be released.
-        void result.response.body?.cancel().catch(() => undefined);
+        // fails first, cancel here before release clears the guarded abort, and
+        // do not wait on it for the same debug-capture tee reason.
+        void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }
       buffer = await readResponseWithLimit(result.response, params.maxBytes, {

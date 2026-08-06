@@ -354,6 +354,34 @@ describe("downloadDashscopeGeneratedVideos", () => {
     ).rejects.toThrow("Alibaba Wan generated video download: malformed video response");
   });
 
+  it("rejects a malformed response while a debug-capture clone still holds the body tee", async () => {
+    const fetchFn = vi.fn(async () => {
+      const response = new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"error":"denied"'));
+            // The body never ends, so only an explicit cancel can settle it.
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+      // Debug capture keeps an unread clone; the tee leaves the source branch
+      // pending, so awaiting the cancel of the rejected body would never settle.
+      response.clone();
+      return response;
+    });
+
+    await expect(
+      downloadDashscopeGeneratedVideos({
+        providerLabel: "Alibaba Wan",
+        urls: ["https://example.com/invalid.mp4"],
+        timeoutMs: 5_000,
+        fetchFn: fetchFn as unknown as typeof fetch,
+        maxBytes: 10 * 1024 * 1024,
+      }),
+    ).rejects.toThrow("Alibaba Wan generated video download: malformed video response");
+  }, 2_000);
+
   it("fails closed before fetch when a function-valued remaining budget is exhausted", async () => {
     const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
     const startedAt = Date.now();
