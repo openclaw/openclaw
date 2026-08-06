@@ -123,16 +123,17 @@ function resolveGatewayAuthRequestContext(
     params.ingressAttribution?.kind === "unattributable-proxy"
       ? undefined
       : params.ingressAttribution;
-  const ip =
+  const fallbackIp =
     attributed?.clientIp ??
-    params.clientIp ??
     resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
 
   return {
     authSurface,
     limiter: params.rateLimiter,
-    subject: attributed?.rateLimit.subject ?? ip,
+    // Browser-origin and other owner-selected limiter keys stay authoritative;
+    // prepared ingress supplies locality/reset policy and the default subject.
+    subject: params.clientIp ?? attributed?.rateLimit.subject ?? fallbackIp,
     rateLimitScope: params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
     localDirect:
       attributed?.localDirect ??

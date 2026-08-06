@@ -4,7 +4,11 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
-import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  createAuthRateLimiter,
+  type AuthRateLimiter,
+} from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
@@ -526,6 +530,34 @@ describe("gateway auth", () => {
     expect(res).toEqual({ ok: false, reason: "proxy_attribution_required" });
     expect(limiter.check).not.toHaveBeenCalled();
     expect(limiter.reset).not.toHaveBeenCalled();
+  });
+
+  it("preserves a caller-selected browser-origin limiter key with prepared ingress", async () => {
+    const limiter = createAuthRateLimiter({ maxAttempts: 1, pruneIntervalMs: 0 });
+    const req = {
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: {},
+    } as never;
+    await prepareGatewayIngressAttribution({ req });
+
+    const result = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      req,
+      clientIp: "browser-origin:https://hostile.example",
+      rateLimiter: limiter,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "token_mismatch" });
+    expect(
+      limiter.check("browser-origin:https://hostile.example", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET)
+        .allowed,
+    ).toBe(false);
+    expect(
+      limiter.check("browser-origin:https://control.example", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET)
+        .allowed,
+    ).toBe(true);
+    limiter.dispose();
   });
 
   it("verifies Serve identity before an unrelated limiter bucket", async () => {

@@ -78,6 +78,22 @@ describe("gateway ingress attribution", () => {
     limiter.dispose();
   });
 
+  it("honors an explicitly trusted proxy before manual Serve fallback", async () => {
+    const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({ headers: proxyHeaders }),
+      trustedProxies: ["127.0.0.1"],
+      allowTailscale: true,
+      tailscaleWhois,
+    });
+
+    expect(attribution).toMatchObject({
+      kind: "trusted-proxy",
+      clientIp: "198.51.100.10",
+    });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
   it("verifies Serve identity before assigning a client subject", async () => {
     const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
     const attribution = await resolveGatewayIngressAttribution({

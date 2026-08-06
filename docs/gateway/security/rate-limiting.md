@@ -61,8 +61,9 @@ Attempts from other IPs (including loopback) are unaffected during a lockout.
 
 ### Reverse-proxy attribution
 
-The Gateway decides ingress attribution once, before HTTP routing or WebSocket
-authentication. A configured trusted proxy and OpenClaw-managed Tailscale
+Except for the intentionally public `/live` liveness probe, the Gateway decides
+ingress attribution once, before HTTP routing or WebSocket authentication. A
+configured trusted proxy and OpenClaw-managed Tailscale
 Serve/Funnel traffic use validated per-client limiter keys. Forwarded headers
 from an unconfigured same-host proxy are rejected instead of inheriting the
 direct-local exemption. The error tells the operator to configure

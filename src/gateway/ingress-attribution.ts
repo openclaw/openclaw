@@ -229,6 +229,17 @@ export async function resolveGatewayIngressAttribution(params: {
     });
   }
 
+  if (isTrustedProxyAddress(remoteAddress, params.trustedProxies)) {
+    const clientIp = resolveRequestClientIp(
+      req,
+      params.trustedProxies,
+      params.allowRealIpFallback === true,
+    );
+    return clientIp
+      ? buildAttributedIngress({ kind: "trusted-proxy", clientIp })
+      : unattributableProxy(remoteAddress);
+  }
+
   if (remoteIsLoopback && hasProxyHeaders) {
     const managedTailscaleMode =
       params.tailscaleMode ?? readGatewayTailscaleIngressMode(req.socket.localPort);
@@ -242,17 +253,6 @@ export async function resolveGatewayIngressAttribution(params: {
     if (tailscale) {
       return tailscale;
     }
-  }
-
-  if (isTrustedProxyAddress(remoteAddress, params.trustedProxies)) {
-    const clientIp = resolveRequestClientIp(
-      req,
-      params.trustedProxies,
-      params.allowRealIpFallback === true,
-    );
-    return clientIp
-      ? buildAttributedIngress({ kind: "trusted-proxy", clientIp })
-      : unattributableProxy(remoteAddress);
   }
 
   if (remoteIsLoopback && hasProxyHeaders) {
