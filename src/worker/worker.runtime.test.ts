@@ -1139,6 +1139,22 @@ describe("worker runtime", () => {
     ).toBe(true);
   });
 
+  it("does not reach the worker command sink when shell tools are absent", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.toolAuthority.allowedToolNames = ["read", "write", "edit", "apply_patch"];
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    await expect(
+      readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      gateway.inferenceRequests[1]?.context.messages.some(
+        (message) => message.role === "toolResult" && message.toolName === "exec",
+      ),
+    ).toBe(true);
+  });
+
   it("windows near-limit history for every local tool-loop inference", async () => {
     const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
     launch.assignment.initialMessages = Array.from(

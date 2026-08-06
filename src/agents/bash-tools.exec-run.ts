@@ -47,6 +47,7 @@ import {
 import {
   buildExecForegroundResult,
   createExecHostResolver,
+  resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
 import {
@@ -58,6 +59,7 @@ import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
+import { resolveExecExecutionDisposition } from "./exec-defaults.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
@@ -197,24 +199,10 @@ export function createExecTool(
             )
         : null;
       const elevatedDefaults = defaults?.elevated;
-      const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
-      const elevatedDefaultMode =
-        elevatedDefaults?.defaultLevel === "full"
-          ? "full"
-          : elevatedDefaults?.defaultLevel === "ask"
-            ? "ask"
-            : elevatedDefaults?.defaultLevel === "on"
-              ? "ask"
-              : "off";
-      const effectiveDefaultMode = elevatedAllowed ? elevatedDefaultMode : "off";
-      const elevatedMode =
-        typeof params.elevated === "boolean"
-          ? params.elevated
-            ? elevatedDefaultMode === "full"
-              ? "full"
-              : "ask"
-            : "off"
-          : effectiveDefaultMode;
+      const elevatedMode = resolveExecElevatedMode({
+        defaults: elevatedDefaults,
+        requested: params.elevated,
+      });
       const elevatedRequested = elevatedMode !== "off";
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
@@ -285,10 +273,15 @@ export function createExecTool(
         modePolicy.security,
         approvalPolicy?.security ?? modePolicy.security,
       );
-      if (
-        security === "deny" &&
-        (host !== "sandbox" || defaults?.mode === "deny" || explicitSecurity === "deny")
-      ) {
+      const executionDisposition = resolveExecExecutionDisposition({
+        effectiveHost: host,
+        security,
+        ask: modePolicy.ask,
+        sandboxAvailable: Boolean(defaults?.sandbox),
+        configuredMode: defaults?.mode,
+        explicitSecurity,
+      });
+      if (executionDisposition.kind === "denied") {
         throw new Error(`exec denied: host=${host} security=deny`);
       }
       const hostPolicyAllowsFullBypass =
