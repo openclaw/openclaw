@@ -548,6 +548,43 @@ describe("createSessionVisibilityGuard", () => {
     });
   });
 
+  it("preserves cross-agent policy denials when the spawned lookup fails", async () => {
+    // A failed spawned ownership lookup must not relabel a deterministic
+    // cross-agent denial as retryable: retrying the lookup cannot make a known
+    // `agent:other:*` target eligible, so the cross-visibility refusal is
+    // preserved as-is (review P2: preserve cross-agent policy denials).
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async () => {
+        throw new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message: "transport timeout",
+          retryable: true,
+        });
+      }) as never,
+    });
+    try {
+      const guard = await createSessionVisibilityGuard({
+        action: "history",
+        requesterSessionKey: "agent:main:main",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      });
+
+      const result = guard.check("agent:other:main");
+      expect(result).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+      });
+      // The cross-agent refusal must not be relabeled as a retryable lookup failure.
+      expect(result.allowed ? "" : result.error).not.toMatch(/retry/i);
+      expect(result.allowed ? "" : result.error).not.toMatch(/ownership lookup failed/i);
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
+  });
+
   it("reports a transient tree-visibility lookup failure distinctly", async () => {
     loggerMocks.logWarn.mockClear();
     sessionsResolutionTesting.setDepsForTest({

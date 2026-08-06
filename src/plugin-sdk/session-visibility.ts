@@ -333,7 +333,8 @@ function createSessionVisibilityCheckerWithResult(
         !spawnedKeys.ok &&
         params.visibility === "tree" &&
         targetSessionKey !== params.requesterSessionKey &&
-        targetSessionKey !== "current";
+        targetSessionKey !== "current" &&
+        !isCrossAgentTarget(params, targetSessionKey);
       if (lookupFailed) {
         return {
           allowed: false,
@@ -346,6 +347,34 @@ function createSessionVisibilityCheckerWithResult(
   };
 
   return { check };
+}
+
+/**
+ * Whether a direct-key target resolves to a different agent than the requester.
+ *
+ * Mirrors the row checker's agent resolution so the lookup-failure override can
+ * avoid clobbering deterministic cross-agent policy denials: retrying a spawned
+ * ownership lookup cannot make a known `agent:other:*` target eligible, so those
+ * denials must be preserved as-is instead of being relabeled as retryable lookup
+ * failures. Returns true only when the target agent is known and differs.
+ */
+function isCrossAgentTarget(
+  params: SessionVisibilityCheckerParams,
+  targetSessionKey: string,
+): boolean {
+  const requesterAgentId =
+    normalizeLowercaseStringOrEmpty(params.requesterAgentId) ||
+    resolveAgentIdFromSessionKey(params.requesterSessionKey, params.defaultAgentId);
+  let targetAgentId: string | undefined;
+  try {
+    targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey, params.defaultAgentId);
+  } catch {
+    // If the target agent cannot be resolved, the row checker has already
+    // returned a deterministic "agent ownership unavailable" denial that does
+    // not depend on spawned ownership; do not relabel it.
+    return false;
+  }
+  return !!targetAgentId && !!requesterAgentId && targetAgentId !== requesterAgentId;
 }
 
 /** Create a direct session-key visibility checker for one requester/action pair. */
