@@ -478,12 +478,16 @@ export function createGatewayHooksRequestHandler(params: {
             });
             if (value.wakeMode === "now") {
               // Target the wake at the agent/session the announcement landed on
-              // instead of fanning out to every heartbeat-enabled agent.
+              // instead of fanning out to every heartbeat-enabled agent. Only
+              // pass an agentId when the hook explicitly named one: an unnamed
+              // hook resolves its event session from fresh config at announce
+              // time, and pairing a frozen default agent with that session can
+              // wake a stale agent after a default-agent reload.
               requestHeartbeat({
                 source: "hook",
                 intent: "immediate",
                 reason: `hook:${jobId}`,
-                ...(agentId ? { agentId } : {}),
+                ...(acceptedValue.agentId ? { agentId: acceptedValue.agentId } : {}),
                 ...(eventSessionKey ? { sessionKey: eventSessionKey } : {}),
               });
             }

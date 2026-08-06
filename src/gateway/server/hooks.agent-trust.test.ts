@@ -806,6 +806,34 @@ describe("dispatchAgentHook trust handling", () => {
     });
   });
 
+  it("omits the default agentId from the announce wake when no agent is named", async () => {
+    // An unnamed hook resolves its event session from fresh config at announce
+    // time; pairing the dispatch-time default agent with that session could
+    // wake a stale agent after a default-agent reload.
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: false,
+      deliveryAttempted: false,
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Email"),
+      deliver: true,
+    });
+
+    await waitForFast(() => expect(enqueueSystemEventMock).toHaveBeenCalled());
+    await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
+    const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(wake).toMatchObject({
+      source: "hook",
+      intent: "immediate",
+      reason: expect.stringMatching(/^hook:[0-9a-f-]+$/),
+      sessionKey: "agent:main:main",
+    });
+    expect(wake.agentId).toBeUndefined();
+  });
+
   it("targets the failure wake at the hook agent's main session", async () => {
     runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
 
