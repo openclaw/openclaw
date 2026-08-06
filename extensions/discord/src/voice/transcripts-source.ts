@@ -3,7 +3,8 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "openclaw/plugin-sdk/transcripts";
-import { listDiscordStartupAccountIds } from "../accounts.js";
+import { listDiscordStartupAccountIds, resolveDiscordAccount } from "../accounts.js";
+import { resolveDiscordVoiceEnabled } from "./config.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
 const managersByAccountId = new Map<string, DiscordVoiceManager>();
@@ -30,7 +31,37 @@ export function setDiscordTranscriptsVoiceManager(params: {
 
 const resolveDiscordTranscriptsAccountId: NonNullable<
   TranscriptSourceProvider["resolveAccountId"]
-> = ({ cfg, source }) => source.accountId?.trim() || listDiscordStartupAccountIds(cfg ?? {})[0];
+> = ({ cfg, source }) => {
+  const requestedAccountId = source.accountId?.trim();
+  const configuredVoiceAccountIds = cfg
+    ? listDiscordStartupAccountIds(cfg).filter((accountId) =>
+        resolveDiscordVoiceEnabled(resolveDiscordAccount({ cfg, accountId }).config.voice),
+      )
+    : [];
+  // Configuration owns capability; the manager map is transient readiness state.
+  // Falling back to it only supports direct provider calls that have no config.
+  const capableAccountIds = (
+    cfg ? configuredVoiceAccountIds : [...managersByAccountId.keys()]
+  ).sort();
+
+  if (requestedAccountId) {
+    // A provider can be called directly without config while its manager is starting.
+    // With config, reject accounts that can never register a voice manager.
+    if (!cfg || capableAccountIds.includes(requestedAccountId)) {
+      return requestedAccountId;
+    }
+    throw new Error(`Discord account "${requestedAccountId}" is not enabled for voice.`);
+  }
+  if (capableAccountIds.length === 1) {
+    return capableAccountIds[0];
+  }
+  if (capableAccountIds.length === 0) {
+    throw new Error("No Discord account is enabled for voice; enable voice or specify an account.");
+  }
+  throw new Error(
+    `Multiple Discord accounts are enabled for voice (${capableAccountIds.join(", ")}); specify accountId.`,
+  );
+};
 
 function resolveManager(request: TranscriptStartRequest): DiscordVoiceManager | undefined {
   const accountId = resolveDiscordTranscriptsAccountId({
