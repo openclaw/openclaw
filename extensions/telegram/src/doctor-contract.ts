@@ -186,16 +186,20 @@ function normalizeTelegramWebhookPath(params: {
     fixes.push("removed fragment");
   }
 
-  // Rename /healthz — it collides with the reserved health-check endpoint.
-  if (normalized === "/healthz") {
-    normalized = "/telegram-webhook";
-    fixes.push("renamed from /healthz to /telegram-webhook (reserved health-check path)");
-  }
-
-  // Prefix missing leading slash.
+  // Prefix missing leading slash — normalize before reserved-path checks so
+  // that bare "healthz" and "healthz#fragment" are also detected.
   if (!normalized.startsWith("/")) {
     normalized = `/${normalized}`;
     fixes.push("prefixed missing leading slash");
+  }
+
+  // /healthz collides with the reserved health-check endpoint.  Do not
+  // auto-rename — the public webhook URL / reverse-proxy is configured
+  // independently and would still point at /healthz, silently losing
+  // inbound updates.  A legacyConfigRule warns the operator to choose a
+  // different path and update the public mapping.
+  if (normalized === "/healthz") {
+    return { entry: params.entry, changed: false };
   }
 
   if (normalized === rawPath) {
@@ -207,6 +211,26 @@ function normalizeTelegramWebhookPath(params: {
     `Repaired ${params.pathPrefix}.webhookPath "${rawPath}" → "${normalized}" (${fixes.join("; ")}).`,
   );
   return { entry: updated, changed: true };
+}
+
+function hasHealthzWebhookPath(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  const rawPath = entry.webhookPath;
+  if (typeof rawPath !== "string" || rawPath.length === 0) {
+    return false;
+  }
+  let normalized = rawPath;
+  const hashIdx = normalized.indexOf("#");
+  if (hashIdx !== -1) {
+    normalized = normalized.slice(0, hashIdx);
+  }
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+  }
+  return normalized === "/healthz";
 }
 
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
@@ -271,6 +295,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       hasLegacyAccountStreamingAliases(value, hasRetiredTelegramGroupHistoryContextConfig),
   },
   ...streamingAliasMigration.legacyConfigRules,
+  {
+    path: ["channels", "telegram"],
+    message:
+      'channels.telegram.webhookPath collides with the reserved /healthz health-check endpoint. Choose a different webhook path and update your public webhook URL / reverse-proxy configuration to match. Run "openclaw doctor --fix".',
+    match: hasHealthzWebhookPath,
+  },
+  {
+    path: ["channels", "telegram", "accounts"],
+    message:
+      'channels.telegram.accounts.<id>.webhookPath collides with the reserved /healthz health-check endpoint. Choose a different webhook path and update your public webhook URL / reverse-proxy configuration to match. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasHealthzWebhookPath),
+  },
 ];
 
 export function normalizeCompatibilityConfig({

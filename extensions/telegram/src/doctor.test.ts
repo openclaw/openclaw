@@ -784,7 +784,7 @@ describe("telegram doctor", () => {
     );
   });
 
-  it("repairs webhookPath colliding with /healthz", () => {
+  it("does not auto-rename webhookPath colliding with /healthz", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
     if (!normalize) {
       throw new Error("expected telegram compatibility normalizer");
@@ -800,10 +800,10 @@ describe("telegram doctor", () => {
       } as never,
     });
 
-    expect(result.config.channels?.telegram?.webhookPath).toBe("/telegram-webhook");
-    expect(result.changes).toContain(
-      'Repaired channels.telegram.webhookPath "/healthz" → "/telegram-webhook" (renamed from /healthz to /telegram-webhook (reserved health-check path)).',
-    );
+    // /healthz is left unchanged — the operator must fix the public URL/proxy
+    // themselves.  A legacyConfigRule warns about the collision.
+    expect(result.config.channels?.telegram?.webhookPath).toBe("/healthz");
+    expect(result.changes).not.toContain('Repaired channels.telegram.webhookPath "/healthz"');
   });
 
   it("repairs webhookPath containing a fragment", () => {
@@ -854,7 +854,7 @@ describe("telegram doctor", () => {
     );
   });
 
-  it("repairs account webhookPath colliding with /healthz", () => {
+  it("does not auto-rename account webhookPath colliding with /healthz", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
     if (!normalize) {
       throw new Error("expected telegram compatibility normalizer");
@@ -874,9 +874,9 @@ describe("telegram doctor", () => {
       } as never,
     });
 
-    expect(result.config.channels?.telegram?.accounts?.work?.webhookPath).toBe("/telegram-webhook");
-    expect(result.changes).toContain(
-      'Repaired channels.telegram.accounts.work.webhookPath "/healthz" → "/telegram-webhook" (renamed from /healthz to /telegram-webhook (reserved health-check path)).',
+    expect(result.config.channels?.telegram?.accounts?.work?.webhookPath).toBe("/healthz");
+    expect(result.changes).not.toContain(
+      'Repaired channels.telegram.accounts.work.webhookPath "/healthz"',
     );
   });
 
@@ -904,5 +904,73 @@ describe("telegram doctor", () => {
     expect(result.config.channels?.telegram?.webhookPath).toBe("/my-custom-webhook");
     expect(result.config.channels?.telegram?.accounts?.work?.webhookPath).toBe("/work-webhook");
     expect(result.changes).toEqual([]);
+  });
+
+  it("normalizes a bare healthz path (no slash) but leaves it unchanged because it collides with /healthz", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            webhookPath: "healthz",
+          },
+        },
+      } as never,
+    });
+
+    // Slash is prefixed, but the result is /healthz which is reserved.
+    // The path is left as-is — the operator must pick a different path.
+    expect(result.config.channels?.telegram?.webhookPath).toBe("healthz");
+    expect(result.changes).not.toContain("healthz");
+  });
+
+  it("normalizes healthz#fragment but leaves it unchanged because the result collides with /healthz", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            webhookPath: "healthz#fragment",
+          },
+        },
+      } as never,
+    });
+
+    // Fragment is stripped and slash is prefixed, but the result is /healthz.
+    // The path is left as-is.
+    expect(result.config.channels?.telegram?.webhookPath).toBe("healthz#fragment");
+    expect(result.changes).not.toContain("healthz");
+  });
+
+  it("legacyConfigRule matches root webhookPath colliding with /healthz", () => {
+    const rule = telegramDoctor.legacyConfigRules?.find(
+      (r) => r.path.join(".") === "channels.telegram" && r.message.includes("healthz"),
+    );
+    expect(rule).toBeDefined();
+
+    expect(rule!.match?.({ webhookPath: "/healthz" }, {})).toBe(true);
+    expect(rule!.match?.({ webhookPath: "healthz" }, {})).toBe(true);
+    expect(rule!.match?.({ webhookPath: "healthz#fragment" }, {})).toBe(true);
+    expect(rule!.match?.({ webhookPath: "/mybot" }, {})).toBe(false);
+  });
+
+  it("legacyConfigRule matches account webhookPath colliding with /healthz", () => {
+    const rule = telegramDoctor.legacyConfigRules?.find(
+      (r) => r.path.join(".") === "channels.telegram.accounts" && r.message.includes("healthz"),
+    );
+    expect(rule).toBeDefined();
+
+    // Account-level match: value is { <id>: { webhookPath: ... } }
+    expect(rule!.match?.({ work: { webhookPath: "/healthz" } }, {})).toBe(true);
+    expect(rule!.match?.({ ops: { webhookPath: "healthz" } }, {})).toBe(true);
+    expect(rule!.match?.({ work: { webhookPath: "/mybot" } }, {})).toBe(false);
   });
 });
