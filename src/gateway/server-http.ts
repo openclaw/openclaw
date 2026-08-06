@@ -189,6 +189,7 @@ async function handleGatewayProbeRequest(
   resolvedAuth: ResolvedGatewayAuth,
   trustedProxies: string[],
   allowRealIpFallback: boolean,
+  rateLimiter: AuthRateLimiter | undefined,
   ingressAttribution: GatewayIngressAttribution | undefined,
   getReadiness?: ReadinessChecker,
 ): Promise<boolean> {
@@ -227,6 +228,7 @@ async function handleGatewayProbeRequest(
           req,
           trustedProxies,
           allowRealIpFallback,
+          rateLimiter,
           ingressAttribution,
           browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
         })
@@ -436,6 +438,7 @@ export function createGatewayHttpServer(opts: {
           [],
           false,
           undefined,
+          undefined,
           getReadiness,
         );
         return;
@@ -499,6 +502,7 @@ export function createGatewayHttpServer(opts: {
               resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
+              rateLimiter,
               ingressAttribution,
               getReadiness,
             ),
