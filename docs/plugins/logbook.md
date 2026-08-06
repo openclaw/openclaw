@@ -30,10 +30,13 @@ You need:
   macOS app node needs Screen Recording permission. A headless macOS node host
   (`openclaw node host run`) gets the plugin-provided `logbook.snapshot`
   command backed by the system `screencapture` tool.
-- The bundled Codex plugin enabled and authenticated. Codex currently provides
-  the structured image-extraction contract Logbook requires. Sign in with
-  `openclaw models auth login --provider openai`; see
-  [Codex harness](/plugins/codex-harness) for other auth paths.
+- An image-capable media provider for the vision pass. The bundled Codex plugin
+  is the default route and the only one borrowed automatically from
+  `tools.media.models`; sign in with
+  `openclaw models auth login --provider openai` and see
+  [Codex harness](/plugins/codex-harness) for other auth paths. To use a
+  different provider, set `visionModel` explicitly — see
+  [Vision model selection](#vision-model-selection).
 - A working default agent model. Logbook uses it to synthesize cards, standup
   notes, and day Q&A after the vision pass.
 
@@ -160,7 +163,7 @@ and clamped to the supported range.
 | `nodeId`                  | unset   | node id or display name | Pins capture to one connected node; matching is case-insensitive                             |
 | `screenIndex`             | `0`     | `0`-`16`                | Zero-based display index                                                                     |
 | `maxWidth`                | `1440`  | `480`-`3840`            | Requested capture size cap; headless macOS applies it to the largest dimension               |
-| `visionModel`             | unset   | `provider/model`        | Explicit structured route; malformed refs pause analysis, unsupported providers fail batches |
+| `visionModel`             | unset   | `provider/model`        | Explicit structured route; any image-capable provider works; malformed refs pause analysis   |
 | `retentionDays`           | `14`    | `1`-`365`               | Deletes old frames; cards, observations, and standups remain                                 |
 
 Without `nodeId`, Logbook prefers a connected app node exposing
@@ -176,10 +179,17 @@ Logbook resolves the observation model in this order:
 1. `plugins.entries.logbook.config.visionModel`
 2. the first image-capable Codex entry under `tools.media.models`
 
-Other media providers are skipped because they do not currently expose the
-structured extraction contract Logbook requires. Setting
-`tools.media.image.enabled: false` disables borrowed media defaults, but an
-explicit Logbook `visionModel` still applies.
+Step 2 stays Codex-only: the borrowed default is drawn from image-capable Codex
+entries under `tools.media.models`, and other providers are not borrowed
+automatically.
+
+An explicit `visionModel` is not restricted that way. Any image-capable media
+provider can serve it. Providers shipping their own structured-extraction
+implementation use it; the rest route through the shared model-backed path, the
+same fallback that already backs `describeImage` and `describeImages`.
+
+Setting `tools.media.image.enabled: false` disables borrowed media defaults, but
+an explicit Logbook `visionModel` still applies.
 
 ## Dashboard tab
 

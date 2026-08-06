@@ -95,6 +95,33 @@ describe("media-understanding provider registry", () => {
     expect(provider.extractStructured).toBeTypeOf("function");
   });
 
+  it("routes hydrated structured extraction through the provider's own describeImages", async () => {
+    // opencode-style: the provider's describeImages carries a request transform
+    // (it strips an unsupported disabled-reasoning payload). Structured
+    // extraction must go through that hook, not the bare shared runtime, or the
+    // fallback resends exactly the payload the hook exists to remove.
+    const describeImages = vi.fn().mockResolvedValue({ text: '{"ok":true}', model: "m" });
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "opencode", capabilities: ["image"], describeImages }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = requireMediaProvider(registry, "opencode");
+
+    const result = await provider.extractStructured?.({
+      input: [{ type: "image", buffer: Buffer.from("bytes"), fileName: "a.png", mime: "image/png" }],
+      instructions: "Extract JSON.",
+      provider: "opencode",
+      model: "gpt-5-nano",
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(describeImages).toHaveBeenCalledTimes(1);
+    expect(result?.parsed).toEqual({ ok: true });
+  });
+
   it("keeps a provider's bespoke structured extraction implementation", () => {
     const extractStructured = vi.fn();
     resolvePluginCapabilityProvidersMock.mockReturnValue([

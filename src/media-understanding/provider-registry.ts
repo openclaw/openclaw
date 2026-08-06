@@ -3,7 +3,7 @@ import { resolvePluginCapabilityProviders } from "../plugins/capability-provider
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
-import { extractStructuredWithImageModel } from "./structured-extraction-runtime.js";
+import { createStructuredExtractionWithImageModel } from "./structured-extraction-runtime.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 function mergeProviderIntoRegistry(
@@ -38,11 +38,17 @@ function hydrateModelBackedMediaProvider(
   if (provider.describeImage && provider.describeImages && provider.extractStructured) {
     return provider;
   }
+  // Bind structured extraction to the SAME describeImages this provider will
+  // use. A provider can carry a transport-specific request transform there
+  // (opencode strips an unsupported disabled-reasoning payload), and extraction
+  // must go through it rather than the bare shared runtime.
+  const describeImages = provider.describeImages ?? describeImagesWithModel;
   return {
     ...provider,
     describeImage: provider.describeImage ?? describeImageWithModel,
-    describeImages: provider.describeImages ?? describeImagesWithModel,
-    extractStructured: provider.extractStructured ?? extractStructuredWithImageModel,
+    describeImages,
+    extractStructured:
+      provider.extractStructured ?? createStructuredExtractionWithImageModel(describeImages),
   };
 }
 
