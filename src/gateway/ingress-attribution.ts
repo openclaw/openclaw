@@ -64,6 +64,16 @@ function hasTailscaleProxyHeaders(req: IncomingMessage): boolean {
   );
 }
 
+function hasTailscaleModeEvidence(
+  req: IncomingMessage,
+  mode: GatewayTailscaleIngressMode,
+): boolean {
+  if (mode === "serve") {
+    return Boolean(normalizeOptionalString(req.headers["tailscale-user-login"]));
+  }
+  return mode === "funnel" && headerValue(req.headers["tailscale-funnel-request"]) === "?1";
+}
+
 function buildAttributedIngress(params: {
   kind: Exclude<GatewayIngressAttribution["kind"], "unattributable-proxy">;
   clientIp: string;
@@ -175,13 +185,15 @@ export async function resolveGatewayIngressAttribution(params: {
   if (remoteIsLoopback && hasProxyHeaders) {
     const managedTailscaleMode =
       params.tailscaleMode ?? readGatewayTailscaleIngressMode(req.socket.localPort);
-    const tailscale = await resolveTailscaleIngress({
-      req,
-      effectiveMode: managedTailscaleMode,
-      tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
-    });
-    if (tailscale) {
-      return tailscale;
+    if (hasTailscaleModeEvidence(req, managedTailscaleMode)) {
+      const tailscale = await resolveTailscaleIngress({
+        req,
+        effectiveMode: managedTailscaleMode,
+        tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
+      });
+      if (tailscale) {
+        return tailscale;
+      }
     }
   }
 

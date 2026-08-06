@@ -112,6 +112,35 @@ describe("gateway ingress attribution", () => {
     expect(tailscaleWhois).toHaveBeenCalledOnce();
   });
 
+  it("preserves generic trusted-proxy attribution without Serve identity evidence", async () => {
+    const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({ headers: proxyHeaders }),
+      trustedProxies: ["127.0.0.1"],
+      tailscaleMode: "serve",
+      tailscaleWhois,
+    });
+
+    expect(attribution).toMatchObject({
+      kind: "trusted-proxy",
+      clientIp: "198.51.100.10",
+    });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
+  it("preserves generic trusted-proxy attribution without a Funnel marker", async () => {
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({ headers: proxyHeaders }),
+      trustedProxies: ["127.0.0.1"],
+      tailscaleMode: "funnel",
+    });
+
+    expect(attribution).toMatchObject({
+      kind: "trusted-proxy",
+      clientIp: "198.51.100.10",
+    });
+  });
+
   it("verifies Serve identity before assigning a client subject", async () => {
     const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
     const attribution = await resolveGatewayIngressAttribution({
