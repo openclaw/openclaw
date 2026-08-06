@@ -62,7 +62,10 @@ function storeFor(stateDir: string): TranscriptsStore {
 }
 
 describe("transcripts tool", () => {
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+  afterEach(() => {
+    vi.useRealTimers();
+    closeOpenClawStateDatabaseForTest();
+  });
 
   beforeEach(() => {
     getTranscriptSourceProviderMock.mockReset();
@@ -923,6 +926,48 @@ describe("transcripts tool", () => {
     expect(stop).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledWith(
       expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
+    );
+
+    stop.mockClear();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-07T12:00:00.000Z"));
+    await otherAccountTool.execute(
+      "replacement-start",
+      {
+        action: "start",
+        providerId: "discord-voice",
+        sessionId: "account-bound-auto-start",
+      },
+      undefined,
+      vi.fn(),
+    );
+    const replacementSelector = "2026-08-07/account-bound-auto-start";
+    const replacement = await storeFor(stateDir).readSession(replacementSelector);
+    expect(replacement).toMatchObject({
+      source: { accountId: "account-b" },
+      metadata: { ownerChannel: "discord", ownerAccountId: "account-b" },
+    });
+    await service.stop();
+    expect(stop).not.toHaveBeenCalled();
+    await expect(
+      otherAccountTool.execute("replacement-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "account-bound-auto-start" })] },
+    });
+    const replacementAfterServiceStop = await storeFor(stateDir).readSession(replacementSelector);
+    expect(replacementAfterServiceStop).toMatchObject({
+      startedAt: replacement?.startedAt,
+      source: { accountId: "account-b" },
+    });
+    expect(replacementAfterServiceStop?.stoppedAt).toBeUndefined();
+    await otherAccountTool.execute(
+      "replacement-stop",
+      { action: "stop", sessionId: "account-bound-auto-start" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-b" }) }),
     );
   });
 

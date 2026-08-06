@@ -5,7 +5,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "openclaw/plugin-sdk/transcripts";
-import { listDiscordStartupAccountIds, resolveDiscordAccount } from "../accounts.js";
+import { listEnabledDiscordAccounts, resolveDiscordAccount } from "../accounts.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
@@ -49,15 +49,19 @@ const resolveDiscordTranscriptsAccountId: NonNullable<
   TranscriptSourceProvider["resolveAccountId"]
 > = ({ cfg, source }) => {
   const requestedAccountId = source.accountId?.trim();
-  const configuredVoiceAccountIds = cfg
-    ? listDiscordStartupAccountIds(cfg).filter((accountId) =>
-        resolveDiscordVoiceEnabled(resolveDiscordAccount({ cfg, accountId }).config.voice),
+  const configuredVoiceAccounts = cfg
+    ? listEnabledDiscordAccounts(cfg).filter((account) =>
+        resolveDiscordVoiceEnabled(account.config.voice),
       )
     : [];
   // Configuration owns capability; the manager map is transient readiness state.
   // Falling back to it only supports direct provider calls that have no config.
   const capableAccountIds = (
-    cfg ? configuredVoiceAccountIds : [...managersByAccountId.keys()]
+    cfg
+      ? configuredVoiceAccounts
+          .filter((account) => account.tokenStatus === "available")
+          .map((account) => account.accountId)
+      : [...managersByAccountId.keys()]
   ).toSorted();
 
   if (requestedAccountId) {
@@ -65,6 +69,15 @@ const resolveDiscordTranscriptsAccountId: NonNullable<
     // With config, reject accounts that can never register a voice manager.
     if (!cfg || capableAccountIds.includes(requestedAccountId)) {
       return { ok: true, value: requestedAccountId };
+    }
+    if (
+      resolveDiscordAccount({ cfg, accountId: requestedAccountId }).tokenStatus ===
+      "configured_unavailable"
+    ) {
+      return {
+        ok: false,
+        error: `Discord account ${formatAccountIdForError(requestedAccountId)} has configured credentials that are unavailable in this runtime; resolve its SecretRef before using this account.`,
+      };
     }
     return {
       ok: false,
@@ -78,7 +91,7 @@ const resolveDiscordTranscriptsAccountId: NonNullable<
     return {
       ok: false,
       error:
-        "No Discord account is enabled for voice; configure credentials and enable voice for an account.",
+        "No Discord account has available credentials and voice enabled; configure credentials and enable voice for an account.",
     };
   }
   return {
