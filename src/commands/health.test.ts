@@ -1,6 +1,7 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
@@ -175,7 +176,13 @@ describe("healthCommand", () => {
 
       await healthCommand({ json: true, verbose, timeoutMs, config: {} }, runtime as never);
 
-      expect(requireFirstGatewayRequest().timeoutMs).toBe(expected);
+      const request = requireFirstGatewayRequest();
+      expect(request.timeoutMs).toBe(expected);
+      expect(request.unboundedRequestCapability).toBe(
+        verbose && timeoutMs === undefined
+          ? GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS
+          : undefined,
+      );
     },
   );
 

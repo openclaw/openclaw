@@ -90,10 +90,15 @@ Options:
 - `--debug`: alias for `--verbose`
 
 Cached health uses a 10-second response deadline when `--timeout` is omitted.
-Verbose/debug health and `status --deep` instead keep connection startup bounded,
-then wait for the account-dependent live probe set. The Gateway enforces a
-10-second deadline for every account probe—even when a plugin ignores the timeout
-hint—and runs at most five accounts for one channel concurrently.
+Verbose/debug health and `status --deep` keep that deadline with an older
+Gateway. An updated Gateway advertises bounded live-health support during the
+connection handshake, after which the CLI waits for the account-dependent
+result. The Gateway gives each account's complete plugin-hook pipeline 10
+seconds and runs at most five accounts for one channel concurrently. A hook that
+outlives its deadline keeps its capacity slot; accounts that cannot start are
+included as skipped partial results.
+If a newly updated CLI still reports a 10-second transport timeout, restart the
+Gateway so the new process advertises bounded live-health support.
 
 The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
 

@@ -31,10 +31,13 @@ security audit, plugin compatibility, and memory-vector probes are left to
 and `openclaw memory status --deep`.
 
 Live `--deep` health has account-dependent duration. Without an explicit
-`--timeout`, status keeps Gateway connection startup bounded and then waits for
-the Gateway to finish; each account probe is still capped at 10 seconds and at
-most five accounts for one channel run concurrently. An explicit timeout always
-remains the overall client response deadline.
+`--timeout`, status keeps the 10-second response deadline for an older Gateway.
+An updated Gateway advertises bounded live-health support during connection
+setup; status then waits for its result. The Gateway gives each account's whole
+plugin-hook pipeline 10 seconds and runs at most five accounts for one channel
+concurrently. Timed-out work retains its slot, and accounts that cannot start
+are returned as skipped partial results. An explicit timeout always remains the
+overall client response deadline.
 
 ## Session and model resolution
 

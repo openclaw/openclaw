@@ -21,14 +21,13 @@ import {
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   resolveChannelHealthState,
 } from "../channel-health-policy.js";
-import { raceChannelHookWithTimeout } from "../channel-hook-timeout.js";
+import { runChannelHookTasksWithTimeout } from "../channel-hook-timeout.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
@@ -48,6 +47,21 @@ const HEALTH_PROBE_CONCURRENCY = 5;
 const healthLog = createSubsystemLogger("health");
 
 type HealthSnapshotAudience = "public" | "admin";
+
+function buildPartialAccountHealthSummary(params: {
+  accountId: string;
+  error: string;
+  runtime?: ChannelAccountSnapshot;
+  skipped: boolean;
+}): ChannelAccountHealthSummary {
+  return redactChannelStatusSummaryBaseUrl({
+    ...(params.runtime ?? {}),
+    accountId: params.accountId,
+    lastError: params.error,
+    timedOut: true,
+    ...(params.skipped ? { skipped: true } : {}),
+  });
+}
 
 const debugHealth = (
   cfg: OpenClawConfig | undefined,
@@ -292,24 +306,12 @@ export async function collectGatewayHealthSnapshot(params: {
       let lastProbeAt: number | null = null;
       const probeAccountHook = plugin.status?.probeAccount;
       if (enabled && configured && params.probe && probeAccountHook) {
-        // Adapters receive the timeout as a hint, but the Gateway owns the hard
-        // deadline so one non-compliant account cannot block the whole snapshot.
-        const result = await raceChannelHookWithTimeout({
-          timeoutMs: cappedTimeout,
-          run: () => probeAccountHook({ account: probeAccount, timeoutMs: cappedTimeout, cfg }),
-        });
-        lastProbeAt = Date.now();
-        if (result.kind === "value") {
-          probe = result.value;
-        } else if (result.kind === "error") {
-          probe = { ok: false, error: formatErrorMessage(result.error) };
-        } else {
-          probe = {
-            ok: false,
-            error: `Probe timed out after ${cappedTimeout}ms`,
-            timedOut: true,
-          };
+        try {
+          probe = await probeAccountHook({ account: probeAccount, timeoutMs: cappedTimeout, cfg });
+        } catch (error) {
+          probe = { ok: false, error: formatErrorMessage(error) };
         }
+        lastProbeAt = Date.now();
       }
 
       const probeRecord =
@@ -386,18 +388,43 @@ export async function collectGatewayHealthSnapshot(params: {
       record.accountId = accountId;
       return record;
     });
-    const accountRun = await runTasksWithConcurrency({
+    // The timeout covers the full Promise-capable account pipeline. A timed-out
+    // task retains its process-wide channel slot until its backing work settles.
+    const accountConcurrency = params.probe ? HEALTH_PROBE_CONCURRENCY : 1;
+    const accountRun = await runChannelHookTasksWithTimeout({
+      capacityKey: `health:${plugin.id}`,
       tasks: accountTasks,
-      limit: params.probe ? HEALTH_PROBE_CONCURRENCY : 1,
+      limit: accountConcurrency,
+      timeoutMs: cappedTimeout,
     });
-    if (accountRun.hasError) {
-      throw accountRun.firstError;
-    }
     const accountSummaries = Object.fromEntries(
-      accountIdsToProbe.map((accountId, index) => [
-        accountId,
-        expectDefined(accountRun.results[index], `health result for ${plugin.id}:${accountId}`),
-      ]),
+      accountIdsToProbe.map((accountId, index) => {
+        const result = expectDefined(
+          accountRun[index],
+          `health result for ${plugin.id}:${accountId}`,
+        );
+        if (result.kind === "value") {
+          return [accountId, result.value];
+        }
+        const runtime =
+          params.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
+          (accountId === defaultAccountId
+            ? params.runtimeSnapshot?.channels[plugin.id]
+            : undefined);
+        const skipped = result.kind === "timeout" && result.started === false;
+        const error =
+          result.kind === "error"
+            ? includeSensitive
+              ? `Account health failed: ${formatErrorMessage(result.error)}`
+              : "Account health failed"
+            : skipped
+              ? `Account health skipped because ${accountConcurrency} earlier ${accountConcurrency === 1 ? "check is" : "checks are"} still running`
+              : `Account health timed out after ${cappedTimeout}ms`;
+        return [
+          accountId,
+          buildPartialAccountHealthSummary({ accountId, error, runtime, skipped }),
+        ];
+      }),
     );
 
     const defaultSummary =

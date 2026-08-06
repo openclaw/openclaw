@@ -1,6 +1,7 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
@@ -144,12 +145,18 @@ export async function resolveStatusGatewayHealth(params: {
   timeoutMs?: number;
 }) {
   const { callGateway } = await loadGatewayCallModule();
+  const gatewayOwnsLiveHealthDeadline = params.timeoutMs === undefined;
   return await callGateway<HealthSummary>({
     method: "health",
     params: { probe: true },
     // Deep status requests the same variable-duration all-account health work as
-    // verbose health. An explicit operator deadline still wins.
-    timeoutMs: params.timeoutMs ?? null,
+    // verbose health. Rolling upgrades stay bounded until the Gateway advertises ownership.
+    timeoutMs: gatewayOwnsLiveHealthDeadline ? null : params.timeoutMs,
+    ...(gatewayOwnsLiveHealthDeadline
+      ? {
+          unboundedRequestCapability: GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+        }
+      : {}),
     config: params.config,
   });
 }
@@ -171,10 +178,16 @@ export async function resolveStatusGatewayHealthSafe(params: {
     return { error: params.gatewayProbeError ?? "gateway unreachable" };
   }
   const { callGateway } = await loadGatewayCallModule();
+  const gatewayOwnsLiveHealthDeadline = params.timeoutMs === undefined;
   return await callGateway<HealthSummary>({
     method: "health",
     params: { probe: true },
-    timeoutMs: params.timeoutMs ?? null,
+    timeoutMs: gatewayOwnsLiveHealthDeadline ? null : params.timeoutMs,
+    ...(gatewayOwnsLiveHealthDeadline
+      ? {
+          unboundedRequestCapability: GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+        }
+      : {}),
     config: params.config,
     ...params.callOverrides,
   }).catch((err: unknown) => ({ error: String(err) }));
