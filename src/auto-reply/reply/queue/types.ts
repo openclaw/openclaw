@@ -234,6 +234,8 @@ export type FollowupQueueState = {
     count: number;
     /** Compact sources stay strong so cancellation follows summarized content until delivery. */
     sources: FollowupRun[];
+    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
+    summaryLines: string[];
     /** Weak source mapping keeps concurrent summary consumption identity-safe. */
     sourceRefs: WeakMap<FollowupRun, FollowupRun>;
   }>;
