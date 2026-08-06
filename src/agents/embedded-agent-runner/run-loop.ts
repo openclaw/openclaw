@@ -367,6 +367,7 @@ export async function runPreparedEmbeddedLoop(
         modelId,
         startupStagesEmitted,
         bootstrapPromptWarningSignaturesSeen,
+        sameTurnRetry: runRetryBudget.attemptsDispatched > 1,
         resolveRuntimeFallbackReason,
         observeToolOutcome,
         isTurnTainted: turnTaintState.isTainted,

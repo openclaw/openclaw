@@ -103,6 +103,37 @@ function makeExhaustedCredentialFailureInput(options?: { replaySafe?: boolean })
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it("keeps transport-owned timeouts outside the core same-model retry envelope", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    const assistant = buildEmbeddedRunnerAssistant({
+      provider: "anthropic",
+      model: "mock-1",
+      stopReason: "error",
+      errorMessage: "Request timed out.",
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    fixture.input.attempt = attempt;
+    fixture.input.attemptAssistant = assistant;
+    fixture.input.currentAttemptAssistant = assistant;
+    fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant,
+    });
+    fixture.input.pluginHarnessOwnsTransport = true;
+    fixture.input.canRestartForLiveSwitch = true;
+    fixture.input.emptyErrorRetries = 0;
+
+    const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+    expect(outcome.action).toBe("proceed");
+    expect(outcome.sameModelIdleTimeoutRetries).toBe(0);
+    expect(fixture.advanceAttemptAuthProfile).not.toHaveBeenCalled();
+  });
+
   it("falls back after exhausted replay-safe credential-file retries without touching auth state", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
 

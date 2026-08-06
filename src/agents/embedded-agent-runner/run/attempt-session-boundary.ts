@@ -5,6 +5,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
+  dropReplayableAbortedAssistantLeaf,
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
@@ -18,6 +19,7 @@ type SessionBoundaryAttempt = Pick<
   | "onUserMessagePersistenceInvalidated"
   | "operation"
   | "prompt"
+  | "sameTurnRetry"
   | "suppressNextUserMessagePersistence"
   | "trigger"
   | "userTurnTranscriptRecorder"
@@ -50,12 +52,23 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     input.setActiveSessionSystemPrompt("");
   }
 
+  let orphanRepairInitialEntry: ReturnType<typeof sessionManager.getLeafEntry> | undefined;
+  if (!preserveExactPrompt && attempt.sameTurnRetry === true) {
+    const leafEntry = sessionManager.getLeafEntry();
+    const droppedParent = dropReplayableAbortedAssistantLeaf(sessionManager, leafEntry);
+    orphanRepairInitialEntry = droppedParent ?? leafEntry;
+    if (droppedParent) {
+      activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+    }
+  }
+
   const orphanRepairCandidate = preserveExactPrompt
     ? undefined
     : resolveOrphanRepairPlan({
         sessionManager,
         prompt: attempt.prompt,
         trigger: attempt.trigger,
+        initialEntry: orphanRepairInitialEntry ?? sessionManager.getLeafEntry(),
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
   // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.

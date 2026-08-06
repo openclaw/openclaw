@@ -20,7 +20,7 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     failoverFailure: true,
     failoverReason: "billing",
     harnessOwnsTransport: false,
-    allowSameModelIdleTimeoutRetry: false,
+    allowSameModelTimeoutRetry: false,
     allowSameModelRateLimitRetry: true,
     assistantProfileFailureReason: null,
     lastProfileId: undefined,
@@ -135,6 +135,82 @@ describe("handleAssistantFailover", () => {
       expect(maybeRetrySameModelRateLimit).toHaveBeenCalledWith({});
       expect(maybeEscalateRateLimitProfileFallback).not.toHaveBeenCalled();
       expect(advanceAuthProfile).not.toHaveBeenCalled();
+    });
+
+    it("retries the same profile once before rotating on an ordinary timeout", async () => {
+      const advanceAuthProfile = vi.fn(async () => true);
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+      const warn = vi.fn();
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          failoverReason: "timeout",
+          terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
+          allowSameModelTimeoutRetry: true,
+          assistantProfileFailureReason: "timeout",
+          lastProfileId: "openai:p1",
+          billingFailure: false,
+          advanceAuthProfile,
+          maybeMarkAuthProfileFailure,
+          warn,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_timeout");
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
+      expect(maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        "[llm-timeout] Anthropic/claude-haiku-4-5-20251001 hit request timeout; retrying same profile before auth-profile rotation",
+      );
+    });
+
+    it("does not retry after the run budget expires", async () => {
+      const warn = vi.fn();
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: null },
+          terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true },
+          failoverFailure: false,
+          failoverReason: null,
+          allowSameModelTimeoutRetry: true,
+          assistantProfileFailureReason: null,
+          billingFailure: false,
+          warn,
+        }),
+      );
+
+      expect(outcome.action).toBe("continue_normal");
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("does not spend the timeout retry on rate-limit failures", async () => {
+      const advanceAuthProfile = vi.fn(async () => true);
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
+          allowSameModelTimeoutRetry: true,
+          allowSameModelRateLimitRetry: false,
+          assistantProfileFailureReason: "rate_limit",
+          billingFailure: false,
+          rateLimitFailure: true,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("profile_rotation");
+      expect(advanceAuthProfile).toHaveBeenCalledOnce();
     });
 
     it("honors disabled rate-limit profile rotations before same-model retry", async () => {
@@ -734,13 +810,13 @@ describe("handleAssistantFailover", () => {
       expect(outcome.action).toBe("continue_normal");
     });
 
-    it("retries the same model when an idle-timeout retry is allowed", async () => {
+    it("retries the same model when a timeout retry is allowed", async () => {
       const outcome = await handleAssistantFailover(
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
           failoverReason: null,
           terminal: { kind: "timeout", phase: "prompt", source: "idle" },
-          allowSameModelIdleTimeoutRetry: true,
+          allowSameModelTimeoutRetry: true,
           billingFailure: false,
         }),
       );
@@ -749,7 +825,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBe("same_model_idle_timeout");
+      expect(outcome.retryKind).toBe("same_model_timeout");
     });
   });
 

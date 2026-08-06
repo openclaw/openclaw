@@ -34,6 +34,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   modelId: string;
   startupStagesEmitted: boolean;
   bootstrapPromptWarningSignaturesSeen: string[];
+  sameTurnRetry?: boolean;
   resolveRuntimeFallbackReason: () => string | null;
   observeToolOutcome: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"]["onToolOutcome"];
   isTurnTainted: () => boolean;
@@ -261,6 +262,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       clearPostCompactionAbortController: input.clearPostCompactionAbortController,
     },
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarningSignaturesSeen,
+    sameTurnRetry: input.sameTurnRetry,
     suppressNextUserMessagePersistence: sessionPromptState.suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts: terminalRetryState.beforeFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
