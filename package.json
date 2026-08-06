@@ -170,6 +170,7 @@
     "!dist/plugin-sdk/qa-runner-runtime.d.ts",
     "!dist/plugin-sdk/realtime-bootstrap-context.d.ts",
     "!dist/plugin-sdk/realtime-transcription.d.ts",
+    "!dist/plugin-sdk/realtime-voice-audio-queue.d.ts",
     "!dist/plugin-sdk/realtime-voice.d.ts",
     "!dist/plugin-sdk/reply-payload-testing.js",
     "!dist/plugin-sdk/reply-payload-testing.d.ts",
@@ -1126,6 +1127,9 @@
     "./plugin-sdk/realtime-bootstrap-context": {
       "default": "./dist/plugin-sdk/realtime-bootstrap-context.js"
     },
+    "./plugin-sdk/realtime-voice-audio-queue": {
+      "default": "./dist/plugin-sdk/realtime-voice-audio-queue.js"
+    },
     "./plugin-sdk/realtime-voice": {
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
@@ -1863,6 +1867,7 @@
     "test:parallels:npm-update": "bash scripts/e2e/parallels-npm-update-smoke.sh",
     "test:parallels:windows:prepare": "bash scripts/e2e/parallels-windows-prepare.sh",
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
+    "test:agents:concurrency": "node --import tsx scripts/bench-agent-concurrency.ts",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
     "test:perf:changed:bench": "node scripts/bench-test-changed.mjs",
     "test:perf:groups": "node scripts/test-group-report.mjs",
