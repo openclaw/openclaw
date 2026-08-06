@@ -33,7 +33,6 @@ type AttributedGatewayIngress = {
   clientIp: string;
   localDirect: boolean;
   rateLimit: GatewayIngressRateLimitPolicy;
-  tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
 };
 
 export type GatewayIngressAttribution =
@@ -42,7 +41,8 @@ export type GatewayIngressAttribution =
   | (AttributedGatewayIngress & { kind: "trusted-proxy" })
   | (AttributedGatewayIngress & {
       kind: "tailscale-serve";
-      provenance: "managed-route" | "verified-external-route";
+      provenance: "managed-route" | "operator-trusted-proxy";
+      verifyIdentity: () => Promise<VerifiedTailscaleIngressIdentity | undefined>;
     })
   | (AttributedGatewayIngress & { kind: "tailscale-funnel" })
   | {
@@ -136,7 +136,6 @@ function buildAttributedIngress<
   kind: Kind;
   clientIp: string;
   localDirect?: boolean;
-  tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
 }): AttributedGatewayIngress & {
   kind: Kind;
 } {
@@ -151,7 +150,6 @@ function buildAttributedIngress<
       },
       resetOnSuccess: true,
     },
-    ...(params.tailscaleIdentity ? { tailscaleIdentity: params.tailscaleIdentity } : {}),
   };
 }
 
@@ -198,33 +196,37 @@ async function resolveTailscaleIngress(params: {
   if (!headerLogin) {
     return unattributableProxy(req.socket.remoteAddress ?? "unknown");
   }
-  let whois: TailscaleWhoisIdentity | null;
-  try {
-    whois = await (params.externalServe
-      ? runExternalServeWhois(params.tailscaleWhois, clientIp)
-      : params.tailscaleWhois(clientIp));
-  } catch {
-    return unattributableProxy(req.socket.remoteAddress ?? "unknown");
-  }
-  if (!whois?.login) {
-    return unattributableProxy(req.socket.remoteAddress ?? "unknown");
-  }
-  if (headerLogin.toLowerCase() !== whois.login.toLowerCase()) {
-    return unattributableProxy(req.socket.remoteAddress ?? "unknown");
-  }
   const headerName = normalizeOptionalString(req.headers["tailscale-user-name"]);
   const profilePic = normalizeOptionalString(req.headers["tailscale-user-profile-pic"]);
+  let identityPromise: Promise<VerifiedTailscaleIngressIdentity | undefined> | undefined;
+  const verifyIdentity = () => {
+    identityPromise ??= (async () => {
+      try {
+        const whois = await (params.externalServe
+          ? runExternalServeWhois(params.tailscaleWhois, clientIp)
+          : params.tailscaleWhois(clientIp));
+        if (!whois?.login || headerLogin.toLowerCase() !== whois.login.toLowerCase()) {
+          return undefined;
+        }
+        return {
+          login: whois.login,
+          name: whois.name ?? headerName ?? whois.login,
+          ...(profilePic ? { profilePic } : {}),
+        };
+      } catch {
+        return undefined;
+      }
+    })();
+    return identityPromise;
+  };
   return {
     ...buildAttributedIngress({
       kind: "tailscale-serve",
       clientIp,
-      tailscaleIdentity: {
-        login: whois.login,
-        name: whois.name ?? headerName ?? whois.login,
-        ...(profilePic ? { profilePic } : {}),
-      },
     }),
-    provenance: params.externalServe ? "verified-external-route" : "managed-route",
+    provenance: params.externalServe ? "operator-trusted-proxy" : "managed-route",
+    // Capture immutable request facts now; WhoIs runs only if tokenless identity auth is selected.
+    verifyIdentity,
   };
 }
 

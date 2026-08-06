@@ -519,10 +519,11 @@ describe("gateway auth", () => {
 
   it("allows tailscale identity when header auth is explicitly enabled", async () => {
     const req = createTailscaleForwardedReq();
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
     const ingressAttribution = await prepareGatewayIngressAttribution({
       req,
       tailscaleMode: "serve",
-      tailscaleWhois: createTailscaleWhois(),
+      tailscaleWhois,
     });
     const res = await authorizeWsControlUiGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
@@ -539,6 +540,7 @@ describe("gateway auth", () => {
       name: "Peter",
       profilePic: "https://avatars.example.test/peter.png",
     });
+    expect(tailscaleWhois).toHaveBeenCalledOnce();
   });
 
   it("does not infer Tailscale identity from raw headers without prepared provenance", async () => {
@@ -549,6 +551,24 @@ describe("gateway auth", () => {
     });
 
     expect(res).toMatchObject({ ok: false, reason: "token_missing" });
+  });
+
+  it("falls through to normal auth when lazy Tailscale identity lookup fails", async () => {
+    const req = createTailscaleForwardedReq();
+    const tailscaleWhois = vi.fn(async () => {
+      throw new Error("WhoIs unavailable");
+    });
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
+
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      req,
+      ingressAttribution,
+    });
+
+    expect(res).toMatchObject({ ok: false, reason: "token_missing" });
+    expect(tailscaleWhois).toHaveBeenCalledOnce();
   });
 
   it("rejects unattributable proxy ingress before checking credentials", async () => {
@@ -654,7 +674,7 @@ describe("gateway auth", () => {
     });
 
     expect(res).toMatchObject({ ok: false, reason: "origin_not_allowed" });
-    expect(tailscaleWhois).toHaveBeenCalledOnce();
+    expect(tailscaleWhois).not.toHaveBeenCalled();
   });
 
   it("rejects wildcard origin grants for ambient Tailscale avatar identity", async () => {
@@ -673,7 +693,7 @@ describe("gateway auth", () => {
     });
 
     expect(res).toMatchObject({ ok: false, reason: "origin_not_allowed" });
-    expect(tailscaleWhois).toHaveBeenCalledOnce();
+    expect(tailscaleWhois).not.toHaveBeenCalled();
   });
 
   it("allows an approved Control UI origin before verifying Tailscale avatar identity", async () => {
@@ -716,7 +736,7 @@ describe("gateway auth", () => {
       });
 
       expect(res).toMatchObject({ ok: false, reason: "origin_not_allowed" });
-      expect(tailscaleWhois).toHaveBeenCalledOnce();
+      expect(tailscaleWhois).not.toHaveBeenCalled();
     },
   );
 
@@ -767,7 +787,7 @@ describe("gateway auth", () => {
     expect(res).toMatchObject({
       ok: false,
       reason:
-        ingressAttribution.kind === "direct-remote"
+        ingressAttribution.kind === "direct-remote" || ingressAttribution.kind === "tailscale-serve"
           ? "token_missing"
           : "proxy_attribution_required",
     });
@@ -788,7 +808,8 @@ describe("gateway auth", () => {
     const req = createTailscaleForwardedReq();
     req.headers.origin = "https://evil.example";
     req.headers["sec-fetch-site"] = "cross-site";
-    const ingressAttribution = await prepareTailscaleServe(req);
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       ...testCase,
       req,
@@ -797,6 +818,25 @@ describe("gateway auth", () => {
     });
 
     expect(res).toMatchObject({ ok: true, method: testCase.method });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit token auth independent of disabled Tailscale identity lookup", async () => {
+    const req = createTailscaleForwardedReq();
+    const tailscaleWhois = vi.fn(async () => {
+      throw new Error("WhoIs unavailable");
+    });
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
+
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "secret" },
+      req,
+      ingressAttribution,
+    });
+
+    expect(res).toMatchObject({ ok: true, method: "token" });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
   });
 
   it("keeps tailscale header auth disabled on HTTP auth wrapper", async () => {

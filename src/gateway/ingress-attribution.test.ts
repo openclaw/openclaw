@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import {
   createGatewayIngressAttributionDiagnostics,
+  type GatewayIngressAttribution,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
   resolveGatewayIngressAttribution,
 } from "./ingress-attribution.js";
@@ -26,6 +27,13 @@ const proxyHeaders = {
   "x-forwarded-proto": "https",
   "x-forwarded-host": "gateway.example.test",
 };
+
+function serveIdentity(attribution: GatewayIngressAttribution) {
+  if (attribution.kind !== "tailscale-serve") {
+    throw new Error(`expected Serve attribution, got ${attribution.kind}`);
+  }
+  return attribution.verifyIdentity();
+}
 
 describe("gateway ingress attribution", () => {
   it("documents that a headerless TCP forwarder is indistinguishable from clean loopback", async () => {
@@ -115,6 +123,10 @@ describe("gateway ingress attribution", () => {
       provenance: "managed-route",
       clientIp: "100.64.0.9",
     });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+    await expect(serveIdentity(attribution)).resolves.toMatchObject({
+      login: "owner@example.test",
+    });
     expect(tailscaleWhois).toHaveBeenCalledOnce();
   });
 
@@ -134,7 +146,7 @@ describe("gateway ingress attribution", () => {
     expect(tailscaleWhois).not.toHaveBeenCalled();
   });
 
-  it("does not downgrade failed managed Serve verification to trusted-proxy attribution", async () => {
+  it("preserves managed Serve attribution when identity verification fails", async () => {
     const attribution = await resolveGatewayIngressAttribution({
       req: request({
         headers: {
@@ -148,7 +160,8 @@ describe("gateway ingress attribution", () => {
       tailscaleWhois: async () => null,
     });
 
-    expect(attribution.kind).toBe("unattributable-proxy");
+    expect(attribution.kind).toBe("tailscale-serve");
+    await expect(serveIdentity(attribution)).resolves.toBeUndefined();
   });
 
   it("preserves generic trusted-proxy attribution without a Funnel marker", async () => {
@@ -164,26 +177,36 @@ describe("gateway ingress attribution", () => {
     });
   });
 
-  it("verifies Serve identity before assigning a client subject", async () => {
+  it("captures and memoizes Serve identity verification after assigning a client subject", async () => {
     const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
+    const req = request({
+      headers: {
+        ...proxyHeaders,
+        "x-forwarded-for": "100.64.0.9",
+        "tailscale-user-login": "owner@example.test",
+      },
+    });
     const attribution = await resolveGatewayIngressAttribution({
-      req: request({
-        headers: {
-          ...proxyHeaders,
-          "x-forwarded-for": "100.64.0.9",
-          "tailscale-user-login": "owner@example.test",
-        },
-      }),
+      req,
       tailscaleMode: "serve",
       tailscaleWhois,
     });
 
-    expect(tailscaleWhois).toHaveBeenCalledWith("100.64.0.9");
     expect(attribution).toMatchObject({
       kind: "tailscale-serve",
       clientIp: "100.64.0.9",
-      tailscaleIdentity: { login: "owner@example.test" },
     });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+    req.headers["x-forwarded-for"] = "100.64.0.99";
+    req.headers["tailscale-user-login"] = "mutated@example.test";
+    const first = serveIdentity(attribution);
+    const second = serveIdentity(attribution);
+    await expect(first).resolves.toMatchObject({
+      login: "owner@example.test",
+    });
+    await expect(second).resolves.toMatchObject({ login: "owner@example.test" });
+    expect(tailscaleWhois).toHaveBeenCalledWith("100.64.0.9");
+    expect(tailscaleWhois).toHaveBeenCalledOnce();
   });
 
   it("preserves separately managed Serve when explicitly enabled and verified", async () => {
@@ -201,14 +224,17 @@ describe("gateway ingress attribution", () => {
       tailscaleWhois,
     });
 
-    expect(tailscaleWhois).toHaveBeenCalledWith("100.64.0.10");
     expect(attribution).toMatchObject({
       kind: "tailscale-serve",
-      provenance: "verified-external-route",
+      provenance: "operator-trusted-proxy",
       clientIp: "100.64.0.10",
       rateLimit: { subject: { key: "100.64.0.10", exemption: "none" } },
-      tailscaleIdentity: { login: "owner@example.test" },
     });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+    await expect(serveIdentity(attribution)).resolves.toMatchObject({
+      login: "owner@example.test",
+    });
+    expect(tailscaleWhois).toHaveBeenCalledWith("100.64.0.10");
   });
 
   it("does not infer separately managed Serve without trusted proxy provenance", async () => {
@@ -251,7 +277,7 @@ describe("gateway ingress attribution", () => {
         throw new Error("WhoIs unavailable");
       },
     ],
-  ])("fails closed for external Serve with %s", async (_name, tailscaleWhois) => {
+  ])("withholds external Serve identity for %s", async (_name, tailscaleWhois) => {
     const attribution = await resolveGatewayIngressAttribution({
       req: request({
         headers: {
@@ -265,7 +291,8 @@ describe("gateway ingress attribution", () => {
       tailscaleWhois,
     });
 
-    expect(attribution.kind).toBe("trusted-proxy");
+    expect(attribution.kind).toBe("tailscale-serve");
+    await expect(serveIdentity(attribution)).resolves.toBeUndefined();
   });
 
   it("bounds and deduplicates external Serve WhoIs", async () => {
@@ -290,13 +317,20 @@ describe("gateway ingress attribution", () => {
         tailscaleWhois,
       });
 
-    const first = lookup(20);
-    const duplicate = lookup(20);
-    const admitted = Array.from({ length: 7 }, (_, index) => lookup(21 + index));
-    const rejected = await lookup(28);
+    const firstAttribution = await lookup(20);
+    const duplicateAttribution = await lookup(20);
+    const admittedAttributions = await Promise.all(
+      Array.from({ length: 7 }, (_, index) => lookup(21 + index)),
+    );
+    const rejectedAttribution = await lookup(28);
+
+    const first = serveIdentity(firstAttribution);
+    const duplicate = serveIdentity(duplicateAttribution);
+    const admitted = admittedAttributions.map((attribution) => serveIdentity(attribution));
+    const rejected = serveIdentity(rejectedAttribution);
 
     expect(tailscaleWhois).toHaveBeenCalledTimes(8);
-    expect(rejected.kind).toBe("trusted-proxy");
+    await expect(rejected).resolves.toBeUndefined();
     for (const resolve of resolvers) {
       resolve();
     }

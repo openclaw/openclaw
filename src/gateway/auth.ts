@@ -501,7 +501,7 @@ async function authorizeGatewayConnectCore(
         return originResult;
       }
     }
-    const tailscaleIdentity = ingressAttribution.tailscaleIdentity;
+    const tailscaleIdentity = await ingressAttribution.verifyIdentity();
     if (tailscaleIdentity) {
       if (resetOnSuccess) {
         limiter?.reset(subject, rateLimitScope);
