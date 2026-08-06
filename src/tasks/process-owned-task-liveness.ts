@@ -6,7 +6,7 @@ export const CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_ma
 const ACTIVE_PROCESS_OWNED_TASK_IDS_KEY = Symbol.for("openclaw.processOwnedTaskIds");
 
 function getActiveProcessOwnedTaskIds(): Set<string> {
-  return resolveGlobalSet<string>(ACTIVE_PROCESS_OWNED_TASK_IDS_KEY, "close-and-restart");
+  return resolveGlobalSet<string>(ACTIVE_PROCESS_OWNED_TASK_IDS_KEY, "close-only");
 }
 
 export function isNonResumableProcessOwnedTask(

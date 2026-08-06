@@ -4,10 +4,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
-import { enqueueCommandInLane, markGatewayDraining } from "../../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  markGatewayDraining,
+  resetAllLanes,
+} from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { isProcessOwnedTaskIdActive } from "../../tasks/process-owned-task-liveness.js";
 import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
@@ -554,6 +559,87 @@ describe("runContextEngineMaintenance", () => {
         );
 
         await foregroundTurn;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("keeps queued maintenance owned when a SIGUSR1 restart reset pumps its worker", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-restart-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-restart-held";
+        const maintenanceLane = `context-engine-turn-maintenance:${sessionKey}`;
+        let releaseLaneBlocker: (() => void) | undefined;
+        const laneBlocker = enqueueCommandInLane(maintenanceLane, async () => {
+          await new Promise<void>((resolve) => {
+            releaseLaneBlocker = resolve;
+          });
+        });
+        await flushAsyncWork();
+
+        let releaseMaintenance: (() => void) | undefined;
+        const maintain = vi.fn(async () => {
+          await new Promise<void>((resolve) => {
+            releaseMaintenance = resolve;
+          });
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        });
+        let deferredMaintenance: Promise<void> | undefined;
+
+        await runContextEngineMaintenance({
+          contextEngine: {
+            info: {
+              id: "test",
+              name: "Test Engine",
+              turnMaintenanceMode: "background",
+            },
+            ingest: async () => ({ ingested: true }),
+            assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+            compact: async () => ({ ok: true, compacted: false }),
+            maintain,
+          },
+          sessionId: "session-restart-held",
+          sessionKey,
+          sessionFile: "/tmp/session-restart-held.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredMaintenance = promise;
+          },
+        });
+
+        const task = expectDefined(
+          listTasksForOwnerKey(sessionKey).find(
+            (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+          ),
+          "queued maintenance task",
+        );
+        expect(task.status).toBe("queued");
+        expect(isProcessOwnedTaskIdActive(task.taskId)).toBe(true);
+
+        // Mirrors runGatewayLoop: resetAllLanes pumps preserved queue entries,
+        // then the in-process restart drains restart-scoped singletons.
+        resetAllLanes();
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        expect(getTaskById(task.taskId)?.status).toBe("running");
+        await drainGlobalSingletonLifecycleState("restart");
+        expect(isProcessOwnedTaskIdActive(task.taskId)).toBe(true);
+
+        if (!releaseMaintenance || !deferredMaintenance || !releaseLaneBlocker) {
+          throw new Error("expected held maintenance and lane blocker callbacks");
+        }
+        releaseMaintenance();
+        await deferredMaintenance;
+        expect(getTaskById(task.taskId)?.status).toBe("succeeded");
+        expect(isProcessOwnedTaskIdActive(task.taskId)).toBe(false);
+
+        releaseLaneBlocker();
+        await laneBlocker;
       } finally {
         vi.useRealTimers();
       }

@@ -118,9 +118,18 @@ describe("process-owned task liveness", () => {
       expect(requireTask(taskId).status).toBe("running");
       expect(getTaskFlowById(flowId)?.status).toBe("running");
 
-      // SIGUSR1 keeps this Node process alive, so the gateway restart lifecycle
-      // must clear ownership before the next iteration reloads durable rows.
+      // SIGUSR1 keeps this Node process and its queued/running workers alive, so
+      // an in-process restart must preserve their process-owned liveness.
       await drainGlobalSingletonLifecycleState("restart");
+      expect(isProcessOwnedTaskIdActive(taskId)).toBe(true);
+
+      expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+      expect(requireTask(taskId).status).toBe("running");
+      expect(getTaskFlowById(flowId)?.status).toBe("running");
+
+      // A full process exit drops the in-memory owner set. The close lifecycle
+      // models that boundary while retaining durable task and TaskFlow rows.
+      await drainGlobalSingletonLifecycleState("close");
       expect(isProcessOwnedTaskIdActive(taskId)).toBe(false);
 
       expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
