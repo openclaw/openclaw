@@ -71,6 +71,7 @@ export async function authenticateGatewayConnect(
     configSnapshot,
     trustedProxies,
     allowRealIpFallback,
+    ingressAttribution,
     peerLabel,
     hasProxyHeaders,
     isLocalClient,
@@ -124,6 +125,7 @@ export async function authenticateGatewayConnect(
     req: upgradeReq,
     trustedProxies,
     allowRealIpFallback,
+    ingressAttribution,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
   });

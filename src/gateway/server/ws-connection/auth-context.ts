@@ -14,6 +14,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
+import type { GatewayIngressAttribution } from "../../ingress-attribution.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 
 type HandshakeConnectAuth = {
@@ -131,6 +132,7 @@ export async function resolveConnectAuthState(params: {
   req: IncomingMessage;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
+  ingressAttribution: GatewayIngressAttribution;
   rateLimiter?: AuthRateLimiter;
   clientIp?: string | AuthRateLimitSubject;
 }): Promise<ConnectAuthState> {
@@ -148,6 +150,7 @@ export async function resolveConnectAuthState(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
+    ingressAttribution: params.ingressAttribution,
     rateLimiter: sharedAuthProvided ? params.rateLimiter : undefined,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -161,6 +164,7 @@ export async function resolveConnectAuthState(params: {
       req: params.req,
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
+      ingressAttribution: params.ingressAttribution,
       // Shared-auth probe only; rate-limit side effects are handled in the
       // primary auth flow (or deferred for device-token candidates).
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,

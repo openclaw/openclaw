@@ -448,7 +448,6 @@ export function createGatewayHttpServer(opts: {
         req,
         trustedProxies,
         allowRealIpFallback,
-        allowTailscale: getResolvedAuth().allowTailscale,
       });
       opts.ingressAttributionDiagnostics?.observe(ingressAttribution, req);
       if (ingressAttribution.kind === "unattributable-proxy") {
@@ -887,7 +886,6 @@ export function attachGatewayUpgradeHandler(opts: {
         req,
         trustedProxies,
         allowRealIpFallback,
-        allowTailscale: getResolvedAuth().allowTailscale,
       });
       opts.ingressAttributionDiagnostics?.observe(ingressAttribution, req);
       if (ingressAttribution.kind === "unattributable-proxy") {

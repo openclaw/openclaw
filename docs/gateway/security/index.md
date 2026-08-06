@@ -607,7 +607,7 @@ Rotation checklist (token/password): generate/set a new secret (`gateway.auth.to
 
 ### Tailscale Serve identity headers
 
-When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header - this only triggers for loopback requests carrying `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as injected by Tailscale. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
+When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication on an active OpenClaw-registered Serve route. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header. The permission setting alone does not make headers from a separately managed proxy trustworthy. Configure `gateway.trustedProxies` narrowly for those deployments and make the proxy overwrite or safely rebuild forwarded client headers.
 
 HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`) do not use Tailscale identity-header auth - they follow the gateway's configured HTTP auth mode.
 
@@ -615,7 +615,7 @@ Gateway HTTP bearer auth is effectively all-or-nothing operator access. Credenti
 
 Tokenless Serve auth assumes the gateway host itself is trusted - it is not protection against hostile same-host processes. If untrusted local code may run on the gateway host, disable `allowTailscale` and require explicit shared-secret auth (`token` or `password`).
 
-Do not forward these headers from your own reverse proxy. If you terminate TLS or proxy in front of the gateway, disable `allowTailscale` and use shared-secret auth or [Trusted Proxy Auth](/gateway/trusted-proxy-auth) instead.
+Do not forward these headers from your own reverse proxy. If you terminate TLS or proxy in front of the gateway, configure `gateway.trustedProxies` and use shared-secret auth or [Trusted Proxy Auth](/gateway/trusted-proxy-auth) instead.
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 

@@ -117,7 +117,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     req: upgradeReq,
     trustedProxies,
     allowRealIpFallback,
-    allowTailscale: params.getResolvedAuth().allowTailscale,
   });
   const clientIp = resolveClientIp({
     remoteAddr,
@@ -372,6 +371,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           configSnapshot,
           trustedProxies,
           allowRealIpFallback,
+          ingressAttribution,
           peerLabel,
           hasProxyHeaders,
           isLocalClient,

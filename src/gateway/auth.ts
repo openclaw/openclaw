@@ -6,7 +6,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
-import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -16,7 +15,6 @@ import {
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
-  readPreparedGatewayIngressAttribution,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayIngressAttribution,
   type VerifiedTailscaleIngressIdentity,
@@ -27,7 +25,6 @@ import {
   resolveLocalInterfaceAddressMatch,
   resolveRequestClientIp,
   isTrustedProxyAddress,
-  resolveClientIp,
 } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
@@ -75,7 +72,6 @@ type AuthorizeGatewayConnectParams = {
   connectAuth?: ConnectAuth | null;
   req?: IncomingMessage;
   trustedProxies?: string[];
-  tailscaleWhois?: TailscaleWhoisLookup;
   ingressAttribution?: GatewayIngressAttribution;
   /**
    * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
@@ -101,8 +97,6 @@ type AuthorizeGatewayConnectParams = {
 };
 
 type VerifiedTailscaleIdentity = VerifiedTailscaleIngressIdentity;
-
-type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
 type GatewayAuthRequestContext = {
   authSurface: GatewayAuthSurface;
@@ -149,87 +143,8 @@ function hasExplicitSharedSecretAuth(connectAuth?: ConnectAuth | null): boolean 
   );
 }
 
-function normalizeLogin(login: string): string {
-  return normalizeLowercaseStringOrEmpty(login);
-}
-
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
-}
-
-const TAILSCALE_TRUSTED_PROXIES = ["127.0.0.1", "::1"] as const;
-
-function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
-  if (!req) {
-    return undefined;
-  }
-  return resolveClientIp({
-    remoteAddr: req.socket?.remoteAddress ?? "",
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
-    trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
-  });
-}
-
-function getTailscaleUser(req?: IncomingMessage): VerifiedTailscaleIdentity | null {
-  if (!req) {
-    return null;
-  }
-  const login = normalizeOptionalString(req.headers["tailscale-user-login"]);
-  if (!login) {
-    return null;
-  }
-  const nameRaw = req.headers["tailscale-user-name"];
-  const profilePic = req.headers["tailscale-user-profile-pic"];
-  const name = normalizeOptionalString(nameRaw) ?? login;
-  return {
-    login,
-    name,
-    profilePic: normalizeOptionalString(profilePic),
-  };
-}
-
-function hasTailscaleProxyHeaders(req?: IncomingMessage): boolean {
-  return Boolean(
-    req?.headers["x-forwarded-for"] &&
-    req.headers["x-forwarded-proto"] &&
-    req.headers["x-forwarded-host"],
-  );
-}
-
-async function resolveVerifiedTailscaleUser(params: {
-  req?: IncomingMessage;
-  tailscaleWhois: TailscaleWhoisLookup;
-}): Promise<{ ok: true; user: VerifiedTailscaleIdentity } | { ok: false; reason: string }> {
-  const tailscaleUser = getTailscaleUser(params.req);
-  if (!tailscaleUser) {
-    return { ok: false, reason: "tailscale_user_missing" };
-  }
-  if (
-    !params.req ||
-    !isLoopbackAddress(params.req.socket?.remoteAddress) ||
-    !hasTailscaleProxyHeaders(params.req)
-  ) {
-    return { ok: false, reason: "tailscale_proxy_missing" };
-  }
-  const clientIp = resolveTailscaleClientIp(params.req);
-  if (!clientIp) {
-    return { ok: false, reason: "tailscale_whois_failed" };
-  }
-  const whois = await params.tailscaleWhois(clientIp);
-  if (!whois?.login) {
-    return { ok: false, reason: "tailscale_whois_failed" };
-  }
-  if (normalizeLogin(whois.login) !== normalizeLogin(tailscaleUser.login)) {
-    return { ok: false, reason: "tailscale_user_mismatch" };
-  }
-  return {
-    ok: true,
-    user: {
-      login: whois.login,
-      name: whois.name ?? tailscaleUser.name,
-      profilePic: tailscaleUser.profilePic,
-    },
-  };
 }
 
 /** Validate that the selected gateway auth mode has the required resolved credentials/config. */
@@ -465,9 +380,7 @@ async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth } = params;
-  const ingressAttribution =
-    params.ingressAttribution ??
-    (params.req ? await readPreparedGatewayIngressAttribution(params.req) : undefined);
+  const ingressAttribution = params.ingressAttribution;
   if (ingressAttribution?.kind === "unattributable-proxy") {
     return { ok: false, reason: PROXY_ATTRIBUTION_REQUIRED_REASON };
   }
@@ -570,7 +483,7 @@ async function authorizeGatewayConnectCore(
     auth.allowTailscale &&
     !localDirect &&
     !hasExplicitSharedSecretAuth(connectAuth) &&
-    getTailscaleUser(req)
+    ingressAttribution?.kind === "tailscale-serve"
   ) {
     if (authSurface === "http-user-profile-avatar") {
       // Same-origin <img> loads may omit Origin, but Fetch Metadata still identifies
@@ -588,22 +501,16 @@ async function authorizeGatewayConnectCore(
         return originResult;
       }
     }
-    const tailscaleCheck =
-      ingressAttribution?.kind === "tailscale-serve"
-        ? ({ ok: true, user: ingressAttribution.tailscaleIdentity } as const)
-        : await resolveVerifiedTailscaleUser({
-            req,
-            tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
-          });
-    if (tailscaleCheck.ok && tailscaleCheck.user) {
+    const tailscaleIdentity = ingressAttribution.tailscaleIdentity;
+    if (tailscaleIdentity) {
       if (resetOnSuccess) {
         limiter?.reset(subject, rateLimitScope);
       }
       return {
         ok: true,
         method: "tailscale",
-        user: tailscaleCheck.user.login,
-        tailscaleIdentity: tailscaleCheck.user,
+        user: tailscaleIdentity.login,
+        tailscaleIdentity,
       };
     }
   }
