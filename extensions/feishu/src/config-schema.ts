@@ -24,10 +24,52 @@ const FeishuGroupPolicySchema = z.union([
   // Preserve the shipped Feishu alias while the canonical value remains "open".
   z.literal("allowall").transform(() => "open" as const),
 ]);
-const FeishuDomainSchema = z.union([
-  z.enum(["feishu", "lark"]),
-  z.string().url().startsWith("https://"),
-]);
+// URL schemes are case-insensitive (RFC 3986). Accept HTTPS://... and normalize
+// via the URL constructor so downstream Feishu clients always see lowercase https://.
+// Only admit a clean HTTPS origin+path base (no credentials, query, or fragment).
+const CustomFeishuDomainSchema = z
+  .string()
+  .url()
+  .superRefine((value, ctx) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid custom Feishu domain URL" });
+      return;
+    }
+    if (parsed.protocol.toLowerCase() !== "https:") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Custom Feishu domain must use HTTPS" });
+    }
+    if (parsed.username || parsed.password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Custom Feishu domain must not include credentials",
+      });
+    }
+    if (parsed.search) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Custom Feishu domain must not include a query string",
+      });
+    }
+    if (parsed.hash) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Custom Feishu domain must not include a fragment",
+      });
+    }
+  })
+  .transform((value) => {
+    const parsed = new URL(value);
+    parsed.protocol = "https:";
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/+$/, "");
+  });
+const FeishuDomainSchema = z.union([z.enum(["feishu", "lark"]), CustomFeishuDomainSchema]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
 const FeishuWebhookPathSchema = z
   .string()

@@ -97,6 +97,60 @@ function hasLegacyWebhookPath(value: unknown): boolean {
   return typeof path === "string" && normalizeFeishuWebhookPath(path) !== path;
 }
 
+// Current schema rejects credentials, query, and fragment on custom HTTPS domains
+// (config-schema CustomFeishuDomainSchema). Values that main previously accepted
+// must be repaired by doctor --fix before runtime validation.
+function normalizeLegacyCustomDomain(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol.toLowerCase() !== "https:") {
+    return undefined;
+  }
+  if (!url.username && !url.password && !url.search && !url.hash) {
+    return undefined;
+  }
+  url.protocol = "https:";
+  url.username = "";
+  url.password = "";
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/+$/, "");
+}
+
+function sanitizeLegacyCustomDomain(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const domain = normalizeLegacyCustomDomain(params.entry.domain);
+  if (!domain) {
+    return { entry: params.entry, changed: false };
+  }
+  params.changes.push(
+    `Normalized ${params.pathPrefix}.domain by removing unsupported URL credentials, query, or fragment components.`,
+  );
+  return { entry: { ...params.entry, domain }, changed: true };
+}
+
+function hasLegacyFeishuCustomDomain(entry: Record<string, unknown> | undefined): boolean {
+  if (!entry) {
+    return false;
+  }
+  if (normalizeLegacyCustomDomain(entry.domain)) {
+    return true;
+  }
+  return Object.values(asObjectRecord(entry.accounts) ?? {}).some((account) => {
+    return normalizeLegacyCustomDomain(asObjectRecord(account)?.domain) !== undefined;
+  });
+}
+
 function normalizeLegacyWebhookPath(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -129,12 +183,18 @@ function normalizeFeishuLegacyConfigEntries(
     changes,
     normalizeEntry: (params) => {
       const tools = toolsBaseMigration.normalize(params);
-      const coalesce = sanitizeLegacyCoalesceFields({ ...params, entry: tools.entry });
+      const domain = sanitizeLegacyCustomDomain({ ...params, entry: tools.entry });
+      const coalesce = sanitizeLegacyCoalesceFields({ ...params, entry: domain.entry });
       const heartbeat = sanitizeLegacyHeartbeatFields({ ...params, entry: coalesce.entry });
       const webhook = normalizeLegacyWebhookPath({ ...params, entry: heartbeat.entry });
       return {
         entry: webhook.entry,
-        changed: tools.changed || coalesce.changed || heartbeat.changed || webhook.changed,
+        changed:
+          tools.changed ||
+          domain.changed ||
+          coalesce.changed ||
+          heartbeat.changed ||
+          webhook.changed,
       };
     },
   }).config;
@@ -165,6 +225,12 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
         hasLegacyAccountStreamingAliases(entry?.accounts, toolsBaseMigration.hasLegacy)
       );
     },
+  },
+  {
+    path: ["channels", "feishu"],
+    message:
+      'channels.feishu[.accounts.<id>].domain must be an HTTPS API base URL. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyFeishuCustomDomain(asObjectRecord(value) ?? undefined),
   },
 ];
 
