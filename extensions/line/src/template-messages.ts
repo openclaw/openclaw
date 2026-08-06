@@ -297,6 +297,13 @@ export function createCarouselColumn(params: {
 
 // A degraded column must keep every user-visible part: title, text, and the
 // labels of the actions the recipient can no longer tap.
+// A whitespace-only altText carries nothing readable; treating it as present
+// would let it suppress an authored question, title, or body in a fallback,
+// or blank the fallback into a loud failure.
+function authoredAltText(altText: string | undefined): string | undefined {
+  return altText?.trim() ? altText : undefined;
+}
+
 // Surviving action labels are authored content; a textual fallback renders
 // every non-blank one so degraded controls stay visible to the recipient.
 function labeledActionSuffix(labels: Array<string | undefined>): string {
@@ -340,7 +347,7 @@ export function buildTemplateMessageFromPayload(
       // cannot keep just one provider action, so the fallback carries any
       // surviving label alongside the question instead of dropping it.
       if (!payload.confirmLabel || !payload.cancelLabel || !payload.text.trim()) {
-        const raw = payload.altText || payload.text;
+        const raw = authoredAltText(payload.altText) ?? payload.text;
         const base = raw.trim() ? truncateTemplateText(raw, TEMPLATE_ALT_TEXT_LIMIT) : "";
         const suffix = labeledActionSuffix([payload.confirmLabel, payload.cancelLabel]);
         return templateTextFallback([base, suffix].filter(Boolean).join(" "));
@@ -376,8 +383,8 @@ export function buildTemplateMessageFromPayload(
       if (!text) {
         // No body and no title: the altText summary still cannot stand in
         // for the buttons themselves, so their labels ride along.
-        const raw = payload.altText ?? "";
-        const base = raw.trim() ? truncateTemplateText(raw, TEMPLATE_ALT_TEXT_LIMIT) : "";
+        const alt = authoredAltText(payload.altText);
+        const base = alt === undefined ? "" : truncateTemplateText(alt, TEMPLATE_ALT_TEXT_LIMIT);
         const suffix = labeledActionSuffix(actions.map((action) => action.label));
         return templateTextFallback([base, suffix].filter(Boolean).join(" "));
       }
@@ -392,7 +399,7 @@ export function buildTemplateMessageFromPayload(
       if (message.template.type === "buttons" && message.template.actions.length === 0) {
         return templateTextFallback(
           truncateTemplateText(
-            payload.altText || (foldedTitle ? `${foldedTitle}: ${text}` : text),
+            authoredAltText(payload.altText) ?? (foldedTitle ? `${foldedTitle}: ${text}` : text),
             TEMPLATE_ALT_TEXT_LIMIT,
           ),
         );
@@ -420,8 +427,9 @@ export function buildTemplateMessageFromPayload(
         // content — an arbitrary "Two options" must not replace the columns'
         // text and action labels, so both are delivered.
         const lines = columns.map(describeCarouselColumn).filter(Boolean);
-        if (payload.altText) {
-          lines.unshift(truncateTemplateText(payload.altText, TEMPLATE_ALT_TEXT_LIMIT));
+        const alt = authoredAltText(payload.altText);
+        if (alt !== undefined) {
+          lines.unshift(truncateTemplateText(alt, TEMPLATE_ALT_TEXT_LIMIT));
         }
         return templateTextFallback(lines.join("\n"));
       }

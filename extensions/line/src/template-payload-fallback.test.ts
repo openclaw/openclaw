@@ -325,6 +325,60 @@ describe("template payload textual fallback", () => {
     expect(message).toEqual({ type: "text", text: "(Help / Status)" });
   });
 
+  it("keeps the confirm question when the altText is whitespace-only", () => {
+    // A blank altText carries nothing readable; preferring it would erase
+    // the authored question and deliver only "(No)".
+    const message = buildTemplateMessageFromPayload({
+      type: "confirm",
+      text: "Continue?",
+      confirmLabel: "",
+      confirmData: "yes",
+      cancelLabel: "No",
+      cancelData: "no",
+      altText: " ",
+    });
+
+    expect(message).toEqual({ type: "text", text: "Continue? (No)" });
+  });
+
+  it("keeps the buttons title and text when the altText is whitespace-only", () => {
+    // A blank altText used to win the fallback selection and then fail the
+    // blank-text guard, turning a recoverable reply into a delivery failure.
+    const message = buildTemplateMessageFromPayload({
+      type: "buttons",
+      title: "Menu",
+      text: "Pick",
+      actions: [{ type: "message", label: "" }],
+      altText: " ",
+    });
+
+    expect(message).toEqual({ type: "text", text: "Menu: Pick" });
+  });
+
+  it("keeps button labels when the altText is whitespace-only and no text exists", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "buttons",
+      text: " ",
+      actions: [
+        { type: "message", label: "Help", data: "/help" },
+        { type: "message", label: "Status", data: "/status" },
+      ],
+      altText: " ",
+    });
+
+    expect(message).toEqual({ type: "text", text: "(Help / Status)" });
+  });
+
+  it("omits a whitespace-only altText line from the carousel fallback", () => {
+    const message = buildTemplateMessageFromPayload({
+      type: "carousel",
+      columns: [{ text: "A", actions: [] }],
+      altText: " ",
+    });
+
+    expect(message).toEqual({ type: "text", text: "A" });
+  });
+
   it("fails loudly when a template payload has nothing deliverable", () => {
     expect(() =>
       buildTemplateMessageFromPayload({
