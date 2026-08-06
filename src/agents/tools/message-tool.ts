@@ -573,15 +573,30 @@ function hasSanitizedSendPayloadContent(params: Record<string, unknown>): boolea
     ...(readStringArrayParam(params, "mediaUrls") ?? []),
     ...readStructuredAttachmentMediaParams(params.attachments),
   ];
+  const location =
+    typeof params.location === "string" && !normalizeOptionalString(params.location)
+      ? undefined
+      : params.location;
   return hasReplyPayloadContent(
     {
       text,
-      mediaUrl: readFirstStringParam(params, ["media", "mediaUrl", "path", "filePath", "fileUrl"]),
+      mediaUrl: readFirstStringParam(params, [
+        "media",
+        "mediaUrl",
+        "path",
+        "filePath",
+        "fileUrl",
+        "image",
+      ]),
       mediaUrls,
       presentation: params.presentation,
       interactive: params.interactive,
+      location,
     },
-    { trimText: true },
+    {
+      trimText: true,
+      extraContent: Boolean(readStringParam(params, "buffer", { trim: false })) || location != null,
+    },
   );
 }
 

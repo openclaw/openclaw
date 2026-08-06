@@ -4631,7 +4631,24 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.params?.pollQuestion).toBe("HEARTBEAT_OK");
   });
 
-  it("keeps sending media when the heartbeat token is the only text", async () => {
+  it.each([
+    {
+      name: "media URL",
+      content: { mediaUrl: "file:///tmp/status.png" },
+    },
+    {
+      name: "inline buffer",
+      content: { buffer: "aGVsbG8=" },
+    },
+    {
+      name: "image alias",
+      content: { image: "https://example.com/status.png" },
+    },
+    {
+      name: "portable location",
+      content: { location: { latitude: 48.858844, longitude: 2.294351 } },
+    },
+  ])("keeps sending $name when the heartbeat token is the only text", async ({ content }) => {
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 
     const call = await executeSend({
@@ -4639,12 +4656,12 @@ describe("message tool internal-runtime-context sanitization", () => {
         channel: "telegram",
         target: "telegram:123",
         text: "HEARTBEAT_OK",
-        mediaUrl: "file:///tmp/status.png",
+        ...content,
       },
     });
 
     expect(call?.params?.text).toBe("");
-    expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
+    expect(call?.params).toMatchObject(content);
   });
 });
 
