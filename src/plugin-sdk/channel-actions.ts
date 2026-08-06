@@ -1,5 +1,6 @@
 // Channel action schemas describe plugin-declared actions available through channel UIs.
 
+export { QrPngDataUrlSchema } from "../../packages/gateway-protocol/src/schema/qr.js";
 export {
   createUnionActionGate,
   listTokenSourcedAccounts,

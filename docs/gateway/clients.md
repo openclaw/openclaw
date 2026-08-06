@@ -97,8 +97,8 @@ const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 
 The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
 `run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
-`task-suggestions`, `terminal-offset-seq`, `tool-events`, and `ui-commands`.
-Advertise only capabilities the client actually implements.
+`system-agent-qr-code`, `task-suggestions`, `terminal-offset-seq`, `tool-events`,
+and `ui-commands`. Advertise only capabilities the client actually implements.
 
 <Warning>
 `tool-events` gates live tool-execution streaming. The Gateway registers only
@@ -133,6 +133,38 @@ depend on the entrypoint and the resolved model. The gateway can return a typed
 rejection, while text-only model runs can omit additional images after their
 offload cap and still complete the request. The values are a connection-time
 snapshot, so re-read them on every reconnect.
+
+### Present system-agent QR codes
+
+Advertise `GATEWAY_CLIENT_CAPS.SYSTEM_AGENT_QR_CODE` only when the client can
+render a QR image and return a deliberate acknowledgement. A pending
+`openclaw.chat` response can then carry a QR `step` through the same wizard-step
+contract used for other setup controls:
+
+```json
+{
+  "step": {
+    "id": "setup-qr",
+    "type": "qr",
+    "title": "Scan QR code",
+    "message": "Scan the code, then continue.",
+    "qrDataUrl": "data:image/png;base64,...",
+    "expiresInMs": 120000,
+    "executor": "client"
+  }
+}
+```
+
+`qrDataUrl` is no longer than 16,384 characters. `expiresInMs` is the remaining
+lifetime when the Gateway emits the response, so remote clients never compare
+the Gateway clock with their own. Acknowledge it with
+`wizardAnswer: { "stepId": "setup-qr" }`.
+
+Keep the QR visible only while that step remains unresolved and for at most
+`step.expiresInMs` after receipt. At the deadline, remove both the image and
+acknowledgement action. Discard the image bytes after a confirmed or
+delivery-uncertain acknowledgement. Clients that do not advertise the
+capability retain the prose fallback and never receive a QR step.
 
 ## Recover state after reconnect
 

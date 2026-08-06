@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type {
   RequestFrame,
@@ -17,6 +16,7 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
+import { renderQrPngDataUrl } from "../src/media/qr-image.js";
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -978,15 +978,13 @@ async function createChatPickerScenario(
     }),
     "utf8",
   ).toString("base64url");
-  const devicePairQrDataUrl = await qrcode.toDataURL(devicePairSetupCode, {
-    errorCorrectionLevel: "M",
-    margin: 2,
-    width: 360,
+  const devicePairQrDataUrl = await renderQrPngDataUrl(devicePairSetupCode, {
+    marginModules: 2,
+    scale: 8,
   });
-  const whatsappLoginQrDataUrl = await qrcode.toDataURL("mock-whatsapp-login", {
-    errorCorrectionLevel: "M",
-    margin: 2,
-    width: 360,
+  const whatsappLoginQrDataUrl = await renderQrPngDataUrl("mock-whatsapp-login", {
+    marginModules: 2,
+    scale: 8,
   });
   const workspaceFiles = [
     {

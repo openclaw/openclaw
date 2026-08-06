@@ -7,6 +7,8 @@ import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
 export type WizardStep = ProtocolWizardStep;
+type WizardNonQrStep = Exclude<WizardStep, { type: "qr" }>;
+type WizardNonQrStepInput = Omit<WizardNonQrStep, "id">;
 
 type WizardStepInputRequirement = "always" | "never" | "client-executor";
 
@@ -18,6 +20,7 @@ const WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE = {
   multiselect: "always",
   progress: "never",
   action: "client-executor",
+  qr: "client-executor",
 } as const satisfies Record<WizardStep["type"], WizardStepInputRequirement>;
 
 /** Whether a step needs a user answer instead of client or gateway acknowledgement. */
@@ -237,11 +240,11 @@ class WizardSessionPrompter implements WizardPrompter {
     this.session.queueExternalUrl(url);
   }
 
-  private async prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
+  private async prompt(step: WizardNonQrStepInput): Promise<unknown> {
     return await this.session.awaitAnswer(this.createStep(step));
   }
 
-  private createStep(step: Omit<WizardStep, "id">): WizardStep {
+  private createStep(step: WizardNonQrStepInput): WizardNonQrStep {
     // Each emitted step receives an id so remote clients can answer the exact
     // pending prompt and stale answers can be rejected. Explicit browser
     // destinations bind to the very next step regardless of its input type.

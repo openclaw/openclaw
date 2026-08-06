@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
+import { QrPngDataUrlSchema } from "./qr.js";
 
 /**
  * Channel and Talk protocol schemas.
@@ -758,16 +759,11 @@ export const WebLoginStartParamsSchema = closedObject({
   accountId: Type.Optional(Type.String()),
 });
 
-const QrDataUrlSchema = Type.String({
-  maxLength: 16_384,
-  pattern: "^data:image/png;base64,",
-});
-
 /** Waits for web login completion or the next QR code. */
 export const WebLoginWaitParamsSchema = closedObject({
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   accountId: Type.Optional(Type.String()),
-  currentQrDataUrl: Type.Optional(QrDataUrlSchema),
+  currentQrDataUrl: Type.Optional(QrPngDataUrlSchema),
 });
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

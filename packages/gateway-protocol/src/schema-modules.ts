@@ -1,5 +1,6 @@
 /** Canonical owner-module barrel for gateway protocol schemas. */
 export * from "./schema/primitives.js";
+export * from "./schema/qr.js";
 export * from "./schema/agent.js";
 export * from "./schema/agents-models-skills.js";
 export * from "./schema/agents-workspace.js";

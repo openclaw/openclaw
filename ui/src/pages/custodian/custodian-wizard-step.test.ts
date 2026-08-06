@@ -8,8 +8,24 @@ const options = [
   { label: "Twitch", value: "twitch" },
 ];
 
-function step(patch: Partial<WizardStep>): WizardStep {
-  return { id: "step", type: "select", options, ...patch };
+type TestStepPatch =
+  | { type?: "select"; initialValue?: unknown }
+  | { type: "multiselect"; initialValue?: unknown }
+  | { type: "confirm"; initialValue?: unknown }
+  | { type: "text"; initialValue?: unknown }
+  | { type: "action"; initialValue?: unknown };
+
+function step(patch: TestStepPatch): WizardStep {
+  switch (patch.type) {
+    case "multiselect":
+      return { id: "step", options, ...patch };
+    case "confirm":
+    case "text":
+    case "action":
+      return { id: "step", ...patch };
+    default:
+      return { id: "step", type: "select", options, ...patch };
+  }
 }
 
 describe("Custodian rich wizard answers", () => {

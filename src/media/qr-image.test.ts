@@ -9,7 +9,9 @@ const { MOCK_PNG_BASE64, MOCK_PNG_BUFFER, toBuffer } = vi.hoisted(() => {
   return {
     MOCK_PNG_BASE64: MOCK_PNG_BUFFERLocal.toString("base64"),
     MOCK_PNG_BUFFER: MOCK_PNG_BUFFERLocal,
-    toBuffer: vi.fn(async () => MOCK_PNG_BUFFERLocal),
+    toBuffer: vi.fn(
+      async (_input: string, _opts: { margin: number; scale: number }) => MOCK_PNG_BUFFERLocal,
+    ),
   };
 });
 
@@ -26,11 +28,13 @@ vi.mock("qrcode", async (importOriginal) => {
 
 let renderQrPngBase64: typeof import("./qr-image.ts").renderQrPngBase64;
 let renderQrPngDataUrl: typeof import("./qr-image.ts").renderQrPngDataUrl;
+let renderQrPngDataUrlWithinLimit: typeof import("./qr-image.ts").renderQrPngDataUrlWithinLimit;
 let writeQrPngTempFile: typeof import("./qr-image.ts").writeQrPngTempFile;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } = await import("./qr-image.ts"));
+  ({ renderQrPngBase64, renderQrPngDataUrl, renderQrPngDataUrlWithinLimit, writeQrPngTempFile } =
+    await import("./qr-image.ts"));
 });
 
 describe("renderQrPngBase64", () => {
@@ -86,6 +90,25 @@ describe("renderQrPngBase64", () => {
   it("formats QR PNG data URLs", async () => {
     await expect(renderQrPngDataUrl("openclaw")).resolves.toBe(
       `data:image/png;base64,${MOCK_PNG_BASE64}`,
+    );
+  });
+
+  it("reduces the scale until the QR data URL fits its presentation limit", async () => {
+    toBuffer
+      .mockResolvedValueOnce(Buffer.alloc(30))
+      .mockResolvedValueOnce(Buffer.alloc(20))
+      .mockResolvedValueOnce(Buffer.alloc(10));
+
+    const result = await renderQrPngDataUrlWithinLimit("openclaw", 40);
+
+    expect(result.length).toBeLessThanOrEqual(40);
+  });
+
+  it("rejects QR data URLs that exceed the limit at minimum scale", async () => {
+    toBuffer.mockResolvedValue(Buffer.alloc(30));
+
+    await expect(renderQrPngDataUrlWithinLimit("openclaw", 40)).rejects.toThrow(
+      "exceeds the presentation limit",
     );
   });
 

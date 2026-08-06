@@ -10,6 +10,8 @@ vi.mock("../login-qr-api.js", () => ({
 
 const startWebLoginWithQrMock = vi.mocked(startWebLoginWithQr);
 const waitForWebLoginMock = vi.mocked(waitForWebLogin);
+const PNG_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 describe("createWhatsAppLoginTool", () => {
   beforeEach(() => {
@@ -21,12 +23,12 @@ describe("createWhatsAppLoginTool", () => {
     const pattern = (tool.parameters as { properties: { currentQrDataUrl?: { pattern?: string } } })
       .properties.currentQrDataUrl?.pattern;
 
-    expect(pattern).toBe("^data:image/png;base64,.+$");
     expect(pattern?.startsWith("^")).toBe(true);
     expect(pattern?.endsWith("$")).toBe(true);
 
     const expression = new RegExp(pattern ?? "");
-    expect(expression.test("data:image/png;base64,YQ==")).toBe(true);
+    expect(expression.test(PNG_DATA_URL)).toBe(true);
+    expect(expression.test("data:image/png;base64,SGVsbG8=")).toBe(false);
     expect(expression.test("data:image/png;base64,")).toBe(false);
     expect(expression.test("data:image/jpeg;base64,YQ==")).toBe(false);
   });

@@ -308,6 +308,10 @@ export function renderWizardStepControls(
       return props.step.executor === "gateway"
         ? renderProgressStep(props)
         : renderContinueStep(props);
+    // QR steps need a client-owned presentation; clients without one must not
+    // turn them into an answerable generic step.
+    case "qr":
+      return nothing;
     // These show whatever the step supplies behind a single Continue.
     case "note":
     case "action":

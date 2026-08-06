@@ -23,6 +23,9 @@ vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
 
 import { webHandlers } from "./web.js";
 
+const CURRENT_QR_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
 function createRunningWhatsappSnapshot(): ChannelRuntimeSnapshot {
   return {
     channels: {
@@ -334,7 +337,7 @@ describe("webHandlers web.login.wait", () => {
         {
           accountId: "default",
           timeoutMs: 5000,
-          currentQrDataUrl: "data:image/png;base64,current-qr",
+          currentQrDataUrl: CURRENT_QR_DATA_URL,
         },
         {
           req: {
@@ -344,7 +347,7 @@ describe("webHandlers web.login.wait", () => {
             params: {
               accountId: "default",
               timeoutMs: 5000,
-              currentQrDataUrl: "data:image/png;base64,current-qr",
+              currentQrDataUrl: CURRENT_QR_DATA_URL,
             },
           } as GatewayRequestHandlerOptions["req"],
           respond,
@@ -355,7 +358,7 @@ describe("webHandlers web.login.wait", () => {
     expect(loginWithQrWait).toHaveBeenCalledWith({
       accountId: "default",
       timeoutMs: 5000,
-      currentQrDataUrl: "data:image/png;base64,current-qr",
+      currentQrDataUrl: CURRENT_QR_DATA_URL,
     });
     expect(respond).toHaveBeenCalledWith(
       true,

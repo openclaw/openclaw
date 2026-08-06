@@ -5,12 +5,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QR_PNG_DATA_URL_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema/qr.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePairingSetupFromConfig: vi.fn(),
   encodePairingSetupCode: vi.fn(),
-  renderQrPngDataUrl: vi.fn(),
+  renderQrPngDataUrlWithinLimit: vi.fn(),
   runCommandWithTimeout: vi.fn(),
 }));
 
@@ -19,7 +20,7 @@ vi.mock("../../pairing/setup-code.js", () => ({
   encodePairingSetupCode: mocks.encodePairingSetupCode,
 }));
 vi.mock("../../media/qr-image.js", () => ({
-  renderQrPngDataUrl: mocks.renderQrPngDataUrl,
+  renderQrPngDataUrlWithinLimit: mocks.renderQrPngDataUrlWithinLimit,
 }));
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
@@ -65,14 +66,14 @@ describe("device.pair.setupCode", () => {
   beforeEach(() => {
     mocks.resolvePairingSetupFromConfig.mockReset();
     mocks.encodePairingSetupCode.mockReset();
-    mocks.renderQrPngDataUrl.mockReset();
+    mocks.renderQrPngDataUrlWithinLimit.mockReset();
     mocks.runCommandWithTimeout.mockReset();
   });
 
   it("returns the setup code, QR data URL, and only an auth label", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
+    mocks.renderQrPngDataUrlWithinLimit.mockResolvedValue("data:image/png;base64,cXI=");
 
     const { options, respond } = createOptions({});
     await expectDefined(
@@ -89,13 +90,17 @@ describe("device.pair.setupCode", () => {
     expect(error).toBeUndefined();
     expect(payload).toEqual({
       setupCode: "SETUP-CODE-XYZ",
-      qrDataUrl: "data:image/png;base64,qr",
+      qrDataUrl: "data:image/png;base64,cXI=",
       gatewayUrl: "wss://gw.example:8443",
       gatewayUrls: ["wss://gw.example:8443", "ws://192.168.1.20:18789"],
       auth: "token",
       urlSource: "remote",
       access: "full",
     });
+    expect(mocks.renderQrPngDataUrlWithinLimit).toHaveBeenCalledWith(
+      "SETUP-CODE-XYZ",
+      QR_PNG_DATA_URL_MAX_LENGTH,
+    );
     // The bootstrap token only lives inside the (opaque) setup code, never as a field.
     expect(JSON.stringify(payload)).not.toContain("boot-123");
   });
@@ -123,7 +128,7 @@ describe("device.pair.setupCode", () => {
   it("preserves the configured device-pair public URL fallback", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
+    mocks.renderQrPngDataUrlWithinLimit.mockResolvedValue("data:image/png;base64,cXI=");
 
     const { options } = createOptions(
       {},
@@ -149,7 +154,7 @@ describe("device.pair.setupCode", () => {
   it("labels an explicit request URL separately from configured fallback", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
+    mocks.renderQrPngDataUrlWithinLimit.mockResolvedValue("data:image/png;base64,cXI=");
 
     const { options, respond } = createOptions({ publicUrl: "wss://request.example.com" });
     await expectDefined(
@@ -167,7 +172,7 @@ describe("device.pair.setupCode", () => {
   it("prefers the remote URL over the configured device-pair fallback", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
+    mocks.renderQrPngDataUrlWithinLimit.mockResolvedValue("data:image/png;base64,cXI=");
 
     const { options } = createOptions(
       { preferRemoteUrl: true },
@@ -200,7 +205,7 @@ describe("device.pair.setupCode", () => {
       'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
     )(options);
 
-    expect(mocks.renderQrPngDataUrl).not.toHaveBeenCalled();
+    expect(mocks.renderQrPngDataUrlWithinLimit).not.toHaveBeenCalled();
     const [ok, payload] = expectDefined(
       respond.mock.calls[0],
       "respond.mock.calls[0] test invariant",
@@ -255,27 +260,6 @@ describe("device.pair.setupCode", () => {
     );
   });
 
-  it("omits an oversized QR but still returns the setup code", async () => {
-    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
-    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    // Exceed the result schema's qrDataUrl bound (16_384) so the response stays valid.
-    mocks.renderQrPngDataUrl.mockResolvedValue(`data:image/png;base64,${"a".repeat(20_000)}`);
-
-    const { options, respond } = createOptions({});
-    await expectDefined(
-      devicePairSetupHandlers["device.pair.setupCode"],
-      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
-    )(options);
-
-    const [ok, payload] = expectDefined(
-      respond.mock.calls[0],
-      "respond.mock.calls[0] test invariant",
-    );
-    expect(ok).toBe(true);
-    expect(payload.qrDataUrl).toBeUndefined();
-    expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
-  });
-
   it("responds with an invalid-request error when setup cannot be resolved", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue({
       ok: false,
@@ -313,7 +297,7 @@ describe("device.pair.setupCode", () => {
   it("keeps the setup code when optional QR rendering throws", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
-    mocks.renderQrPngDataUrl.mockRejectedValue(new Error("qr boom"));
+    mocks.renderQrPngDataUrlWithinLimit.mockRejectedValue(new Error("qr boom"));
 
     const { options, respond } = createOptions({});
     await expectDefined(
