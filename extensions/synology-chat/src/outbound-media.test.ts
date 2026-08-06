@@ -80,6 +80,9 @@ describe("Synology Chat hosted outbound media", () => {
   });
 
   it("requires an exact public HTTPS callback without credentials or fragments", () => {
+    const credentialedUrl = new URL("https://gateway.example.com/webhook");
+    credentialedUrl.username = "fixture-user";
+    credentialedUrl.password = "fixture-password";
     expect(() => resolveSynologyHostedMediaRoute(createAccount({ webhookUrl: "" }))).toThrow(
       "attachments require webhookUrl",
     );
@@ -89,9 +92,7 @@ describe("Synology Chat hosted outbound media", () => {
       ),
     ).toThrow("must be an absolute HTTPS URL");
     expect(() =>
-      resolveSynologyHostedMediaRoute(
-        createAccount({ webhookUrl: "https://user:pass@gateway.example.com/webhook" }),
-      ),
+      resolveSynologyHostedMediaRoute(createAccount({ webhookUrl: credentialedUrl.toString() })),
     ).toThrow("must be an absolute HTTPS URL");
   });
 
