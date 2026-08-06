@@ -56,7 +56,6 @@ import {
 } from "./bash-tools.exec-task-tracking.js";
 import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
-import { resolveExecTimeoutSeconds } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -422,7 +421,7 @@ export function createExecTool(
             strictInlineEval: defaults?.strictInlineEval,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
-            timeoutSec: resolveExecTimeoutSeconds(params),
+            timeoutSec: params.timeoutSeconds,
             defaultTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
@@ -445,7 +444,7 @@ export function createExecTool(
             pathPrepend: defaultPathPrepend,
             requestedEnv,
             pty: params.pty === true && !sandbox,
-            timeoutSec: resolveExecTimeoutSeconds(params),
+            timeoutSec: params.timeoutSeconds,
             defaultTimeoutSec,
             security,
             ask,
@@ -500,9 +499,8 @@ export function createExecTool(
           warnings.push(foregroundFallbackWarning);
         }
 
-        const resolvedTimeoutSec = resolveExecTimeoutSeconds(params);
         const explicitTimeoutSec =
-          typeof resolvedTimeoutSec === "number" ? resolvedTimeoutSec : null;
+          typeof params.timeoutSeconds === "number" ? params.timeoutSeconds : null;
         effectiveTimeout = explicitTimeoutSec ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 

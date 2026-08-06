@@ -38,11 +38,6 @@ milliseconds, and the `process` tool's identically named `timeout` is also in mi
 `timeoutSeconds` so the unit is explicit at the call site. Applies to foreground, background, `yieldMs`, gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call.
 </ParamField>
 
-<ParamField path="timeout" type="number" deprecated>
-Deprecated alias for `timeoutSeconds`, in seconds. Still accepted; `timeoutSeconds` wins when both
-are supplied.
-</ParamField>
-
 <ParamField path="pty" type="boolean" default="false">
 Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, and terminal UIs.
 </ParamField>

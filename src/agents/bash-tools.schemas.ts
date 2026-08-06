@@ -29,15 +29,6 @@ export const execSchema = Type.Object({
       description: "Timeout in seconds.",
     }),
   ),
-  // Deprecated alias for timeoutSeconds. The bare name is unit-ambiguous: the
-  // sibling field above is milliseconds, and the process tool's identically
-  // named `timeout` is also milliseconds, so a caller seeing only the field
-  // name has no way to tell them apart. Kept for compatibility.
-  timeout: Type.Optional(
-    Type.Number({
-      description: "Deprecated; seconds.",
-    }),
-  ),
   pty: Type.Optional(
     Type.Boolean({
       description: "Use PTY for TTY-required CLIs and coding agents.",
@@ -75,7 +66,6 @@ export const nodeExecSchema = Type.Object({
   workdir: execSchema.properties.workdir,
   env: execSchema.properties.env,
   timeoutSeconds: execSchema.properties.timeoutSeconds,
-  timeout: execSchema.properties.timeout,
   host: optionalStringEnum(["node"] as const, {
     description: "Exec target. Only node is available on this tool surface.",
   }),
@@ -107,19 +97,3 @@ export const processSchema = Type.Object({
     }),
   ),
 });
-
-/**
- * Resolve the exec timeout in seconds.
- *
- * `timeoutSeconds` is canonical; `timeout` is a deprecated alias kept for
- * compatibility. The bare `timeout` name is unit-ambiguous - the sibling
- * `yieldMs` field is milliseconds and the process tool's identically named
- * `timeout` is also milliseconds - so callers that see only field names
- * (for example code mode, which defers descriptions) cannot tell them apart.
- */
-export function resolveExecTimeoutSeconds(params: {
-  timeoutSeconds?: number;
-  timeout?: number;
-}): number | undefined {
-  return typeof params.timeoutSeconds === "number" ? params.timeoutSeconds : params.timeout;
-}
