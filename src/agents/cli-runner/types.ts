@@ -40,6 +40,7 @@ import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliSessionReuseResult } from "../cli-session.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
+import type { DelegationCapability } from "../delegation-capability.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
@@ -108,6 +109,12 @@ export type RunCliAgentParams = {
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
+  /**
+   * Attempt-local authority to start or redirect delegated work. Forwarded into
+   * the minted loopback grant so the CLI's tool surface matches the embedded
+   * one for fallback completion-report turns.
+   */
+  delegationCapability?: DelegationCapability;
   /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
   modelProvider?: string;
   provider: string;

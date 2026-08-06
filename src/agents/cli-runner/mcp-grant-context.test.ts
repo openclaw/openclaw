@@ -67,3 +67,20 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant(overrides as Partial<RunCliAgentParams>).sourceReplyOnly).toBeUndefined();
   });
 });
+
+describe("buildCliMcpGrantContext delegationCapability", () => {
+  it("stamps a report-only capability into the minted grant", () => {
+    expect(buildGrant({ delegationCapability: "report_only" })).toMatchObject({
+      delegationCapability: "report_only",
+    });
+  });
+
+  it("leaves the grant shape untouched for ordinary runs", () => {
+    // Primary attempts must produce byte-identical grant contexts, so the key
+    // is absent rather than explicitly "full".
+    expect(buildGrant()).not.toHaveProperty("delegationCapability");
+    expect(buildGrant({ delegationCapability: "full" })).toMatchObject({
+      delegationCapability: "full",
+    });
+  });
+});

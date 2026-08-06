@@ -136,6 +136,11 @@ export function buildCliMcpGrantContext(params: {
     // Restricted runs get their allowlist stamped into the grant; the
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
+    // Same enforcement point for the fallback delegation gate, so an
+    // unrestricted run keeps its exact prior grant shape.
+    ...(params.run.delegationCapability
+      ? { delegationCapability: params.run.delegationCapability }
+      : {}),
     ...(params.run.scheduledToolPolicy
       ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
       : {}),

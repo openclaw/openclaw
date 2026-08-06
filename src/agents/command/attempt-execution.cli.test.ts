@@ -3296,6 +3296,86 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it.each([
+    {
+      label: "a fallback completion report",
+      isFallbackRetry: true,
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      expected: "report_only",
+    },
+    {
+      label: "a fallback answering ordinary user input",
+      isFallbackRetry: true,
+      inputProvenance: { kind: "external_user" },
+      expected: "full",
+    },
+    {
+      label: "a primary completion report",
+      isFallbackRetry: false,
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      expected: "full",
+    },
+  ])(
+    "stamps the command-fallback CLI grant delegation capability for $label",
+    async ({ isFallbackRetry, inputProvenance, expected }) => {
+      const runId = `run-command-fallback-delegation-${String(isFallbackRetry)}-${expected}`;
+      const sessionKey = `agent:main:direct:${runId}`;
+      const sessionEntry: SessionEntry = {
+        sessionId: `session-${runId}`,
+        updatedAt: Date.now(),
+      };
+      await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("delegation gate"));
+
+      await runAgentAttempt({
+        providerOverride: "anthropic",
+        originalProvider: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        cfg: {
+          session: { store: storePath },
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, `${runId}.jsonl`),
+        workspaceDir: tmpDir,
+        body: "report the completion",
+        isFallbackRetry,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId,
+        opts: {
+          message: "report the completion",
+          inputProvenance,
+        } as RunAgentAttemptParams["opts"],
+        runContext: {} as RunAgentAttemptParams["runContext"],
+        spawnedBy: undefined,
+        messageChannel: "telegram",
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "anthropic",
+        sessionStore: { [sessionKey]: sessionEntry },
+        storePath,
+        sessionHasHistory: false,
+      });
+
+      // The command loop is a second fallback entry point; its CLI grant must
+      // carry the same gate as the auto-reply candidate or the loopback surface
+      // resolves to full.
+      expectMockArgFields(runCliAgentMock, { delegationCapability: expected });
+    },
+  );
+
   it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-claude-cli";
     const sessionEntry: SessionEntry = {
