@@ -53,12 +53,13 @@ function buildPartialAccountHealthSummary(params: {
   error: string;
   runtime?: ChannelAccountSnapshot;
   skipped: boolean;
+  timedOut: boolean;
 }): ChannelAccountHealthSummary {
   return redactChannelStatusSummaryBaseUrl({
     ...params.runtime,
     accountId: params.accountId,
     lastError: params.error,
-    timedOut: true,
+    ...(params.timedOut ? { timedOut: true } : {}),
     ...(params.skipped ? { skipped: true } : {}),
   });
 }
@@ -422,7 +423,13 @@ export async function collectGatewayHealthSnapshot(params: {
               : `Account health timed out after ${cappedTimeout}ms`;
         return [
           accountId,
-          buildPartialAccountHealthSummary({ accountId, error, runtime, skipped }),
+          buildPartialAccountHealthSummary({
+            accountId,
+            error,
+            runtime,
+            skipped,
+            timedOut: result.kind === "timeout",
+          }),
         ];
       }),
     );

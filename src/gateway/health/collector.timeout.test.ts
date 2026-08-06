@@ -152,6 +152,36 @@ describe("collectGatewayHealthSnapshot hook deadlines", () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 
+  it("preserves an immediate account hook error without marking it timed out", async () => {
+    const pluginId = "rejected-summary";
+    const account = { accountId: "default", enabled: true, configured: true };
+    healthPluginsForTest = [
+      {
+        ...createChannelTestPluginBase({ id: pluginId, label: pluginId }),
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => account,
+          inspectAccount: () => account,
+          isConfigured: () => true,
+        },
+        status: {
+          buildChannelSummary: async () => {
+            throw new Error("summary failed");
+          },
+        },
+      },
+    ];
+
+    const result = (await collectHealth()).channels[pluginId]?.accounts?.default;
+
+    expect(result).toMatchObject({
+      accountId: "default",
+      lastError: "Account health failed: summary failed",
+    });
+    expect(result?.timedOut).toBeUndefined();
+    expect(result?.skipped).toBeUndefined();
+  });
+
   it("keeps timed-out account work inside the five-account capacity", async () => {
     vi.useFakeTimers();
     const accountIds = Array.from({ length: 6 }, (_, index) => `account-${index + 1}`);
