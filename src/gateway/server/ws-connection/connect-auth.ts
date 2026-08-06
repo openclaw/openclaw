@@ -359,6 +359,10 @@ export async function authenticateGatewayConnect(
     scopes,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
+    resetSharedSecretOnSuccess:
+      ingressAttribution.kind === "unattributable-proxy"
+        ? true
+        : ingressAttribution.rateLimit.resetOnSuccess,
     async verifyBootstrapToken({
       deviceId,
       publicKey,

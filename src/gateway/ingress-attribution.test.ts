@@ -378,6 +378,16 @@ describe("gateway ingress attribution", () => {
       }),
       tailscaleMode: "funnel",
     });
+    const otherClient = await resolveGatewayIngressAttribution({
+      req: request({
+        headers: {
+          ...proxyHeaders,
+          "x-forwarded-for": "198.51.100.11",
+          "tailscale-funnel-request": "?1",
+        },
+      }),
+      tailscaleMode: "funnel",
+    });
     const missingMarker = await resolveGatewayIngressAttribution({
       req: request({ headers: proxyHeaders }),
       tailscaleMode: "funnel",
@@ -389,7 +399,22 @@ describe("gateway ingress attribution", () => {
       tailscaleMode: "off",
     });
 
-    expect(attributed).toMatchObject({ kind: "tailscale-funnel", clientIp: "198.51.100.10" });
+    expect(attributed).toMatchObject({
+      kind: "tailscale-funnel",
+      clientIp: "198.51.100.10",
+      rateLimit: {
+        subject: { key: "127.0.0.1", exemption: "none" },
+        resetOnSuccess: false,
+      },
+    });
+    expect(otherClient).toMatchObject({
+      kind: "tailscale-funnel",
+      clientIp: "198.51.100.11",
+      rateLimit: {
+        subject: { key: "127.0.0.1", exemption: "none" },
+        resetOnSuccess: false,
+      },
+    });
     expect(missingMarker.kind).toBe("unattributable-proxy");
     expect(inactive.kind).toBe("unattributable-proxy");
   });

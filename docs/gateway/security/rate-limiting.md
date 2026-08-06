@@ -63,8 +63,8 @@ Attempts from other IPs (including loopback) are unaffected during a lockout.
 
 Except for the intentionally public `/live` liveness probe, the Gateway decides
 ingress attribution once, before HTTP routing or WebSocket authentication. A
-configured trusted proxy, WhoIs-verified managed or explicitly trusted
-Tailscale Serve, and managed Funnel traffic use validated per-client limiter keys. Forwarded headers
+configured trusted proxy and WhoIs-verified, explicitly trusted Tailscale Serve
+use validated per-client limiter keys. Forwarded headers
 from an unconfigured same-host proxy are rejected instead of inheriting the
 direct-local exemption. The error tells the operator to configure
 `gateway.trustedProxies` narrowly and make the proxy overwrite or safely
@@ -76,6 +76,11 @@ address. This prevents unverified headers from rotating limiter keys, but one
 client can temporarily lock shared-secret attempts for other clients on that
 route. Verified tokenless Serve identity is evaluated independently of that
 degraded fallback.
+
+Managed Funnel uses the same stable, non-resetting proxy-peer policy for its
+required shared password. The route marker selects Funnel behavior but does not
+allow a claimed forwarded address to select or reset a limiter bucket. Repeated
+failures can temporarily lock password attempts across Funnel clients.
 
 A headerless TCP forwarder cannot be distinguished from a direct local TCP
 client at the HTTP boundary. Do not use raw TCP forwarding as a remote-access

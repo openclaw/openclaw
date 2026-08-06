@@ -67,6 +67,7 @@ type ResolveConnectAuthDecisionParams = {
   scopes: string[];
   rateLimiter?: AuthRateLimiter;
   clientIp?: string | AuthRateLimitSubject;
+  resetSharedSecretOnSuccess?: boolean;
   verifyBootstrapToken: (params: {
     deviceId: string;
     publicKey: string;
@@ -316,7 +317,7 @@ async function resolveConnectAuthDecisionCore(
         deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
       }
       params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-      if (params.state.sharedAuthProvided) {
+      if (params.state.sharedAuthProvided && params.resetSharedSecretOnSuccess !== false) {
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
       }
     } else {

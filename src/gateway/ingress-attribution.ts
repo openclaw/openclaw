@@ -189,7 +189,15 @@ async function resolveTailscaleIngress(params: {
     if (headerValue(req.headers["tailscale-funnel-request"]) !== "?1") {
       return unattributableProxy(req.socket.remoteAddress ?? "unknown");
     }
-    return buildAttributedIngress({ kind: "tailscale-funnel", clientIp });
+    return {
+      ...buildAttributedIngress({ kind: "tailscale-funnel", clientIp }),
+      // The marker identifies managed Funnel mode but is not connection-bound.
+      // Keep unverified shared-secret attempts on one non-resetting peer bucket.
+      rateLimit: {
+        subject: { key: req.socket.remoteAddress ?? "unknown", exemption: "none" },
+        resetOnSuccess: false,
+      },
+    };
   }
 
   const headerLogin = normalizeOptionalString(req.headers["tailscale-user-login"]);

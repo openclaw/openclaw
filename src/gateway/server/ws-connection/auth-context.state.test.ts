@@ -165,4 +165,31 @@ describe("resolveConnectAuthDecision", () => {
 
     expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "shared-secret");
   });
+
+  it("does not reset a non-resetting shared-secret bucket after device-token fallback", async () => {
+    const rateLimiter = createLimiter();
+    await resolveConnectAuthDecision({
+      state: {
+        authResult: { ok: false, reason: "token_mismatch" },
+        authOk: false,
+        authMethod: "token",
+        sharedAuthOk: false,
+        sharedAuthProvided: true,
+        deviceTokenCandidate: "device-token",
+        deviceTokenCandidateSource: "explicit-device-token",
+      },
+      hasDeviceIdentity: true,
+      deviceId: "dev-1",
+      publicKey: "pub-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      verifyBootstrapToken: async () => ({ ok: false, reason: "bootstrap_token_invalid" }),
+      verifyDeviceToken: async () => ({ ok: true }),
+      rateLimiter,
+      clientIp: CLIENT_IP,
+      resetSharedSecretOnSuccess: false,
+    });
+
+    expect(rateLimiter.reset).not.toHaveBeenCalledWith(CLIENT_IP, "shared-secret");
+  });
 });
