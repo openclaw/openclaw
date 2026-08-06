@@ -765,7 +765,11 @@ describe("readRemoteMediaBuffer", () => {
     });
     controller.abort();
 
-    await expect(promise).rejects.toThrow();
+    await expect(promise).rejects.toMatchObject({
+      name: "MediaFetchError",
+      code: "fetch_failed",
+      cause: { name: "AbortError" },
+    });
     // Without signal-aware sleep the backoff would block for 10s and retry;
     // with the fix the abort interrupts the sleep immediately.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
