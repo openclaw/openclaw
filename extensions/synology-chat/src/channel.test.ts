@@ -59,7 +59,9 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 const clientModule = await import("./client.js");
 const gatewayRuntimeModule = await import("./gateway-runtime.js");
 const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
-const mockSendHostedFileUrl = vi.spyOn(clientModule, "sendHostedFileUrl").mockResolvedValue(true);
+const mockSendHostedFileUrl = vi
+  .spyOn(clientModule, "sendHostedFileUrl")
+  .mockResolvedValue({ status: "accepted" });
 const registerSynologyWebhookRouteMock = vi
   .spyOn(gatewayRuntimeModule, "registerSynologyWebhookRoute")
   .mockImplementation(async () => vi.fn(async () => undefined));
@@ -80,12 +82,12 @@ describe("createSynologyChatPlugin", () => {
     prepareSynologyHostedMediaMock.mockReset();
     registerSynologyWebhookRouteMock.mockClear();
     mockSendMessage.mockResolvedValue(true);
-    mockSendHostedFileUrl.mockResolvedValue(true);
+    mockSendHostedFileUrl.mockResolvedValue({ status: "accepted" });
     prepareSynologyHostedMediaMock.mockImplementation(async ({ account }) => {
       if (!account.webhookUrl) {
         throw new Error("Synology Chat attachments require webhookUrl");
       }
-      return { url: preparedCapabilityUrl };
+      return { url: preparedCapabilityUrl, cleanup: vi.fn(async () => undefined) };
     });
     registerSynologyWebhookRouteMock.mockImplementation(async () => vi.fn(async () => undefined));
   });
@@ -698,7 +700,7 @@ describe("createSynologyChatPlugin", () => {
     });
 
     it("sendMedia retains staged bytes when webhook acceptance is indeterminate", async () => {
-      mockSendHostedFileUrl.mockResolvedValueOnce(false);
+      mockSendHostedFileUrl.mockResolvedValueOnce({ status: "indeterminate" });
       await expect(
         synologyChatPlugin.outbound.sendMedia({
           cfg: {
@@ -715,6 +717,33 @@ describe("createSynologyChatPlugin", () => {
           to: "user1",
         }),
       ).rejects.toThrow("acceptance could not be confirmed");
+    });
+
+    it("sendMedia cleans up staged bytes after a definitive webhook rejection", async () => {
+      const cleanup = vi.fn(async () => undefined);
+      prepareSynologyHostedMediaMock.mockResolvedValueOnce({
+        url: preparedCapabilityUrl,
+        cleanup,
+      });
+      mockSendHostedFileUrl.mockResolvedValueOnce({ status: "rejected" });
+
+      await expect(
+        synologyChatPlugin.outbound.sendMedia({
+          cfg: {
+            channels: {
+              "synology-chat": {
+                enabled: true,
+                token: "t",
+                incomingUrl: "https://nas/incoming",
+                webhookUrl: "https://gateway.example.com/w",
+              },
+            },
+          },
+          mediaUrl: "https://example.com/img.png",
+          to: "user1",
+        }),
+      ).rejects.toThrow("rejected the attachment request");
+      expect(cleanup).toHaveBeenCalledOnce();
     });
 
     it("sanitizeText strips internal tool-trace banners from outbound text", () => {
