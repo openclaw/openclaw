@@ -113,9 +113,11 @@ export function createSubagentRegistryRestorer(config: {
         return;
       }
       const cfg = deps().getRuntimeConfig();
+      const deferredCleanupRunIds = new Set<string>();
       let restoredStateChanged = reconcileOrphanedRestoredRuns({
         runs,
         resumedRuns,
+        deferredCleanupRunIds,
       });
       for (const entry of runs.values()) {
         if (backfillCollectorArchiveAtMs(entry, cfg)) {
@@ -127,6 +129,9 @@ export function createSubagentRegistryRestorer(config: {
       }
       const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
       for (const entry of runs.values()) {
+        if (deferredCleanupRunIds.has(entry.runId)) {
+          continue;
+        }
         const requesterTurnRunId = entry.requesterTurnRunId?.trim();
         if (!requesterTurnRunId) {
           continue;
