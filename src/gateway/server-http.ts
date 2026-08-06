@@ -54,7 +54,6 @@ import {
   type GatewayIngressAttribution,
   type GatewayIngressAttributionDiagnostics,
 } from "./ingress-attribution.js";
-import { resolveRequestClientIp } from "./net.js";
 import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
@@ -684,7 +683,6 @@ export function createGatewayHttpServer(opts: {
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {
-        const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
         let pluginGatewayAuthSatisfied = false;
         let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
         let pluginRequestOperatorScopes: string[] | undefined;
@@ -731,7 +729,7 @@ export function createGatewayHttpServer(opts: {
                 gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
                 gatewayRequestAuth: pluginGatewayRequestAuth,
                 gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
-                gatewayRequestClientIp: requestClientIp,
+                gatewayRequestClientIp: ingressAttribution.clientIp,
               }),
           },
         );
@@ -900,7 +898,6 @@ export function attachGatewayUpgradeHandler(opts: {
         socket.destroy();
         return;
       }
-      const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
@@ -975,7 +972,7 @@ export function attachGatewayUpgradeHandler(opts: {
             gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
             gatewayRequestAuth: pluginGatewayRequestAuth,
             gatewayRequestOperatorScopes: pluginGatewayRequestOperatorScopes,
-            gatewayRequestClientIp: requestClientIp,
+            gatewayRequestClientIp: ingressAttribution.clientIp,
           })
         ) {
           return;
@@ -991,7 +988,7 @@ export function attachGatewayUpgradeHandler(opts: {
           head,
           wss,
           preauthConnectionBudget,
-          preauthBudgetKey: requestClientIp,
+          preauthBudgetKey: ingressAttribution.clientIp,
           ingressName: "Gateway",
         });
       } catch {
