@@ -258,6 +258,12 @@ important facts in the conversation that are not yet written to a file, they
 are saved automatically before the summary happens.
 </Tip>
 
+The flush contract covers recovery-triggered compaction too. If the session
+overflowed and the provider rejected the full context, OpenClaw runs the flush
+before compacting only when a reduced maintenance turn demonstrably fits the
+flush model's context budget; otherwise it compacts unchanged and logs an
+explicit `[memory-flush-skip]` reason instead of failing silently.
+
 ## Dreaming
 
 Dreaming is the default background consolidation path for memory. It collects

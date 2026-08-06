@@ -75,10 +75,36 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
+/**
+ * Applies the shared recovery memory-flush executor at the runner boundary.
+ *
+ * The bounded pre-compaction flush executes its nested maintenance turn
+ * through the same orchestrator, but recovery-memory-flush cannot import it
+ * directly (runtime import cycle). Only the auto-reply builder used to inject
+ * the executor, so direct, cron, and gateway embedded runs hit the
+ * unavailable-executor skip and compacted without the checkpoint. Defaulting
+ * here gives every embedded run the checkpoint; the nested turn sets
+ * `suppressCompactionRecovery` and uses an ephemeral session identity, so it
+ * cannot re-enter this path or deadlock the real session's lane.
+ */
+export function applyEmbeddedRunRecoveryFlushExecutor(
+  params: RunEmbeddedAgentParams,
+): RunEmbeddedAgentParams {
+  if (params.runRecoveryMemoryFlushTurn) {
+    return params;
+  }
+  return {
+    ...params,
+    runRecoveryMemoryFlushTurn: (runParams: RunEmbeddedAgentParams) => runEmbeddedAgent(runParams),
+  };
+}
+
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
+  const internalParamsInput = applyEmbeddedRunRecoveryFlushExecutor(
+    paramsInput,
+  ) as RunEmbeddedAgentInternalParams;
   const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
   const requestedModel = normalizeOptionalString(internalParamsInput.model);
   const needsConfiguredDefault =

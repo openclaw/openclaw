@@ -234,10 +234,12 @@ export function resolveRunFastModeForFallbackCandidate(params: {
 }
 /** Builds base embedded run params with auth and provider runtime hints. */
 function buildEmbeddedRunBaseParams(params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0]) {
-  return buildEmbeddedRunBaseParamsCore({
-    ...params,
-    isReasoningTagProvider,
-  });
+  return {
+    ...buildEmbeddedRunBaseParamsCore({
+      ...params,
+      isReasoningTagProvider,
+    }),
+  };
 }
 
 function buildEmbeddedContextFromTemplate(params: {

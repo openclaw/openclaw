@@ -165,6 +165,18 @@ Before compaction, OpenClaw can run a **silent memory flush** turn to store dura
 
 The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
 
+Provider-overflow and timeout recovery inside the embedded agent runner apply
+the same flush contract before compacting. When the session was rejected
+because its context already overflowed, OpenClaw uses a **bounded overflow
+checkpoint**: it runs the memory-flush turn before compacting only when a
+maintenance turn is demonstrably admissible (the flush model's context budget
+has room for the session transcript plus reserve). If the maintenance turn
+cannot fit — for example when no larger-context `memoryFlush.model` is
+configured — OpenClaw compacts unchanged and records an explicit
+`[memory-flush-skip]` log line with the reason, so a skipped checkpoint is
+never silent. (Manual compaction invoked through the gateway compaction API
+does not go through this recovery path.)
+
 ## Pluggable compaction providers
 
 Plugins can register a custom compaction provider via `registerCompactionProvider()` on the plugin API. When a provider is registered and configured, OpenClaw delegates summarization to it instead of the built-in LLM pipeline.
