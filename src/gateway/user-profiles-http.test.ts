@@ -87,16 +87,17 @@ describe("profile avatar HTTP endpoint", () => {
       updatedAt: 42,
     });
     const res = response();
+    const ingressAttribution = { kind: "tailscale-serve" } as never;
 
     await handleUserProfileAvatarHttpRequest(
       request("/ignored-by-handler"),
       res.response,
       "/api/users/profile-1/avatar",
-      { auth: {} as never },
+      { auth: {} as never, ingressAttribution },
     );
 
     expect(authorizeScopedUserProfileAvatarHttpRequestOrReply).toHaveBeenCalledWith(
-      expect.objectContaining({ operatorMethod: "users.list" }),
+      expect.objectContaining({ operatorMethod: "users.list", ingressAttribution }),
     );
     expect(res.writeHead).toHaveBeenCalledWith(
       200,
