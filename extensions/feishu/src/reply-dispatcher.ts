@@ -28,6 +28,7 @@ import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { buildMentionedCardContent } from "./mention.js";
 import { buildFeishuPayloadCard } from "./outbound.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -1364,6 +1365,63 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await discardStreamingPreview();
       }
 
+      // Interactive/presentation finals must win over any active streaming preview.
+      // The active-preview branch below returns before sendCardFeishu, which would
+      // still drop buttons in the common partial/card streaming flow (#119616).
+      // Preview-disposal transition carried from 5d5f2d971d5e (licheer-zte).
+      if (interactiveCard) {
+        if (streaming?.isActive() || streamingStartPromise) {
+          await discardStreamingPreview();
+        }
+        let cardToSend = interactiveCard;
+        if (requiredMentionTargets?.length) {
+          const mentionContent = buildMentionedCardContent(requiredMentionTargets, "").trim();
+          const body = cardToSend.body;
+          if (
+            mentionContent &&
+            body &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            Array.isArray((body as { elements?: unknown }).elements)
+          ) {
+            const bodyRecord = body as { elements: unknown[] };
+            cardToSend = {
+              ...cardToSend,
+              body: {
+                ...bodyRecord,
+                elements: [{ tag: "markdown", content: mentionContent }, ...bodyRecord.elements],
+              },
+            };
+          }
+        }
+        deliveredResults.push(
+          createFeishuReplyDeliveryResult({
+            results: [
+              await sendCardFeishu({
+                cfg,
+                to: sendTarget,
+                card: cardToSend,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                allowTopLevelReplyFallback,
+                accountId,
+              }),
+            ],
+            visibleReplySent: true,
+            content: text ?? payload.text ?? "",
+            kind: "card",
+          }),
+        );
+        markVisibleReplySent();
+        if (info?.kind === "final" && text) {
+          deliveredFinalTexts.add(text);
+        }
+        if (hasMedia) {
+          await collectMediaDelivery(payload);
+        }
+        return mergeFeishuReplyDeliveryResults(deliveredResults, text ?? payload.text ?? "");
+      }
+
       if (shouldDeliverText) {
         if (info?.kind === "block") {
           // Drop internal block chunks unless we can safely consume them as
@@ -1463,54 +1521,29 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (useCard) {
-          if (interactiveCard) {
-            // Route interactive final replies through the same card builder as
-            // outbound sendPayload so buttons survive delivery.
-            const cardResult = await sendCardFeishu({
-              cfg,
-              to: sendTarget,
-              card: interactiveCard,
-              replyToMessageId: sendReplyToMessageId,
-              replyInThread: effectiveReplyInThread,
-              allowTopLevelReplyFallback,
-              accountId,
-            });
-            deliveredResults.push(
-              createFeishuReplyDeliveryResult({
-                results: [cardResult],
-                visibleReplySent: true,
-                content: text ?? payload.text ?? "",
-                kind: "card",
-              }),
-            );
-            if (info?.kind === "final" && text) {
-              deliveredFinalTexts.add(text);
-            }
-          } else {
-            const cardHeader = resolveCardHeader(agentId, identity);
-            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-            deliveredResults.push(
-              await sendChunkedTextReply({
-                text,
-                useCard: true,
-                infoKind: info?.kind,
-                chunkMentions: requiredMentionTargets,
-                sendChunk: async ({ chunk, mentions }) =>
-                  await sendStructuredCardFeishu({
-                    cfg,
-                    to: sendTarget,
-                    text: chunk,
-                    replyToMessageId: sendReplyToMessageId,
-                    replyInThread: effectiveReplyInThread,
-                    allowTopLevelReplyFallback,
-                    accountId,
-                    header: cardHeader,
-                    note: cardNote,
-                    ...(mentions ? { mentions } : {}),
-                  }),
-              }),
-            );
-          }
+          const cardHeader = resolveCardHeader(agentId, identity);
+          const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+          deliveredResults.push(
+            await sendChunkedTextReply({
+              text,
+              useCard: true,
+              infoKind: info?.kind,
+              chunkMentions: requiredMentionTargets,
+              sendChunk: async ({ chunk, mentions }) =>
+                await sendStructuredCardFeishu({
+                  cfg,
+                  to: sendTarget,
+                  text: chunk,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  allowTopLevelReplyFallback,
+                  accountId,
+                  header: cardHeader,
+                  note: cardNote,
+                  ...(mentions ? { mentions } : {}),
+                }),
+            }),
+          );
         } else {
           const firstChunkMentions =
             info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;
