@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@copilotkit/aimock": "1.37.4",
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/client": "2.0.0",
     "@openclaw/crabline": "0.1.11",
     "p-limit": "7.3.1",
     "p-map": "7.0.6",

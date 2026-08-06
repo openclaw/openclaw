@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -453,7 +453,7 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(fixture).toContain(
       `@modelcontextprotocol/ext-apps@${uiPackage.dependencies["@modelcontextprotocol/ext-apps"]}`,
     );
-    expect(fixture).toContain('server.tool("app_companion"');
+    expect(fixture).toMatch(/server\.registerTool\(\s*"app_companion"/);
     expect(fixture).toContain('visibility: ["app"]');
     expect(fixture).toContain('"data://conformance/value"');
     expect(fixture).toContain('text: "resource-ok"');

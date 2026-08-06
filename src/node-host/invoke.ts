@@ -1,7 +1,7 @@
 /** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
 import fs from "node:fs";
 import path from "node:path";
-import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import type { ContentBlock } from "@modelcontextprotocol/server";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -1038,7 +1038,17 @@ async function handleMcpToolsCall(
       await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));
       return;
     }
-    await sendMcpPayloadResult(client, frame, boundMcpToolResultPayload(result));
+    await sendMcpPayloadResult(
+      client,
+      frame,
+      boundMcpToolResultPayload({
+        content: result.content,
+        // v2 types structuredContent as unknown; only forward record payloads.
+        ...(isRecord(result.structuredContent)
+          ? { structuredContent: result.structuredContent }
+          : {}),
+      }),
+    );
   } catch (error) {
     if (error instanceof NodeHostMcpError) {
       await sendErrorResult(client, frame, error.code, error.message);

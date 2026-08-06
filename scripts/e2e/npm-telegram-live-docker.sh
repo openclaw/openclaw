@@ -499,7 +499,7 @@ link_installed_package_dependency() {
 # QA Lab is intentionally mounted as harness source, so its package-local
 # runtime imports must resolve from the installed package dependency tree.
 for dependency in \
-  @modelcontextprotocol/sdk \
+  @modelcontextprotocol/client \
   yaml \
   zod; do
   link_installed_package_dependency "$dependency"

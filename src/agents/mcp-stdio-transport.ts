@@ -4,10 +4,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import { PassThrough } from "node:stream";
-import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/client";
+import type { Transport, JSONRPCMessage } from "@modelcontextprotocol/client";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 

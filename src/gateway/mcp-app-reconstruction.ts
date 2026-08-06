@@ -1,4 +1,5 @@
-import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ContentBlockSchema } from "@modelcontextprotocol/core";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";

@@ -1,13 +1,21 @@
 /** Process-lifetime MCP clients owned by the headless node host. */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import { Client, SdkErrorCode } from "@modelcontextprotocol/client";
+import type {
+  Transport,
+  CallToolResult,
+  Tool,
+  VersionNegotiationOptions,
+} from "@modelcontextprotocol/client";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { matchesMcpToolFilterPattern } from "../agents/agent-bundle-mcp-filter.js";
+import {
+  buildMcpVersionNegotiationForTransport,
+  isMcpEraNegotiationFailure,
+} from "../agents/mcp-connect.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
 import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
@@ -43,7 +51,6 @@ type NodeHostMcpClient = {
   ): Promise<{ tools: Tool[]; nextCursor?: string }>;
   callTool(
     params: { name: string; arguments?: Record<string, unknown> },
-    resultSchema?: undefined,
     options?: { timeout?: number; signal?: AbortSignal },
   ): Promise<CallToolResult>;
   close(): Promise<void>;
@@ -53,6 +60,7 @@ type NodeHostMcpTransport = {
   transport: Transport;
   connectionTimeoutMs: number;
   requestTimeoutMs: number;
+  transportType?: "stdio" | "sse" | "streamable-http";
   detachStderr?: () => void;
 };
 
@@ -94,7 +102,10 @@ export type NodeHostMcpManager = {
 };
 
 type NodeHostMcpManagerDeps = {
-  createClient?: (serverName: string) => NodeHostMcpClient;
+  createClient?: (
+    serverName: string,
+    versionNegotiation?: VersionNegotiationOptions,
+  ) => NodeHostMcpClient;
   resolveTransport?: (serverName: string, config: McpServerConfig) => NodeHostMcpTransport | null;
   warn?: (message: string) => void;
   signal?: AbortSignal;
@@ -302,7 +313,7 @@ function isMcpTimeoutError(error: unknown): boolean {
     error &&
     typeof error === "object" &&
     "code" in error &&
-    (error as { code?: unknown }).code === ErrorCode.RequestTimeout,
+    (error as { code?: unknown }).code === SdkErrorCode.RequestTimeout,
   );
 }
 
@@ -314,10 +325,13 @@ export async function startNodeHostMcpManager(
   const warn = deps.warn ?? defaultWarn;
   const createClient =
     deps.createClient ??
-    (() =>
+    ((_serverName: string, versionNegotiation?: VersionNegotiationOptions) =>
       new Client(
         { name: "openclaw-node-host", version: VERSION },
-        { jsonSchemaValidator: createMcpJsonSchemaValidator() },
+        {
+          jsonSchemaValidator: createMcpJsonSchemaValidator(),
+          ...(versionNegotiation ? { versionNegotiation } : {}),
+        },
       ) as NodeHostMcpClient);
   const resolveTransport = deps.resolveTransport ?? resolveMcpTransport;
   const configured = listEnabledNodeHostMcpServers(servers);
@@ -339,7 +353,10 @@ export async function startNodeHostMcpManager(
           warn(`node host MCP server "${serverName}" skipped: invalid or unsupported transport`);
           return;
         }
-        client = createClient(serverName);
+        client = createClient(
+          serverName,
+          buildMcpVersionNegotiationForTransport(resolved.transportType),
+        );
         session = {
           client,
           connected: false,
@@ -354,10 +371,42 @@ export async function startNodeHostMcpManager(
             session.connected = false;
           }
         };
-        await withAbort(
-          connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs),
-          deps.signal,
-        );
+        try {
+          await withAbort(
+            connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs),
+            deps.signal,
+          );
+        } catch (error) {
+          if (!isMcpEraNegotiationFailure(error)) {
+            throw error;
+          }
+          // A legacy server exited on the 2026-07-28 server/discover probe
+          // instead of answering it. Rebuild pinned to the 2025 handshake and
+          // retry once.
+          resolved.detachStderr?.();
+          await Promise.allSettled([client.close()]);
+          resolved = resolveTransport(serverName, config);
+          if (!resolved) {
+            throw error;
+          }
+          client = createClient(serverName, { mode: "legacy" });
+          session.client = client;
+          session.detachStderr = resolved.detachStderr;
+          // MCP Client exposes callback properties rather than an EventTarget surface.
+          // oxlint-disable-next-line unicorn/prefer-add-event-listener
+          client.onclose = () => {
+            if (session) {
+              session.connected = false;
+            }
+          };
+          warn(
+            `node host MCP server "${serverName}" ended the 2026-07-28 probe; retrying with the legacy 2025 handshake`,
+          );
+          await withAbort(
+            connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs),
+            deps.signal,
+          );
+        }
         session.connected = true;
         const tools = await listAllTools(
           client,
@@ -412,7 +461,6 @@ export async function startNodeHostMcpManager(
       try {
         return await session.client.callTool(
           { name: params.tool, arguments: params.arguments ?? {} },
-          undefined,
           {
             timeout: Math.min(resolveCallTimeoutMs(params.timeoutMs), session.toolCallTimeoutMs),
             ...(params.signal ? { signal: params.signal } : {}),

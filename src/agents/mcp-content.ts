@@ -1,4 +1,4 @@
-import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import type { ContentBlock } from "@modelcontextprotocol/server";
 import type { AgentToolResult } from "./runtime/index.js";
 
 type McpAgentContentBlock = AgentToolResult<unknown>["content"][number];
