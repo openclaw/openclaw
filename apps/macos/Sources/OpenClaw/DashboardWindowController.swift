@@ -266,7 +266,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         initiatedByFrame frame: WKFrameInfo,
         completionHandler: @escaping @MainActor @Sendable (Bool) -> Void)
     {
-        guard webView === self.webView || self.linkBrowser.owns(webView) else {
+        guard self.ownsJavaScriptConfirmDialog(webView) else {
             completionHandler(false)
             return
         }
@@ -648,6 +648,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return allowedPath == "/" || sourceURL.path.hasPrefix(allowedPath)
     }
 
+    static func shouldAllowJavaScriptControlUIDialog(
+        isOwnedWebView: Bool = true,
+        from sourceURL: URL?,
+        isMainFrame: Bool,
+        dashboardURL: URL) -> Bool
+    {
+        isOwnedWebView &&
+            isMainFrame &&
+            self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL)
+    }
+
     static func shouldAllowEditorURLLaunch(
         from sourceURL: URL?,
         isMainFrame: Bool,
@@ -987,37 +998,69 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         guard let url, self.isHTTPURL(url) else { return .ignore }
         return sourceIsLinkBrowser ? .openTab(url) : .openExternal(url)
     }
-
-    private func showLoadFailure(_ error: Error) {
-        let nsError = error as NSError
-        // A cancelled provisional navigation never commits, so the prior
-        // document survives and stays command-capable; clearing live state
-        // here would queue native commands forever with no reload to flush.
-        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
-            return
-        }
-        self.hasLiveContent = false
-        self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
-        // Same moment-bound rule as showFailure: a terminal load failure
-        // invalidates commands queued for the document that never arrived.
-        self.pendingNativeCommands = []
-        self.pendingNativeNavigation = nil
-        dashboardWindowLogger.error(
-            """
-            dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
-            error=\(error.localizedDescription, privacy: .public)
-            """)
-        let html = DashboardFailurePage.html(
-            title: "Dashboard unavailable",
-            message: error.localizedDescription,
-            detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
-            url: self.currentURL)
-        self.webView.loadHTMLString(html, baseURL: nil)
-    }
 }
 
 extension DashboardWindowController {
+    /// Bridges JavaScript `window.alert` calls used by the Control UI to report
+    /// failed destructive actions. Untrusted frames are completed without UI.
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptAlertPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping @MainActor @Sendable () -> Void)
+    {
+        guard Self.shouldAllowJavaScriptControlUIDialog(
+            isOwnedWebView: self.ownsJavaScriptControlUIDialog(webView),
+            from: frame.request.url,
+            isMainFrame: frame.isMainFrame,
+            dashboardURL: self.currentURL)
+        else {
+            completionHandler()
+            return
+        }
+        let alert = Self.makeJavaScriptAlert(message: message, host: frame.request.url?.host)
+        if let window {
+            alert.beginSheetModal(for: window) { _ in completionHandler() }
+            return
+        }
+        alert.runModal()
+        completionHandler()
+    }
+
+    /// Bridges JavaScript `window.prompt` calls used for session and group names.
+    /// Cancel maps to nil exactly as it does in a browser.
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptTextInputPanelWithPrompt prompt: String,
+        defaultText: String?,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping @MainActor @Sendable (String?) -> Void)
+    {
+        guard Self.shouldAllowJavaScriptControlUIDialog(
+            isOwnedWebView: self.ownsJavaScriptControlUIDialog(webView),
+            from: frame.request.url,
+            isMainFrame: frame.isMainFrame,
+            dashboardURL: self.currentURL)
+        else {
+            completionHandler(nil)
+            return
+        }
+        let dialog = Self.makeJavaScriptPromptAlert(
+            prompt: prompt,
+            defaultText: defaultText,
+            host: frame.request.url?.host)
+        let finish: @MainActor @Sendable (NSApplication.ModalResponse) -> Void = { response in
+            completionHandler(Self.javaScriptPromptResult(
+                for: response,
+                text: dialog.textField.stringValue))
+        }
+        if let window {
+            dialog.alert.beginSheetModal(for: window, completionHandler: finish)
+            return
+        }
+        finish(dialog.alert.runModal())
+    }
+
     func navigateBack() {
         self.activeNavigationWebView.goBack()
     }
@@ -1032,7 +1075,7 @@ extension DashboardWindowController {
             lhs.port == rhs.port
     }
 
-    private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
+    private static func makeJavaScriptDialog(message: String, host: String?) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = "OpenClaw Dashboard"
         if let host, !host.isEmpty {
@@ -1040,9 +1083,44 @@ extension DashboardWindowController {
         } else {
             alert.informativeText = message
         }
+        return alert
+    }
+
+    private func ownsJavaScriptControlUIDialog(_ webView: WKWebView) -> Bool {
+        webView === self.webView
+    }
+
+    private func ownsJavaScriptConfirmDialog(_ webView: WKWebView) -> Bool {
+        webView === self.webView || self.linkBrowser.owns(webView)
+    }
+
+    private static func makeJavaScriptAlert(message: String, host: String?) -> NSAlert {
+        let alert = self.makeJavaScriptDialog(message: message, host: host)
+        alert.addButton(withTitle: "OK")
+        return alert
+    }
+
+    private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
+        let alert = self.makeJavaScriptDialog(message: message, host: host)
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
         return alert
+    }
+
+    private static func makeJavaScriptPromptAlert(
+        prompt: String,
+        defaultText: String?,
+        host: String?)
+        -> (alert: NSAlert, textField: NSTextField)
+    {
+        let alert = self.makeJavaScriptDialog(message: prompt, host: host)
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let textField = NSTextField(string: defaultText ?? "")
+        textField.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+        alert.accessoryView = textField
+        alert.window.initialFirstResponder = textField
+        return (alert, textField)
     }
 
     private static func javaScriptConfirmResult(
@@ -1050,6 +1128,14 @@ extension DashboardWindowController {
         -> Bool
     {
         response == .alertFirstButtonReturn
+    }
+
+    private static func javaScriptPromptResult(
+        for response: NSApplication.ModalResponse,
+        text: String)
+        -> String?
+    {
+        response == .alertFirstButtonReturn ? text : nil
     }
 
     /// Commands are deliverable when a document is live or a load is in flight
@@ -1399,6 +1485,34 @@ extension DashboardWindowController {
         self.showLoadFailure(error)
     }
 
+    private func showLoadFailure(_ error: Error) {
+        let nsError = error as NSError
+        // A cancelled provisional navigation never commits, so the prior
+        // document survives and stays command-capable; clearing live state
+        // here would queue native commands forever with no reload to flush.
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            return
+        }
+        self.hasLiveContent = false
+        self.isShowingFailurePage = true
+        self.advanceNavigationGeneration()
+        // Same moment-bound rule as showFailure: a terminal load failure
+        // invalidates commands queued for the document that never arrived.
+        self.pendingNativeCommands = []
+        self.pendingNativeNavigation = nil
+        dashboardWindowLogger.error(
+            """
+            dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
+            error=\(error.localizedDescription, privacy: .public)
+            """)
+        let html = DashboardFailurePage.html(
+            title: "Dashboard unavailable",
+            message: error.localizedDescription,
+            detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
+            url: self.currentURL)
+        self.webView.loadHTMLString(html, baseURL: nil)
+    }
+
     private func decideTargetlessNavigation(
         _ url: URL,
         navigationType: WKNavigationType,
@@ -1608,6 +1722,37 @@ extension DashboardWindowController {
 
     static func _testJavaScriptConfirmResult(for response: NSApplication.ModalResponse) -> Bool {
         self.javaScriptConfirmResult(for: response)
+    }
+
+    static func _testJavaScriptAlert(message: String, host: String?) -> NSAlert {
+        self.makeJavaScriptAlert(message: message, host: host)
+    }
+
+    static func _testJavaScriptPromptAlert(
+        prompt: String,
+        defaultText: String?,
+        host: String?)
+        -> (alert: NSAlert, textField: NSTextField)
+    {
+        self.makeJavaScriptPromptAlert(prompt: prompt, defaultText: defaultText, host: host)
+    }
+
+    static func _testJavaScriptPromptResult(
+        for response: NSApplication.ModalResponse,
+        text: String)
+        -> String?
+    {
+        self.javaScriptPromptResult(for: response, text: text)
+    }
+
+    var _testLinkBrowserOwnsJavaScriptControlUIDialog: Bool {
+        guard let webView = self.linkBrowser.activeWebView else { return false }
+        return self.ownsJavaScriptControlUIDialog(webView)
+    }
+
+    var _testLinkBrowserOwnsJavaScriptConfirmDialog: Bool {
+        guard let webView = self.linkBrowser.activeWebView else { return false }
+        return self.ownsJavaScriptConfirmDialog(webView)
     }
 }
 #endif
