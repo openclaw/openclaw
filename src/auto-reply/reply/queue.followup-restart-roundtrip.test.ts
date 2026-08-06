@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   followupQueueEntryContainsPrompt,
   hasFollowupQueueEntries,
@@ -32,8 +30,10 @@ installQueueRuntimeErrorSilencer();
 // the process, so the cycle is exercised here against the real persist/restore
 // modules rather than over a live transport.
 describe("followup queue restart round-trip (real shared SQLite state)", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   it("persists a mid-turn Telegram followup, restores it after a simulated restart, redelivers exactly once with routing intact, and does not replay after a second restart", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-followup-tg-restart-"));
+    const tmpDir = tempDirs.make("openclaw-followup-tg-restart-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
 
@@ -146,7 +146,6 @@ describe("followup queue restart round-trip (real shared SQLite state)", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
       }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });

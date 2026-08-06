@@ -1,9 +1,7 @@
 // Tests queue drain restart behavior when follow-up runs chain together.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   followupQueueEntryContainsPrompt,
   hasFollowupQueueEntries,
@@ -41,6 +39,8 @@ import { clearFollowupQueue, FOLLOWUP_QUEUES, getExistingFollowupQueue } from ".
 installQueueRuntimeErrorSilencer();
 
 describe("followup queue drain restart after idle window", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   it("keeps a detached drain on a live root after its enqueue request returns", async () => {
     resetGatewayWorkAdmission();
     const key = `test-detached-drain-root-${Date.now()}`;
@@ -741,7 +741,7 @@ describe("followup queue drain restart after idle window", () => {
   });
 
   it("drains restored queue items when a followup callback is registered after restart", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-restore-drain-"));
+    const tmpDir = tempDirs.make("openclaw-queue-restore-drain-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
 
@@ -783,12 +783,11 @@ describe("followup queue drain restart after idle window", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
       }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
   it("drains restored items via production enqueue idle-kick after restart", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-prod-kick-"));
+    const tmpDir = tempDirs.make("openclaw-queue-prod-kick-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
 
@@ -840,7 +839,6 @@ describe("followup queue drain restart after idle window", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
       }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
@@ -850,7 +848,7 @@ describe("followup queue drain restart after idle window", () => {
     // That registration must not, on its own, schedule a drain for a restored
     // queue, or the restored items would be dispatched concurrently with the
     // active turn they should wait behind.
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-race-"));
+    const tmpDir = tempDirs.make("openclaw-queue-race-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
 
@@ -905,7 +903,6 @@ describe("followup queue drain restart after idle window", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
       }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
@@ -915,7 +912,7 @@ describe("followup queue drain restart after idle window", () => {
     // route B's restored items when route A's idle-kick fires, because the
     // caller only confirmed idle for A. Locks per-key isolation: A's idle-kick
     // does NOT touch B's pending-restore entry or B's callback.
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-isolation-"));
+    const tmpDir = tempDirs.make("openclaw-queue-isolation-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
 
@@ -988,7 +985,6 @@ describe("followup queue drain restart after idle window", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
       }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
@@ -998,7 +994,7 @@ describe("followup queue drain restart after idle window", () => {
     // and the next persist would leave the aborted item on disk — and because
     // abortSignal is not serialized, restore would replay an item the source
     // already canceled.
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-abort-"));
+    const tmpDir = tempDirs.make("openclaw-queue-abort-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
 
@@ -1053,7 +1049,6 @@ describe("followup queue drain restart after idle window", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
       }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });

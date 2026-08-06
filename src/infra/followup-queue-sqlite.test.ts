@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -15,11 +13,12 @@ import {
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 describe("followup-queue-sqlite", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let tmpDir: string;
   let originalEnv: string | undefined;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-followup-sqlite-"));
+    tmpDir = tempDirs.make("openclaw-followup-sqlite-");
     originalEnv = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     closeOpenClawStateDatabaseForTest();
@@ -32,7 +31,6 @@ describe("followup-queue-sqlite", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = originalEnv;
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("lazily ensures followup_queue_entries on an existing v6 database without bumping user_version", () => {
@@ -140,45 +138,41 @@ describe("followup-queue-sqlite", () => {
   });
 
   it("honors an explicit stateDir instead of the process-default state root", () => {
-    const defaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-followup-default-"));
-    const selectedDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-followup-selected-"));
-    try {
-      process.env.OPENCLAW_STATE_DIR = defaultDir;
-      closeOpenClawStateDatabaseForTest();
+    const defaultDir = tempDirs.make("openclaw-followup-default-");
+    const selectedDir = tempDirs.make("openclaw-followup-selected-");
+    process.env.OPENCLAW_STATE_DIR = defaultDir;
+    closeOpenClawStateDatabaseForTest();
 
-      // Warm the process-default database so a wrong write path would hit it.
-      openOpenClawStateDatabase({ env: process.env });
-      expect(hasFollowupQueueEntries(defaultDir)).toBe(false);
+    // Warm the process-default database so a wrong write path would hit it.
+    openOpenClawStateDatabase({ env: process.env });
+    expect(hasFollowupQueueEntries(defaultDir)).toBe(false);
 
-      replaceFollowupQueueEntries({
-        stateDir: selectedDir,
-        entries: [
-          [
-            "agent:main:dm:selected-root",
-            {
-              items: [{ prompt: "selected-root-only", enqueuedAt: 1 }],
-              mode: "steer",
-              lastEnqueuedAt: 1,
-              droppedCount: 0,
-              summaryLines: [],
-            },
-          ],
+    replaceFollowupQueueEntries({
+      stateDir: selectedDir,
+      entries: [
+        [
+          "agent:main:dm:selected-root",
+          {
+            items: [{ prompt: "selected-root-only", enqueuedAt: 1 }],
+            mode: "steer",
+            lastEnqueuedAt: 1,
+            droppedCount: 0,
+            summaryLines: [],
+          },
         ],
-      });
+      ],
+    });
 
-      expect(hasFollowupQueueEntries(selectedDir)).toBe(true);
-      expect(hasFollowupQueueEntries(defaultDir)).toBe(false);
-      expect(loadFollowupQueueEntries(selectedDir)[0]?.[0]).toBe("agent:main:dm:selected-root");
-      expect(loadFollowupQueueEntries(defaultDir)).toHaveLength(0);
+    expect(hasFollowupQueueEntries(selectedDir)).toBe(true);
+    expect(hasFollowupQueueEntries(defaultDir)).toBe(false);
+    expect(loadFollowupQueueEntries(selectedDir)[0]?.[0]).toBe("agent:main:dm:selected-root");
+    expect(loadFollowupQueueEntries(defaultDir)).toHaveLength(0);
 
-      replaceFollowupQueueEntries({ stateDir: selectedDir, entries: [] });
-      expect(hasFollowupQueueEntries(selectedDir)).toBe(false);
-      expect(hasFollowupQueueEntries(defaultDir)).toBe(false);
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      process.env.OPENCLAW_STATE_DIR = tmpDir;
-      fs.rmSync(defaultDir, { recursive: true, force: true });
-      fs.rmSync(selectedDir, { recursive: true, force: true });
-    }
+    replaceFollowupQueueEntries({ stateDir: selectedDir, entries: [] });
+    expect(hasFollowupQueueEntries(selectedDir)).toBe(false);
+    expect(hasFollowupQueueEntries(defaultDir)).toBe(false);
+
+    closeOpenClawStateDatabaseForTest();
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
   });
 });

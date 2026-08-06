@@ -27,10 +27,8 @@
 // scheduleFollowupDrain, and FOLLOWUP_QUEUES are imported. The Deferred gate
 // mirrors the pattern in queue.drain-restart.test.ts:207-234.
 
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { loadFollowupQueueEntries } from "../../../infra/followup-queue-sqlite.js";
 import {
   clearSessionQueues,
@@ -49,6 +47,7 @@ import type { FollowupRun, QueueSettings } from "./types.js";
 installQueueRuntimeErrorSilencer();
 
 describe("drain finally identity guard — late D1 must not orphan Q2", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const keysToCleanup: string[] = [];
 
   afterEach(() => {
@@ -167,7 +166,7 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
   });
 
   it("persists the shortened queue after each delivered item", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-drain-ack-test-"));
+    const tmpDir = tempDirs.make("openclaw-drain-ack-test-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const key = "test-drain-ack-" + Date.now() + "-" + Math.random();
@@ -209,7 +208,6 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
       }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });

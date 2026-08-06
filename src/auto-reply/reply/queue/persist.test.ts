@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -79,11 +79,12 @@ describe("resolveFollowupQueueStatePath", () => {
 });
 
 describe("persistFollowupQueues / restoreFollowupQueues", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let tmpDir: string;
   let originalEnv: string | undefined;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-persist-test-"));
+    tmpDir = tempDirs.make("openclaw-persist-test-");
     originalEnv = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     FOLLOWUP_QUEUES.clear();
@@ -101,7 +102,6 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = originalEnv;
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("writes shared SQLite state when a non-empty queue exists", () => {

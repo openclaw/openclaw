@@ -1,9 +1,9 @@
 /** Shared Vitest harness mocks and helpers for doctor command e2e-style tests. */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { createDoctorConfigSnapshot } from "./doctor-config-snapshot.test-helpers.js";
@@ -22,6 +22,7 @@ let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
 let originalUpdateInProgress: string | undefined;
 let tempStateDir: string | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function setStdinTty(value: boolean | undefined) {
   try {
@@ -718,7 +719,7 @@ beforeEach(() => {
   originalStateDir = process.env.OPENCLAW_STATE_DIR;
   originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-"));
+  tempStateDir = tempDirs.make("openclaw-doctor-state-");
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
@@ -738,8 +739,5 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
   }
-  if (tempStateDir) {
-    fs.rmSync(tempStateDir, { recursive: true, force: true });
-    tempStateDir = undefined;
-  }
+  tempStateDir = undefined;
 });

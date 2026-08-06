@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createQueueTestRun as createRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import {
@@ -29,6 +27,7 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 const { wakeRestoredFollowupQueueSessions } = await import("./server-followup-queue-recovery.js");
 
 describe("wakeRestoredFollowupQueueSessions", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
 
   beforeEach(() => {
@@ -49,7 +48,7 @@ describe("wakeRestoredFollowupQueueSessions", () => {
   });
 
   it("wakes each session that has a non-empty restored followup queue", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-followup-recovery-"));
+    const tmpDir = tempDirs.make("openclaw-followup-recovery-");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const key = `agent:main:telegram:direct:recovery-${Date.now()}`;
@@ -86,7 +85,6 @@ describe("wakeRestoredFollowupQueueSessions", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
       }
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 });
