@@ -77,7 +77,8 @@ const resolveDiscordTranscriptsAccountId: NonNullable<
   if (capableAccountIds.length === 0) {
     return {
       ok: false,
-      error: "No Discord account is enabled for voice; enable voice or specify an account.",
+      error:
+        "No Discord account is enabled for voice; configure credentials and enable voice for an account.",
     };
   }
   return {
