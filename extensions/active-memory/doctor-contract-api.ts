@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
+  type PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 
@@ -20,11 +21,7 @@ const TOGGLE_STATE_FILE = "session-toggles.json";
 const SESSION_TOGGLES_NAMESPACE = "session-toggles";
 const MAX_TOGGLE_ENTRIES = 10_000;
 export const LEGACY_TOGGLE_STATE_MAX_BYTES = 8 * 1024 * 1024;
-
-type LegacyToggleReadResult =
-  | { kind: "ok"; entries: ActiveMemoryToggleEntry[] }
-  | { kind: "empty" }
-  | { kind: "oversized"; warning: string };
+export const LEGACY_TOGGLE_RECOVERY_MAX_BYTES = 64 * 1024 * 1024;
 
 function resolveToggleStatePath(stateDir: string): string {
   return path.join(stateDir, "plugins", "active-memory", TOGGLE_STATE_FILE);
@@ -38,33 +35,25 @@ function normalizeLegacyUpdatedAt(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
 }
 
-function isLegacyToggleStateOversizedError(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    err.message.includes(`File exceeds ${LEGACY_TOGGLE_STATE_MAX_BYTES} bytes`)
-  );
+function isLegacyToggleStateOversizedError(err: unknown, maxBytes: number): boolean {
+  return err instanceof Error && err.message.includes(`File exceeds ${maxBytes} bytes`);
 }
 
-function oversizedLegacyToggleStateWarning(filePath: string): string {
-  return `Skipped Active Memory session toggle migration because ${filePath} exceeds ${LEGACY_TOGGLE_STATE_MAX_BYTES} bytes; left legacy source in place`;
-}
-
-async function readLegacyToggleState(filePath: string): Promise<LegacyToggleReadResult> {
+/**
+ * Parses legacy toggle JSON with the same tolerant per-record semantics the
+ * normal migration always used: malformed records are skipped, non-true
+ * disabled values are ignored, invalid timestamps are normalized, and a
+ * malformed document yields no entries instead of a partial import.
+ */
+function parseLegacyToggleEntries(raw: string): ActiveMemoryToggleEntry[] {
   try {
-    const parsed = JSON.parse(
-      (
-        await readRegularFile({
-          filePath,
-          maxBytes: LEGACY_TOGGLE_STATE_MAX_BYTES,
-        })
-      ).buffer.toString("utf8"),
-    ) as unknown;
+    const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") {
-      return { kind: "empty" };
+      return [];
     }
     const sessions = (parsed as { sessions?: unknown }).sessions;
     if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
-      return { kind: "empty" };
+      return [];
     }
     const entries: ActiveMemoryToggleEntry[] = [];
     for (const [sessionKey, value] of Object.entries(sessions)) {
@@ -77,13 +66,79 @@ async function readLegacyToggleState(filePath: string): Promise<LegacyToggleRead
       const updatedAt = normalizeLegacyUpdatedAt((value as { updatedAt?: unknown }).updatedAt);
       entries.push({ sessionKey, disabled: true, updatedAt });
     }
-    return entries.length > 0 ? { kind: "ok", entries } : { kind: "empty" };
-  } catch (err) {
-    if (isLegacyToggleStateOversizedError(err)) {
-      return { kind: "oversized", warning: oversizedLegacyToggleStateWarning(filePath) };
-    }
-    return { kind: "empty" };
+    return entries;
+  } catch {
+    return [];
   }
+}
+
+/**
+ * Reads a legacy toggle source through the bounded SDK file reader. The fast
+ * path uses the smaller cap; oversized sources are retried with the recovery
+ * cap so valid opt-outs are still preserved through the same JSON.parse path.
+ */
+async function readLegacyToggleEntries(
+  filePath: string,
+  maxBytes: number,
+): Promise<{ entries: ActiveMemoryToggleEntry[]; oversized: boolean }> {
+  try {
+    const { buffer } = await readRegularFile({ filePath, maxBytes });
+    return { entries: parseLegacyToggleEntries(buffer.toString("utf8")), oversized: false };
+  } catch (err) {
+    if (isLegacyToggleStateOversizedError(err, maxBytes)) {
+      return { entries: [], oversized: true };
+    }
+    return { entries: [], oversized: false };
+  }
+}
+
+function previewForEntries(entries: ActiveMemoryToggleEntry[]): string {
+  return `- Active Memory session toggles: ${entries.length} ${entries.length === 1 ? "entry" : "entries"} -> plugin state (${SESSION_TOGGLES_NAMESPACE})`;
+}
+
+async function migrateToggleEntriesToPluginState(params: {
+  filePath: string;
+  entries: ActiveMemoryToggleEntry[];
+  context: PluginDoctorStateMigrationContext;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const store = params.context.openPluginStateKeyedStore<ActiveMemoryToggleEntry>({
+    namespace: SESSION_TOGGLES_NAMESPACE,
+    maxEntries: MAX_TOGGLE_ENTRIES,
+  });
+  const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
+  const missingEntries = params.entries.filter(
+    (entry) => !existingKeys.has(activeMemoryToggleKey(entry.sessionKey)),
+  );
+  if (missingEntries.length > MAX_TOGGLE_ENTRIES - existingKeys.size) {
+    warnings.push(
+      `Skipped Active Memory session toggle migration because plugin state has room for ${MAX_TOGGLE_ENTRIES - existingKeys.size} of ${missingEntries.length} missing entries; left legacy source in place`,
+    );
+    return { changes, warnings };
+  }
+  let imported = 0;
+  for (const entry of params.entries) {
+    const key = activeMemoryToggleKey(entry.sessionKey);
+    if (existingKeys.has(key)) {
+      continue;
+    }
+    await store.register(key, entry);
+    existingKeys.add(key);
+    imported++;
+  }
+  if (imported > 0) {
+    changes.push(
+      `Migrated ${imported} Active Memory session toggle ${imported === 1 ? "entry" : "entries"} -> plugin state`,
+    );
+  }
+  await archiveLegacyStateSource({
+    filePath: params.filePath,
+    label: "Active Memory session toggles",
+    changes,
+    warnings,
+  });
+  return { changes, warnings };
 }
 
 /** State migrations exposed to OpenClaw doctor for Active Memory. */
@@ -93,70 +148,60 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Active Memory session toggles",
     async detectLegacyState(params) {
       const filePath = resolveToggleStatePath(params.stateDir);
-      const legacyState = await readLegacyToggleState(filePath);
-      if (legacyState.kind === "oversized") {
+      const fast = await readLegacyToggleEntries(filePath, LEGACY_TOGGLE_STATE_MAX_BYTES);
+      if (fast.oversized) {
+        const recovery = await readLegacyToggleEntries(filePath, LEGACY_TOGGLE_RECOVERY_MAX_BYTES);
+        if (recovery.oversized) {
+          return {
+            preview: [
+              `- Active Memory session toggles: legacy source exceeds ${LEGACY_TOGGLE_RECOVERY_MAX_BYTES} bytes and cannot be recovered; left in place`,
+            ],
+          };
+        }
+        if (recovery.entries.length === 0) {
+          return null;
+        }
         return {
-          preview: [`- ${legacyState.warning}`],
+          preview: [previewForEntries(recovery.entries)],
         };
       }
-      if (legacyState.kind === "empty") {
+      if (fast.entries.length === 0) {
         return null;
       }
       return {
-        preview: [
-          `- Active Memory session toggles: ${legacyState.entries.length} ${legacyState.entries.length === 1 ? "entry" : "entries"} -> plugin state (${SESSION_TOGGLES_NAMESPACE})`,
-        ],
+        preview: [previewForEntries(fast.entries)],
       };
     },
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
       const filePath = resolveToggleStatePath(params.stateDir);
-      const legacyState = await readLegacyToggleState(filePath);
-      if (legacyState.kind === "oversized") {
-        warnings.push(legacyState.warning);
-        return { changes, warnings };
-      }
-      if (legacyState.kind === "empty") {
-        return { changes, warnings };
-      }
-      const entries = legacyState.entries;
-      const store = params.context.openPluginStateKeyedStore<ActiveMemoryToggleEntry>({
-        namespace: SESSION_TOGGLES_NAMESPACE,
-        maxEntries: MAX_TOGGLE_ENTRIES,
-      });
-      const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
-      const missingEntries = entries.filter(
-        (entry) => !existingKeys.has(activeMemoryToggleKey(entry.sessionKey)),
-      );
-      if (missingEntries.length > MAX_TOGGLE_ENTRIES - existingKeys.size) {
-        warnings.push(
-          `Skipped Active Memory session toggle migration because plugin state has room for ${MAX_TOGGLE_ENTRIES - existingKeys.size} of ${missingEntries.length} missing entries; left legacy source in place`,
-        );
-        return { changes, warnings };
-      }
-      let imported = 0;
-      for (const entry of entries) {
-        const key = activeMemoryToggleKey(entry.sessionKey);
-        if (existingKeys.has(key)) {
-          continue;
+      const fast = await readLegacyToggleEntries(filePath, LEGACY_TOGGLE_STATE_MAX_BYTES);
+      if (fast.oversized) {
+        const recovery = await readLegacyToggleEntries(filePath, LEGACY_TOGGLE_RECOVERY_MAX_BYTES);
+        if (recovery.oversized) {
+          warnings.push(
+            `Skipped Active Memory session toggle migration because ${filePath} exceeds ${LEGACY_TOGGLE_RECOVERY_MAX_BYTES} bytes; left legacy source in place`,
+          );
+          return { changes, warnings };
         }
-        await store.register(key, entry);
-        existingKeys.add(key);
-        imported++;
+        if (recovery.entries.length === 0) {
+          return { changes, warnings };
+        }
+        return await migrateToggleEntriesToPluginState({
+          filePath,
+          entries: recovery.entries,
+          context: params.context,
+        });
       }
-      if (imported > 0) {
-        changes.push(
-          `Migrated ${imported} Active Memory session toggle ${imported === 1 ? "entry" : "entries"} -> plugin state`,
-        );
+      if (fast.entries.length === 0) {
+        return { changes, warnings };
       }
-      await archiveLegacyStateSource({
+      return await migrateToggleEntriesToPluginState({
         filePath,
-        label: "Active Memory session toggles",
-        changes,
-        warnings,
+        entries: fast.entries,
+        context: params.context,
       });
-      return { changes, warnings };
     },
   },
 ];
