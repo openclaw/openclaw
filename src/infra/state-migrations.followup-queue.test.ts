@@ -12,6 +12,20 @@ import {
   migrateLegacyFollowupQueueSidecar,
 } from "./state-migrations.followup-queue.js";
 
+function makeRestorableRun(overrides: Record<string, unknown> = {}) {
+  return {
+    agentId: "main",
+    sessionId: "sess-migrate",
+    sessionFile: "/tmp/sess.jsonl",
+    workspaceDir: "/tmp/ws",
+    provider: "anthropic",
+    model: "claude",
+    timeoutMs: 30_000,
+    blockReplyBreak: "message_end",
+    ...overrides,
+  };
+}
+
 describe("legacy followup queue sidecar doctor migration", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
@@ -64,13 +78,7 @@ describe("legacy followup queue sidecar doctor migration", () => {
                 enqueuedAt: 100,
                 originatingChannel: "telegram",
                 originatingTo: "999",
-                run: {
-                  agentId: "main",
-                  sessionId: "sess-migrate",
-                  sessionKey: queueKey,
-                  provider: "anthropic",
-                  model: "claude",
-                },
+                run: makeRestorableRun({ sessionId: "sess-migrate", sessionKey: queueKey }),
               },
             ],
             mode: "steer",
@@ -126,12 +134,7 @@ describe("legacy followup queue sidecar doctor migration", () => {
               {
                 prompt: "already in sqlite",
                 enqueuedAt: 1,
-                run: {
-                  agentId: "main",
-                  sessionId: "sess-existing",
-                  provider: "anthropic",
-                  model: "claude",
-                },
+                run: makeRestorableRun({ sessionId: "sess-existing" }),
               },
             ],
             mode: "steer",
@@ -152,12 +155,7 @@ describe("legacy followup queue sidecar doctor migration", () => {
               {
                 prompt: "stale json prompt",
                 enqueuedAt: 2,
-                run: {
-                  agentId: "main",
-                  sessionId: "sess-sidecar",
-                  provider: "anthropic",
-                  model: "claude",
-                },
+                run: makeRestorableRun({ sessionId: "sess-sidecar" }),
               },
             ],
             mode: "steer",
@@ -182,7 +180,47 @@ describe("legacy followup queue sidecar doctor migration", () => {
     expect(sqliteQueue.items?.[0]?.prompt).toBe("already in sqlite");
   });
 
-  it("skips malformed legacy followup queue entries", async () => {
+  it("retains the sidecar when an entry fails restore-strength validation", async () => {
+    const stateDir = await useStateDir();
+    const sourcePath = await writeLegacySidecar(stateDir, {
+      version: 1,
+      entries: [
+        [
+          "agent:main:dm:incomplete",
+          {
+            items: [
+              {
+                prompt: "incomplete run fields",
+                enqueuedAt: 1,
+                run: {
+                  agentId: "main",
+                  sessionId: "sess-incomplete",
+                  provider: "anthropic",
+                  model: "claude",
+                },
+              },
+            ],
+            mode: "steer",
+            lastEnqueuedAt: 1,
+            droppedCount: 0,
+            summaryLines: [],
+          },
+        ],
+      ],
+    });
+
+    const detected = detectLegacyFollowupQueueSidecar({ stateDir });
+    const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
+
+    expect(result.warnings).toContain(
+      `Left followup queue sidecar in place because one or more entries failed restore-strength validation: ${sourcePath}`,
+    );
+    expect(result.changes).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
+  });
+
+  it("retains the sidecar when items are malformed rather than deleting as empty", async () => {
     const stateDir = await useStateDir();
     const sourcePath = await writeLegacySidecar(stateDir, {
       version: 1,
@@ -192,8 +230,10 @@ describe("legacy followup queue sidecar doctor migration", () => {
     const detected = detectLegacyFollowupQueueSidecar({ stateDir });
     const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
 
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(`Removed empty followup queue sidecar ${sourcePath}`);
+    expect(result.warnings).toContain(
+      `Left followup queue sidecar in place because one or more entries failed restore-strength validation: ${sourcePath}`,
+    );
+    expect(fs.existsSync(sourcePath)).toBe(true);
     expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
   });
 
@@ -222,12 +262,7 @@ describe("legacy followup queue sidecar doctor migration", () => {
               {
                 prompt: "selected-dir-followup",
                 enqueuedAt: 42,
-                run: {
-                  agentId: "main",
-                  sessionId: "sess-selected",
-                  provider: "anthropic",
-                  model: "claude",
-                },
+                run: makeRestorableRun({ sessionId: "sess-selected" }),
               },
             ],
             mode: "steer",

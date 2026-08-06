@@ -35,24 +35,60 @@ describe("followup-queue-sqlite", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("creates followup_queue_entries on a fresh shared state database", () => {
+  it("lazily ensures followup_queue_entries on an existing v6 database without bumping user_version", () => {
     openOpenClawStateDatabase({ env: process.env });
     const databasePath = resolveOpenClawStateSqlitePath(process.env);
     const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(databasePath, {
-      readOnly: true,
-    });
+    const pre = new DatabaseSync(databasePath);
     try {
-      const row = db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'followup_queue_entries'",
-        )
-        .get() as { name?: string } | undefined;
-      expect(row?.name).toBe("followup_queue_entries");
+      pre.exec("DROP TABLE IF EXISTS followup_queue_entries;");
+      expect(pre.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(
+        pre
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'followup_queue_entries'",
+          )
+          .get(),
+      ).toBeUndefined();
     } finally {
-      db.close();
+      pre.close();
     }
+
+    closeOpenClawStateDatabaseForTest();
+    // Existing v6 without the lazy table must still open cleanly.
+    openOpenClawStateDatabase({ env: process.env });
     expect(hasFollowupQueueEntries(tmpDir)).toBe(false);
+
+    replaceFollowupQueueEntries({
+      stateDir: tmpDir,
+      entries: [
+        [
+          "agent:main:dm:lazy",
+          {
+            items: [{ prompt: "lazy-ensure", enqueuedAt: 1, run: { agentId: "main" } }],
+            mode: "steer",
+            lastEnqueuedAt: 1,
+            droppedCount: 0,
+            summaryLines: [],
+          },
+        ],
+      ],
+    });
+
+    const post = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(post.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(
+        post
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'followup_queue_entries'",
+          )
+          .get(),
+      ).toEqual({ name: "followup_queue_entries" });
+    } finally {
+      post.close();
+    }
+    expect(loadFollowupQueueEntries(tmpDir)[0]?.[0]).toBe("agent:main:dm:lazy");
   });
 
   it("round-trips queue entries through replace and load", () => {

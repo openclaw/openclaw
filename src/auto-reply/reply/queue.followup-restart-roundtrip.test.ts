@@ -99,10 +99,10 @@ describe("followup queue restart round-trip (real shared SQLite state)", () => {
       expect(restored?.items[0]?.originatingTo).toBe("6300969793");
 
       // 5. Drain via the idle-aware path; record every delivery to detect replay.
-      //    In-flight items are omitted from SQLite before runFollowup so a crash
-      //    after the external send cannot rehydrate the same follow-up.
+      //    SQLite keeps the row until settle-after-success so a crash mid-send
+      //    can still redeliver; durable omit happens only after channel handoff.
       const deliveries: string[] = [];
-      let persistedDuringSend = true;
+      let persistedDuringSend = false;
       rememberFollowupDrainCallback(key, async (run) => {
         persistedDuringSend = followupQueueEntryContainsPrompt(key, run.prompt);
         deliveries.push(run.prompt);
@@ -129,9 +129,9 @@ describe("followup queue restart round-trip (real shared SQLite state)", () => {
       }
 
       // 6. Exactly-once: the restored message was redelivered a single time and
-      //    the in-memory queue is now empty. SQLite was already cleared before send.
+      //    the in-memory queue is now empty. SQLite stayed durable during send.
       expect(deliveries).toEqual(["summarize the thread so far"]);
-      expect(persistedDuringSend).toBe(false);
+      expect(persistedDuringSend).toBe(true);
       expect(FOLLOWUP_QUEUES.get(key)?.items ?? []).toHaveLength(0);
 
       // 7. The drain acknowledgement persisted the now-empty queue, so a SECOND

@@ -103,12 +103,16 @@ type DrainQueueItemOptions<T> = {
   shouldRestoreOnError?: (item: T) => boolean;
   onDiscard?: (item: T) => void;
   /**
-   * When set, called after the item is marked in-flight and before `run` so
-   * durable state can omit it (preventing post-send restart replay) while the
-   * in-memory identity stays visible to overflow policy. On run failure, called
-   * again after the in-flight mark is cleared so the item can be re-persisted.
+   * Optional pre-send settle hook for generic callers that still want durable
+   * omission before run. Followup drains prefer {@link acknowledgeAfterSuccess}.
    */
   acknowledgeBeforeRun?: (item: T) => void;
+  /**
+   * Called after a successful remove (and after fail-closed discard remove)
+   * before `finally` clears inFlight, so durable state can settle once delivery
+   * (or discard) has completed.
+   */
+  acknowledgeAfterSuccess?: (item: T) => void;
 };
 
 /** Apply overflow policy before enqueueing another item. */
@@ -261,9 +265,8 @@ export async function drainNextQueueItem<T>(
   // await window when the shared items array is still mutated by enqueuers.
   options?.inFlight?.add(next);
   const acknowledgeBeforeRun = options?.acknowledgeBeforeRun;
+  const acknowledgeAfterSuccess = options?.acknowledgeAfterSuccess;
   if (acknowledgeBeforeRun) {
-    // Persist while in-flight so durable state omits this item before send,
-    // without removing it from memory (overflow policy still needs the identity).
     try {
       acknowledgeBeforeRun(next);
     } catch (error) {
@@ -274,10 +277,13 @@ export async function drainNextQueueItem<T>(
   try {
     await run(next);
     removeQueuedItemsByRef(items, [next]);
+    if (acknowledgeAfterSuccess) {
+      acknowledgeAfterSuccess(next);
+    }
   } catch (error) {
     if (acknowledgeBeforeRun) {
-      // Drop the in-flight mark before re-persisting so a retryable failure
-      // makes the item durable again (or omits it after onDiscard removal).
+      // Drop the in-flight mark before re-settling so a retryable failure
+      // leaves the identity durable again (or omits it after onDiscard removal).
       options?.inFlight?.delete(next);
       if (options?.shouldRestoreOnError?.(next) ?? true) {
         try {
@@ -299,6 +305,11 @@ export async function drainNextQueueItem<T>(
     if (!(options?.shouldRestoreOnError?.(next) ?? true)) {
       removeQueuedItemsByRef(items, [next]);
       options?.onDiscard?.(next);
+      try {
+        acknowledgeAfterSuccess?.(next);
+      } catch {
+        // Prefer the original drain error.
+      }
     }
     throw error;
   } finally {

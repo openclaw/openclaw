@@ -20,6 +20,7 @@ import {
   hasPersistedFollowupQueues,
   peekRestoredPendingDrainKeys,
   persistFollowupQueues,
+  persistFollowupQueuesOrThrow,
   resolveFollowupQueueStatePath,
   restoreFollowupQueues,
 } from "./persist.js";
@@ -164,6 +165,113 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
       sourceChannel: "telegram",
       sourceSessionKey: "agent:main:dm:999",
     });
+  });
+
+  it("round-trips media facts through persist+restore", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push({
+      ...makeFollowupRun("with media"),
+      media: [
+        {
+          path: "/tmp/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+          fileName: "photo.jpg",
+        },
+      ],
+    });
+    persistFollowupQueues();
+
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0];
+    expect(restored?.media).toEqual([
+      {
+        path: "/tmp/photo.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+        fileName: "photo.jpg",
+      },
+    ]);
+  });
+
+  it("round-trips summarySources and summaryElisions through persist+restore", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    const summarySource = makeFollowupRun("summarized overflow");
+    queue.items.push(makeFollowupRun("still pending"));
+    queue.droppedCount = 2;
+    queue.summaryLines = ["summarized overflow", "elided sibling"];
+    queue.summarySources = [summarySource];
+    queue.summaryElisions = [
+      {
+        contextKey: "route-a",
+        count: 1,
+        sources: [makeFollowupRun("elided sibling")],
+        summaryLines: ["elided sibling"],
+        sourceRefs: new WeakMap(),
+      },
+    ];
+    queue.evictedSummaryCount = 3;
+    persistFollowupQueues();
+
+    const persisted = readPersistedQueueEntry(TEST_KEY) as {
+      summarySources?: Array<{ prompt?: string }>;
+      summaryElisions?: Array<{
+        contextKey?: string;
+        count?: number;
+        sources?: Array<{ prompt?: string }>;
+        summaryLines?: string[];
+        sourceRefs?: unknown;
+      }>;
+      evictedSummaryCount?: number;
+    };
+    expect(persisted.summarySources?.[0]?.prompt).toBe("summarized overflow");
+    expect(persisted.summaryElisions?.[0]?.contextKey).toBe("route-a");
+    expect(persisted.summaryElisions?.[0]?.sources?.[0]?.prompt).toBe("elided sibling");
+    expect(persisted.summaryElisions?.[0]?.sourceRefs).toBeUndefined();
+    expect(persisted.evictedSummaryCount).toBe(3);
+
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
+    expect(restored?.summarySources.map((item) => item.prompt)).toEqual(["summarized overflow"]);
+    expect(restored?.summaryElisions).toHaveLength(1);
+    expect(restored?.summaryElisions[0]?.contextKey).toBe("route-a");
+    expect(restored?.summaryElisions[0]?.count).toBe(1);
+    expect(restored?.summaryElisions[0]?.sources[0]?.prompt).toBe("elided sibling");
+    expect(restored?.summaryElisions[0]?.summaryLines).toEqual(["elided sibling"]);
+    expect(restored?.summaryElisions[0]?.sourceRefs).toBeInstanceOf(WeakMap);
+    expect(restored?.evictedSummaryCount).toBe(3);
+    expect(restored?.activeSummarySources).toBeInstanceOf(WeakSet);
+  });
+
+  it("persistFollowupQueuesOrThrow rethrows write failures", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push(makeFollowupRun("must settle"));
+    const blocker = path.join(tmpDir, "not-a-directory");
+    fs.writeFileSync(blocker, "file");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    // Parent path is a file, so opening shared SQLite under it must fail.
+    process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+    try {
+      expect(() => persistFollowupQueuesOrThrow()).toThrow();
+    } finally {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+  });
+
+  it("keeps in-flight items in SQLite until settle-after-success", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    const item = makeFollowupRun("in flight");
+    queue.items.push(item);
+    queue.inFlight.add(item);
+    persistFollowupQueues();
+
+    expect(followupQueueEntryContainsPrompt(TEST_KEY, "in flight")).toBe(true);
   });
 
   it("round-trips room_event inbound context through persist+restore", () => {

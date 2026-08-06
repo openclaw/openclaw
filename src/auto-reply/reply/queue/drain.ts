@@ -30,7 +30,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { clearRestoredPendingDrainKey, persistFollowupQueues } from "./persist.js";
+import { clearRestoredPendingDrainKey, persistFollowupQueuesOrThrow } from "./persist.js";
 import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
   admitFollowupRunLifecycle,
@@ -135,10 +135,9 @@ export function kickFollowupDrainIfIdle(key: string): void {
 }
 
 function persistDrainAcknowledgement(): void {
-  // A successful followup run means the message has been handed to the
-  // dispatcher. Persist the shortened queue immediately so a crash before the
-  // drain finally block cannot replay an already-delivered prompt.
-  persistFollowupQueues();
+  // Settle AFTER successful delivery (or fail-closed discard). Keep SQLite
+  // rows until then so a crash mid-send can redeliver; OrThrow fails closed.
+  persistFollowupQueuesOrThrow();
 }
 
 type OriginRoutingMetadata = Pick<
@@ -923,18 +922,16 @@ async function drainProtectedPriorityFollowup(
   if (!priority) {
     return false;
   }
-  // Mark in-flight and persist before send so SQLite omits this item while
-  // overflow policy can still see the in-memory identity.
+  // Mark in-flight so overflow policy retains this identity during send.
+  // Durable settle happens after successful delivery (caller) or fail-closed
+  // discard below — keep SQLite rows until then.
   options.inFlight.add(priority);
-  persistDrainAcknowledgement();
   try {
     await runFollowup(priority);
     removeQueuedItemsByRef(items, [priority]);
   } catch (error) {
     options.inFlight.delete(priority);
-    if (options.shouldRestoreOnError()) {
-      persistDrainAcknowledgement();
-    } else {
+    if (!options.shouldRestoreOnError()) {
       removeQueuedItemsByRef(items, [priority]);
       options.onDiscard(priority);
       persistDrainAcknowledgement();
@@ -1204,9 +1201,8 @@ export function scheduleFollowupDrain(
     shouldRestoreOnError: () =>
       FOLLOWUP_QUEUES.get(key) === queue && !queue.abortController.signal.aborted,
     onDiscard: (item: FollowupRun) => completeFollowupRunLifecycle(item),
-    // Persist removal before the external send so a crash after channel delivery
-    // cannot rehydrate the same follow-up from shared SQLite state.
-    acknowledgeBeforeRun: () => {
+    // Settle durable state after successful remove (or fail-closed discard).
+    acknowledgeAfterSuccess: () => {
       persistDrainAcknowledgement();
     },
   };
@@ -1391,8 +1387,6 @@ export function scheduleFollowupDrain(
               for (const item of activeGroupItems) {
                 queue.inFlight.add(item);
               }
-              // Persist while in-flight so SQLite omits these items before send.
-              persistDrainAcknowledgement();
               await drainGroup();
             } catch (err) {
               if (admitted) {
@@ -1404,12 +1398,12 @@ export function scheduleFollowupDrain(
                 for (const item of activeGroupItems) {
                   queue.inFlight.delete(item);
                 }
-                persistDrainAcknowledgement();
               } else {
                 removeQueuedItemsByRef(queue.items, activeGroupItems);
                 for (const item of activeGroupItems) {
                   completeFollowupRunLifecycle(item);
                 }
+                persistDrainAcknowledgement();
               }
               throw err;
             } finally {
@@ -1451,7 +1445,7 @@ export function scheduleFollowupDrain(
         if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup, reserveOptions))) {
           break;
         }
-        // drainNextQueueItem already persisted via acknowledgeBeforeRun.
+        // drainNextQueueItem already settled via acknowledgeAfterSuccess.
       }
     } catch (err) {
       queue.lastEnqueuedAt = Date.now();

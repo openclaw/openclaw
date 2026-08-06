@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -18,12 +19,43 @@ type FollowupQueueRow = {
   updated_at: number | bigint;
 };
 
+const ensuredDatabases = new WeakSet<DatabaseSync>();
+
+const FOLLOWUP_QUEUE_ENTRIES_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS followup_queue_entries (
+  queue_key TEXT NOT NULL PRIMARY KEY,
+  queue_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_followup_queue_entries_updated
+  ON followup_queue_entries(updated_at DESC, queue_key);
+`;
+
 function databaseOptions(stateDir?: string): OpenClawStateDatabaseOptions {
   return stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {};
 }
 
+function ensureFollowupQueueEntriesSchema(options: OpenClawStateDatabaseOptions = {}): void {
+  const database = openOpenClawStateDatabase(options);
+  if (ensuredDatabases.has(database.db)) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      // sqlite-allow-raw -- feature-local additive schema DDL; queue rows use Kysely below.
+      db.exec(FOLLOWUP_QUEUE_ENTRIES_SCHEMA_SQL);
+    },
+    options,
+    { operationLabel: "followup-queue.schema.ensure" },
+  );
+  ensuredDatabases.add(database.db);
+}
+
 function openQueueDatabase(stateDir?: string) {
-  return openOpenClawStateDatabase(databaseOptions(stateDir));
+  const options = databaseOptions(stateDir);
+  ensureFollowupQueueEntriesSchema(options);
+  return openOpenClawStateDatabase(options);
 }
 
 export function replaceFollowupQueueEntries(params: {
@@ -33,6 +65,7 @@ export function replaceFollowupQueueEntries(params: {
   const now = Date.now();
   // Always open through the caller-selected state root — never the process-default singleton.
   const options = databaseOptions(params.stateDir);
+  ensureFollowupQueueEntriesSchema(options);
   runOpenClawStateWriteTransaction((database) => {
     const queueDb = getNodeSqliteKysely<FollowupQueueDatabase>(database.db);
     const nextKeys = new Set(params.entries.map(([key]) => key));

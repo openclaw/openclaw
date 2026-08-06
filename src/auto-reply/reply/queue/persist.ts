@@ -171,6 +171,7 @@ type PersistedFollowupRun = Pick<
   | "enqueuedAt"
   | "images"
   | "imageOrder"
+  | "media"
   | "currentInboundEventKind"
   | "currentInboundAudio"
   | "currentInboundContext"
@@ -186,6 +187,13 @@ type PersistedFollowupRun = Pick<
   run: PersistedRunFields;
 };
 
+type PersistedSummaryElision = {
+  contextKey: string;
+  count: number;
+  sources: PersistedFollowupRun[];
+  summaryLines: string[];
+};
+
 type PersistedQueueEntry = {
   items: PersistedFollowupRun[];
   lastEnqueuedAt: number;
@@ -195,6 +203,9 @@ type PersistedQueueEntry = {
   dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
+  summarySources?: PersistedFollowupRun[];
+  summaryElisions?: PersistedSummaryElision[];
+  evictedSummaryCount?: number;
   lastRun?: PersistedRunFields;
 };
 
@@ -299,7 +310,7 @@ function resolveCurrentRunConfig(): OpenClawConfig {
   }
 }
 
-function isPersistedRunFields(value: unknown): value is PersistedRunFields {
+export function isPersistedRunFields(value: unknown): value is PersistedRunFields {
   return (
     isRecord(value) &&
     typeof value.agentId === "string" &&
@@ -313,7 +324,7 @@ function isPersistedRunFields(value: unknown): value is PersistedRunFields {
   );
 }
 
-function isPersistedFollowupRun(value: unknown): value is PersistedFollowupRun {
+export function isPersistedFollowupRun(value: unknown): value is PersistedFollowupRun {
   return (
     isRecord(value) &&
     typeof value.prompt === "string" &&
@@ -322,8 +333,43 @@ function isPersistedFollowupRun(value: unknown): value is PersistedFollowupRun {
   );
 }
 
+function isPersistedSummaryElision(value: unknown): value is PersistedSummaryElision {
+  return (
+    isRecord(value) &&
+    typeof value.contextKey === "string" &&
+    typeof value.count === "number" &&
+    Array.isArray(value.sources) &&
+    value.sources.every(isPersistedFollowupRun) &&
+    Array.isArray(value.summaryLines) &&
+    value.summaryLines.every((line) => typeof line === "string")
+  );
+}
+
 function isPersistedQueueEntry(value: unknown): value is PersistedQueueEntry {
-  return isRecord(value) && Array.isArray(value.items) && value.items.every(isPersistedFollowupRun);
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.items) ||
+    !value.items.every(isPersistedFollowupRun)
+  ) {
+    return false;
+  }
+  if (
+    value.summarySources !== undefined &&
+    (!Array.isArray(value.summarySources) || !value.summarySources.every(isPersistedFollowupRun))
+  ) {
+    return false;
+  }
+  if (
+    value.summaryElisions !== undefined &&
+    (!Array.isArray(value.summaryElisions) ||
+      !value.summaryElisions.every(isPersistedSummaryElision))
+  ) {
+    return false;
+  }
+  if (value.evictedSummaryCount !== undefined && typeof value.evictedSummaryCount !== "number") {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -366,6 +412,7 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
     enqueuedAt: item.enqueuedAt,
     ...(item.images !== undefined ? { images: item.images } : {}),
     ...(item.imageOrder !== undefined ? { imageOrder: item.imageOrder } : {}),
+    ...(item.media !== undefined ? { media: item.media } : {}),
     ...(item.currentInboundEventKind !== undefined
       ? { currentInboundEventKind: item.currentInboundEventKind }
       : {}),
@@ -397,38 +444,65 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
   };
 }
 
+function toPersistedQueueEntry(queue: FollowupQueueState): PersistedQueueEntry {
+  return {
+    // Keep in-flight identities in SQLite until channel delivery succeeds (or
+    // fail-closed discard). Memory inFlight is overflow protection only.
+    items: queue.items.map(toPersistedRun),
+    lastEnqueuedAt: queue.lastEnqueuedAt,
+    mode: queue.mode,
+    debounceMs: queue.debounceMs,
+    cap: queue.cap,
+    dropPolicy: queue.dropPolicy,
+    droppedCount: queue.droppedCount,
+    summaryLines: queue.summaryLines,
+    summarySources: queue.summarySources.map(toPersistedRun),
+    summaryElisions: queue.summaryElisions.map((entry) => ({
+      contextKey: entry.contextKey,
+      count: entry.count,
+      sources: entry.sources.map(toPersistedRun),
+      summaryLines: entry.summaryLines,
+    })),
+    evictedSummaryCount: queue.evictedSummaryCount,
+    ...(queue.lastRun !== undefined ? { lastRun: projectRunForPersist(queue.lastRun) } : {}),
+  };
+}
+
+function rehydratePersistedFollowupRun(
+  persisted: PersistedFollowupRun,
+  currentConfig: OpenClawConfig,
+): FollowupRun {
+  return {
+    ...persisted,
+    run: rehydrateRun(persisted.run, currentConfig),
+  };
+}
+
 /**
  * Write all non-empty followup queues to disk so they survive gateway restarts.
  * Called after any mutation that changes queue contents (enqueue, drain, clear).
  *
- * In-flight items are omitted: drains acknowledge by persisting while the item
- * remains in memory (for overflow protection) but is already marked in-flight,
- * so a crash after external send cannot rehydrate it from SQLite.
+ * Rows stay in SQLite until delivery settles (successful channel handoff or
+ * fail-closed discard). In-flight marks are process-local only.
+ */
+export function persistFollowupQueuesOrThrow(): void {
+  const entries: Array<[string, PersistedQueueEntry]> = [];
+  for (const [key, queue] of FOLLOWUP_QUEUES) {
+    if (!queue || (queue.items.length === 0 && queue.droppedCount === 0)) {
+      continue;
+    }
+    entries.push([key, toPersistedQueueEntry(queue)]);
+  }
+  replaceFollowupQueueEntries({ entries });
+}
+
+/**
+ * Best-effort persist for non-critical callers (enqueue). Drain settlement uses
+ * {@link persistFollowupQueuesOrThrow} so ack failures fail closed.
  */
 export function persistFollowupQueues(): void {
   try {
-    const entries: Array<[string, PersistedQueueEntry]> = [];
-    for (const [key, queue] of FOLLOWUP_QUEUES) {
-      const durableItems = queue.items.filter((item) => !queue.inFlight.has(item));
-      if (!queue || (durableItems.length === 0 && queue.droppedCount === 0)) {
-        continue;
-      }
-      entries.push([
-        key,
-        {
-          items: durableItems.map(toPersistedRun),
-          lastEnqueuedAt: queue.lastEnqueuedAt,
-          mode: queue.mode,
-          debounceMs: queue.debounceMs,
-          cap: queue.cap,
-          dropPolicy: queue.dropPolicy,
-          droppedCount: queue.droppedCount,
-          summaryLines: queue.summaryLines,
-          ...(queue.lastRun !== undefined ? { lastRun: projectRunForPersist(queue.lastRun) } : {}),
-        },
-      ]);
-    }
-    replaceFollowupQueueEntries({ entries });
+    persistFollowupQueuesOrThrow();
   } catch (err) {
     defaultRuntime.error?.(`failed to persist followup queues: ${String(err)}`);
   }
@@ -472,6 +546,12 @@ export function restoreFollowupQueues(): void {
       if (rehydratedItems.length === 0 && data.droppedCount === 0) {
         continue;
       }
+      const rehydratedSummarySources = filterRestorableFollowupItems(
+        key,
+        (data.summarySources ?? []).map((persisted) =>
+          rehydratePersistedFollowupRun(persisted, currentConfig),
+        ),
+      );
       const restored: FollowupQueueState = {
         abortController: new AbortController(),
         items: rehydratedItems,
@@ -489,10 +569,21 @@ export function restoreFollowupQueues(): void {
         droppedCount:
           typeof data.droppedCount === "number" ? Math.max(0, Math.floor(data.droppedCount)) : 0,
         summaryLines: Array.isArray(data.summaryLines) ? data.summaryLines : [],
-        summarySources: [],
+        summarySources: rehydratedSummarySources,
         activeSummarySources: new WeakSet(),
-        summaryElisions: [],
-        evictedSummaryCount: 0,
+        summaryElisions: (data.summaryElisions ?? []).map((elision) => ({
+          contextKey: elision.contextKey,
+          count: elision.count,
+          sources: elision.sources.map((persisted) =>
+            rehydratePersistedFollowupRun(persisted, currentConfig),
+          ),
+          summaryLines: [...elision.summaryLines],
+          sourceRefs: new WeakMap(),
+        })),
+        evictedSummaryCount:
+          typeof data.evictedSummaryCount === "number"
+            ? Math.max(0, Math.floor(data.evictedSummaryCount))
+            : 0,
         ...(isPersistedRunFields(data.lastRun)
           ? { lastRun: rehydrateRun(data.lastRun, currentConfig) }
           : {}),

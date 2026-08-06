@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME } from "../auto-reply/reply/queue/persist.js";
+import {
+  LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME,
+  isPersistedFollowupRun,
+  isPersistedRunFields,
+} from "../auto-reply/reply/queue/persist.js";
 import { loadFollowupQueueEntries, replaceFollowupQueueEntries } from "./followup-queue-sqlite.js";
 import { fileExists } from "./state-migrations.fs.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
@@ -11,27 +15,18 @@ function resolveLegacyFollowupQueueStatePath(stateDir: string): string {
   return path.join(stateDir, LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME);
 }
 
-function isLegacyPersistedRun(value: unknown): boolean {
+/**
+ * Restore-strength queue payload: every item (and optional lastRun) must satisfy
+ * the same validators restoreFollowupQueues uses, including sessionFile,
+ * workspaceDir, timeoutMs, and blockReplyBreak.
+ */
+function isRestorableQueueData(value: unknown): boolean {
   return (
     isRecord(value) &&
-    typeof value.agentId === "string" &&
-    typeof value.sessionId === "string" &&
-    typeof value.provider === "string" &&
-    typeof value.model === "string"
+    Array.isArray(value.items) &&
+    value.items.every(isPersistedFollowupRun) &&
+    (value.lastRun === undefined || isPersistedRunFields(value.lastRun))
   );
-}
-
-function isLegacyPersistedItem(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.prompt === "string" &&
-    typeof value.enqueuedAt === "number" &&
-    isLegacyPersistedRun(value.run)
-  );
-}
-
-function isLegacyQueueData(value: unknown): boolean {
-  return isRecord(value) && Array.isArray(value.items) && value.items.every(isLegacyPersistedItem);
 }
 
 /** Detect a retired followup-queue JSON sidecar left over from before SQLite persistence. */
@@ -48,7 +43,8 @@ export function detectLegacyFollowupQueueSidecar(params: {
 /**
  * Import entries from the legacy JSON sidecar into shared SQLite state, then remove the
  * sidecar. Entries already present in SQLite win on conflict — the sidecar is left in place
- * (with a warning) so no data is silently dropped.
+ * (with a warning) so no data is silently dropped. Conversion must be lossless: any entry
+ * that fails restore-strength validation retains the sidecar and skips migration.
  */
 export async function migrateLegacyFollowupQueueSidecar(params: {
   detected: LegacyStateDetection["followupQueueSidecar"];
@@ -76,15 +72,27 @@ export async function migrateLegacyFollowupQueueSidecar(params: {
   }
 
   const jsonEntries = new Map<string, unknown>();
+  let hasUnrestorableEntry = false;
   for (const entry of entriesRaw) {
     if (!Array.isArray(entry) || entry.length < 2) {
       continue;
     }
     const key = typeof entry[0] === "string" ? entry[0] : undefined;
-    if (!key || !isLegacyQueueData(entry[1])) {
+    if (!key) {
+      continue;
+    }
+    if (!isRestorableQueueData(entry[1])) {
+      hasUnrestorableEntry = true;
       continue;
     }
     jsonEntries.set(key, entry[1]);
+  }
+
+  if (hasUnrestorableEntry) {
+    warnings.push(
+      `Left followup queue sidecar in place because one or more entries failed restore-strength validation: ${sourcePath}`,
+    );
+    return { changes, warnings };
   }
 
   if (jsonEntries.size === 0) {
