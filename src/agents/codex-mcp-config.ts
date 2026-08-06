@@ -212,6 +212,9 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
+  // Bundle-only gate: do not pass user `cfg.mcp.servers` names here.
+  // User MCP is projected separately; a user-server glob must not open this
+  // loader and drag in unrelated enabled bundled servers.
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,

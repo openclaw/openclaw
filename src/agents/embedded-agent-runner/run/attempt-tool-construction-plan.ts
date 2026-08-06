@@ -1,7 +1,7 @@
 /**
  * Plans which core, bundle MCP, and bundle LSP tools an attempt should build.
  */
-import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import {
   type CoreToolFactoryFamily,
   type OpenClawCodingToolConstructionPlan,
@@ -240,13 +240,101 @@ function shouldCreateBundleRuntimeForAttempt(
  * runtime creation follows explicit bundle/plugin allowlist names rather than
  * generic local tool names.
  */
+/**
+ * MCP server names that should participate in materialization prechecks.
+ * Mirrors effective enablement: session `toolOverrides.mcpServers[name] === true`
+ * enables a server even when config has `enabled: false`.
+ */
+export function listMaterializableMcpServerNames(params: {
+  servers?: Record<string, { enabled?: boolean } | null | undefined> | null;
+  toolOverrides?: { mcpServers?: Record<string, boolean> };
+}): string[] {
+  const servers = params.servers ?? {};
+  const overrides = params.toolOverrides?.mcpServers;
+  const names: string[] = [];
+  for (const [name, server] of Object.entries(servers)) {
+    if (!server) {
+      continue;
+    }
+    const override = overrides && Object.hasOwn(overrides, name) ? overrides[name] : undefined;
+    if (override === false) {
+      continue;
+    }
+    if (override === true || server.enabled !== false) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * True when an allowlist entry can authorize generated MCP tools for a
+ * configured server. Exact bare server names (e.g. `hzr-oa`) are intentionally
+ * excluded: the final policy only admits concrete names like `hzr-oa__tool` or
+ * globs (`hzr-oa*`, `hzr-oa__*`), so materializing on bare names would start MCP
+ * and still leave an empty callable tool set.
+ *
+ * Safe names come from {@link assignSafeServerNames} over the full declared
+ * server set (declaration order), matching runtime collision-suffix ownership.
+ * `mcpServerNames` only filters which servers may authorize materialization.
+ */
+function matchesConfiguredMcpServerAllowlist(
+  normalized: string,
+  params: {
+    mcpServerNames?: Iterable<string>;
+    mcpDeclaredServerNames?: Iterable<string>;
+  },
+): boolean {
+  const materializable = [...(params.mcpServerNames ?? [])];
+  if (materializable.length === 0) {
+    return false;
+  }
+  const declared = [...(params.mcpDeclaredServerNames ?? materializable)];
+  const assignments = assignSafeServerNames(declared);
+  for (const serverName of materializable) {
+    const safeRaw = assignments.get(serverName);
+    if (!safeRaw) {
+      continue;
+    }
+    const safeName = normalizeToolName(safeRaw);
+    if (!safeName) {
+      continue;
+    }
+    if (
+      normalized === `${safeName}*` ||
+      normalized.startsWith(`${safeName}${TOOL_NAME_SEPARATOR}`) ||
+      (normalized.endsWith("*") &&
+        normalized.length > 1 &&
+        safeName.startsWith(normalized.slice(0, -1)))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
   toolsAllow?: string[];
+  /** Enabled `mcp.servers` keys from OpenClaw config (owner-managed MCP). */
+  mcpServerNames?: Iterable<string>;
+  /**
+   * Full declared `mcp.servers` keys for collision-stable safe-name assignment.
+   * Must include disabled peers that reserve aliases in the runtime full set.
+   * When omitted, falls back to `mcpServerNames` (no collision peers).
+   */
+  mcpDeclaredServerNames?: Iterable<string>;
 }): boolean {
   return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
-    return isBundleMcpAllowlistName(normalized) || isPluginGroupAllowlistName(normalized);
+    return (
+      isBundleMcpAllowlistName(normalized) ||
+      isPluginGroupAllowlistName(normalized) ||
+      matchesConfiguredMcpServerAllowlist(normalized, {
+        mcpServerNames: params.mcpServerNames,
+        mcpDeclaredServerNames: params.mcpDeclaredServerNames,
+      })
+    );
   });
 }
 

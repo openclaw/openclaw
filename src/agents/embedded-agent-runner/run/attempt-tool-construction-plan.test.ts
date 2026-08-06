@@ -6,6 +6,7 @@ import {
   mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
+  listMaterializableMcpServerNames,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
 
@@ -547,6 +548,101 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
       shouldCreateBundleMcpRuntimeForAttempt({
         toolsEnabled: true,
         toolsAllow: ["strict__strict_probe"],
+      }),
+    ).toBe(true);
+  });
+
+  it("creates bundle MCP for configured server-name globs without __", () => {
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa*"],
+      }),
+    ).toBe(false);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa*"],
+        mcpServerNames: ["hzr-oa"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa__*"],
+        mcpServerNames: ["hzr-oa"],
+      }),
+    ).toBe(true);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["other*"],
+        mcpServerNames: ["hzr-oa"],
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa"],
+        mcpServerNames: ["hzr-oa"],
+      }),
+    ).toBe(false);
+  });
+
+  it("uses full-set safe-name assignment for collision suffixes", () => {
+    // Runtime assignSafeServerNames(merged bundle+configured) e.g.
+    // ["mail.prod", "mail-prod"] → mail.prod → mail-prod, mail-prod → mail-prod-2.
+    // Callers must pass that merged set as mcpDeclaredServerNames.
+    // Use prefix globs without `__` so isBundleMcpAllowlistName does not short-circuit.
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["mail-prod-2*"],
+        mcpServerNames: ["mail-prod"],
+        mcpDeclaredServerNames: ["mail.prod", "mail-prod"],
+      }),
+    ).toBe(true);
+    // Without the declared peer set, the materializable-only alias is mail-prod.
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["mail-prod-2*"],
+        mcpServerNames: ["mail-prod"],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("listMaterializableMcpServerNames", () => {
+  it("includes config-enabled servers and session-enabled overrides", () => {
+    expect(
+      listMaterializableMcpServerNames({
+        servers: {
+          enabled: { enabled: true },
+          disabled: { enabled: false },
+          defaulted: {},
+        },
+        toolOverrides: {
+          mcpServers: {
+            disabled: true,
+            defaulted: false,
+          },
+        },
+      }),
+    ).toEqual(["enabled", "disabled"]);
+  });
+
+  it("feeds session-enabled server names into the materialization precheck", () => {
+    const names = listMaterializableMcpServerNames({
+      servers: { "hzr-oa": { enabled: false } },
+      toolOverrides: { mcpServers: { "hzr-oa": true } },
+    });
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["hzr-oa*"],
+        mcpServerNames: names,
       }),
     ).toBe(true);
   });

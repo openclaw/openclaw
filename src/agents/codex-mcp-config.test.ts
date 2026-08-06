@@ -243,6 +243,42 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     }
   });
 
+  it("does not open the Codex bundle loader for user-server toolsAllow globs", () => {
+    // User MCP projection is separate; a matching user-server glob must not
+    // activate unrelated enabled bundled servers through this loader.
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          unrelated: {
+            type: "http",
+            url: "https://bundled.example.com/unrelated",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+    const cfg = {
+      mcp: {
+        servers: {
+          search: {
+            transport: "streamable-http",
+            url: "https://user.example.com/search",
+          },
+        },
+      },
+    } as const;
+
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg,
+      toolsEnabled: true,
+      toolsAllow: ["search*"],
+    });
+    expect(loaded.evaluated).toBe(true);
+    expect(loaded.configPatch).toBeUndefined();
+    expect(loaded.fingerprint).toBeUndefined();
+  });
+
   it("omits the config patch when no MCP servers are configured", () => {
     const loaded = loadCodexBundleMcpThreadConfig({
       workspaceDir: "/workspace",

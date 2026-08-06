@@ -1,5 +1,6 @@
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
+import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
@@ -18,6 +19,7 @@ import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare
 import {
   applyEmbeddedAttemptToolsAllow,
   shouldCreateBundleLspRuntimeForAttempt,
+  listMaterializableMcpServerNames,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -80,19 +82,40 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           isRuntimeToolAllowed(definition.function.name, effectiveToolsAllow),
         )
       : providedClientTools;
-  const bundleMcpEnabled =
-    !params.attempt.forceRestartSafeTools &&
-    shouldCreateBundleMcpRuntimeForAttempt({
-      toolsEnabled,
-      disableTools: params.attempt.disableTools || params.isRawModelRun,
-      toolsAllow: params.attempt.toolsAllow,
-    });
+  const configuredMcpServers = params.attempt.config?.mcp?.servers;
+  const configuredMcpServerNames = listMaterializableMcpServerNames({
+    servers: configuredMcpServers,
+    toolOverrides: params.attempt.toolOverrides,
+  });
   const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
   const bundleManifestRegistry =
     bundleMetadataSnapshot?.pluginIds === undefined
       ? bundleMetadataSnapshot?.manifestRegistry
       : undefined;
+  // Safe-name assignment must match getOrCreateSessionMcpRuntime: the merged
+  // enabled bundle + configured server map (declaration order), not user keys alone.
+  const mergedMcpServerNames =
+    !params.attempt.forceRestartSafeTools && configuredMcpServerNames.length > 0
+      ? Object.keys(
+          loadSessionMcpConfig({
+            workspaceDir: params.effectiveWorkspace,
+            cfg: params.attempt.config,
+            logDiagnostics: false,
+            manifestRegistry: bundleManifestRegistry,
+            toolOverrides: params.attempt.toolOverrides,
+          }).loaded.mcpServers,
+        )
+      : Object.keys(configuredMcpServers ?? {});
+  const bundleMcpEnabled =
+    !params.attempt.forceRestartSafeTools &&
+    shouldCreateBundleMcpRuntimeForAttempt({
+      toolsEnabled,
+      disableTools: params.attempt.disableTools || params.isRawModelRun,
+      toolsAllow: params.attempt.toolsAllow,
+      mcpServerNames: configuredMcpServerNames,
+      mcpDeclaredServerNames: mergedMcpServerNames,
+    });
   const bundleMcpSessionRuntime = bundleMcpEnabled
     ? await getOrCreateSessionMcpRuntime({
         sessionId: params.attempt.sessionId,
