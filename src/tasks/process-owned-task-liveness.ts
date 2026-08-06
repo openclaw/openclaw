@@ -1,4 +1,4 @@
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalSet } from "../shared/global-singleton.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 export const CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
@@ -6,7 +6,7 @@ export const CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_ma
 const ACTIVE_PROCESS_OWNED_TASK_IDS_KEY = Symbol.for("openclaw.processOwnedTaskIds");
 
 function getActiveProcessOwnedTaskIds(): Set<string> {
-  return resolveGlobalSingleton(ACTIVE_PROCESS_OWNED_TASK_IDS_KEY, () => new Set<string>());
+  return resolveGlobalSet<string>(ACTIVE_PROCESS_OWNED_TASK_IDS_KEY, "close-and-restart");
 }
 
 export function isNonResumableProcessOwnedTask(

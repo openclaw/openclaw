@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND,
@@ -117,9 +118,9 @@ describe("process-owned task liveness", () => {
       expect(requireTask(taskId).status).toBe("running");
       expect(getTaskFlowById(flowId)?.status).toBe("running");
 
-      // A crashed process cannot release ownership. Clearing the process-local
-      // generation state models the next gateway process loading durable rows.
-      resetProcessOwnedTaskLivenessForTests();
+      // SIGUSR1 keeps this Node process alive, so the gateway restart lifecycle
+      // must clear ownership before the next iteration reloads durable rows.
+      await drainGlobalSingletonLifecycleState("restart");
       expect(isProcessOwnedTaskIdActive(taskId)).toBe(false);
 
       expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
