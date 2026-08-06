@@ -15,10 +15,6 @@ import {
   testState,
   testTailscaleWhois,
 } from "./server.auth.test-helpers.js";
-import {
-  clearGatewayTailscaleIngressMode,
-  setGatewayTailscaleIngressMode,
-} from "./tailscale-ingress-state.js";
 
 async function requestModels(port: number, secret: string): Promise<Response> {
   return await fetch(`http://127.0.0.1:${port}/v1/models`, {
@@ -272,18 +268,17 @@ export function registerAuthModesSuite(): void {
           gateway: {
             auth: testState.gatewayAuth,
             controlUi: testState.gatewayControlUi,
+            trustedProxies: ["127.0.0.1"],
           },
         },
         afterWrite: { mode: "auto" },
       });
       port = await getFreePort();
       server = await startGatewayServer(port);
-      setGatewayTailscaleIngressMode(port, "serve");
     });
 
     afterAll(async () => {
       await server.close();
-      clearGatewayTailscaleIngressMode(port);
     });
 
     beforeEach(() => {

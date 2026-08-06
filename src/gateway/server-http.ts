@@ -444,10 +444,12 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadGatewayConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const resolvedAuthValue = getResolvedAuth();
       const ingressAttribution = await prepareGatewayIngressAttribution({
         req,
         trustedProxies,
         allowRealIpFallback,
+        allowVerifiedExternalServe: resolvedAuthValue.allowTailscale,
       });
       opts.ingressAttributionDiagnostics?.observe(ingressAttribution, req);
       if (ingressAttribution.kind === "unattributable-proxy") {
@@ -467,7 +469,6 @@ export function createGatewayHttpServer(opts: {
       const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
-      const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
         trustedProxies,
@@ -882,10 +883,12 @@ export function attachGatewayUpgradeHandler(opts: {
       const configSnapshot = getRuntimeConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const resolvedAuthLocal = getResolvedAuth();
       const ingressAttribution = await prepareGatewayIngressAttribution({
         req,
         trustedProxies,
         allowRealIpFallback,
+        allowVerifiedExternalServe: resolvedAuthLocal.allowTailscale,
       });
       opts.ingressAttributionDiagnostics?.observe(ingressAttribution, req);
       if (ingressAttribution.kind === "unattributable-proxy") {
@@ -903,7 +906,6 @@ export function attachGatewayUpgradeHandler(opts: {
       if (scopedNodeCapability.rewrittenUrl) {
         req.url = scopedNodeCapability.rewrittenUrl;
       }
-      const resolvedAuthLocal = getResolvedAuth();
       const requestPath = scopedNodeCapability.pathname;
       const pathContext = resolvePluginRoutePathContext(requestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);

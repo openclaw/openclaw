@@ -78,10 +78,12 @@ describe("gateway ingress attribution", () => {
     limiter.dispose();
   });
 
-  it("uses an explicitly trusted proxy when no managed Tailscale route is active", async () => {
+  it("does not use external Serve identity when permission is disabled", async () => {
     const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
     const attribution = await resolveGatewayIngressAttribution({
-      req: request({ headers: proxyHeaders }),
+      req: request({
+        headers: { ...proxyHeaders, "tailscale-user-login": "owner@example.test" },
+      }),
       trustedProxies: ["127.0.0.1"],
       tailscaleWhois,
     });
@@ -108,7 +110,11 @@ describe("gateway ingress attribution", () => {
       tailscaleWhois,
     });
 
-    expect(attribution).toMatchObject({ kind: "tailscale-serve", clientIp: "100.64.0.9" });
+    expect(attribution).toMatchObject({
+      kind: "tailscale-serve",
+      provenance: "managed-route",
+      clientIp: "100.64.0.9",
+    });
     expect(tailscaleWhois).toHaveBeenCalledOnce();
   });
 
@@ -126,6 +132,23 @@ describe("gateway ingress attribution", () => {
       clientIp: "198.51.100.10",
     });
     expect(tailscaleWhois).not.toHaveBeenCalled();
+  });
+
+  it("does not downgrade failed managed Serve verification to trusted-proxy attribution", async () => {
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({
+        headers: {
+          ...proxyHeaders,
+          "x-forwarded-for": "100.64.0.9",
+          "tailscale-user-login": "owner@example.test",
+        },
+      }),
+      trustedProxies: ["127.0.0.1"],
+      tailscaleMode: "serve",
+      tailscaleWhois: async () => null,
+    });
+
+    expect(attribution.kind).toBe("unattributable-proxy");
   });
 
   it("preserves generic trusted-proxy attribution without a Funnel marker", async () => {
@@ -163,7 +186,7 @@ describe("gateway ingress attribution", () => {
     });
   });
 
-  it("requires registered Serve provenance before running WhoIs", async () => {
+  it("preserves separately managed Serve when explicitly enabled and verified", async () => {
     const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
     const attribution = await resolveGatewayIngressAttribution({
       req: request({
@@ -173,11 +196,111 @@ describe("gateway ingress attribution", () => {
           "tailscale-user-login": "owner@example.test",
         },
       }),
+      trustedProxies: ["127.0.0.1"],
+      allowVerifiedExternalServe: true,
+      tailscaleWhois,
+    });
+
+    expect(tailscaleWhois).toHaveBeenCalledWith("100.64.0.10");
+    expect(attribution).toMatchObject({
+      kind: "tailscale-serve",
+      provenance: "verified-external-route",
+      clientIp: "100.64.0.10",
+      rateLimit: { subject: { key: "100.64.0.10", exemption: "none" } },
+      tailscaleIdentity: { login: "owner@example.test" },
+    });
+  });
+
+  it("does not infer separately managed Serve without trusted proxy provenance", async () => {
+    const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({
+        headers: {
+          ...proxyHeaders,
+          "x-forwarded-for": "100.64.0.10",
+          "tailscale-user-login": "owner@example.test",
+        },
+      }),
+      allowVerifiedExternalServe: true,
       tailscaleWhois,
     });
 
     expect(tailscaleWhois).not.toHaveBeenCalled();
     expect(attribution.kind).toBe("unattributable-proxy");
+  });
+
+  it("does not run external Serve WhoIs without an identity header", async () => {
+    const tailscaleWhois = vi.fn(async () => ({ login: "owner@example.test", name: "Owner" }));
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({ headers: proxyHeaders }),
+      trustedProxies: ["127.0.0.1"],
+      allowVerifiedExternalServe: true,
+      tailscaleWhois,
+    });
+
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+    expect(attribution.kind).toBe("trusted-proxy");
+  });
+
+  it.each([
+    ["mismatched identity", async () => ({ login: "other@example.test", name: "Other" })],
+    ["missing identity", async () => null],
+    [
+      "WhoIs failure",
+      async () => {
+        throw new Error("WhoIs unavailable");
+      },
+    ],
+  ])("fails closed for external Serve with %s", async (_name, tailscaleWhois) => {
+    const attribution = await resolveGatewayIngressAttribution({
+      req: request({
+        headers: {
+          ...proxyHeaders,
+          "x-forwarded-for": "100.64.0.10",
+          "tailscale-user-login": "owner@example.test",
+        },
+      }),
+      trustedProxies: ["127.0.0.1"],
+      allowVerifiedExternalServe: true,
+      tailscaleWhois,
+    });
+
+    expect(attribution.kind).toBe("trusted-proxy");
+  });
+
+  it("bounds and deduplicates external Serve WhoIs", async () => {
+    const resolvers: Array<() => void> = [];
+    const tailscaleWhois = vi.fn(
+      async (ip: string) =>
+        await new Promise<{ login: string; name: string } | null>((resolve) => {
+          resolvers.push(() => resolve({ login: `${ip}@example.test`, name: ip }));
+        }),
+    );
+    const lookup = (client: number) =>
+      resolveGatewayIngressAttribution({
+        req: request({
+          headers: {
+            ...proxyHeaders,
+            "x-forwarded-for": `100.64.0.${client}`,
+            "tailscale-user-login": `100.64.0.${client}@example.test`,
+          },
+        }),
+        trustedProxies: ["127.0.0.1"],
+        allowVerifiedExternalServe: true,
+        tailscaleWhois,
+      });
+
+    const first = lookup(20);
+    const duplicate = lookup(20);
+    const admitted = Array.from({ length: 7 }, (_, index) => lookup(21 + index));
+    const rejected = await lookup(28);
+
+    expect(tailscaleWhois).toHaveBeenCalledTimes(8);
+    expect(rejected.kind).toBe("trusted-proxy");
+    for (const resolve of resolvers) {
+      resolve();
+    }
+    await expect(Promise.all([first, duplicate, ...admitted])).resolves.toHaveLength(9);
   });
 
   it("requires active Funnel provenance and the sanitized marker", async () => {

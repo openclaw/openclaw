@@ -40,7 +40,10 @@ export type GatewayIngressAttribution =
   | (AttributedGatewayIngress & { kind: "direct-local" })
   | (AttributedGatewayIngress & { kind: "direct-remote" })
   | (AttributedGatewayIngress & { kind: "trusted-proxy" })
-  | (AttributedGatewayIngress & { kind: "tailscale-serve" })
+  | (AttributedGatewayIngress & {
+      kind: "tailscale-serve";
+      provenance: "managed-route" | "verified-external-route";
+    })
   | (AttributedGatewayIngress & { kind: "tailscale-funnel" })
   | {
       kind: "unattributable-proxy";
@@ -51,6 +54,59 @@ export type GatewayIngressAttribution =
     };
 
 export type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
+
+const EXTERNAL_SERVE_WHOIS_MAX_CONCURRENT = 8;
+const EXTERNAL_SERVE_WHOIS_MAX_KEYS_PER_WINDOW = 64;
+const EXTERNAL_SERVE_WHOIS_WINDOW_MS = 60_000;
+
+type ExternalServeWhoisAdmissionState = {
+  inFlight: Map<string, Promise<TailscaleWhoisIdentity | null>>;
+  admittedAt: Map<string, number>;
+};
+
+const externalServeWhoisAdmission = new WeakMap<
+  TailscaleWhoisLookup,
+  ExternalServeWhoisAdmissionState
+>();
+
+// External proxy headers arrive before credentials, so bound distinct WhoIs work
+// and share in-flight lookups instead of allowing pre-auth subprocess amplification.
+function runExternalServeWhois(
+  lookup: TailscaleWhoisLookup,
+  clientIp: string,
+): Promise<TailscaleWhoisIdentity | null> {
+  let state = externalServeWhoisAdmission.get(lookup);
+  if (!state) {
+    state = { inFlight: new Map(), admittedAt: new Map() };
+    externalServeWhoisAdmission.set(lookup, state);
+  }
+  const existing = state.inFlight.get(clientIp);
+  if (existing) {
+    return existing;
+  }
+
+  const now = Date.now();
+  for (const [key, admittedAt] of state.admittedAt) {
+    if (now - admittedAt >= EXTERNAL_SERVE_WHOIS_WINDOW_MS) {
+      state.admittedAt.delete(key);
+    }
+  }
+  if (
+    state.inFlight.size >= EXTERNAL_SERVE_WHOIS_MAX_CONCURRENT ||
+    (!state.admittedAt.has(clientIp) &&
+      state.admittedAt.size >= EXTERNAL_SERVE_WHOIS_MAX_KEYS_PER_WINDOW)
+  ) {
+    return Promise.resolve(null);
+  }
+
+  state.admittedAt.delete(clientIp);
+  state.admittedAt.set(clientIp, now);
+  const pending = lookup(clientIp).finally(() => {
+    state?.inFlight.delete(clientIp);
+  });
+  state.inFlight.set(clientIp, pending);
+  return pending;
+}
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -74,13 +130,15 @@ function hasTailscaleModeEvidence(
   return mode === "funnel" && headerValue(req.headers["tailscale-funnel-request"]) === "?1";
 }
 
-function buildAttributedIngress(params: {
-  kind: Exclude<GatewayIngressAttribution["kind"], "unattributable-proxy">;
+function buildAttributedIngress<
+  Kind extends Exclude<GatewayIngressAttribution["kind"], "unattributable-proxy">,
+>(params: {
+  kind: Kind;
   clientIp: string;
   localDirect?: boolean;
   tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
 }): AttributedGatewayIngress & {
-  kind: Exclude<GatewayIngressAttribution["kind"], "unattributable-proxy">;
+  kind: Kind;
 } {
   return {
     kind: params.kind,
@@ -119,6 +177,7 @@ async function resolveTailscaleIngress(params: {
   req: IncomingMessage;
   effectiveMode: GatewayTailscaleIngressMode;
   tailscaleWhois: TailscaleWhoisLookup;
+  externalServe?: boolean;
 }): Promise<GatewayIngressAttribution | undefined> {
   const { req, effectiveMode } = params;
   if (effectiveMode === "off" || !hasTailscaleProxyHeaders(req)) {
@@ -139,7 +198,14 @@ async function resolveTailscaleIngress(params: {
   if (!headerLogin) {
     return unattributableProxy(req.socket.remoteAddress ?? "unknown");
   }
-  const whois = await params.tailscaleWhois(clientIp);
+  let whois: TailscaleWhoisIdentity | null;
+  try {
+    whois = await (params.externalServe
+      ? runExternalServeWhois(params.tailscaleWhois, clientIp)
+      : params.tailscaleWhois(clientIp));
+  } catch {
+    return unattributableProxy(req.socket.remoteAddress ?? "unknown");
+  }
   if (!whois?.login) {
     return unattributableProxy(req.socket.remoteAddress ?? "unknown");
   }
@@ -148,21 +214,25 @@ async function resolveTailscaleIngress(params: {
   }
   const headerName = normalizeOptionalString(req.headers["tailscale-user-name"]);
   const profilePic = normalizeOptionalString(req.headers["tailscale-user-profile-pic"]);
-  return buildAttributedIngress({
-    kind: "tailscale-serve",
-    clientIp,
-    tailscaleIdentity: {
-      login: whois.login,
-      name: whois.name ?? headerName ?? whois.login,
-      ...(profilePic ? { profilePic } : {}),
-    },
-  });
+  return {
+    ...buildAttributedIngress({
+      kind: "tailscale-serve",
+      clientIp,
+      tailscaleIdentity: {
+        login: whois.login,
+        name: whois.name ?? headerName ?? whois.login,
+        ...(profilePic ? { profilePic } : {}),
+      },
+    }),
+    provenance: params.externalServe ? "verified-external-route" : "managed-route",
+  };
 }
 
 export async function resolveGatewayIngressAttribution(params: {
   req: IncomingMessage;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
+  allowVerifiedExternalServe?: boolean;
   tailscaleWhois?: TailscaleWhoisLookup;
   tailscaleMode?: GatewayTailscaleIngressMode;
 }): Promise<GatewayIngressAttribution> {
@@ -203,9 +273,28 @@ export async function resolveGatewayIngressAttribution(params: {
       params.trustedProxies,
       params.allowRealIpFallback === true,
     );
-    return clientIp
-      ? buildAttributedIngress({ kind: "trusted-proxy", clientIp })
-      : unattributableProxy(remoteAddress);
+    if (!clientIp) {
+      return unattributableProxy(remoteAddress);
+    }
+    const managedTailscaleMode =
+      params.tailscaleMode ?? readGatewayTailscaleIngressMode(req.socket.localPort);
+    if (
+      remoteIsLoopback &&
+      managedTailscaleMode === "off" &&
+      params.allowVerifiedExternalServe &&
+      hasTailscaleModeEvidence(req, "serve")
+    ) {
+      const tailscale = await resolveTailscaleIngress({
+        req,
+        effectiveMode: "serve",
+        tailscaleWhois: params.tailscaleWhois ?? readTailscaleWhoisIdentity,
+        externalServe: true,
+      });
+      if (tailscale?.kind === "tailscale-serve") {
+        return tailscale;
+      }
+    }
+    return buildAttributedIngress({ kind: "trusted-proxy", clientIp });
   }
 
   if (remoteIsLoopback && hasProxyHeaders) {
