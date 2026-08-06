@@ -87,6 +87,8 @@ type RuntimeWebProviderSelectionParams<
   resolveSecretInput: (
     params: RuntimeWebResolveSecretInputParams,
   ) => Promise<SecretResolutionResult<TSource>>;
+  /** False for inspection flows that select refs without materializing provider credentials. */
+  materializeResolvedCredentials: boolean;
   /** Writes the selected credential into the resolved runtime config snapshot. */
   setResolvedCredential: (params: {
     resolvedConfig: OpenClawConfig;
@@ -380,6 +382,25 @@ export async function resolveRuntimeWebProviderSelection<
   let selectedProvider: string | undefined;
   let selectedPath: string | undefined;
   let selectedResolution: SecretResolutionResult<TSource> | undefined;
+  const materializeResolvedCredential = (paramsToMaterialize: {
+    provider: TProvider;
+    path: string;
+    value: string;
+  }): void => {
+    if (!params.materializeResolvedCredentials) {
+      return;
+    }
+    setResolvedCredentialPath({
+      resolvedConfig: params.resolvedConfig,
+      path: paramsToMaterialize.path,
+      value: paramsToMaterialize.value,
+    });
+    params.setResolvedCredential({
+      resolvedConfig: params.resolvedConfig,
+      provider: paramsToMaterialize.provider,
+      value: paramsToMaterialize.value,
+    });
+  };
   if (params.enabled) {
     const candidates = params.configuredProvider
       ? params.providers.filter((provider) => provider.id === params.configuredProvider)
@@ -459,7 +480,11 @@ export async function resolveRuntimeWebProviderSelection<
             envVars: getProviderEnvVars(provider),
             contractDigest,
           });
-          if (fallbackResolution.source === "secretRef" && fallbackResolution.value) {
+          if (
+            params.materializeResolvedCredentials &&
+            fallbackResolution.source === "secretRef" &&
+            fallbackResolution.value
+          ) {
             // Preserve transcript/config bytes for env-selected providers while materializing refs.
             setResolvedCredentialPath({
               resolvedConfig: params.resolvedConfig,
@@ -508,14 +533,9 @@ export async function resolveRuntimeWebProviderSelection<
         selectedPath = selectedCandidatePath;
         selectedResolution = selectedCandidateResolution;
         if (selectedCandidateResolution.value) {
-          setResolvedCredentialPath({
-            resolvedConfig: params.resolvedConfig,
-            path: selectedCandidatePath,
-            value: selectedCandidateResolution.value,
-          });
-          params.setResolvedCredential({
-            resolvedConfig: params.resolvedConfig,
+          materializeResolvedCredential({
             provider,
+            path: selectedCandidatePath,
             value: selectedCandidateResolution.value,
           });
         }
@@ -527,14 +547,9 @@ export async function resolveRuntimeWebProviderSelection<
         selectedPath = selectedCandidatePath;
         selectedResolution = selectedCandidateResolution;
         if (selectedCandidateResolution.value) {
-          setResolvedCredentialPath({
-            resolvedConfig: params.resolvedConfig,
-            path: selectedCandidatePath,
-            value: selectedCandidateResolution.value,
-          });
-          params.setResolvedCredential({
-            resolvedConfig: params.resolvedConfig,
+          materializeResolvedCredential({
             provider,
+            path: selectedCandidatePath,
             value: selectedCandidateResolution.value,
           });
         }
@@ -545,14 +560,9 @@ export async function resolveRuntimeWebProviderSelection<
         selectedProvider = provider.id;
         selectedPath = selectedCandidatePath;
         selectedResolution = selectedCandidateResolution;
-        setResolvedCredentialPath({
-          resolvedConfig: params.resolvedConfig,
-          path: selectedCandidatePath,
-          value: selectedCandidateResolution.value,
-        });
-        params.setResolvedCredential({
-          resolvedConfig: params.resolvedConfig,
+        materializeResolvedCredential({
           provider,
+          path: selectedCandidatePath,
           value: selectedCandidateResolution.value,
         });
         break;

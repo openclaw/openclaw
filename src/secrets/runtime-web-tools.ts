@@ -758,6 +758,7 @@ export async function resolveRuntimeWebTools(params: {
   inspectSecretRef?: (ref: SecretRef) => string;
 }): Promise<ResolvedRuntimeWebTools> {
   const defaults = params.sourceConfig.secrets?.defaults;
+  const materializeResolvedCredentials = params.inspectSecretRef === undefined;
   const diagnostics: RuntimeWebDiagnostic[] = [];
   const degradedOwners: DegradedSecretOwner[] = [];
   const secretOwners: SecretOwnerRefState[] = [];
@@ -927,6 +928,7 @@ export async function resolveRuntimeWebTools(params: {
           providerFailuresByRefKey,
           ...(params.inspectSecretRef ? { inspectSecretRef: params.inspectSecretRef } : {}),
         }),
+      materializeResolvedCredentials,
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
         setResolvedWebSearchApiKey({
           resolvedConfig,
@@ -939,11 +941,8 @@ export async function resolveRuntimeWebTools(params: {
         if (!provider.resolveRuntimeMetadata) {
           return;
         }
-        // Inspection mode (config preflight) must not invoke provider metadata
-        // hooks: the credential is a synthetic placeholder, and a hook can
-        // side-effect or throw during `config validate` despite the non-executing
-        // contract (PR #117128 P1).
-        if (params.inspectSecretRef) {
+        // Synthetic inspection credentials must not reach plugin callbacks.
+        if (!materializeResolvedCredentials) {
           return;
         }
         Object.assign(
@@ -1074,6 +1073,7 @@ export async function resolveRuntimeWebTools(params: {
           restrictEnvRefsToEnvVars: true,
           ...(params.inspectSecretRef ? { inspectSecretRef: params.inspectSecretRef } : {}),
         }),
+      materializeResolvedCredentials,
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
         setResolvedWebFetchApiKey({
           resolvedConfig,
@@ -1086,11 +1086,8 @@ export async function resolveRuntimeWebTools(params: {
         if (!provider.resolveRuntimeMetadata) {
           return;
         }
-        // Inspection mode (config preflight) must not invoke provider metadata
-        // hooks: the credential is a synthetic placeholder, and a hook can
-        // side-effect or throw during `config validate` despite the non-executing
-        // contract (PR #117128 P1).
-        if (params.inspectSecretRef) {
+        // Synthetic inspection credentials must not reach plugin callbacks.
+        if (!materializeResolvedCredentials) {
           return;
         }
         Object.assign(
