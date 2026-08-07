@@ -19,9 +19,19 @@ export function applyDeferredFollowupToolDescriptions(
   params?: { agentId?: string },
 ): AnyAgentTool[] {
   const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
+  const hasFileWriteTool = tools.some(
+    (tool) => tool.name === "write" || tool.name === "edit" || tool.name === "apply_patch",
+  );
   return tools.map((tool) => {
     if (tool.name === "exec") {
-      return replaceDescription(tool, describeExecTool({ agentId: params?.agentId, hasCronTool }));
+      return replaceDescription(
+        tool,
+        describeExecTool({
+          agentId: params?.agentId,
+          hasCronTool,
+          hasFileWriteTool,
+        }),
+      );
     }
     if (tool.name === "process") {
       return replaceDescription(tool, describeProcessTool({ hasCronTool }));

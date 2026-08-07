@@ -530,6 +530,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "First-class tool exists: use it; never ask user for equivalent CLI/slash.",
     );
+    expect(prompt).toContain(
+      "File writes: prefer dedicated file-writing tools over shell heredocs or bash -c",
+    );
+  });
+
+  it("omits file-write advice when no file-writing tools are available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "read", "grep"],
+    });
+
+    expect(prompt).not.toContain("File writes: prefer dedicated file-writing tools");
   });
 
   it("only mentions sessions_yield wait guidance when the tool is available", () => {
@@ -1737,7 +1749,11 @@ describe("buildAgentSystemPrompt", () => {
         containerWorkspaceDir: "/workspace",
         workspaceAccess: "ro",
         agentWorkspaceMount: "/agent",
-        elevated: { allowed: true, defaultLevel: "on", fullAccessAvailable: true },
+        elevated: {
+          allowed: true,
+          defaultLevel: "on",
+          fullAccessAvailable: true,
+        },
       },
     });
 
