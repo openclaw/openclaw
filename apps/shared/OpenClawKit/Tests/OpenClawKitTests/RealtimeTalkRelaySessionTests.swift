@@ -85,6 +85,18 @@ private actor RealtimeRelayStartupRequestLog {
     }
 }
 
+private actor RealtimeRelayRouteFlag {
+    private var isCurrent = true
+
+    func expire() {
+        self.isCurrent = false
+    }
+
+    func value() -> Bool {
+        self.isCurrent
+    }
+}
+
 private func unusedRealtimeRelayTransport() -> RealtimeTalkRelayTransport {
     RealtimeTalkRelayTransport(
         subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
@@ -646,6 +658,40 @@ struct RealtimeTalkRelaySessionTests {
         await send.value
 
         #expect(await requests.snapshot().isEmpty)
+    }
+
+    @Test func `gateway route lost during startup fails instead of reporting ready`() async throws {
+        let route = RealtimeRelayRouteFlag()
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in
+                    // The Gateway replaces the route immediately after the subscription lands.
+                    await route.expire()
+                    return AsyncStream { $0.finish() }
+                },
+                request: { _, _, _ in Data("{\"ok\":true}".utf8) },
+                isCurrent: { await route.value() }),
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+
+        do {
+            try await session.start()
+            Issue.record("Expected a lost Gateway route to fail startup")
+        } catch is CancellationError {
+            // The runtime returns silently on CancellationError, so classifying route loss as
+            // cancellation would leave Talk marked listening with no relay and no fallback.
+            Issue.record("Route loss must not surface as local cancellation")
+        } catch {
+            #expect(
+                error.localizedDescription ==
+                    "Gateway connection was replaced before realtime startup finished")
+        }
+
+        #expect(!audioCapture.isStarted)
     }
 
     @Test func `appended audio timestamps stay whole milliseconds`() async throws {

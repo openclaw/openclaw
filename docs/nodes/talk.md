@@ -40,6 +40,35 @@ stopping Talk releases the camera and microphone tracks.
 - Replies are written to WebChat (same as typing).
 - **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.
 
+## Realtime Talk over the Gateway relay (macOS)
+
+macOS defaults to the native path above: Apple Speech recognition, Gateway chat, and `talk.speak`
+playback. It switches to a streamed realtime session only when `talk.realtime` selects all three
+of these together:
+
+| Key         | Required value  |
+| ----------- | --------------- |
+| `mode`      | `realtime`      |
+| `transport` | `gateway-relay` |
+| `brain`     | `agent-consult` |
+
+Any other combination — including a partially set one — keeps the native path.
+
+The Gateway must also advertise `gateway-relay` and `agent-consult` for the selected provider in
+`talk.catalog`. Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the
+Talk runtime returns before startup and the native path is the only one available.
+
+### When realtime cannot start
+
+Talk never silently sits idle. If the relay fails to start — no Gateway route, rejected
+credentials, or an unsupported model — the failure is logged, the overlay shows the reason, and
+Talk falls back to the native speech path for that session.
+
+Once a session is running, a dropped relay reconnects on a bounded retry schedule (roughly 0.5 s
+then 2 s). If those attempts are exhausted, the overlay reports
+`Realtime disconnected repeatedly — using native speech` and the next start bypasses realtime.
+Losing the microphone mid-session closes the relay and takes the same route.
+
 ## Voice directives in replies
 
 The assistant can prefix a reply with a single JSON line to control voice:

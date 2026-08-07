@@ -204,6 +204,15 @@ public final class RealtimeTalkRelaySession {
         case cancelled
     }
 
+    /// Startup abandons for two very different reasons and callers must not treat them alike.
+    /// Local cancellation is caller-initiated and stays silent; a lost Gateway route is an
+    /// external failure the runtime has to see, or Talk reports listening with no relay behind it.
+    private enum LifecycleStatus {
+        case current
+        case cancelledLocally
+        case routeLost
+    }
+
     private nonisolated static let expectedInputEncoding = "pcm16"
     private nonisolated static let expectedOutputEncoding = "pcm16"
     private nonisolated static let defaultSampleRateHz = 24000
@@ -303,17 +312,25 @@ public final class RealtimeTalkRelaySession {
         self.pendingPreRelayEvents.removeAll()
         self.onStatus("Connecting realtime…")
         let eventStream = await self.transport.subscribeServerEvents(200)
-        guard await self.isCurrentLifecycle(lifecycleGeneration) else { return }
+        switch await self.lifecycleStatus(lifecycleGeneration) {
+        case .current: break
+        case .cancelledLocally: return
+        case .routeLost: throw Self.gatewayRouteLostError()
+        }
         self.startEventPump(stream: eventStream, lifecycleGeneration: lifecycleGeneration)
         do {
             let result = try await self.createRelaySession()
-            guard await self.isCurrentLifecycle(lifecycleGeneration) else {
+            let statusAfterCreate = await self.lifecycleStatus(lifecycleGeneration)
+            if statusAfterCreate != .current {
                 if let relaySessionId = result.relaysessionid?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !relaySessionId.isEmpty
                 {
                     await Self.closeRelaySession(
                         transport: self.transport,
                         relaySessionId: relaySessionId)
+                }
+                if statusAfterCreate == .routeLost {
+                    throw Self.gatewayRouteLostError()
                 }
                 return
             }
@@ -332,7 +349,11 @@ public final class RealtimeTalkRelaySession {
             try self.startMicrophonePump(lifecycleGeneration: lifecycleGeneration)
             self.onStatus("Waiting for realtime…")
             await self.drainPendingPreRelayEvents(lifecycleGeneration: lifecycleGeneration)
-            guard await self.isCurrentLifecycle(lifecycleGeneration) else { return }
+            switch await self.lifecycleStatus(lifecycleGeneration) {
+            case .current: break
+            case .cancelledLocally: return
+            case .routeLost: throw Self.gatewayRouteLostError()
+            }
             switch await self.waitForStartupResult(
                 timeoutSeconds: Self.startupReadyTimeoutSeconds,
                 lifecycleGeneration: lifecycleGeneration)
@@ -347,7 +368,9 @@ public final class RealtimeTalkRelaySession {
                 return
             }
         } catch {
-            guard await self.isCurrentLifecycle(lifecycleGeneration) else { return }
+            // A lost route must still surface: swallowing here would discard both the original
+            // failure and the route loss, leaving the runtime with nothing to fall back from.
+            if await self.lifecycleStatus(lifecycleGeneration) == .cancelledLocally { return }
             let createdRelaySessionId = self.relaySessionId
             self.close(sendClose: false)
             if let createdRelaySessionId {
@@ -390,6 +413,14 @@ public final class RealtimeTalkRelaySession {
         }
         self.relaySessionId = nil
         self.onSpeakingChanged(false)
+    }
+
+    /// Deliberately not a `CancellationError`: the runtime treats those as caller-initiated and
+    /// returns silently, while any other error routes Talk to its native fallback.
+    private nonisolated static func gatewayRouteLostError() -> NSError {
+        NSError(domain: "RealtimeTalkRelay", code: 7, userInfo: [
+            NSLocalizedDescriptionKey: "Gateway connection was replaced before realtime startup finished",
+        ])
     }
 
     private nonisolated static func closeRelaySession(
@@ -884,11 +915,15 @@ public final class RealtimeTalkRelaySession {
         return try JSONDecoder().decode(type, from: response)
     }
 
-    private func isCurrentLifecycle(_ lifecycleGeneration: UInt64) async -> Bool {
-        guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return false }
+    private func lifecycleStatus(_ lifecycleGeneration: UInt64) async -> LifecycleStatus {
+        guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return .cancelledLocally }
         let routeIsCurrent = await self.transport.isCurrent()
-        return self.isCurrentLifecycleLocally(lifecycleGeneration) &&
-            routeIsCurrent
+        guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return .cancelledLocally }
+        return routeIsCurrent ? .current : .routeLost
+    }
+
+    private func isCurrentLifecycle(_ lifecycleGeneration: UInt64) async -> Bool {
+        await self.lifecycleStatus(lifecycleGeneration) == .current
     }
 
     private func isCurrentLifecycleLocally(_ lifecycleGeneration: UInt64) -> Bool {
