@@ -27,6 +27,13 @@ An explicit `agents.defaults.workspace` value takes precedence over
 `OPENCLAW_WORKSPACE_DIR`. Use the environment variable to point default agents
 at a mounted workspace when you do not want to write that path into config.
 
+Path conventions (applies to every workspace and directory setting, including
+`agents.entries.*.workspace`): a leading `~` expands to the OS home directory
+on every platform, so the tilde examples in these docs are portable — on
+Windows, `~/.openclaw/workspace` resolves under the Windows profile directory
+(for example `C:\Users\<name>\.openclaw\workspace`). Absolute paths, including
+Windows drive paths such as `C:\openclaw\workspace`, are used as-is.
+
 ### `agents.defaults.repoRoot`
 
 Optional repository root shown in the system prompt's Runtime line. If unset, OpenClaw auto-detects by walking upward from the workspace.
