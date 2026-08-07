@@ -1,4 +1,7 @@
 // Cron edit register tests cover cron edit command registration and option wiring.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
@@ -52,6 +55,33 @@ describe("cron edit command", () => {
       id: "job-1",
       patch: { pacing: { min: "30m", max: "4h" } },
     });
+  });
+
+  it("preserves existing trigger.once when only the script body is replaced (#119916)", async () => {
+    const scriptPath = path.join(
+      await fs.promises.mkdtemp(path.join(os.tmpdir(), "cron-edit-cli-")),
+      "next.js",
+    );
+    await fs.promises.writeFile(scriptPath, "return { fire: true };", "utf8");
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return { id: "job-1", trigger: { script: "return { fire: false };", once: true } };
+      }
+      return { ok: true };
+    });
+
+    await createCronProgram().parseAsync(["edit", "job-1", "--trigger-script", scriptPath], {
+      from: "user",
+    });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "cron.update",
+      expect.anything(),
+      expect.objectContaining({
+        id: "job-1",
+        patch: { trigger: { script: "return { fire: true };", once: true } },
+      }),
+    );
   });
 
   it("reuses one versioned snapshot for combined pacing and tool edits", async () => {
