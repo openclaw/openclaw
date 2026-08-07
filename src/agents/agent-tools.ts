@@ -642,7 +642,7 @@ export function createOpenClawCodingToolsInternal(
   const ownerOnlyCoreToolPolicy =
     ownerOnlyCoreToolDenylist.length > 0 ? { deny: ownerOnlyCoreToolDenylist } : undefined;
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
-    capabilityProfile.policy.explicitToolAllowlist,
+    capabilityProfile.policy.pluginToolDiscoveryAllowlist,
     runtimePluginToolGrant,
   );
   const pluginToolDenylist = [

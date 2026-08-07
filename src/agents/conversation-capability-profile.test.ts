@@ -231,6 +231,7 @@ describe("resolveConversationCapabilityProfile", () => {
 
     expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
     expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
+    expect(profile.policy.pluginToolDiscoveryAllowlist).toEqual(["pdf"]);
   });
 
   it("adds runtime tools without replacing the configured tool surface", () => {
@@ -291,6 +292,7 @@ describe("resolveConversationCapabilityProfile", () => {
 
       expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
+      expect(profile.policy.pluginToolDiscoveryAllowlist).toContain("image_generate");
       expect(profile.policy.delegated).toBe(true);
       expect(profile.policy.requesterPolicySource).toBe("persisted-child");
     } finally {
