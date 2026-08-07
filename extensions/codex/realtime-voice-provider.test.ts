@@ -9,16 +9,30 @@ import { buildCodexRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 function createRuntime(
   options: {
     missingSession?: boolean;
+    nativeConnectFailure?: Error;
+    replaceSessionBeforeRunFailure?: Record<string, unknown>;
+    runFailureBeforeReady?: Error;
     sessionHarnessId?: string;
     patchSessionHarnessId?: string;
   } = {},
 ) {
   let attempt: Record<string, unknown> | undefined;
   let nativeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+  let storedEntry: Record<string, unknown> | undefined = options.missingSession
+    ? undefined
+    : {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        agentHarnessId: options.sessionHarnessId ?? "codex",
+      };
   const nativeBridge: RealtimeVoiceBridge = {
     acknowledgeMark: vi.fn(),
     close: vi.fn(),
-    connect: vi.fn(async () => {}),
+    connect: vi.fn(async () => {
+      if (options.nativeConnectFailure) {
+        throw options.nativeConnectFailure;
+      }
+    }),
     isConnected: vi.fn(() => true),
     sendAudio: vi.fn(),
     setMediaTimestamp: vi.fn(),
@@ -31,6 +45,10 @@ function createRuntime(
       onBridgeReady: (bridge: RealtimeVoiceBridge) => void;
     };
     nativeRequest = realtimeVoice.request;
+    if (options.runFailureBeforeReady) {
+      storedEntry = options.replaceSessionBeforeRunFailure ?? storedEntry;
+      throw options.runFailureBeforeReady;
+    }
     realtimeVoice.onBridgeReady(nativeBridge);
     await new Promise<void>((resolve) => {
       const signal = params.abortSignal as AbortSignal;
@@ -38,23 +56,30 @@ function createRuntime(
     });
     return {};
   });
+  let patchCalls = 0;
   const patchSessionEntry = vi.fn(
     async (params: {
       fallbackEntry: { sessionId: string; updatedAt: number };
+      replaceEntry?: boolean;
       update: (entry: {
         sessionId: string;
         updatedAt: number;
+        agentHarnessId?: string;
       }) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
     }) => {
-      const currentEntry = options.missingSession
-        ? params.fallbackEntry
-        : {
-            sessionId: "session-1",
-            updatedAt: Date.now(),
-            agentHarnessId: options.patchSessionHarnessId ?? options.sessionHarnessId ?? "codex",
-          };
+      patchCalls += 1;
+      const currentEntry = {
+        ...(storedEntry ?? params.fallbackEntry),
+        ...(patchCalls === 1 && options.patchSessionHarnessId
+          ? { agentHarnessId: options.patchSessionHarnessId }
+          : {}),
+      } as { sessionId: string; updatedAt: number; agentHarnessId?: string };
       const patch = await params.update(currentEntry);
-      return patch ? { ...currentEntry, ...patch } : null;
+      if (!patch) {
+        return storedEntry ?? null;
+      }
+      storedEntry = params.replaceEntry ? { ...patch } : { ...currentEntry, ...patch };
+      return storedEntry;
     },
   );
   const runtime = {
@@ -66,14 +91,7 @@ function createRuntime(
       runEmbeddedAgent,
       session: {
         resolveStorePath: () => "/tmp/sessions.json",
-        getSessionEntry: () =>
-          options.missingSession
-            ? undefined
-            : {
-                sessionId: "session-1",
-                updatedAt: Date.now(),
-                agentHarnessId: options.sessionHarnessId ?? "codex",
-              },
+        getSessionEntry: () => storedEntry,
         patchSessionEntry,
       },
     },
@@ -85,6 +103,7 @@ function createRuntime(
     runEmbeddedAgent,
     getAttempt: () => attempt,
     getNativeRequest: () => nativeRequest,
+    getStoredEntry: () => storedEntry,
   };
 }
 
@@ -172,6 +191,7 @@ describe("Codex realtime voice provider", () => {
       cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } } as never,
       agentId: "main",
       sessionKey: "agent:main:new-voice",
+      senderId: "discord-user-1",
       senderIsOwner: true,
       providerConfig: {},
       onAudio: vi.fn(),
@@ -197,6 +217,7 @@ describe("Codex realtime voice provider", () => {
     const bridge = provider.createBridge({
       cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } } as never,
       sessionKey: "agent:main:owned",
+      senderId: "discord-user-1",
       senderIsOwner: true,
       providerConfig: {},
       onAudio: vi.fn(),
@@ -209,19 +230,20 @@ describe("Codex realtime voice provider", () => {
     expect(harness.runEmbeddedAgent.mock.calls).toHaveLength(0);
   });
 
-  it("fails closed without an owner-authorized sender", async () => {
+  it("fails closed without a verified owner identity", async () => {
     const harness = createRuntime();
     const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
     const bridge = provider.createBridge({
       cfg: {} as never,
       sessionKey: "agent:main:voice",
+      senderIsOwner: true,
       providerConfig: {},
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });
 
     await expect(bridge.connect()).rejects.toThrow(
-      "Codex realtime voice requires an owner-authorized bound OpenClaw session",
+      "Codex realtime voice requires a verified owner identity on a bound OpenClaw session",
     );
     expect(harness.runEmbeddedAgent).not.toHaveBeenCalled();
   });
@@ -232,6 +254,7 @@ describe("Codex realtime voice provider", () => {
     const bridge = provider.createBridge({
       cfg: {} as never,
       sessionKey: "agent:main:raced",
+      senderId: "discord-user-1",
       senderIsOwner: true,
       providerConfig: {},
       onAudio: vi.fn(),
@@ -242,5 +265,72 @@ describe("Codex realtime voice provider", () => {
       "Codex realtime voice cannot replace session agent:main:raced owner openclaw",
     );
     expect(harness.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("rolls back a new session claim when startup fails before the bridge is ready", async () => {
+    const harness = createRuntime({
+      missingSession: true,
+      runFailureBeforeReady: new Error("startup failed"),
+    });
+    const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
+    const bridge = provider.createBridge({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } } as never,
+      sessionKey: "agent:main:failed-voice",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+      providerConfig: {},
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await expect(bridge.connect()).rejects.toThrow("startup failed");
+    expect(harness.patchSessionEntry).toHaveBeenCalledTimes(2);
+    expect(harness.getStoredEntry()).toEqual({ sessionId: "", updatedAt: expect.any(Number) });
+  });
+
+  it("does not roll back over a newer session claim", async () => {
+    const successor = {
+      sessionId: "successor-session",
+      updatedAt: Date.now() + 1,
+      agentHarnessId: "codex",
+    };
+    const harness = createRuntime({
+      missingSession: true,
+      replaceSessionBeforeRunFailure: successor,
+      runFailureBeforeReady: new Error("older startup failed"),
+    });
+    const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
+    const bridge = provider.createBridge({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } } as never,
+      sessionKey: "agent:main:raced-rollback",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+      providerConfig: {},
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await expect(bridge.connect()).rejects.toThrow("older startup failed");
+    expect(harness.getStoredEntry()).toEqual(successor);
+  });
+
+  it("rolls back when the native realtime bridge itself fails to connect", async () => {
+    const harness = createRuntime({
+      missingSession: true,
+      nativeConnectFailure: new Error("realtime start failed"),
+    });
+    const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
+    const bridge = provider.createBridge({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } } as never,
+      sessionKey: "agent:main:native-start-failed",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+      providerConfig: {},
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await expect(bridge.connect()).rejects.toThrow("realtime start failed");
+    expect(harness.getStoredEntry()).toEqual({ sessionId: "", updatedAt: expect.any(Number) });
   });
 });

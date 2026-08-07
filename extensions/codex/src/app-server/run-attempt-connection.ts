@@ -27,6 +27,7 @@ import { resolveCodexBindingAppServerConnection } from "./binding-connection.js"
 import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
+  enableCodexRealtimeConversation,
   resolveCodexAppServerHomeScope,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
@@ -188,8 +189,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
-  const resolveRuntimeOptionsForBinding = (selection: { modelProvider?: string; model?: string }) =>
-    applyStoredBindingPermissions({
+  const resolveRuntimeOptionsForBinding = (selection: {
+    modelProvider?: string;
+    model?: string;
+  }) => {
+    const appServer = applyStoredBindingPermissions({
       appServer: resolveCodexBindingAppServerConnection({
         binding: startupBinding,
         pluginConfig,
@@ -203,6 +207,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       binding: startupBinding,
       execPolicyTouched: execPolicy.touched,
     });
+    return params.realtimeVoice ? enableCodexRealtimeConversation(appServer) : appServer;
+  };
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
   const preparedAuthRoute = usesSupervisionConnection
@@ -400,8 +406,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;
     model?: string;
-  }) =>
-    applyStoredBindingPermissions({
+  }) => {
+    const currentBindingAppServer = applyStoredBindingPermissions({
       appServer: resolveCodexBindingAppServerConnection({
         binding: mutable.startupBinding,
         pluginConfig,
@@ -415,6 +421,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       binding: mutable.startupBinding,
       execPolicyTouched: execPolicy.touched,
     });
+    return params.realtimeVoice
+      ? enableCodexRealtimeConversation(currentBindingAppServer)
+      : currentBindingAppServer;
+  };
   return {
     params,
     options,

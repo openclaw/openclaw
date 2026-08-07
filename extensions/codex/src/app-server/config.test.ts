@@ -9,6 +9,7 @@ import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
+  enableCodexRealtimeConversation,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -72,6 +73,30 @@ function expectRuntimePolicy(
 }
 
 describe("Codex app-server config", () => {
+  it("enables realtime conversation only for spawned app-server clients", () => {
+    const stdio = resolveRuntimeForTest();
+    const enabled = enableCodexRealtimeConversation(stdio);
+
+    expect(enabled.start.args).toEqual([
+      "app-server",
+      "--listen",
+      "stdio://",
+      "--enable",
+      "realtime_conversation",
+    ]);
+    expect(enableCodexRealtimeConversation(enabled)).toBe(enabled);
+
+    const websocket = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+    });
+    expect(enableCodexRealtimeConversation(websocket)).toBe(websocket);
+  });
+
   it("only auto-approves app-server approvals for full yolo runtime policy", () => {
     expect(
       shouldAutoApproveCodexAppServerApprovals({

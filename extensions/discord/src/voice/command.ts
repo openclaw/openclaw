@@ -13,6 +13,7 @@ import {
   type CommandOptions,
 } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
+import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadLikeChannelContext } from "../monitor/thread-channel-context.js";
@@ -50,7 +51,10 @@ async function authorizeVoiceCommand(
   interaction: CommandInteraction,
   params: VoiceCommandContext,
   options?: { channelOverride?: VoiceCommandChannelOverride },
-): Promise<{ ok: boolean; message?: string; guildId?: string }> {
+): Promise<
+  | { ok: false; message: string }
+  | { ok: true; guildId: string; senderId: string; senderIsOwner: boolean }
+> {
   const channelOverride = options?.channelOverride;
   const channel = channelOverride ? undefined : interaction.channel;
   if (!interaction.guild) {
@@ -102,7 +106,16 @@ async function authorizeVoiceCommand(
     return { ok: false, message: access.message };
   }
 
-  return { ok: true, guildId: interaction.guild.id };
+  return {
+    ok: true,
+    guildId: interaction.guild.id,
+    senderId: sender.id,
+    senderIsOwner: resolveDiscordOwnerAccess({
+      allowFrom: voiceAccess.ownerAllowFrom,
+      sender,
+      allowNameMatching: false,
+    }).ownerAllowed,
+  };
 }
 
 async function resolveVoiceCommandRuntimeContext(
@@ -186,15 +199,6 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         await interaction.reply({ content: "That is not a voice channel.", ephemeral: true });
         return;
       }
-      const guildId = access.guildId ?? ("guildId" in channel ? channel.guildId : undefined);
-      if (!guildId) {
-        await interaction.reply({
-          content: "Unable to resolve guild for this voice channel.",
-          ephemeral: true,
-        });
-        return;
-      }
-
       const manager = params.getManager();
       if (!manager) {
         await interaction.reply({
@@ -204,7 +208,15 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         return;
       }
 
-      const result = await manager.join({ guildId, channelId: channel.id });
+      const result = await manager.join(
+        { guildId: access.guildId, channelId: channel.id },
+        {
+          requester: {
+            senderId: access.senderId,
+            senderIsOwner: access.senderIsOwner,
+          },
+        },
+      );
       await interaction.reply({ content: result.message, ephemeral: true });
     }
   }

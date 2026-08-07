@@ -74,6 +74,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseTerminalEmitted = false;
   private audioQueue: Buffer[] = [];
   private queuedAudioBytes = 0;
+  private activeAudioBytes = 0;
   private audioDrainActive = false;
 
   constructor(
@@ -123,7 +124,10 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!this.connected || this.terminal || audio.length === 0) {
       return;
     }
-    if (this.queuedAudioBytes + audio.length > CODEX_REALTIME_MAX_QUEUED_AUDIO_BYTES) {
+    if (
+      this.activeAudioBytes + this.queuedAudioBytes + audio.length >
+      CODEX_REALTIME_MAX_QUEUED_AUDIO_BYTES
+    ) {
       this.fail(new Error("Codex realtime voice input audio queue exceeded two seconds"));
       return;
     }
@@ -263,19 +267,24 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     try {
       while (this.connected && !this.terminal && this.queuedAudioBytes > 0) {
         const audio = this.takeQueuedAudio(CODEX_REALTIME_AUDIO_RPC_BYTES);
-        await this.client.request(
-          "thread/realtime/appendAudio",
-          {
-            threadId: this.threadId,
-            audio: {
-              data: audio.toString("base64"),
-              sampleRate: CODEX_REALTIME_SAMPLE_RATE_HZ,
-              numChannels: CODEX_REALTIME_CHANNELS,
-              samplesPerChannel: Math.floor(audio.length / 2),
+        this.activeAudioBytes = audio.length;
+        try {
+          await this.client.request(
+            "thread/realtime/appendAudio",
+            {
+              threadId: this.threadId,
+              audio: {
+                data: audio.toString("base64"),
+                sampleRate: CODEX_REALTIME_SAMPLE_RATE_HZ,
+                numChannels: CODEX_REALTIME_CHANNELS,
+                samplesPerChannel: Math.floor(audio.length / 2),
+              },
             },
-          },
-          { signal: this.signal, timeoutMs: CODEX_REALTIME_AUDIO_RPC_TIMEOUT_MS },
-        );
+            { signal: this.signal, timeoutMs: CODEX_REALTIME_AUDIO_RPC_TIMEOUT_MS },
+          );
+        } finally {
+          this.activeAudioBytes = 0;
+        }
       }
     } catch (error) {
       this.fail(error);
@@ -329,6 +338,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.connected = false;
     this.audioQueue = [];
     this.queuedAudioBytes = 0;
+    this.activeAudioBytes = 0;
     this.request.onClose?.(reason);
     this.completion.resolve(reason);
   }

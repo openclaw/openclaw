@@ -1295,7 +1295,10 @@ describe("DiscordVoiceManager", () => {
     const manager = createAgentProxyManager();
     const onUtterance = vi.fn();
 
-    await manager.join({ guildId: "g1", channelId: "1001" });
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { requester: { senderId: "u-owner", senderIsOwner: true } },
+    );
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       { transcripts: { sessionId: "notes-1", onUtterance } },
@@ -1304,6 +1307,7 @@ describe("DiscordVoiceManager", () => {
     const rawBridgeParams = bridgeParams as unknown as Record<string, unknown>;
     expect(rawBridgeParams.agentId).toBe("agent-1");
     expect(rawBridgeParams.sessionKey).toBe("discord:g1:c1");
+    expect(rawBridgeParams.senderId).toBe("u-owner");
     expect(rawBridgeParams.senderIsOwner).toBe(true);
     expect(bridgeParams.autoRespondToAudio).toBe(true);
     expect(bridgeParams.tools).toEqual([]);
@@ -1326,6 +1330,8 @@ describe("DiscordVoiceManager", () => {
       ),
     );
     beginSpeakerTurn(entry, { senderIsOwner: false });
+    expect(realtimeSessionMock.sendAudio).toHaveBeenCalledOnce();
+    beginSpeakerTurn(entry, { senderIsOwner: true, userId: "u-other-owner" });
     expect(realtimeSessionMock.sendAudio).toHaveBeenCalledOnce();
   });
 

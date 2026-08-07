@@ -165,7 +165,7 @@ describe("Codex app-server realtime voice bridge", () => {
     await bridge.connect();
 
     bridge.sendAudio(Buffer.alloc(4_800));
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 19; index += 1) {
       bridge.sendAudio(Buffer.alloc(4_800));
     }
     expect(

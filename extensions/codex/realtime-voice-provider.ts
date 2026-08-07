@@ -38,12 +38,16 @@ async function resolveBoundVoiceRun(params: {
   runtime: PluginRuntime;
   request: RealtimeVoiceBridgeCreateRequest;
   abortSignal: AbortSignal;
+  isStartupCommitted: () => boolean;
   onBridgeReady: (bridge: RealtimeVoiceBridge) => void;
 }) {
   const cfg = params.request.cfg;
   const sessionKey = params.request.sessionKey?.trim();
-  if (!cfg || !sessionKey || params.request.senderIsOwner !== true) {
-    throw new Error("Codex realtime voice requires an owner-authorized bound OpenClaw session");
+  const senderId = normalizeOptionalString(params.request.senderId);
+  if (!cfg || !sessionKey || !senderId || params.request.senderIsOwner !== true) {
+    throw new Error(
+      "Codex realtime voice requires a verified owner identity on a bound OpenClaw session",
+    );
   }
   const agentId = params.request.agentId?.trim() || "main";
   const storePath = params.runtime.agent.session.resolveStorePath(cfg.session?.store, {
@@ -98,33 +102,57 @@ async function resolveBoundVoiceRun(params: {
   const workspaceDir = params.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = params.runtime.agent.resolveAgentDir(cfg, agentId);
   const timeoutMs = params.runtime.agent.resolveAgentTimeoutMs({ cfg });
-  return await params.runtime.agent.runEmbeddedAgent({
-    sessionId: sessionEntry.sessionId,
-    sessionKey,
-    sessionTarget: { agentId, sessionId: sessionEntry.sessionId, sessionKey, storePath },
-    sandboxSessionKey: sessionKey,
-    agentId,
-    messageProvider: "voice",
-    ...(params.request.senderId ? { senderId: params.request.senderId } : {}),
-    senderIsOwner: true,
-    workspaceDir,
-    agentDir,
-    config: cfg,
-    prompt: "",
-    provider: modelRef.provider,
-    model: modelRef.model,
-    modelSelectionLocked: sessionEntry.modelSelectionLocked === true,
-    agentHarnessId: "codex",
-    agentHarnessRuntimeOverride: "codex",
-    timeoutMs,
-    runId: `codex-realtime-voice:${randomUUID()}`,
-    lane: "voice",
-    abortSignal: params.abortSignal,
-    realtimeVoice: {
-      request: params.request,
-      onBridgeReady: params.onBridgeReady,
-    },
-  });
+  try {
+    return await params.runtime.agent.runEmbeddedAgent({
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionTarget: { agentId, sessionId: sessionEntry.sessionId, sessionKey, storePath },
+      sandboxSessionKey: sessionKey,
+      agentId,
+      messageProvider: "voice",
+      senderId,
+      senderIsOwner: true,
+      workspaceDir,
+      agentDir,
+      config: cfg,
+      prompt: "",
+      provider: modelRef.provider,
+      model: modelRef.model,
+      modelSelectionLocked: sessionEntry.modelSelectionLocked === true,
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+      timeoutMs,
+      runId: `codex-realtime-voice:${randomUUID()}`,
+      lane: "voice",
+      abortSignal: params.abortSignal,
+      realtimeVoice: {
+        request: params.request,
+        onBridgeReady: (bridge) => {
+          params.onBridgeReady(bridge);
+        },
+      },
+    });
+  } finally {
+    if (!params.isStartupCommitted()) {
+      await params.runtime.agent.session.patchSessionEntry({
+        agentId,
+        sessionKey,
+        storePath,
+        fallbackEntry: { sessionId: "", updatedAt: now },
+        replaceEntry: true,
+        update: (current) => {
+          if (
+            current.agentHarnessId !== "codex" ||
+            current.sessionId !== sessionEntry.sessionId ||
+            current.updatedAt !== sessionEntry.updatedAt
+          ) {
+            return null;
+          }
+          return sessionEntryBeforeClaim ?? { sessionId: "", updatedAt: now };
+        },
+      });
+    }
+  }
 }
 
 class CodexBoundRealtimeVoiceBridge implements RealtimeVoiceBridge {
@@ -135,6 +163,7 @@ class CodexBoundRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private inner?: RealtimeVoiceBridge;
   private run?: Promise<unknown>;
   private closed = false;
+  private startupCommitted = false;
   private readonly audioFormat;
   private readonly codexRequest: RealtimeVoiceBridgeCreateRequest;
 
@@ -173,6 +202,7 @@ class CodexBoundRealtimeVoiceBridge implements RealtimeVoiceBridge {
       runtime: this.runtime,
       request: this.codexRequest,
       abortSignal: this.abortController.signal,
+      isStartupCommitted: () => this.startupCommitted,
       onBridgeReady: resolveBridge,
     }).catch((error: unknown) => {
       const normalized = error instanceof Error ? error : new Error(formatErrorMessage(error));
@@ -189,7 +219,14 @@ class CodexBoundRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.inner.close();
       throw new Error("Codex realtime voice bridge was closed during startup");
     }
-    await this.inner.connect();
+    try {
+      await this.inner.connect();
+      this.startupCommitted = true;
+    } catch (error) {
+      this.abortController.abort(error);
+      await this.run.catch(() => undefined);
+      throw error;
+    }
   }
 
   sendAudio(audio: Buffer): void {

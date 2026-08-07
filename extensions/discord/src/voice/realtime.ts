@@ -390,6 +390,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       discordConfig: DiscordAccountConfig;
       entry: VoiceSessionEntry;
       mode: Exclude<DiscordVoiceMode, "stt-tts">;
+      requester?: { senderId: string; senderIsOwner: boolean };
       bootstrapContextInstructions?: string;
       getHumanParticipantCount?: () => number;
       onTerminalError: (error: Error) => void;
@@ -466,6 +467,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         surface: "bridge",
       })?.handlesAgentTurns === true;
     this.providerHandlesAgentTurns = providerHandlesAgentTurns;
+    const directAgentRequester = providerHandlesAgentTurns ? this.params.requester : undefined;
+    if (
+      providerHandlesAgentTurns &&
+      (!directAgentRequester?.senderId.trim() || !directAgentRequester.senderIsOwner)
+    ) {
+      throw new Error("Direct-agent realtime voice requires a verified owner to start the session");
+    }
     const isAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
     const defaultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = isAgentProxy
       ? "owner"
@@ -515,7 +523,9 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       cfg: this.params.cfg,
       agentId: this.params.entry.route.agentId,
       sessionKey: this.params.entry.route.sessionKey,
-      ...(providerHandlesAgentTurns ? { senderIsOwner: true } : {}),
+      ...(directAgentRequester
+        ? { senderId: directAgentRequester.senderId.trim(), senderIsOwner: true }
+        : {}),
       providerConfig: resolved.providerConfig,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions,
@@ -692,7 +702,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
   }
 
   beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
-    if (this.providerHandlesAgentTurns && !context.senderIsOwner) {
+    const directAgentSenderId = this.params.requester?.senderId.trim();
+    if (
+      this.providerHandlesAgentTurns &&
+      (!context.senderIsOwner || !directAgentSenderId || userId !== directAgentSenderId)
+    ) {
       logger.warn(
         `discord voice: direct-agent audio denied guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${userId} speaker=${context.speakerLabel}`,
       );
