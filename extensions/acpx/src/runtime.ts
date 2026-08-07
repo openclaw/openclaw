@@ -72,6 +72,7 @@ const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSI
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
+  discardPersistedRecord: (sessionKey: string) => Promise<void>;
 };
 
 type OpenClawLeaseSessionMetadata = {
@@ -366,6 +367,23 @@ function createResetAwareSessionStore(
       if (normalized) {
         freshSessionKeys.add(normalized);
       }
+    },
+    async discardPersistedRecord(sessionKey: string): Promise<void> {
+      const normalized = sessionKey.trim();
+      if (!normalized) {
+        return;
+      }
+      freshSessionKeys.add(normalized);
+      const record = await baseStore.load(normalized);
+      if (!record || readRecordResetOnNextEnsure(record)) {
+        return;
+      }
+      await baseStore.save({
+        ...record,
+        closed: true,
+        closedAt: new Date().toISOString(),
+        acpx: { ...record.acpx, reset_on_next_ensure: true },
+      });
     },
   };
 }
@@ -1765,7 +1783,7 @@ export class AcpxRuntime implements AcpRuntime {
     // Fresh reset has no ACP handle to close the delegate's upstream client.
     // Keep the scoped delegate reachable so the next ensure can replace it;
     // close() owns cache release when the session lifecycle ends.
-    this.sessionStore.markFresh(input.sessionKey);
+    await this.sessionStore.discardPersistedRecord(input.sessionKey);
   }
 
   async close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
