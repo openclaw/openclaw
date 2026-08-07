@@ -32,7 +32,7 @@
     "visionModel": {
       "label": "Vision Model",
       "placeholder": "codex/gpt-5.6-sol",
-      "help": "provider/model used to read snapshots. Any image-capable media-understanding provider works; providers without a bespoke structured-extraction implementation use the shared model-backed path. Defaults to the first image-capable Codex entry under tools.media."
+      "help": "provider/model used to read snapshots. Most image-capable media-understanding providers work; providers without a bespoke structured-extraction implementation use the shared model-backed path. MiniMax's MiniMax-VL-01 is the exception: it answers multi-image requests one image at a time, so it cannot serve Logbook's multi-frame batches. Defaults to the first image-capable Codex entry under tools.media."
     },
     "captureEnabled": {
       "label": "Capture Enabled",

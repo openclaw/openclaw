@@ -158,4 +158,48 @@ describe("extractStructuredWithImageModel", () => {
       ),
     ).rejects.toThrow("Structured extraction JSON did not match schema");
   });
+
+  // A MiniMax-VL-01 route answers a multi-image request with one call per image
+  // and joins the replies as `Image N:` text, which can never be one JSON
+  // document. Logbook samples up to 16 frames per call, so this is its real
+  // shape on that provider.
+  it("refuses multi-image structured extraction on a split-response route", async () => {
+    await expect(
+      extractStructuredWithImageModel(
+        baseRequest({
+          provider: "minimax",
+          model: "MiniMax-VL-01",
+          input: [baseImageInput(), baseImageInput()],
+        }),
+      ),
+    ).rejects.toThrow("Provider does not support structured extraction: minimax");
+    // Refused before spending a call, not after failing at the JSON parser.
+    expect(mocks.describeImagesWithModel).not.toHaveBeenCalled();
+  });
+
+  it("still allows single-image structured extraction on a split-response route", async () => {
+    // One image gets the model's bare text back, with no `Image N:` prefix, so
+    // it parses like any other provider and must not be blocked.
+    mocks.describeImagesWithModel.mockResolvedValueOnce({
+      text: '{"summary":"ok"}',
+      model: "MiniMax-VL-01",
+    });
+
+    await expect(
+      extractStructuredWithImageModel(baseRequest({ provider: "minimax", model: "MiniMax-VL-01" })),
+    ).resolves.toMatchObject({ parsed: { summary: "ok" }, contentType: "json" });
+    expect(mocks.describeImagesWithModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves multi-image structured extraction alone on atomic routes", async () => {
+    mocks.describeImagesWithModel.mockResolvedValueOnce({
+      text: '{"summary":"ok"}',
+      model: "claude-sonnet-5",
+    });
+
+    await expect(
+      extractStructuredWithImageModel(baseRequest({ input: [baseImageInput(), baseImageInput()] })),
+    ).resolves.toMatchObject({ parsed: { summary: "ok" } });
+    expect(mocks.describeImagesWithModel).toHaveBeenCalledTimes(1);
+  });
 });

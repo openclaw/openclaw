@@ -7,6 +7,7 @@
 // unsupported disabled-reasoning payload, for example -- and structured
 // extraction has to honour it, otherwise the fallback would resend exactly the
 // payload that hook exists to remove.
+import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { describeImagesWithModel } from "./image-runtime.js";
@@ -35,6 +36,23 @@ function isStructuredTextInput(
 
 function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Routes whose image executor answers a MULTI-image request with one call per
+ * image and joins the replies as `Image N:` text (see describeImagesWithMinimax
+ * in image.ts). Structured extraction needs one JSON document for the whole
+ * request, which a joined transcript can never be, so those routes keep the
+ * dispatcher's explicit unsupported error instead of failing later at
+ * JSON.parse with a message that blames the model.
+ *
+ * Deliberately scoped to multi-image requests only. The same executor returns
+ * the model's bare text for a single image, with no `Image N:` prefix and no
+ * "describe image N of M" prompt suffix, so single-image structured extraction
+ * on these routes parses like any other provider and stays supported.
+ */
+function splitsMultiImageRequests(provider: string, model: string): boolean {
+  return isMinimaxVlmModel(provider, model);
 }
 
 /** Builds the extraction prompt from instructions, schema, and any text inputs. */
@@ -131,6 +149,12 @@ async function runStructuredExtraction(
   const images = req.input.filter(isStructuredImageInput);
   if (images.length === 0) {
     throw new Error("Structured extraction requires at least one image input.");
+  }
+  // Refuse before spending any provider call, and with the same message the
+  // dispatcher used before this fallback existed, so a split-response route is
+  // unchanged rather than newly broken at the JSON parser.
+  if (images.length > 1 && splitsMultiImageRequests(req.provider, model)) {
+    throw new Error(`Provider does not support structured extraction: ${req.provider}`);
   }
   req.signal?.throwIfAborted();
 

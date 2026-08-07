@@ -155,16 +155,16 @@ text.
 All Logbook config keys are optional. Numeric values are rounded to integers
 and clamped to the supported range.
 
-| Key                       | Default | Range or values         | Behavior                                                                                     |
-| ------------------------- | ------- | ----------------------- | -------------------------------------------------------------------------------------------- |
-| `captureEnabled`          | `true`  | boolean                 | Persistent master switch for new snapshots; the timeline remains available when `false`      |
-| `captureIntervalSeconds`  | `30`    | `5`-`600`               | Delay between capture attempts                                                               |
-| `analysisIntervalMinutes` | `15`    | `3`-`120`               | Target observation window; gaps and midnight can close it earlier                            |
-| `nodeId`                  | unset   | node id or display name | Pins capture to one connected node; matching is case-insensitive                             |
-| `screenIndex`             | `0`     | `0`-`16`                | Zero-based display index                                                                     |
-| `maxWidth`                | `1440`  | `480`-`3840`            | Requested capture size cap; headless macOS applies it to the largest dimension               |
-| `visionModel`             | unset   | `provider/model`        | Explicit structured route; any image-capable provider works; malformed refs pause analysis   |
-| `retentionDays`           | `14`    | `1`-`365`               | Deletes old frames; cards, observations, and standups remain                                 |
+| Key                       | Default | Range or values         | Behavior                                                                                    |
+| ------------------------- | ------- | ----------------------- | ------------------------------------------------------------------------------------------- |
+| `captureEnabled`          | `true`  | boolean                 | Persistent master switch for new snapshots; the timeline remains available when `false`     |
+| `captureIntervalSeconds`  | `30`    | `5`-`600`               | Delay between capture attempts                                                              |
+| `analysisIntervalMinutes` | `15`    | `3`-`120`               | Target observation window; gaps and midnight can close it earlier                           |
+| `nodeId`                  | unset   | node id or display name | Pins capture to one connected node; matching is case-insensitive                            |
+| `screenIndex`             | `0`     | `0`-`16`                | Zero-based display index                                                                    |
+| `maxWidth`                | `1440`  | `480`-`3840`            | Requested capture size cap; headless macOS applies it to the largest dimension              |
+| `visionModel`             | unset   | `provider/model`        | Explicit structured route; most image-capable providers work; malformed refs pause analysis |
+| `retentionDays`           | `14`    | `1`-`365`               | Deletes old frames; cards, observations, and standups remain                                |
 
 Without `nodeId`, Logbook prefers a connected app node exposing
 `screen.snapshot`, then falls back to a headless node exposing
@@ -183,10 +183,17 @@ Step 2 stays Codex-only: the borrowed default is drawn from image-capable Codex
 entries under `tools.media.models`, and other providers are not borrowed
 automatically.
 
-An explicit `visionModel` is not restricted that way. Any image-capable media
-provider can serve it. Providers shipping their own structured-extraction
+An explicit `visionModel` is not restricted that way. Most image-capable media
+providers can serve it. Providers shipping their own structured-extraction
 implementation use it; the rest route through the shared model-backed path, the
 same fallback that already backs `describeImage` and `describeImages`.
+
+One exception: MiniMax's `MiniMax-VL-01` route issues one request per image and
+joins the replies as `Image N:` text, which cannot be a single JSON document.
+Logbook sends up to 16 frames per analysis call, so that route is rejected up
+front with `Provider does not support structured extraction: minimax` rather
+than failing later at the JSON parser. Single-image structured extraction on
+MiniMax is unaffected.
 
 Setting `tools.media.image.enabled: false` disables borrowed media defaults, but
 an explicit Logbook `visionModel` still applies.
