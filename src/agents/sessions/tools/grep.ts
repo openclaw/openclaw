@@ -51,6 +51,10 @@ const grepSchema = Type.Object({
 });
 const DEFAULT_LIMIT = 100;
 
+// Cap file reads during grep context rendering at 50 MiB to prevent OOM from
+// large binary files or oversized text files that grep would match against.
+const MAX_GREP_FILE_BYTES = 50 * 1024 * 1024;
+
 /**
  * Pluggable operations for the grep tool.
  * Override these to delegate search to remote systems (for example SSH).
@@ -62,9 +66,21 @@ export interface GrepOperations {
   readFile: (absolutePath: string) => Promise<string> | string;
 }
 
-const defaultGrepOperations: GrepOperations = {
+/** @internal Exported for testing */
+export const defaultGrepOperations: GrepOperations = {
   isDirectory: (p) => statSync(p).isDirectory(),
-  readFile: (p) => readFileSync(p, "utf-8"),
+  readFile: (p) => {
+    const stats = statSync(p);
+    if (!stats.isFile()) {
+      throw new Error(`not a regular file: ${p}`);
+    }
+    if (stats.size > MAX_GREP_FILE_BYTES) {
+      throw new Error(
+        `file too large (${stats.size} bytes > ${MAX_GREP_FILE_BYTES} byte limit): ${p}`,
+      );
+    }
+    return readFileSync(p, "utf-8");
+  },
 };
 
 export interface GrepToolOptions {
