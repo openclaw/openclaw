@@ -248,6 +248,28 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("bypasses env proxy for whitespace-separated NO_PROXY hosts", async () => {
+    const release = vi.fn();
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("ok", { status: 200 }),
+      release,
+    });
+    vi.stubEnv("HTTPS_PROXY", "http://env-proxy.example:8080");
+    vi.stubEnv("NO_PROXY", "accounts.google.com oauth2.googleapis.com");
+
+    const guardedFetch = await createGoogleAuthTransportFetch();
+    await guardedFetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+    } as RequestInit);
+
+    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherPolicy: undefined,
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("releases guarded auth fetch resources even when callers do not consume the body", async () => {
     const release = vi.fn();
     mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
