@@ -123,7 +123,7 @@ export function createWorkerSessionPlacementStore(
     ...createPlacementWorkspaceJournalOps(runtime, {
       hasMatchingRetainedFailedResultOwner: hasMatchingRetainedFailedWorkspaceResultOwner,
     }),
-    ...createPlacementWorkspaceResultOps(runtime),
+    ...createPlacementWorkspaceResultOps(runtime, { signalTurnClaimRelease }),
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));

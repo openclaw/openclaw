@@ -9,7 +9,6 @@ import {
   transitionValues,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
-import { signalTurnClaimRelease } from "./placement-turn-claims.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 
 type WorkspaceResultDatabase = Pick<
@@ -19,7 +18,7 @@ type WorkspaceResultDatabase = Pick<
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
-export type WorkerWorkspacePendingResult = {
+type WorkerWorkspacePendingResult = {
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;
@@ -32,7 +31,7 @@ export type WorkerWorkspacePendingResult = {
   stagedResultRef: string | null;
 };
 
-export type WorkerWorkspaceResultOwnerIdentity = Pick<
+type WorkerWorkspaceResultOwnerIdentity = Pick<
   WorkerWorkspacePendingResult,
   "environmentId" | "ownerEpoch" | "placementGeneration"
 >;
@@ -212,7 +211,10 @@ function markWorkerWorkspacePendingResultAccepted(
   }
 }
 
-export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime) {
+export function createPlacementWorkspaceResultOps(
+  runtime: PlacementStoreRuntime,
+  deps: { signalTurnClaimRelease: (path: string, sessionId: string) => void },
+) {
   const { instanceId, now, path, read, write } = runtime;
   const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
     const row = executeSqliteQuerySync(
@@ -423,7 +425,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         };
       });
       if (outcome.releasedClaim) {
-        signalTurnClaimRelease(path, pending.sessionId);
+        deps.signalTurnClaimRelease(path, pending.sessionId);
       }
       return outcome.record;
     },

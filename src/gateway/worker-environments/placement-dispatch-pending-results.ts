@@ -471,7 +471,10 @@ export async function recoverPendingWorkspaceResults(
       });
     } catch (error) {
       const operatorRecoveryError = findWorkerWorkspaceOperatorRecoveryError(error);
-      if (operatorRecoveryError) {
+      if (
+        operatorRecoveryError &&
+        (placement?.state === "active" || placement?.state === "draining")
+      ) {
         failure.recordRetainedResultFailure(placement, operatorRecoveryError);
       }
       // Keep the result, claim, and environment fenced. The next sweep retries.
