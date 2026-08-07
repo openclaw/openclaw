@@ -40,7 +40,12 @@ import {
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
+import {
+  parseStructuredNextcloudTalkBody,
+  resolveExplicitNextcloudTalkMention,
+} from "./structured-body.js";
 import type { CoreConfig, NextcloudTalkInboundMessage, NextcloudTalkRoomConfig } from "./types.js";
+import { resolveNextcloudTalkBotActorId } from "./webhook-url.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
@@ -141,6 +146,14 @@ export async function handleNextcloudTalkInbound(params: {
   if (!rawBody) {
     return;
   }
+  const botIds = new Set([resolveNextcloudTalkBotActorId(account.config)]);
+  const parsedBody = parseStructuredNextcloudTalkBody(rawBody, botIds);
+  // For structured bodies use the stripped/substituted text; fall back to rawBody for plain text.
+  const effectiveBody = parsedBody.structured ? parsedBody.text : rawBody;
+  const commandBody = parsedBody.structured ? parsedBody.commandText : rawBody;
+  if (!effectiveBody) {
+    return;
+  }
 
   const roomKind = await resolveNextcloudTalkRoomKind({
     account,
@@ -164,7 +177,10 @@ export async function handleNextcloudTalkInbound(params: {
     cfg: config as OpenClawConfig,
     surface: CHANNEL_ID,
   });
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const hasControlCommand = core.channel.text.hasControlCommand(
+    commandBody,
+    config as OpenClawConfig,
+  );
   const shouldRequireMention = isGroup
     ? resolveNextcloudTalkGroupRequireMention({
         cfg: config as OpenClawConfig,
@@ -299,10 +315,24 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
+  // A structured message that is nothing but mention placeholders produces an empty
+  // effectiveBody after stripping. Treat it as a mention-only ping with no actionable
+  // content and drop it silently — the agent has nothing to respond to.
+  if (parsedBody.structured && effectiveBody === "") {
+    runtime.log?.(`nextcloud-talk: drop room ${roomToken} (mention-only, no message body)`);
+    return;
+  }
+
+  const explicitMention = resolveExplicitNextcloudTalkMention({
+    mentionEntries: parsedBody.mentionEntries,
+    account,
+  });
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
-  const wasMentioned = mentionRegexes.length
-    ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
-    : false;
+  const wasMentioned =
+    explicitMention ||
+    (mentionRegexes.length
+      ? core.channel.mentions.matchesMentionPatterns(commandBody, mentionRegexes)
+      : false);
   if (isGroup) {
     access = await resolveAccess(wasMentioned);
   }
@@ -326,7 +356,7 @@ export async function handleNextcloudTalkInbound(params: {
     channel: "Nextcloud Talk",
     from: fromLabel,
     timestamp: message.timestamp,
-    body: rawBody,
+    body: effectiveBody,
   });
 
   const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
@@ -347,7 +377,12 @@ export async function handleNextcloudTalkInbound(params: {
       routeSessionKey: route.sessionKey,
     },
     reply: { to: `nextcloud-talk:${roomToken}`, originatingTo: `nextcloud-talk:${roomToken}` },
-    message: { body, bodyForAgent: rawBody, rawBody, commandBody: rawBody },
+    message: {
+      body,
+      bodyForAgent: effectiveBody,
+      rawBody: effectiveBody,
+      commandBody,
+    },
     access: {
       commands: { authorized: commandAuthorized },
       mentions: { canDetectMention: isGroup, wasMentioned: isGroup && wasMentioned },

@@ -1,4 +1,5 @@
 // Nextcloud Talk tests cover inbound.behavior plugin behavior.
+import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutboundReplyPayload, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -49,15 +50,12 @@ vi.mock("./room-info.js", async () => {
 
 function installRuntime(params?: {
   buildMentionRegexes?: () => RegExp[];
-  hasControlCommand?: (body: string) => boolean;
+  hasControlCommand?: (body?: string) => boolean;
   matchesMentionPatterns?: (body: string, regexes: RegExp[]) => boolean;
   shouldHandleTextCommands?: () => boolean;
 }) {
-  const runtime = {
+  const runtime = createPluginRuntimeMock({
     channel: {
-      inbound: {
-        dispatchReply: vi.fn(async () => undefined),
-      },
       pairing: {
         readAllowFromStore: vi.fn(async () => []),
         upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
@@ -73,7 +71,7 @@ function installRuntime(params?: {
         matchesMentionPatterns: params?.matchesMentionPatterns ?? vi.fn(() => false),
       },
     },
-  };
+  });
   setNextcloudTalkRuntime(runtime as unknown as PluginRuntime);
   return runtime;
 }
@@ -233,6 +231,84 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
   });
 
+  it("does not let structured display names satisfy mention gating", async () => {
+    const matchesMentionPatterns = vi.fn((body: string) => /openclaw/i.test(body));
+    const mentionRegexes = [/openclaw/i];
+    const coreRuntime = installRuntime({
+      buildMentionRegexes: vi.fn(() => mentionRegexes),
+      matchesMentionPatterns,
+    });
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+    const runtime = createRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-group",
+        roomName: "Ops",
+        isGroupChat: true,
+        text: JSON.stringify({
+          message: "ask {mention0}",
+          parameters: {
+            mention0: { type: "user", id: "alice", name: "OpenClaw" },
+          },
+        }),
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-1"],
+          apiUser: "agent",
+        },
+      }),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+    });
+
+    expect(matchesMentionPatterns).toHaveBeenCalledWith("ask _", mentionRegexes);
+    expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("nextcloud-talk: drop room room-group (no mention)");
+  });
+
+  it("matches literal mention text in a structured message", async () => {
+    const mentionRegexes = [/@openclaw/i];
+    const coreRuntime = installRuntime({
+      buildMentionRegexes: vi.fn(() => mentionRegexes),
+      matchesMentionPatterns: vi.fn((body: string) => mentionRegexes[0]?.test(body) ?? false),
+    });
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-group",
+        roomName: "Ops",
+        isGroupChat: true,
+        text: JSON.stringify({ message: "@openclaw help", parameters: {} }),
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["user-1"],
+        },
+      }),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(coreRuntime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks unauthorized group text control commands even when room sender access allows chat", async () => {
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
     const coreRuntime = installRuntime({
@@ -277,6 +353,45 @@ describe("nextcloud-talk inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "nextcloud-talk: drop control command (unauthorized) target=user-1",
     );
+  });
+
+  it("does not interpret rich-object display names as control commands", async () => {
+    const hasControlCommand = vi.fn((body = "") => body.startsWith("/"));
+    const coreRuntime = installRuntime({ hasControlCommand });
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+
+    const config = { channels: { "nextcloud-talk": {} } } as CoreConfig;
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        text: JSON.stringify({
+          message: "{object0}",
+          parameters: {
+            object0: { type: "file", name: "/reset" },
+          },
+        }),
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["user-1"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config,
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(hasControlCommand).toHaveBeenCalledWith("_", config);
+    const assembledRequest = requireFirstMockArg(
+      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+      "Nextcloud Talk assembled request",
+    ) as { ctxPayload: { BodyForAgent?: unknown; CommandBody?: unknown } };
+    expect(assembledRequest.ctxPayload.BodyForAgent).toBe("/reset");
+    expect(assembledRequest.ctxPayload.CommandBody).toBe("_");
   });
 
   it("passes the shared reply pipeline for dispatched replies", async () => {
@@ -421,5 +536,78 @@ describe("nextcloud-talk inbound behavior", () => {
         replyTo: "reply-1",
       },
     ]);
+  });
+
+  it("keeps group visible-reply delivery on the shared message-tool policy and its fallback", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+    const cfg = {
+      messages: {
+        groupChat: { visibleReplies: "message_tool" },
+      },
+      channels: {
+        "nextcloud-talk": {
+          rooms: {
+            "room-group": {
+              allowFrom: ["user-1"],
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-group",
+        roomName: "Ops",
+        isGroupChat: true,
+        text: "hello team",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          rooms: {
+            "room-group": {
+              allowFrom: ["user-1"],
+              requireMention: false,
+            },
+          },
+        },
+      }),
+      config: cfg,
+      runtime: createRuntimeEnv(),
+    });
+
+    const assembledRequest = requireFirstMockArg(
+      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+      "Nextcloud Talk assembled request",
+    ) as {
+      ctxPayload: Parameters<typeof resolveChannelMessageSourceReplyDeliveryMode>[0]["ctx"];
+      replyOptions?: unknown;
+    };
+
+    expect(assembledRequest.replyOptions).not.toHaveProperty("sourceReplyDeliveryMode");
+    expect(
+      resolveChannelMessageSourceReplyDeliveryMode({
+        cfg,
+        ctx: assembledRequest.ctxPayload,
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveChannelMessageSourceReplyDeliveryMode({
+        cfg,
+        ctx: assembledRequest.ctxPayload,
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
   });
 });
