@@ -769,6 +769,40 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("restores originalPath to path when persisting user turn media", async () => {
+    const params = baseParams();
+    params.ctx.ThreadHistoryBody = undefined;
+    params.ctx.media = [
+      {
+        path: "/tmp/staged.png",
+        originalPath: "/tmp/input.png",
+        workspaceDir: "/tmp/workspace",
+      },
+    ];
+    params.sessionCtx.ThreadHistoryBody = undefined;
+
+    await runPreparedReply(params);
+
+    const call = requireRunReplyAgentCall();
+    const persisted = call.followupRun.userTurnTranscriptRecorder?.message;
+    expect(persisted).toMatchObject({
+      role: "user",
+      content: "",
+      __openclaw: {
+        media: [
+          expect.objectContaining({
+            path: "/tmp/input.png",
+          }),
+        ],
+      },
+    });
+    const fact = (persisted as { __openclaw?: { media?: unknown[] } })?.__openclaw?.media?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(fact).not.toHaveProperty("originalPath");
+    expect(fact).not.toHaveProperty("workspaceDir");
+  });
+
   it.each([
     "discord",
     "telegram",

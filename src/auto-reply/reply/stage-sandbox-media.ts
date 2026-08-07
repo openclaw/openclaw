@@ -29,6 +29,7 @@ const SCP_STDERR_TAIL_CHARS = 16_384;
 // partial failures without matching rewritten strings back to source paths.
 export type StageSandboxMediaResult = {
   staged: ReadonlyMap<number, string>;
+  hostWorkspaceStagingDir?: string;
 };
 
 const EMPTY_STAGE_RESULT: StageSandboxMediaResult = { staged: new Map() };
@@ -158,6 +159,18 @@ export async function stageSandboxMedia(params: {
   }
 
   if (staged.size === 0) {
+    if (hostWorkspaceStagingDir) {
+      const absolutePath = path.resolve(effectiveWorkspaceDir, hostWorkspaceStagingDir);
+      await fs.rm(absolutePath, { recursive: true, force: true }).catch((error: unknown) => {
+        const errorCode =
+          error instanceof Error && "code" in error && typeof error.code === "string"
+            ? error.code
+            : "UNKNOWN";
+        logVerbose(
+          `[host-staging-cleanup] Failed to clean up empty host workspace staging directory recursively: ${path.basename(absolutePath)} (${errorCode})`,
+        );
+      });
+    }
     return { staged };
   }
 
@@ -168,6 +181,7 @@ export async function stageSandboxMedia(params: {
       nextMedia[index] = {
         ...fact,
         path: stagedPath,
+        ...(hostWorkspaceStagingDir ? { originalPath: fact.originalPath ?? fact.path } : {}),
         ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
         workspaceDir: effectiveWorkspaceDir,
       };
@@ -178,7 +192,12 @@ export async function stageSandboxMedia(params: {
     applyStagedMediaContext(sessionCtx, nextMedia);
   }
 
-  return { staged };
+  return {
+    staged,
+    hostWorkspaceStagingDir: hostWorkspaceStagingDir
+      ? path.resolve(effectiveWorkspaceDir, hostWorkspaceStagingDir)
+      : undefined,
+  };
 }
 
 async function isUrlAliasForStagedSource(params: {

@@ -1,5 +1,6 @@
 // Tests get-reply message hooks before and after agent execution.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { logVerbose } from "../../globals.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
@@ -188,6 +189,8 @@ async function resetMessageHookTestState() {
 }
 
 describe("getReplyFromConfig message hooks", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   let enrichedHookCase: {
     transcribed: ReturnType<typeof hookEventCall>;
     preprocessed: ReturnType<typeof hookEventCall>;
@@ -873,5 +876,61 @@ describe("getReplyFromConfig message hooks", () => {
         message.includes("link understanding failed, proceeding with raw content"),
       ),
     ).toBe(true);
+  });
+
+  it("cleans up hostWorkspaceStagingDir in finally block when getReply completes", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const { markCompleteReplyConfig } = await import("./get-reply-fast-path.test-support.js");
+
+    const tempDir = tempDirs.make("openclaw-test-staging-");
+    await expect(fs.stat(tempDir)).resolves.toBeDefined();
+
+    // Write a dummy file to ensure the directory is not empty
+    await fs.writeFile(path.join(tempDir, "staged-file.txt"), "content");
+
+    vi.mocked(stageSandboxMediaMock).mockResolvedValueOnce({
+      staged: new Map(),
+      hostWorkspaceStagingDir: tempDir,
+    });
+
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "body",
+        abortKey: "session-id",
+        from: "telegram:user",
+        to: "telegram:local",
+        senderId: "telegram:user",
+        commandSource: "native",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+        provider: "openai",
+        model: "gpt-4o-mini",
+      }),
+    );
+
+    console.error(`[real-host-mode-lifecycle-proof] Created staging directory: ${tempDir}`);
+    console.error(
+      `[real-host-mode-lifecycle-proof] Staging directory exists before reply: ${await fs
+        .stat(tempDir)
+        .then(() => true)
+        .catch(() => false)}`,
+    );
+
+    const reply = await getReplyFromConfig(
+      buildCtx({ SessionKey: "session-id" }),
+      undefined,
+      markCompleteReplyConfig({}, { runtimeMode: "full" }),
+    );
+
+    expect(reply).toEqual({ text: "ok" });
+    const existsAfter = await fs
+      .stat(tempDir)
+      .then(() => true)
+      .catch(() => false);
+    console.error(
+      `[real-host-mode-lifecycle-proof] Staging directory exists after reply: ${existsAfter}`,
+    );
+    await expect(fs.stat(tempDir)).rejects.toThrow();
   });
 });
