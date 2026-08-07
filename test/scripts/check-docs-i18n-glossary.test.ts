@@ -258,4 +258,59 @@ describe("check-docs-i18n-glossary", () => {
       "docs:check-i18n-glossary: git diff --name-only --diff-filter=ACMR missing-ref -- docs failed: fatal: invalid revision",
     );
   });
+
+  it("reports the exit code when git fails without stderr", async () => {
+    const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeGitFixture(
+      binDir,
+      'if (process.argv[2] === "show") { process.exit(1); }\nprocess.exit(0);\n',
+    );
+
+    const git = createGitRunner({
+      timeoutMs: 500,
+      env: {
+        ...process.env,
+        PATH: binDir,
+      },
+    });
+
+    await expect(git(["show", "HEAD:docs/example.md"])).rejects.toThrow(
+      "docs:check-i18n-glossary: git show HEAD:docs/example.md failed: git exited with code 1",
+    );
+  });
+
+  it("preserves the runner cause when spawning git fails without stderr", async () => {
+    const runSpy = vi.spyOn(managedChildProcess, "runManagedCommand");
+    runSpy.mockRejectedValue(
+      Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" }) as never,
+    );
+    try {
+      const runGit = createGitRunner({ cwd: process.cwd() });
+      await expect(runGit(["show", "HEAD:docs/example.md"])).rejects.toThrow(
+        "docs:check-i18n-glossary: git show HEAD:docs/example.md failed: spawn git ENOENT",
+      );
+    } finally {
+      runSpy.mockRestore();
+    }
+  });
+
+  it("preserves process-cleanup failures without stderr", async () => {
+    const runSpy = vi.spyOn(managedChildProcess, "runManagedCommand");
+    runSpy.mockRejectedValue(
+      new AggregateError(
+        [new Error("spawn git ENOENT")],
+        "Managed command setup failed and its process tree could not be cleaned up",
+      ) as never,
+    );
+    try {
+      const runGit = createGitRunner({ cwd: process.cwd() });
+      await expect(runGit(["show", "HEAD:docs/example.md"])).rejects.toThrow(
+        "docs:check-i18n-glossary: git show HEAD:docs/example.md failed: Managed command setup failed and its process tree could not be cleaned up",
+      );
+    } finally {
+      runSpy.mockRestore();
+    }
+  });
 });

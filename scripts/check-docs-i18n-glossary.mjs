@@ -58,9 +58,18 @@ function createGitError(args, error, timeoutMs) {
     error?.signal === "SIGTERM" ||
     /timed out|timeout/i.test(String(error?.message ?? ""));
   const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
-  const message = timedOut
-    ? `docs:check-i18n-glossary: git ${formatGitArgs(args)} timed out after ${timeoutMs}ms.`
-    : `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed${stderr ? `: ${stderr}` : "."}`;
+  let message;
+  if (timedOut) {
+    message = `docs:check-i18n-glossary: git ${formatGitArgs(args)} timed out after ${timeoutMs}ms.`;
+  } else if (stderr) {
+    message = `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed: ${stderr}`;
+  } else {
+    // Raw spawn and process-tree cleanup failures can reject without stderr;
+    // keep the runner's cause so a missing git executable or failed cleanup
+    // stays actionable instead of degrading to a generic command failure.
+    const cause = String(error?.message ?? "").trim();
+    message = `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed${cause ? `: ${cause}` : "."}`;
+  }
   const wrapped = new Error(message, { cause: error });
   wrapped.timedOut = timedOut;
   return wrapped;
