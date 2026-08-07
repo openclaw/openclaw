@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
@@ -71,7 +72,20 @@ async function hasConfiguredCurrentSourceChannel(
   if (!isConfiguredChannel(input.cfg, provider)) {
     return false;
   }
-  if (!resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })) {
+  const outboundPlugin = resolveOutboundChannelPlugin({
+    channel: provider,
+    cfg: input.cfg,
+    allowBootstrap: true,
+  });
+  const plugin =
+    outboundPlugin ??
+    getLoadedChannelPlugin(provider as Parameters<typeof getLoadedChannelPlugin>[0]);
+  const hasOutbound = Boolean(plugin?.outbound);
+  const handlesAction =
+    Boolean(plugin?.actions?.handleAction) &&
+    plugin?.actions?.supportsAction?.({ action: input.action as any }) !== false;
+
+  if (!hasOutbound && !handlesAction) {
     return false;
   }
   const configuredChannels = await listConfiguredMessageChannels(input.cfg);
