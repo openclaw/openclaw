@@ -69,6 +69,92 @@ describe("nextcloud-talk send error responses", () => {
       },
     );
   });
+
+  it("omits send error body snippet when body exceeds 8 KiB limit", async () => {
+    // A body larger than the 8 KiB (8192) cap triggers the truncated path,
+    // which must suppress the snippet so no boundary-straddling secret prefix leaks.
+    const body = "X".repeat(8300);
+
+    await withServer(
+      (request, response) => {
+        expect(request.url).toBe("/ocs/v2.php/apps/spreed/api/v1/bot/abc123/message");
+        request.resume();
+        response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        response.end(body);
+      },
+      async (baseUrl) => {
+        await expect(
+          sendMessageNextcloudTalk("room:abc123", "hello", {
+            cfg: createTalkConfig(baseUrl),
+            timeoutMs: REQUEST_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow("Nextcloud Talk: bad request - invalid message format");
+      },
+    );
+  });
+
+  it("redacts reflected HMAC signature from short send error bodies", async () => {
+    // A body under 8 KiB that echoes the X-Nextcloud-Talk-Bot-Signature
+    // header must have the signature hex replaced with [redacted].
+    await withServer(
+      (request, response) => {
+        const sig = request.headers["x-nextcloud-talk-bot-signature"] ?? "";
+        expect(request.url).toBe("/ocs/v2.php/apps/spreed/api/v1/bot/abc123/message");
+        request.resume();
+        response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        response.end(`error: ${sig} is not valid`);
+      },
+      async (baseUrl) => {
+        await expect(
+          sendMessageNextcloudTalk("room:abc123", "hello", {
+            cfg: createTalkConfig(baseUrl),
+            timeoutMs: REQUEST_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow(/\[redacted\]/);
+      },
+    );
+  });
+
+  it("omits reaction error body snippet when body exceeds 8 KiB limit", async () => {
+    const body = "Y".repeat(8300);
+
+    await withServer(
+      (request, response) => {
+        expect(request.url).toBe("/ocs/v2.php/apps/spreed/api/v1/bot/abc123/reaction/m-1");
+        request.resume();
+        response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        response.end(body);
+      },
+      async (baseUrl) => {
+        await expect(
+          sendReactionNextcloudTalk("room:abc123", "m-1", "👍", {
+            cfg: createTalkConfig(baseUrl),
+            timeoutMs: REQUEST_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow("Nextcloud Talk reaction failed: 400");
+      },
+    );
+  });
+
+  it("redacts reflected HMAC signature from short reaction error bodies", async () => {
+    await withServer(
+      (request, response) => {
+        const sig = request.headers["x-nextcloud-talk-bot-signature"] ?? "";
+        expect(request.url).toBe("/ocs/v2.php/apps/spreed/api/v1/bot/abc123/reaction/m-1");
+        request.resume();
+        response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+        response.end(`error: ${sig} is not valid`);
+      },
+      async (baseUrl) => {
+        await expect(
+          sendReactionNextcloudTalk("room:abc123", "m-1", "👍", {
+            cfg: createTalkConfig(baseUrl),
+            timeoutMs: REQUEST_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow(/\[redacted\]/);
+      },
+    );
+  });
 });
 
 describe("nextcloud-talk send fetch timeouts", () => {
