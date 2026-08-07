@@ -64,7 +64,13 @@ export function createLineBot(opts: LineBotOptions): LineBot {
           ? { turnAdoptionLifecycle: control.turnAdoptionLifecycle }
           : {}),
         groupHistories,
-        historyLimit: cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        // Account then channel then global, matching the documented precedence in
+        // docs/gateway/config-channels.md. Reading only the global value made the
+        // per-channel override parse and do nothing.
+        historyLimit:
+          account.config.historyLimit ??
+          cfg.messages?.groupChat?.historyLimit ??
+          DEFAULT_GROUP_HISTORY_LIMIT,
       }),
   });
   spool.start();

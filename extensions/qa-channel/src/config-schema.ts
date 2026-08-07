@@ -27,6 +27,7 @@ const QaChannelAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    historyLimit: z.number().int().min(0).optional(),
     baseUrl: z.string().url().optional(),
     botUserId: z.string().optional(),
     botDisplayName: z.string().optional(),

@@ -53,9 +53,14 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
   const { account, botUserId, botUsername, cfg, core, groupPolicy, pairing, resources } = monitor;
   const { resolveMattermostMedia, resolveUserInfo } = resources;
   const channelHistories = new Map<string, HistoryEntry[]>();
+  // Account then channel then global, matching the documented precedence in
+  // docs/gateway/config-channels.md. Reading only the global value made the
+  // per-channel override parse and do nothing.
   const historyLimit = Math.max(
     0,
-    cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    account.config.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
   );
 
   return async (
