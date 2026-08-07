@@ -193,7 +193,7 @@ enum RealtimeTalkSettingsConfig {
 final class RealtimeTalkSettingsModel {
     enum Availability: Equatable {
         case loading
-        case ready
+        case ready(model: String)
         case needsOpenAIAccess
         case unavailable(String)
     }
@@ -221,7 +221,10 @@ final class RealtimeTalkSettingsModel {
     }
 
     var showsConfiguration: Bool {
-        self.availability == .ready || self.draft.explicitlyUsesOpenAI
+        if case .ready = self.availability {
+            return true
+        }
+        return self.draft.explicitlyUsesOpenAI
     }
 
     /// `talk.catalog` takes no parameters and resolves `configured` from the saved realtime
@@ -229,51 +232,68 @@ final class RealtimeTalkSettingsModel {
     /// on that evaluated state rather than on a picker value the Gateway has not judged.
     /// Switching models stays possible: Apply persists `model` while disabled, and the next
     /// load evaluates readiness against the newly saved model.
-    nonisolated static func canEnable(availability: Availability, draftEnabled: Bool) -> Bool {
-        availability == .ready || draftEnabled
+    nonisolated static func canEnable(availability: Availability, draftModel: String) -> Bool {
+        guard case let .ready(model) = availability else { return false }
+        return model == draftModel
     }
 
     var canEnable: Bool {
-        Self.canEnable(availability: self.availability, draftEnabled: self.draft.enabled)
+        Self.canEnable(availability: self.availability, draftModel: self.draft.model)
+    }
+
+    var canApply: Bool {
+        !self.isSaving && (!self.draft.enabled || self.canEnable)
     }
 
     func load() async {
+        await self.refresh(reloadDraft: true)
+    }
+
+    func refreshAvailability() async {
+        await self.refresh(reloadDraft: false)
+    }
+
+    private func refresh(reloadDraft: Bool) async {
         self.loadGeneration &+= 1
         let generation = self.loadGeneration
         self.availability = .loading
         let root = await self.loadConfig()
-        let draft = RealtimeTalkSettingsConfig.parse(root)
+        let savedDraft = RealtimeTalkSettingsConfig.parse(root)
 
         do {
             let catalog = try await self.loadCatalog()
             guard self.loadGeneration == generation else { return }
-            self.draft = draft
+            if reloadDraft {
+                self.draft = savedDraft
+            }
             guard let provider = RealtimeTalkSettingsConfig.openAIProvider(in: catalog) else {
                 self.availability = .unavailable("This Gateway does not expose the OpenAI realtime provider.")
                 return
             }
-            self.models = Self.options(current: draft.model, catalog: provider.models)
-            self.voices = Self.options(current: draft.voice, catalog: provider.voices)
+            self.models = Self.options(current: self.draft.model, catalog: provider.models)
+            self.voices = Self.options(current: self.draft.voice, catalog: provider.voices)
             guard provider.supportsGatewayRelayAgentConsult else {
                 self.availability = .unavailable(
                     "This Gateway's OpenAI realtime provider does not support relayed Talk sessions.")
                 return
             }
-            self.availability = provider.configured ? .ready : .needsOpenAIAccess
+            self.availability = provider.configured ? .ready(model: savedDraft.model) : .needsOpenAIAccess
         } catch {
             guard self.loadGeneration == generation else { return }
-            self.draft = draft
+            if reloadDraft {
+                self.draft = savedDraft
+            }
             self.availability = .unavailable("Could not verify realtime access: \(error.localizedDescription)")
         }
     }
 
     func handleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
         guard state == .connected else { return }
-        await self.load()
+        await self.refreshAvailability()
     }
 
     func save() async {
-        guard !self.isSaving else { return }
+        guard self.canApply else { return }
         self.isSaving = true
         self.saveMessage = nil
         defer { self.isSaving = false }
@@ -327,7 +347,7 @@ struct RealtimeTalkSettingsSection: View {
                         "Stream speech continuously while OpenClaw keeps agent tools " +
                             "and computer actions available."),
                     binding: self.$model.draft.enabled)
-                    .disabled(!self.model.canEnable)
+                    .disabled(!self.model.canEnable && !self.model.draft.enabled)
 
                 SettingsCardRow(
                     title: "Voice model",
@@ -362,7 +382,7 @@ struct RealtimeTalkSettingsSection: View {
                     Button(self.model.isSaving ? "Saving…" : "Apply") {
                         Task { await self.model.save() }
                     }
-                    .disabled(self.model.isSaving || (self.model.draft.enabled && !self.model.canEnable))
+                    .disabled(!self.model.canApply)
                 }
             }
         }
@@ -382,7 +402,7 @@ struct RealtimeTalkSettingsSection: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
             guard self.isActive else { return }
-            Task { await self.model.load() }
+            Task { await self.model.refreshAvailability() }
         }
     }
 
@@ -424,7 +444,7 @@ struct RealtimeTalkSettingsSection: View {
             }
         case .unavailable:
             Button("Retry") {
-                Task { await self.model.load() }
+                Task { await self.model.refreshAvailability() }
             }
         }
     }

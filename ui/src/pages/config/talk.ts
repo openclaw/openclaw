@@ -90,6 +90,23 @@ export function selectedTalkProviderOption(
 }
 
 /**
+ * True only when the selected provider positively states it cannot serve `transport`.
+ * Alias and auto selections share the same canonical provider resolution as the pickers. An
+ * unknown provider or one declaring no transports leaves the configured value alone.
+ */
+export function selectedTalkProviderRejectsTransport(
+  catalog: TalkCatalogState,
+  selection: TalkRealtimeSelection,
+  transport: string,
+): boolean {
+  const transports = selectedTalkProviderOption(catalog, selection)?.transports;
+  if (!transports || transports.length === 0) {
+    return false;
+  }
+  return !transports.includes(transport);
+}
+
+/**
  * Raw config keys under talk.realtime.providers that belong to the selected
  * provider: the configured spelling plus the canonical id and its aliases.
  * Used both to read effective fallback values and to clear them on reset.

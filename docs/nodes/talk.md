@@ -64,10 +64,11 @@ GPT-Live delegates to the agent natively; selecting a GPT-Live model clears that
 Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the controls are
 hidden and the Talk runtime returns before startup.
 
-The Gateway reports readiness for the model already saved in `talk.realtime`, so the status row
-describes that selection rather than one you are switching to. Picking a different model in the
-picker therefore re-enables the toggle even while the saved selection reads as unconfigured —
-useful when a login covers GPT-Live but not the GA realtime models.
+The Gateway reports readiness for the model already saved in `talk.realtime`, so changing models
+uses two Apply steps. First turn off **Use realtime conversation**, choose the model, and click
+**Apply**. After the catalog reload reports that saved model as ready, turn realtime conversation
+back on and click **Apply** again. This prevents a readiness result for one model from enabling a
+different model whose credentials have not been verified.
 
 ### When realtime cannot start
 

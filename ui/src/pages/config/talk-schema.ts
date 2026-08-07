@@ -76,18 +76,3 @@ export function resolveTalkRealtimeSelection(
 export function isTalkGptLiveModel(model: string | null): boolean {
   return model !== null && model.toLowerCase().startsWith("gpt-live");
 }
-
-/**
- * True only when the catalog positively states a provider cannot serve `transport`.
- * An unknown provider or one declaring no transports leaves the configured value alone, so a
- * picker never deletes a selector another client still depends on.
- */
-export function talkProviderRejectsTransport(
-  transports: readonly string[] | undefined,
-  transport: string,
-): boolean {
-  if (!transports || transports.length === 0) {
-    return false;
-  }
-  return !transports.includes(transport);
-}
