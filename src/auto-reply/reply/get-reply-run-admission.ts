@@ -502,7 +502,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const shouldSteer =
-    !isRoomEvent &&
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
