@@ -15,6 +15,7 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   originRank: number;
+  schemaPreferOver?: readonly string[];
 };
 
 type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
@@ -123,6 +124,17 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
   return changed ? normalized : schema;
 }
 
+function declaresChannelPreferenceOver(
+  preferOver: readonly string[] | undefined,
+  pluginId: string | undefined,
+): boolean {
+  const target = pluginId?.trim().toLowerCase();
+  if (!target) {
+    return false;
+  }
+  return (preferOver ?? []).some((entry) => entry.trim().toLowerCase() === target);
+}
+
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
 export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
   const deduped = new Map<
@@ -178,6 +190,7 @@ export function collectChannelSchemaMetadataWithOwnership(
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
           schemaPluginOrigin: current?.schemaPluginOrigin,
+          schemaPreferOver: current?.schemaPreferOver,
           originRank,
         });
       }
@@ -185,13 +198,17 @@ export function collectChannelSchemaMetadataWithOwnership(
 
     for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
       const current = byChannelId.get(channelId);
+      // A closer-origin channel config owns schema/UI hints even if a farther plugin also
+      // advertises the same channel id. At equal origin the replacement contract decides:
+      // a channel config that declared preferOver keeps ownership, so registry traversal
+      // order cannot hand the channel schema back to the plugin it supersedes.
       if (
         current &&
-        current.originRank < originRank &&
-        (current.configSchema !== undefined || current.configUiHints !== undefined)
+        (current.configSchema !== undefined || current.configUiHints !== undefined) &&
+        (current.originRank < originRank ||
+          (current.originRank === originRank &&
+            declaresChannelPreferenceOver(current.schemaPreferOver, record.id)))
       ) {
-        // A closer-origin channel config owns schema/UI hints even if a farther plugin also
-        // advertises the same channel id.
         continue;
       }
       byChannelId.set(channelId, {
@@ -206,6 +223,7 @@ export function collectChannelSchemaMetadataWithOwnership(
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
         schemaPluginId: channelConfig.schema === undefined ? undefined : record.id,
         schemaPluginOrigin: channelConfig.schema === undefined ? undefined : record.origin,
+        schemaPreferOver: channelConfig.schema === undefined ? undefined : channelConfig.preferOver,
         originRank,
       });
     }
@@ -213,7 +231,7 @@ export function collectChannelSchemaMetadataWithOwnership(
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, ...entry }) => entry);
+    .map(({ originRank: _originRank, schemaPreferOver: _schemaPreferOver, ...entry }) => entry);
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */
