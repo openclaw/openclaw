@@ -49,7 +49,10 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
   res.setHeader("Origin-Agent-Cluster", "?1");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.end(req.method === "HEAD" ? undefined : buildSandboxHostProxyHtml(csp));
+  const html = buildSandboxHostProxyHtml(csp);
+  // RFC 9110 §8.6: HEAD must carry the same Content-Length as GET; Node only omits the body.
+  res.setHeader("Content-Length", String(Buffer.byteLength(html)));
+  res.end(req.method === "HEAD" ? undefined : html);
 }
 
 /** Dedicated listener: this origin must never serve Control UI or authenticated Gateway data. */

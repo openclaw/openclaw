@@ -70,6 +70,18 @@ describe("MCP App sandbox HTTP origin", () => {
     );
   });
 
+  it("answers HEAD with the same Content-Length as the GET body", () => {
+    const path = buildMcpAppSandboxPath();
+    const get = request(path, "GET");
+    const head = request(path, "HEAD");
+
+    const getHtml = String(get.end.mock.calls.at(-1)?.[0]);
+    const expectedLength = String(Buffer.byteLength(getHtml));
+    expect(get.setHeader).toHaveBeenCalledWith("Content-Length", expectedLength);
+    expect(head.setHeader).toHaveBeenCalledWith("Content-Length", expectedLength);
+    expect(head.end).toHaveBeenCalledWith(undefined);
+  });
+
   it("emits canonical ASCII origins for validated CSP domains", () => {
     const result = request(
       buildMcpAppSandboxPath({ connectDomains: ["https://b\u00fccher.example"] }),
