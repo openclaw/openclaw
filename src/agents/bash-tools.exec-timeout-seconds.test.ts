@@ -7,6 +7,7 @@
  * `timeout` is a silent 1000x error. These tests pin that contract.
  */
 import { describe, expect, it } from "vitest";
+import { resolveExecTimeoutSeconds } from "./bash-tools.exec-request-preparation.js";
 import { execSchema, nodeExecSchema, processSchema } from "./bash-tools.schemas.js";
 
 /** TypeBox optional wrappers do not surface `description` on their static type. */
@@ -37,5 +38,35 @@ describe("exec timeout unit naming", () => {
     // The collision this change removes: same name, different unit, in two
     // tools used together in one workflow. process keeps its own field.
     expect(describedAs(processSchema.properties.timeout)).toMatch(/millisecond/i);
+  });
+});
+
+describe("legacy exec timeout alias", () => {
+  it("honors the canonical timeoutSeconds", () => {
+    expect(resolveExecTimeoutSeconds({ command: "true", timeoutSeconds: 5 })).toBe(5);
+  });
+
+  it("honors a legacy timeout as the same seconds value", () => {
+    // Removing the field from the schema does not reject it at runtime: the
+    // exec schema accepts unknown properties. Without this alias a call built
+    // against the old schema is accepted and then silently ignored, so it gets
+    // the default deadline instead of the one it asked for.
+    expect(resolveExecTimeoutSeconds({ command: "true", timeout: 5 })).toBe(5);
+  });
+
+  it("prefers timeoutSeconds when a call carries both", () => {
+    expect(resolveExecTimeoutSeconds({ command: "true", timeoutSeconds: 5, timeout: 900 })).toBe(5);
+  });
+
+  it("ignores a non-numeric legacy timeout", () => {
+    expect(resolveExecTimeoutSeconds({ command: "true", timeout: "5" })).toBeUndefined();
+    expect(resolveExecTimeoutSeconds({ command: "true" })).toBeUndefined();
+  });
+
+  it("keeps the alias out of every model-facing surface", () => {
+    // The alias exists for compatibility only. If it ever reaches a schema, the
+    // ambiguity this change removes comes straight back.
+    expect(execSchema.properties).not.toHaveProperty("timeout");
+    expect(nodeExecSchema.properties).not.toHaveProperty("timeout");
   });
 });
