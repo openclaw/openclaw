@@ -59,6 +59,8 @@ export function resolveReusableWorkspaceSkillSnapshot(
   const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(params.workspaceDir);
   const promptFormatChanged =
     params.existingSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION;
+  const promptHasTildeSkillLocation =
+    params.existingSnapshot?.prompt?.includes("<location>~/") === true;
   const skillVersionChanged = shouldRefreshSnapshotForVersion(
     params.existingSnapshot?.version,
     snapshotVersion,
@@ -71,6 +73,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
     stableStringify(params.skillOverrides);
   const shouldRefresh =
     promptFormatChanged ||
+    promptHasTildeSkillLocation ||
     skillVersionChanged ||
     nodeSkillsEligibilityChanged ||
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
