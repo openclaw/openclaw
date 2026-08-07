@@ -22,19 +22,10 @@ const MINIMAX_VLM_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const MINIMAX_VLM_ERROR_BODY_MAX_CHARS = 400;
 const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
-export function isMinimaxVlmProvider(provider: string): boolean {
-  const normalized = provider.trim().toLowerCase();
-  return (
-    normalized === "minimax" ||
-    normalized === "minimax-cn" ||
-    normalized === "minimax-portal" ||
-    normalized === "minimax-portal-cn"
-  );
-}
-
-export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
-  return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
-}
+// Re-exported so every existing importer keeps working; the definitions live in
+// an import-free module so route identification does not pull this file's HTTP
+// transport into a caller's bundle chunk.
+export { isMinimaxVlmModel, isMinimaxVlmProvider } from "./minimax-vlm.ids.js";
 
 function isMinimaxCnProvider(provider: string | undefined): boolean {
   const normalized = provider?.trim().toLowerCase();

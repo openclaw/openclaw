@@ -7,7 +7,10 @@
 // unsupported disabled-reasoning payload, for example -- and structured
 // extraction has to honour it, otherwise the fallback would resend exactly the
 // payload that hook exists to remove.
-import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
+// Import-free predicate module on purpose: minimax-vlm.js drags the provider
+// HTTP transport in, and this chunk is lazily loaded precisely to keep
+// model/provider code out until extraction actually runs.
+import { isMinimaxVlmModel } from "../agents/minimax-vlm.ids.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { describeImagesWithModel } from "./image-runtime.js";
