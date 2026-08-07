@@ -100,6 +100,61 @@ describe("Codex app-server realtime voice bridge", () => {
     expect(onClose).toHaveBeenCalledWith("completed");
   });
 
+  it("supports Codex Realtime V1 on the bound thread for public API models", async () => {
+    const requestRpc = vi.fn(async () => ({}));
+    const client = { request: requestRpc } as unknown as CodexAppServerClient;
+    const bridge = realtimeVoiceSessionTesting.createBridge(
+      client,
+      "thread-1",
+      {
+        providerConfig: {
+          model: "gpt-realtime-2.1",
+          version: "v1",
+          voice: "verse",
+        },
+        instructions: "Keep replies brief.",
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      },
+      new AbortController().signal,
+    );
+
+    await bridge.connect();
+
+    expect(requestRpc).toHaveBeenCalledWith(
+      "thread/realtime/start",
+      {
+        threadId: "thread-1",
+        outputModality: "audio",
+        transport: { type: "websocket" },
+        version: "v1",
+        includeStartupContext: true,
+        prompt: "Keep replies brief.",
+        model: "gpt-realtime-2.1",
+        voice: "verse",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it("rejects unsupported Codex realtime protocol versions", async () => {
+    const requestRpc = vi.fn(async () => ({}));
+    const client = { request: requestRpc } as unknown as CodexAppServerClient;
+    const bridge = realtimeVoiceSessionTesting.createBridge(
+      client,
+      "thread-1",
+      {
+        providerConfig: { version: "v2" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      },
+      new AbortController().signal,
+    );
+
+    await expect(bridge.connect()).rejects.toThrow('Codex realtime version must be "v1" or "v3"');
+    expect(requestRpc).not.toHaveBeenCalled();
+  });
+
   it("emits one portable response terminal for each completed native turn", async () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as CodexAppServerClient;
     const onEvent = vi.fn();
