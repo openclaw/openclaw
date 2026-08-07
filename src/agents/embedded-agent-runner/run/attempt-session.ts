@@ -90,6 +90,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     agentDir: input.agentDir,
     settingsManager,
     extensionFactories,
+    maxSkillFileBytes: attempt.config?.skills?.limits?.maxSkillFileBytes,
   });
   await resourceLoader.reload();
   // reload() rehydrates disk settings. Reapply OpenClaw's context budget and

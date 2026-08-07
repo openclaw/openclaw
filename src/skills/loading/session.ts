@@ -18,7 +18,7 @@ const MAX_NAME_LENGTH = 64;
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
 
-import { readBoundedSkillFile } from "./bounded-skill-read.js";
+import { DEFAULT_MAX_SKILL_FILE_BYTES, readBoundedSkillFile } from "./bounded-skill-read.js";
 
 export interface Skill {
   name: string;
@@ -29,6 +29,8 @@ export interface Skill {
   source: string;
   sourceInfo: SourceInfo;
   disableModelInvocation: boolean;
+  /** Byte limit enforced when this skill file is read; carried so `/skill:` expansion uses the same policy. */
+  maxSkillFileBytes?: number;
 }
 
 interface LoadSkillsResult {
@@ -107,6 +109,7 @@ function loadSkillsFromDirInternal(
   includeRootFiles: boolean,
   ignoreMatcher?: IgnoreMatcher,
   rootDir?: string,
+  maxSkillFileBytes?: number,
 ): LoadSkillsResult {
   const skills: Skill[] = [];
   const diagnostics: ResourceDiagnostic[] = [];
@@ -144,7 +147,7 @@ function loadSkillsFromDirInternal(
         continue;
       }
 
-      const result = loadSkillFromFile(fullPath, source);
+      const result = loadSkillFromFile(fullPath, source, maxSkillFileBytes);
       if (result.skill) {
         skills.push(result.skill);
       }
@@ -185,7 +188,14 @@ function loadSkillsFromDirInternal(
       }
 
       if (isDirectory) {
-        const subResult = loadSkillsFromDirInternal(fullPath, source, false, ig, root);
+        const subResult = loadSkillsFromDirInternal(
+          fullPath,
+          source,
+          false,
+          ig,
+          root,
+          maxSkillFileBytes,
+        );
         skills.push(...subResult.skills);
         diagnostics.push(...subResult.diagnostics);
         continue;
@@ -195,7 +205,7 @@ function loadSkillsFromDirInternal(
         continue;
       }
 
-      const result = loadSkillFromFile(fullPath, source);
+      const result = loadSkillFromFile(fullPath, source, maxSkillFileBytes);
       if (result.skill) {
         skills.push(result.skill);
       }
@@ -212,12 +222,14 @@ function loadSkillsFromDirInternal(
 function loadSkillFromFile(
   filePath: string,
   source: string,
+  maxSkillFileBytes?: number,
 ): { skill: Skill | null; diagnostics: ResourceDiagnostic[] } {
   const diagnostics: ResourceDiagnostic[] = [];
 
   try {
     // Reject oversized skill files to bound memory usage during loading.
-    const rawContent = readBoundedSkillFile(filePath);
+    const resolvedMaxBytes = maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES;
+    const rawContent = readBoundedSkillFile(filePath, resolvedMaxBytes);
     const frontmatter = parseFrontmatter(rawContent);
     const invocation = resolveSkillInvocationPolicy(frontmatter);
     const skillDir = dirname(filePath);
@@ -253,6 +265,7 @@ function loadSkillFromFile(
         source,
         sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
         disableModelInvocation: invocation.disableModelInvocation,
+        maxSkillFileBytes: resolvedMaxBytes,
       },
       diagnostics,
     };
@@ -285,6 +298,8 @@ interface LoadSkillsOptions {
   skillPaths: string[];
   /** Include default skills directories. */
   includeDefaults: boolean;
+  /** Configured byte limit for a single SKILL.md file. */
+  maxSkillFileBytes?: number;
 }
 
 function resolveSkillPath(p: string, cwd: string): string {
@@ -297,7 +312,7 @@ function resolveSkillPath(p: string, cwd: string): string {
  * Returns skills and any validation diagnostics.
  */
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
-  const { cwd, agentDir, skillPaths, includeDefaults } = options;
+  const { cwd, agentDir, skillPaths, includeDefaults, maxSkillFileBytes } = options;
   // One snapshot-level query enforces archival without polling tool hot paths or touching files.
   const archivedSkillFiles = getArchivedSkillFiles();
 
@@ -344,8 +359,26 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   }
 
   if (includeDefaults) {
-    addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));
-    addSkills(loadSkillsFromDirInternal(resolve(cwd, CONFIG_DIR_NAME, "skills"), "project", true));
+    addSkills(
+      loadSkillsFromDirInternal(
+        join(resolvedAgentDir, "skills"),
+        "user",
+        true,
+        undefined,
+        undefined,
+        maxSkillFileBytes,
+      ),
+    );
+    addSkills(
+      loadSkillsFromDirInternal(
+        resolve(cwd, CONFIG_DIR_NAME, "skills"),
+        "project",
+        true,
+        undefined,
+        undefined,
+        maxSkillFileBytes,
+      ),
+    );
   }
 
   const userSkillsDir = join(resolvedAgentDir, "skills");
@@ -387,9 +420,18 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
       const stats = statSync(resolvedPath);
       const source = getSource(resolvedPath);
       if (stats.isDirectory()) {
-        addSkills(loadSkillsFromDirInternal(resolvedPath, source, true));
+        addSkills(
+          loadSkillsFromDirInternal(
+            resolvedPath,
+            source,
+            true,
+            undefined,
+            undefined,
+            maxSkillFileBytes,
+          ),
+        );
       } else if (stats.isFile() && resolvedPath.endsWith(".md")) {
-        const result = loadSkillFromFile(resolvedPath, source);
+        const result = loadSkillFromFile(resolvedPath, source, maxSkillFileBytes);
         if (result.skill) {
           addSkills({ skills: [result.skill], diagnostics: result.diagnostics });
         } else {

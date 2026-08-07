@@ -10,6 +10,7 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
+import { readBestEffortConfig } from "../../config/io.runtime.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
@@ -311,7 +312,13 @@ async function createAgentSessionImpl(
     options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, agentDir));
 
   if (!resourceLoader) {
-    resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+    const cfg = await readBestEffortConfig({ skipPluginValidation: true });
+    resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager,
+      maxSkillFileBytes: cfg.skills?.limits?.maxSkillFileBytes,
+    });
     await resourceLoader.reload();
     modelRegistry.refresh();
   }

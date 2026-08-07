@@ -8,8 +8,14 @@ import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function loadSkillsFromPath(dir: string) {
-  return loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir], includeDefaults: false });
+function loadSkillsFromPath(dir: string, maxSkillFileBytes?: number) {
+  return loadSkills({
+    cwd: dir,
+    agentDir: dir,
+    skillPaths: [dir],
+    includeDefaults: false,
+    maxSkillFileBytes,
+  });
 }
 
 describe("loadSkills", () => {
@@ -112,6 +118,47 @@ disable-model-invocation: true
         message: expect.stringContaining("exceeds"),
       }),
     ]);
+  });
+
+  it("honors a custom maxSkillFileBytes limit for discovery", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-custom-limit-");
+    const acceptedDir = path.join(tempDir, "accepted");
+    const rejectedDir = path.join(tempDir, "rejected");
+    await fs.mkdir(acceptedDir);
+    await fs.mkdir(rejectedDir);
+    const acceptedFile = path.join(acceptedDir, "SKILL.md");
+    const rejectedFile = path.join(rejectedDir, "SKILL.md");
+    // 200 KB body is under a 300 KB custom limit but over a 100 KB one.
+    const body = "x".repeat(200_000);
+    const skillFrontmatter = (name: string) =>
+      `---\nname: ${name}\ndescription: limit probe\n---\n`;
+    await fs.writeFile(acceptedFile, `${skillFrontmatter("accepted")}${body}`, "utf-8");
+    await fs.writeFile(rejectedFile, `${skillFrontmatter("rejected")}${body}`, "utf-8");
+
+    const acceptedResult = loadSkillsFromPath(tempDir, 300_000);
+    expect(acceptedResult.skills).toHaveLength(2);
+    expect(acceptedResult.skills.map((skill) => skill.name)).toEqual(
+      expect.arrayContaining(["accepted", "rejected"]),
+    );
+    expect(acceptedResult.diagnostics).toEqual([]);
+
+    const rejectedResult = loadSkillsFromPath(tempDir, 100_000);
+    expect(rejectedResult.skills).toEqual([]);
+    expect(rejectedResult.diagnostics).toHaveLength(2);
+    expect(rejectedResult.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "warning",
+          path: acceptedFile,
+          message: expect.stringContaining("exceeds"),
+        }),
+        expect.objectContaining({
+          type: "warning",
+          path: rejectedFile,
+          message: expect.stringContaining("exceeds"),
+        }),
+      ]),
+    );
   });
 
   it("rejects oversized files through the bounded descriptor reader (growth-race regression)", async () => {

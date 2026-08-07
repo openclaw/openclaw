@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
+import { DEFAULT_MAX_SKILL_FILE_BYTES } from "../../skills/loading/bounded-skill-read.js";
 import type { Skill } from "../../skills/loading/session.js";
 import { loadSkills } from "../../skills/loading/session.js";
 import { CONFIG_DIR_NAME } from "../config.js";
@@ -146,6 +147,8 @@ interface DefaultResourceLoaderOptions {
   noPromptTemplates?: boolean;
   noThemes?: boolean;
   noContextFiles?: boolean;
+  /** Configured byte limit for a single SKILL.md file. */
+  maxSkillFileBytes?: number;
   systemPrompt?: string;
   appendSystemPrompt?: string[];
   extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
@@ -184,6 +187,7 @@ export class DefaultResourceLoader implements ResourceLoader {
   private noPromptTemplates: boolean;
   private noThemes: boolean;
   private noContextFiles: boolean;
+  private maxSkillFileBytes: number;
   private systemPromptSource?: string;
   private appendSystemPromptSource?: string[];
   private extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
@@ -249,6 +253,7 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.noPromptTemplates = options.noPromptTemplates ?? false;
     this.noThemes = options.noThemes ?? false;
     this.noContextFiles = options.noContextFiles ?? false;
+    this.maxSkillFileBytes = options.maxSkillFileBytes ?? DEFAULT_MAX_SKILL_FILE_BYTES;
     this.systemPromptSource = options.systemPrompt;
     this.appendSystemPromptSource = options.appendSystemPrompt;
     this.extensionsOverride = options.extensionsOverride;
@@ -552,6 +557,7 @@ export class DefaultResourceLoader implements ResourceLoader {
         agentDir: this.agentDir,
         skillPaths,
         includeDefaults: false,
+        maxSkillFileBytes: this.maxSkillFileBytes,
       });
     }
     const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;

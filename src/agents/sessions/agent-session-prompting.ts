@@ -306,7 +306,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } // Unknown skill, pass through
 
     try {
-      const content = readBoundedSkillFile(skill.filePath);
+      const content = readBoundedSkillFile(skill.filePath, skill.maxSkillFileBytes);
       const body = stripFrontmatter(content).trim();
       const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
       return args ? `${skillBlock}\n\n${args}` : skillBlock;
