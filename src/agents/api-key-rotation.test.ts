@@ -312,4 +312,78 @@ describe("executeWithApiKeyRotation", () => {
       }),
     );
   });
+
+  it("passes apiKeyIndex and attempt to rotation callbacks", async () => {
+    const shouldRetry = vi.fn(() => true);
+    const onRetry = vi.fn();
+    const execute = vi
+      .fn<(apiKey: string) => Promise<string>>()
+      .mockRejectedValueOnce(new Error("Rate limit"))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      executeWithApiKeyRotation({
+        provider: "openai",
+        apiKeys: ["key-1", "key-2"],
+        shouldRetry,
+        onRetry,
+        execute,
+      }),
+    ).resolves.toBe("ok");
+
+    // shouldRetry receives apiKeyIndex (0) and attempt (1, canonical retry count).
+    expect(shouldRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: 1,
+        apiKeyIndex: 0,
+      }),
+    );
+
+    // onRetry receives apiKeyIndex (0) and attempt (1).
+    expect(onRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: 1,
+        apiKeyIndex: 0,
+      }),
+    );
+  });
+
+  it("diverges attempt (retry count) from apiKeyIndex (key position) across keys and retries", async () => {
+    // Two keys, transient retry on key-1 (attempt 1→2), then rotate to
+    // key-2 (attempt 1). attempt must track the retry count, not apiKeyIndex.
+    const calls: Array<{ attempt: number; apiKeyIndex: number }> = [];
+    const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
+    const execute = vi.fn(async () => {
+      throw cause;
+    });
+
+    let shouldRetryCallCount = 0;
+    await expect(
+      executeWithApiKeyRotation({
+        provider: "openai",
+        apiKeys: ["key-1", "key-2"],
+        shouldRetry: (params) => {
+          calls.push({
+            attempt: params.attempt,
+            apiKeyIndex: params.apiKeyIndex,
+          });
+          shouldRetryCallCount += 1;
+          // First call: don't rotate (let transient retry run).
+          // Second call: rotate to key-2.
+          return shouldRetryCallCount === 2;
+        },
+        transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep: async () => {} },
+        execute,
+      }),
+    ).rejects.toThrow("socket closed");
+
+    // key-1: attempt 1 (no rotate), then 2 (rotate to key-2)
+    // key-2: attempt 1 (no rotate), then 2 (last key, break)
+    expect(calls).toEqual([
+      { attempt: 1, apiKeyIndex: 0 },
+      { attempt: 2, apiKeyIndex: 0 },
+      { attempt: 1, apiKeyIndex: 1 },
+      { attempt: 2, apiKeyIndex: 1 },
+    ]);
+  });
 });
