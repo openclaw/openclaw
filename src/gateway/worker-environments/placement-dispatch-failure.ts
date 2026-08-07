@@ -40,6 +40,8 @@ export type WorkerDispatchPlacementStore = Pick<
   | "loadWorkspaceReconciliation"
   | "beginWorkspaceReconciliation"
   | "abortWorkspaceReconciliation"
+  | "isWorkspaceReconciliationRetainedForForcedAbandonment"
+  | "retainWorkspaceReconciliationForForcedAbandonment"
   | "listWorkspaceReconciliationOwners"
   | "list"
   | "listPendingWorkspaceResults"

@@ -357,6 +357,11 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "worker_workspace_pending_results", "staged_result_ref TEXT");
   ensureColumn(
     db,
+    "worker_workspace_reconciliations",
+    "forced_abandonment_retained INTEGER NOT NULL DEFAULT 0 CHECK (forced_abandonment_retained IN (0, 1))",
+  );
+  ensureColumn(
+    db,
     "worker_environments",
     "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
   );

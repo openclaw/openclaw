@@ -70,6 +70,10 @@ export function createHarness(
       placementStore.beginWorkspaceReconciliation(owner, journal),
     abortWorkspaceReconciliation: (owner, abortOptions) =>
       placementStore.abortWorkspaceReconciliation(owner, abortOptions),
+    isWorkspaceReconciliationRetainedForForcedAbandonment: (owner) =>
+      placementStore.isWorkspaceReconciliationRetainedForForcedAbandonment(owner),
+    retainWorkspaceReconciliationForForcedAbandonment: (owner) =>
+      placementStore.retainWorkspaceReconciliationForForcedAbandonment(owner),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),

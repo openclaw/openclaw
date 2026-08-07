@@ -7,10 +7,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
-import {
-  FORCED_WORKER_ABANDONMENT_ERROR,
-  isForcedWorkerAbandonmentPlacement,
-} from "./placement-force-abandon.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-force-abandon.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -33,10 +30,7 @@ describe("worker placement workspace journal", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  const prune = () =>
-    store.pruneOrphanedWorkspaceReconciliations({
-      retainFailedOwnerWithoutPending: isForcedWorkerAbandonmentPlacement,
-    });
+  const prune = () => store.pruneOrphanedWorkspaceReconciliations();
 
   const seedJournal = () => {
     const active = seedActivePlacement(store, { environmentId: "worker-1", ownerEpoch: 7 });
@@ -90,6 +84,7 @@ describe("worker placement workspace journal", () => {
 
   it("retains a failed owner whose forced rollback is retryable", () => {
     const { active, owner } = seedJournal();
+    store.retainWorkspaceReconciliationForForcedAbandonment(owner);
     const draining = store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
