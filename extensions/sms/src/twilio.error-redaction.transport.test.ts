@@ -102,6 +102,19 @@ describe("Twilio error redaction real transport", () => {
     });
     expect(error.message).not.toContain(encodedCredential);
     expect(error.responseText).not.toContain(encodedCredential);
+    const credentialAbsent =
+      !error.message.includes(encodedCredential) && !error.responseText.includes(encodedCredential);
+    console.info(
+      "TWILIO_REDACTION_PROOF",
+      JSON.stringify({
+        transport: "loopback-http",
+        authorizationHeaderBuilt: authorization === `Basic ${encodedCredential}`,
+        message: error.message,
+        responseText: error.responseText,
+        credentialAbsent,
+        token: "[redacted]",
+      }),
+    );
   });
 
   it("preserves ordinary structured Twilio error details", async () => {
@@ -120,5 +133,14 @@ describe("Twilio error redaction real transport", () => {
       responseText: body,
       twilioCode: 21610,
     });
+    console.info(
+      "TWILIO_REDACTION_CONTROL",
+      JSON.stringify({
+        httpStatus: error.httpStatus,
+        message: error.message,
+        responseText: error.responseText,
+        twilioCode: error.twilioCode,
+      }),
+    );
   });
 });
