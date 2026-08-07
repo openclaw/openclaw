@@ -841,7 +841,7 @@ describe("sessions_send gating", () => {
       status: "accepted",
       sessionKey: MAIN_AGENT_SESSION_KEY,
     });
-    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
     expect(callGatewayMock.mock.calls).toContainEqual([
       expect.objectContaining({
         method: "agent",
@@ -872,7 +872,13 @@ describe("sessions_send gating", () => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
       if (request.method === "sessions.resolve") {
         if (request.params?.key === "session-id-only") {
-          throw new Error("not a session key");
+          throw new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: "No session found: session-id-only",
+          });
+        }
+        if (request.params?.spawnedBy === MAIN_AGENT_SESSION_KEY) {
+          return {};
         }
         return { key: "agent:other:main" };
       }
@@ -912,7 +918,7 @@ describe("sessions_send gating", () => {
     });
 
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(requireGatewayRequest().method).toBe("sessions.list");
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
     expect(requireDetails(result).status).toBe("forbidden");
   });
 
@@ -950,7 +956,7 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("forbidden");
     expect(String(details.error)).toBe(
-      "Session send denied because spawned-session ownership lookup failed (transient); retry the operation.",
+      "Session send denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
     );
     expect(String(details.error)).not.toContain(
       "Session not visible from this sandboxed agent session",

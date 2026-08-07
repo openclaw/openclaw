@@ -19,7 +19,7 @@ import {
   registerSessionStateWatch,
 } from "../../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
+import { resolveSandboxedSessionToolContext, resolveSessionToolAccess } from "./sessions-access.js";
 import { testing as sessionsResolutionTesting } from "./sessions-resolution.test-support.js";
 
 const loggerMocks = vi.hoisted(() => ({ logWarn: vi.fn() }));
@@ -484,33 +484,35 @@ describe("createSessionVisibilityGuard", () => {
   });
 
   it("does not block exact same-agent spawned targets that fall past the spawned list cap", async () => {
+    const gateway = vi.fn(async (request: { method?: string; params?: { key?: string } }) => {
+      if (request.method === "sessions.resolve") {
+        return { key: request.params?.key };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: Array.from({ length: 100 }, (_, index) => ({
+            key: `agent:main:subagent:worker-${index}`,
+          })),
+        };
+      }
+      return {};
+    });
     sessionsResolutionTesting.setDepsForTest({
-      callGateway: vi.fn(async (request: { method?: string; params?: { key?: string } }) => {
-        if (request.method === "sessions.resolve") {
-          return { key: request.params?.key };
-        }
-        if (request.method === "sessions.list") {
-          return {
-            sessions: [
-              ...Array.from({ length: 500 }, (_, index) => ({
-                key: `agent:main:subagent:worker-${index}`,
-              })),
-              { key: "agent:main:subagent:worker-999" },
-            ],
-          };
-        }
-        return {};
-      }) as never,
+      callGateway: gateway as never,
     });
 
-    const guard = await createSessionVisibilityGuard({
+    const access = await resolveSessionToolAccess({
       action: "history",
       requesterSessionKey: "agent:main:main",
+      targetSessionKey: "agent:main:subagent:worker-999",
+      requesterOwned: false,
       visibility: "tree",
       a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
     });
 
-    expect(guard.check("agent:main:subagent:worker-999")).toEqual({ allowed: true });
+    expect(access).toEqual({ allowed: true });
+    expect(gateway).toHaveBeenCalledTimes(1);
+    expect(gateway).toHaveBeenCalledWith(expect.objectContaining({ method: "sessions.resolve" }));
 
     sessionsResolutionTesting.setDepsForTest();
   });
@@ -584,14 +586,14 @@ describe("createSessionVisibilityGuard", () => {
       target: "agent:codex:acp:child-1",
       visibility: "tree" as const,
       error:
-        "Session history denied because spawned-session ownership lookup failed (transient); retry the operation.",
+        "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
     },
     {
       name: "cross-agent ACP child under all visibility",
       target: "agent:codex:acp:child-1",
       visibility: "all" as const,
       error:
-        "Session history denied because spawned-session ownership lookup failed (transient); retry the operation.",
+        "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
     },
     {
       name: "malformed agent key",
@@ -728,7 +730,31 @@ describe("createSessionVisibilityGuard", () => {
     }
   });
 
+  it("classifies a malformed sessions.list response as an unknown lookup failure", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async () => ({})) as never,
+    });
+    try {
+      const guard = await createSessionVisibilityGuard({
+        action: "history",
+        requesterSessionKey: "agent:main:main",
+        visibility: "tree",
+        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      });
+
+      expect(guard.check("agent:main:subagent:child-1")).toEqual({
+        allowed: false,
+        status: "forbidden",
+        error:
+          "Session history denied because spawned-session ownership lookup failed; ask the operator to inspect OpenClaw logs.",
+      });
+    } finally {
+      sessionsResolutionTesting.setDepsForTest();
+    }
+  });
+
   it("keeps watched same-agent group reads allowed when the spawned lookup throws", async () => {
+    loggerMocks.logWarn.mockClear();
     const tempDirs: string[] = [];
     const stateDir = makeTempDir(tempDirs, "openclaw-session-visibility-");
     closeOpenClawStateDatabaseForTest();
@@ -767,14 +793,16 @@ describe("createSessionVisibilityGuard", () => {
         });
 
         // Durable watched-group allowance does not depend on spawned ownership lookup.
+        expect(loggerMocks.logWarn).not.toHaveBeenCalled();
         expect(guard.check(watchedSessionKey)).toEqual({ allowed: true });
+        expect(loggerMocks.logWarn).not.toHaveBeenCalled();
         // A non-watched, non-spawned same-agent target still fails closed, but
         // the denial is distinguishable from a genuine policy denial.
         expect(guard.check("agent:main:telegram:group:unwatched")).toEqual({
           allowed: false,
           status: "forbidden",
           error:
-            "Session history denied because spawned-session ownership lookup failed (transient); retry the operation.",
+            "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
         });
       } finally {
         warnSpy.mockRestore();

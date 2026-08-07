@@ -22,12 +22,12 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
 import {
   createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
   resolveSessionReference,
+  resolveSessionToolAccess,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 
@@ -100,7 +100,7 @@ type SanitizedSearchHit = {
 
 type SearchSessionCandidate = {
   key: string;
-  access: "direct" | "row";
+  access: "authorized" | "row";
   agentId?: string;
   ownerSessionKey?: string;
   parentSessionKey?: string;
@@ -358,8 +358,10 @@ export function createSessionsSearchTool(opts?: {
         });
 
       let sessionKey: string | undefined;
+      let requesterOwned = false;
       if (requestedSessionKey) {
         const resolved = await resolveSessionReference({
+          action: "search",
           sessionKey: requestedSessionKey,
           alias,
           mainKey,
@@ -370,7 +372,7 @@ export function createSessionsSearchTool(opts?: {
           return jsonResult({ status: resolved.status, error: resolved.error });
         }
         const visible = await resolveVisibleSessionReference({
-          action: "list",
+          action: "search",
           resolvedSession: resolved,
           requesterSessionKey: effectiveRequesterKey,
           restrictToSpawned,
@@ -380,6 +382,7 @@ export function createSessionsSearchTool(opts?: {
           return jsonResult({ status: visible.status, error: visible.error });
         }
         sessionKey = visible.key;
+        requesterOwned = visible.requesterOwned;
       }
 
       const visibility = resolveEffectiveSessionToolsVisibility({
@@ -390,14 +393,6 @@ export function createSessionsSearchTool(opts?: {
       const defaultAgentId = resolveDefaultAgentId(cfg);
       const requesterAgentId =
         opts?.agentId ?? resolveSessionAgentId({ sessionKey: effectiveRequesterKey, config: cfg });
-      const guard = await createSessionVisibilityGuard({
-        action: "history",
-        defaultAgentId,
-        requesterAgentId,
-        requesterSessionKey: effectiveRequesterKey,
-        visibility,
-        a2aPolicy,
-      });
       const rowGuard = createSessionVisibilityRowChecker({
         action: "history",
         defaultAgentId,
@@ -409,7 +404,17 @@ export function createSessionsSearchTool(opts?: {
       if (sessionKey) {
         const access = !parseAgentSessionKey(sessionKey)
           ? rowGuard.check({ key: sessionKey, agentId: requesterAgentId })
-          : guard.check(sessionKey);
+          : await resolveSessionToolAccess({
+              action: "history",
+              displayAction: "search",
+              defaultAgentId,
+              requesterAgentId,
+              requesterSessionKey: effectiveRequesterKey,
+              targetSessionKey: sessionKey,
+              requesterOwned,
+              visibility,
+              a2aPolicy,
+            });
         if (!access.allowed) {
           return jsonResult({ status: access.status, error: access.error });
         }
@@ -419,7 +424,7 @@ export function createSessionsSearchTool(opts?: {
           ? [
               {
                 key: sessionKey,
-                access: "direct" as const,
+                access: "authorized" as const,
                 ...(!parseAgentSessionKey(sessionKey) ? { agentId: requesterAgentId } : {}),
               },
             ]
@@ -488,10 +493,9 @@ export function createSessionsSearchTool(opts?: {
             }
             const { candidate, visibilityKey } = candidateMatch;
             const access =
-              candidate.access === "row" ||
-              (candidate.agentId !== undefined && !parseAgentSessionKey(candidate.key))
-                ? rowGuard.check(candidate)
-                : guard.check(visibilityKey);
+              candidate.access === "authorized"
+                ? { allowed: true as const }
+                : rowGuard.check(candidate);
             if (!access.allowed) {
               continue;
             }

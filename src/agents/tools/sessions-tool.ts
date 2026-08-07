@@ -29,8 +29,8 @@ import {
 } from "./in-process-gateway.js";
 import {
   createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
+  resolveSessionToolAccess,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference } from "./sessions-resolution.js";
@@ -167,6 +167,7 @@ async function resolvePatchTarget(
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
   const resolved = await resolveSessionReference({
+    action: "status",
     sessionKey: rawKey,
     alias: context.alias,
     mainKey: context.mainKey,
@@ -182,10 +183,12 @@ async function resolvePatchTarget(
   if (resolved.key !== context.effectiveRequesterKey) {
     // Session visibility is the configured read/write scope for session tools;
     // the action only selects error copy. Owner gating remains separate.
-    const guard = await createSessionVisibilityGuard({
+    const access = await resolveSessionToolAccess({
       action: "status",
       defaultAgentId: resolveDefaultAgentId(context.cfg),
       requesterSessionKey: context.effectiveRequesterKey,
+      targetSessionKey: resolved.key,
+      requesterOwned: resolved.requesterOwned === true,
       requesterAgentId: resolveAgentIdFromSessionKey(
         context.effectiveRequesterKey,
         resolveDefaultAgentId(context.cfg),
@@ -196,7 +199,6 @@ async function resolvePatchTarget(
       }),
       a2aPolicy: createAgentToAgentPolicy(context.cfg),
     });
-    const access = guard.check(resolved.key);
     if (!access.allowed) {
       throw new ToolAuthorizationError(access.error);
     }

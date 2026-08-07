@@ -1,3 +1,4 @@
+import type { Result } from "@openclaw/normalization-core/result";
 // Session visibility helpers decide which plugin sessions appear in user-facing lists.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -8,8 +9,9 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
 import {
   listSpawnedSessionKeysWithResult,
+  logSessionOwnershipLookupFailure,
   lookupFailedDenialMessage,
-  type SpawnedSessionKeysResult,
+  type SessionOwnershipLookupFailure,
 } from "./session-visibility-internal.js";
 
 // Keep the shipped test hook on its public SDK subpath; richer results stay core-private.
@@ -84,7 +86,14 @@ export async function listSpawnedSessionKeys(params: {
   limit?: number;
 }): Promise<Set<string>> {
   const result = await listSpawnedSessionKeysWithResult(params);
-  return result.ok ? result.keys : new Set();
+  if (!result.ok) {
+    logSessionOwnershipLookupFailure({
+      requesterSessionKey: params.requesterSessionKey,
+      failure: result.error,
+    });
+    return new Set();
+  }
+  return result.value;
 }
 
 /** Resolve configured session-tool visibility, defaulting invalid or missing values to tree. */
@@ -297,9 +306,12 @@ type SessionVisibilityCheckerParams = {
 };
 
 function createSessionVisibilityCheckerWithResult(
-  params: SessionVisibilityCheckerParams & { spawnedKeys: SpawnedSessionKeysResult | null },
+  params: SessionVisibilityCheckerParams & {
+    spawnedKeys: Result<Set<string>, SessionOwnershipLookupFailure> | null;
+  },
 ): { check: (targetSessionKey: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
+  let lookupFailureLogged = false;
   const rowChecker = createSessionVisibilityRowChecker({
     action: params.action,
     defaultAgentId: params.defaultAgentId,
@@ -320,7 +332,7 @@ function createSessionVisibilityCheckerWithResult(
         return { allowed: true, expectedSessionId: scoped.expectedSessionId };
       }
     }
-    const spawnedKeySet = spawnedKeys?.ok ? spawnedKeys.keys : undefined;
+    const spawnedKeySet = spawnedKeys?.ok ? spawnedKeys.value : undefined;
     const isSpawnedSession = spawnedKeySet?.has(targetSessionKey) === true;
     const result = rowChecker.check({
       key: targetSessionKey,
@@ -336,10 +348,17 @@ function createSessionVisibilityCheckerWithResult(
         targetSessionKey !== "current" &&
         hasResolvableTargetAgent(targetSessionKey, params.defaultAgentId);
       if (lookupFailed) {
+        if (!lookupFailureLogged) {
+          lookupFailureLogged = true;
+          logSessionOwnershipLookupFailure({
+            requesterSessionKey: params.requesterSessionKey,
+            failure: spawnedKeys.error,
+          });
+        }
         return {
           allowed: false,
           status: "forbidden",
-          error: lookupFailedDenialMessage(params.action, spawnedKeys.failureKind),
+          error: lookupFailedDenialMessage(params.action, spawnedKeys.error.kind),
         };
       }
     }
@@ -368,7 +387,7 @@ function createSessionVisibilityCheckerImpl(
 ): { check: (targetSessionKey: string) => SessionAccessResult } {
   return createSessionVisibilityCheckerWithResult({
     ...params,
-    spawnedKeys: params.spawnedKeys ? { ok: true, keys: params.spawnedKeys } : null,
+    spawnedKeys: params.spawnedKeys ? { ok: true, value: params.spawnedKeys } : null,
   });
 }
 

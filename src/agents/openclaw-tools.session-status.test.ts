@@ -431,7 +431,13 @@ function resetSessionStore(inputStore: Record<string, SessionEntry>) {
     if (request.method === "sessions.resolve") {
       const key = typeof request.params?.key === "string" ? request.params.key.trim() : "";
       if (key && store[key]) {
-        return { key };
+        const spawnedBy =
+          typeof request.params?.spawnedBy === "string" ? request.params.spawnedBy.trim() : "";
+        const entry = store[key];
+        if (!spawnedBy || entry.spawnedBy === spawnedBy || entry.parentSessionKey === spawnedBy) {
+          return { key };
+        }
+        return {};
       }
       const sessionId =
         typeof request.params?.sessionId === "string" ? request.params.sessionId.trim() : "";
@@ -497,9 +503,23 @@ function installSameAgentVisibility(visibility: "self" | "tree" | "agent") {
 
 function mockSpawnedSessionList(
   resolveSessions: (spawnedBy: string | undefined) => Array<Record<string, unknown>>,
+  resolveSessionId?: (sessionId: string) => string | undefined,
 ) {
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const request = opts as { method?: string; params?: Record<string, unknown> };
+    if (request.method === "sessions.resolve") {
+      const key = typeof request.params?.key === "string" ? request.params.key.trim() : "";
+      const spawnedBy = request.params?.spawnedBy as string | undefined;
+      if (key && resolveSessions(spawnedBy).some((session) => session.key === key)) {
+        return { key };
+      }
+      const sessionId =
+        typeof request.params?.sessionId === "string" ? request.params.sessionId.trim() : "";
+      if (sessionId && !spawnedBy) {
+        return { key: resolveSessionId?.(sessionId) };
+      }
+      return {};
+    }
     if (request.method === "sessions.list") {
       return { sessions: resolveSessions(request.params?.spawnedBy as string | undefined) };
     }
@@ -507,18 +527,14 @@ function mockSpawnedSessionList(
   });
 }
 
-function expectSpawnedSessionLookupCalls(spawnedBy: string) {
-  const expectedCall = {
-    method: "sessions.list",
-    params: {
-      includeGlobal: false,
-      includeUnknown: false,
-      spawnedBy,
-    },
-  };
-  expect(callGatewayMock).toHaveBeenCalledTimes(2);
-  expect(callGatewayMock).toHaveBeenNthCalledWith(1, expectedCall);
-  expect(callGatewayMock).toHaveBeenNthCalledWith(2, expectedCall);
+function expectSpawnedSessionLookupCalls(spawnedBy: string, targetKeys: string[]) {
+  expect(callGatewayMock).toHaveBeenCalledTimes(targetKeys.length);
+  for (const [index, key] of targetKeys.entries()) {
+    expect(callGatewayMock).toHaveBeenNthCalledWith(index + 1, {
+      method: "sessions.resolve",
+      params: { allowMissing: true, key, spawnedBy },
+    });
+  }
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -2128,7 +2144,7 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool("agent:main:main");
 
     await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
-      "Agent-to-agent status is disabled",
+      "Session status visibility is restricted",
     );
   });
 
@@ -2184,10 +2200,10 @@ describe("session_status tool", () => {
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "sessions.list",
+      method: "sessions.resolve",
       params: {
-        includeGlobal: false,
-        includeUnknown: false,
+        allowMissing: true,
+        key: "agent:main:main",
         spawnedBy: "agent:main:subagent:child",
       },
     });
@@ -2272,7 +2288,10 @@ describe("session_status tool", () => {
 
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
-    expectSpawnedSessionLookupCalls("agent:main:subagent:child");
+    expectSpawnedSessionLookupCalls("agent:main:subagent:child", [
+      "agent:main:main",
+      "agent:main:subagent:missing",
+    ]);
   });
 
   it("blocks sandboxed child bare main session_status access outside its tree", async () => {
@@ -2306,10 +2325,10 @@ describe("session_status tool", () => {
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "sessions.list",
+      method: "sessions.resolve",
       params: {
-        includeGlobal: false,
-        includeUnknown: false,
+        allowMissing: true,
+        key: "agent:main:main",
         spawnedBy: "agent:main:subagent:child",
       },
     });
@@ -2320,13 +2339,15 @@ describe("session_status tool", () => {
       name: "blocks sandboxed child session_status access to another agent sessionId before store lookup",
       sessionId: "s-other",
       callId: "call6-session-id",
+      expectedError: "Session status visibility is restricted.",
     },
     {
       name: "blocks sandboxed child session_status parent sessionId access outside its tree",
       sessionId: "s-parent",
       callId: "call7-parent-session-id",
+      expectedError: "Session status visibility is restricted to the current session tree",
     },
-  ])("$name", async ({ sessionId, callId }) => {
+  ])("$name", async ({ sessionId, callId, expectedError }) => {
     resetSessionStore({
       "agent:main:subagent:child": {
         sessionId: "s-child",
@@ -2341,12 +2362,19 @@ describe("session_status tool", () => {
         : {}),
     });
     installSandboxedSessionStatusConfig();
-    mockSpawnedSessionList(() => []);
+    mockSpawnedSessionList(
+      () => [],
+      (value) =>
+        value === sessionId
+          ? sessionId === "s-other"
+            ? "agent:other:main"
+            : "agent:main:main"
+          : undefined,
+    );
 
     const tool = getSessionStatusTool("agent:main:subagent:child", {
       sandboxed: true,
     });
-    const expectedError = "Session status visibility is restricted to the current session tree";
 
     await expect(
       tool.execute(callId, {
@@ -2359,27 +2387,27 @@ describe("session_status tool", () => {
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
     expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
-      method: "sessions.list",
+      method: "sessions.resolve",
       params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        spawnedBy: "agent:main:subagent:child",
+        key: sessionId,
+        spawnedBy: undefined,
       },
     });
     expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
       method: "sessions.resolve",
       params: {
-        key: sessionId,
-        spawnedBy: "agent:main:subagent:child",
+        sessionId,
+        spawnedBy: undefined,
+        includeGlobal: true,
+        includeUnknown: true,
       },
     });
     expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
       method: "sessions.resolve",
       params: {
-        sessionId,
+        allowMissing: true,
+        key: sessionId === "s-other" ? "agent:other:main" : "agent:main:main",
         spawnedBy: "agent:main:subagent:child",
-        includeGlobal: false,
-        includeUnknown: false,
       },
     });
   });
@@ -2416,7 +2444,7 @@ describe("session_status tool", () => {
     expect(childDetails.ok).toBe(true);
     expect(childDetails.sessionKey).toBe("agent:main:subagent:child");
 
-    expectSpawnedSessionLookupCalls("main");
+    expectSpawnedSessionLookupCalls("main", ["agent:main:subagent:child"]);
   });
 
   it("scopes bare session keys to the requester agent", async () => {
