@@ -72,7 +72,15 @@ export type WhatsAppConfig = Omit<WhatsAppSharedConfig, "name"> &
     pluginHooks?: {
       /** Enable message_received hooks to broadcast inbound WhatsApp messages to plugins. */
       messageReceived?: boolean;
+      /** Enable poll_vote_received hooks to broadcast decoded WhatsApp poll votes to plugins. */
+      pollVoteReceived?: boolean;
     };
+    /**
+     * How long (in milliseconds) poll ownership/decryption state stays
+     * durably retained after a poll is created, so a vote arriving after a
+     * gateway restart can still be decoded. Default: 600000 (10 minutes).
+     */
+    pollVoteRetentionMs?: number;
   };
 
 export type WhatsAppAccountConfig = WhatsAppSpecificConfig &
@@ -85,5 +93,14 @@ export type WhatsAppAccountConfig = WhatsAppSpecificConfig &
     pluginHooks?: {
       /** Enable message_received hooks to broadcast inbound WhatsApp messages to plugins. */
       messageReceived?: boolean;
+      /** Enable poll_vote_received hooks to broadcast decoded WhatsApp poll votes to plugins. */
+      pollVoteReceived?: boolean;
     };
+    /**
+     * How long (in milliseconds) poll ownership/decryption state stays
+     * durably retained after a poll is created, so a vote arriving after a
+     * gateway restart can still be decoded. Overrides the channel-level
+     * default. Default: 600000 (10 minutes).
+     */
+    pollVoteRetentionMs?: number;
   };

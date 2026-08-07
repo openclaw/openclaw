@@ -2,6 +2,26 @@
 import { describe, it, expect } from "vitest";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
+describe("WhatsApp pollVoteRetentionMs Zod validation", () => {
+  it("accepts a value within the 24-hour maximum", () => {
+    const result = WhatsAppConfigSchema.safeParse({ pollVoteRetentionMs: 3_600_000 });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pollVoteRetentionMs).toBe(3_600_000);
+    }
+  });
+
+  it("rejects a value above the 24-hour maximum", () => {
+    const result = WhatsAppConfigSchema.safeParse({ pollVoteRetentionMs: 24 * 60 * 60 * 1000 + 1 });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a non-positive value", () => {
+    const result = WhatsAppConfigSchema.safeParse({ pollVoteRetentionMs: 0 });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("WhatsApp prompt config Zod validation", () => {
   it("validates group-level systemPrompt", () => {
     const config = {
@@ -169,6 +189,46 @@ describe("WhatsApp prompt config Zod validation", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.accounts?.work?.pluginHooks?.messageReceived).toBe(false);
+    }
+  });
+
+  it("accepts channel-level pluginHooks.pollVoteReceived", () => {
+    const config = {
+      pluginHooks: {
+        pollVoteReceived: true,
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.pollVoteReceived).toBe(true);
+    }
+  });
+
+  it("accepts account-level pluginHooks.pollVoteReceived", () => {
+    const config = {
+      accounts: {
+        work: {
+          pluginHooks: {
+            pollVoteReceived: true,
+          },
+        },
+      },
+    };
+
+    const result = WhatsAppConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.pluginHooks?.pollVoteReceived).toBe(true);
+    }
+  });
+
+  it("defaults pluginHooks.pollVoteReceived to undefined (disabled) when omitted", () => {
+    const result = WhatsAppConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pluginHooks?.pollVoteReceived).toBeUndefined();
     }
   });
 });

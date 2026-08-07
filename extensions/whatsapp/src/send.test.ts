@@ -14,6 +14,7 @@ const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   controllerListeners: new Map<string, ActiveWebListener>(),
   transcodeAudioBufferToOpus: vi.fn(),
+  rememberWhatsAppOwnPollCreation: vi.fn(),
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
@@ -61,6 +62,15 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   return {
     ...actual,
     transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus,
+  };
+});
+
+vi.mock("./inbound/poll-votes.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./inbound/poll-votes.js")>("./inbound/poll-votes.js");
+  return {
+    ...actual,
+    rememberWhatsAppOwnPollCreation: hoisted.rememberWhatsAppOwnPollCreation,
   };
 });
 
@@ -758,11 +768,14 @@ describe("web outbound", () => {
     });
   });
 
-  it("sends polls via active listener", async () => {
+  it("sends polls via active listener and records ownership when the hook is enabled", async () => {
+    const cfgWithHookEnabled: OpenClawConfig = {
+      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+    };
     const result = await sendPollWhatsApp(
       "+1555",
       { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 2 },
-      { verbose: false, cfg: WHATSAPP_TEST_CFG },
+      { verbose: false, cfg: cfgWithHookEnabled },
     );
     expect(result).toEqual({
       messageId: "poll123",
@@ -775,6 +788,60 @@ describe("web outbound", () => {
       durationSeconds: undefined,
       durationHours: undefined,
     });
+    // Ownership is recorded from the accepted send itself — not only from
+    // later observing our own message echo on the inbound stream — so a
+    // vote arriving before (or without) that echo isn't silently dropped
+    // by the poll_vote_received hook's ownership gate.
+    expect(hoisted.rememberWhatsAppOwnPollCreation).toHaveBeenCalledWith(
+      "default",
+      "1555@s.whatsapp.net",
+      "poll123",
+      cfgWithHookEnabled,
+    );
+  });
+
+  it("does not persist poll ownership/key state when the hook is disabled (default)", async () => {
+    // WHATSAPP_TEST_CFG has no pluginHooks.pollVoteReceived set — the
+    // default-off case. Sending a poll must still succeed, but nothing
+    // decryptable should be written to durable state: the opt-in being off
+    // must mean no durable poll-key material exists at all, not just that
+    // dispatch is suppressed later.
+    const result = await sendPollWhatsApp(
+      "+1555",
+      { question: "Lunch?", options: ["Pizza", "Sushi"] },
+      { verbose: false, cfg: WHATSAPP_TEST_CFG },
+    );
+    expect(result).toEqual({
+      messageId: "poll123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(hoisted.rememberWhatsAppOwnPollCreation).not.toHaveBeenCalled();
+  });
+
+  it("keeps an accepted poll send successful even when hook-state persistence throws", async () => {
+    // Regression: Baileys has already accepted the poll by the time
+    // rememberWhatsAppOwnPollCreation runs. If that (or the key-persistence
+    // call) throws — e.g. a plugin-state I/O failure — it must not fail the
+    // send: the caller would see an error for a poll that's actually live,
+    // and a naive retry could create a duplicate poll.
+    const cfgWithHookEnabled: OpenClawConfig = {
+      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+    };
+    hoisted.rememberWhatsAppOwnPollCreation.mockImplementationOnce(() => {
+      throw new Error("simulated plugin-state write failure");
+    });
+
+    const result = await sendPollWhatsApp(
+      "+1555",
+      { question: "Lunch?", options: ["Pizza", "Sushi"] },
+      { verbose: false, cfg: cfgWithHookEnabled },
+    );
+
+    expect(result).toEqual({
+      messageId: "poll123",
+      toJid: "1555@s.whatsapp.net",
+    });
+    expect(hoisted.rememberWhatsAppOwnPollCreation).toHaveBeenCalledTimes(1);
   });
 
   it("rejects polls without an accepted provider message key", async () => {

@@ -79,6 +79,7 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
   PluginHookName,
+  PluginHookPollVoteReceivedEvent,
   PluginHookRegistration,
   PluginHookSessionContext,
   PluginHookSessionEndEvent,
@@ -1092,6 +1093,18 @@ export function createHookRunner(
   }
 
   /**
+   * Run poll_vote_received hook.
+   * Passive observation only (per #78963) — runs in parallel (fire-and-forget)
+   * and never triggers an agent run.
+   */
+  async function runPollVoteReceived(
+    event: PluginHookPollVoteReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("poll_vote_received", event, ctx);
+  }
+
+  /**
    * Run before_dispatch hook.
    * Allows plugins to inspect or handle a message before model dispatch.
    * First handler returning { handled: true } wins.
@@ -1667,6 +1680,7 @@ export function createHookRunner(
       event: PluginHookMessageReceivedEvent,
       ctx: PluginHookMessageContext,
     ): Promise<void> => runVoidHook("message_received", event, ctx),
+    runPollVoteReceived,
     runBeforeDispatch,
     runReplyDispatch,
     runReplyPayloadSending,

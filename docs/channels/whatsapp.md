@@ -253,6 +253,104 @@ Inbound WhatsApp messages can carry personal content, phone numbers, group ident
 
 Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHooks.messageReceived`. Only enable this for plugins you trust with inbound WhatsApp content and identifiers.
 
+Poll votes follow the same opt-in pattern, under a separate flag. When someone
+votes on a poll OpenClaw created (`message(action="poll", ...)`), WhatsApp
+does not broadcast the decoded vote to plugins unless you enable
+`pluginHooks.pollVoteReceived`:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      pluginHooks: {
+        pollVoteReceived: true,
+      },
+    },
+  },
+}
+```
+
+Same account-level scoping as above:
+`channels.whatsapp.accounts.<id>.pluginHooks.pollVoteReceived`. The
+`poll_vote_received` hook is passive observation only — it never triggers an
+agent run — and delivers `pollMessageId`, `chatJid`, `voter`, and
+`selectedOptions` (an empty array means the voter retracted their vote). See
+[Plugin hooks → Message hooks](/plugins/hooks#message-hooks) for the full
+payload reference.
+
+**Ownership.** A poll is only ever recorded as "this account created it" from
+the accepted-send result of a `message(action="poll", ...)` call this
+gateway itself made — never inferred from observing a `fromMe` poll-creation
+message on the inbound stream. `fromMe` also covers polls created manually
+from another device linked to the same WhatsApp account, which the gateway
+never sent; trusting that signal would let opted-in plugins receive votes on
+polls this gateway didn't create. Ownership is written exactly once, at
+accepted-send time, so replaying or delaying delivery of the corresponding
+inbound echo has no effect on stored state — there's nothing left for a
+delayed echo to do.
+
+**Retention.** Decoding a vote requires the poll's decryption key, captured
+directly from the accepted send's own result (no need to wait for or rely on
+any later inbound echo). That key (and the ownership record above) is kept
+in the runtime's canonical plugin-state store, namespaced under the
+`whatsapp` plugin id — not a bespoke database — so it survives a gateway
+restart, not just an in-memory cache, but **only when the hook is enabled**:
+with `pluginHooks.pollVoteReceived` off (the default), nothing is persisted
+for outbound polls at all. Each record's expiry is anchored to when it was
+first written and does not move. Expired records stop being readable
+immediately, and are physically removed from disk the next time the
+framework's plugin-state maintenance task runs (periodic, not synchronous
+with expiry) — so a small window can exist where expired key material is
+unreadable but not yet erased from the underlying database file. A vote
+arriving after the retention window (or an unrelated poll's leftover state)
+is not decodable and the hook simply does not fire for it — no error is
+raised. `pollVoteRetentionMs` accepts any positive value up to a hard
+maximum of `86400000` (24 hours); larger configured values are rejected by
+config validation. Configure the window channel-wide or per account:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      pollVoteRetentionMs: 1800000, // 30 minutes
+      accounts: {
+        support: {
+          pollVoteRetentionMs: 3600000, // override: 1 hour for this account
+        },
+      },
+    },
+  },
+}
+```
+
+**Known limitation: a vote cast while the gateway is offline is not
+recovered when it comes back.** The durable retention above solves the half
+of this that's under OpenClaw's control — the decryption key and ownership
+record survive a restart. The other half is not: WhatsApp does not appear to
+redeliver a poll vote that arrived while this account's session was
+disconnected, at least not for a companion/linked device, and at least not
+within several minutes of reconnecting. Two approaches were tried and
+verified live against a real account:
+
+1. Passive reconnect — simply waiting after the socket reports `open` again.
+   No redelivery observed after 5–11 minutes across two independent runs.
+2. Active on-demand history sync — calling Baileys'
+   `sock.fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestampMs)`
+   (`HISTORY_SYNC_ON_DEMAND` peer-data-operation) on reconnect, anchored to
+   the poll's own creation message. The request was accepted and sent to the
+   linked primary phone, but produced no response within ~4.5 minutes. This
+   likely requires the primary phone's WhatsApp app to be foregrounded to
+   service the request (matching its normal use as an on-demand "load older
+   messages while scrolling" mechanism, not a background catch-up sync) —
+   unconfirmed.
+
+In practice this matters only for votes cast during the (typically short)
+window a gateway process is down; a gateway that stays connected sees every
+vote normally. Recovering votes cast during that window is left as a future
+improvement — candidates include retrying `fetchMessageHistory` on a
+schedule rather than once, or triggering it from a plugin hook when the
+primary phone is known to be active.
+
 ## Access control and activation
 
 <Tabs>
