@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readBoundedSkillFile } from "./bounded-skill-read.js";
 import { parseFrontmatter, resolveOpenClawMetadata } from "./frontmatter.js";
-import { loadSkills, readBoundedSkillFile } from "./session.js";
+import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

@@ -18,7 +18,6 @@ const MAX_NAME_LENGTH = 64;
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
 
-export { readBoundedSkillFile } from "./bounded-skill-read.js";
 import { readBoundedSkillFile } from "./bounded-skill-read.js";
 
 export interface Skill {

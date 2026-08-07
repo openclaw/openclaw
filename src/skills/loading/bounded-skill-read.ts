@@ -2,7 +2,7 @@ import { closeSync, fstatSync, openSync } from "node:fs";
 import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 
 /** Max file size for a single SKILL.md. Matches workspace skill loading limit. */
-export const MAX_SKILL_FILE_BYTES = 256_000;
+const MAX_SKILL_FILE_BYTES = 256_000;
 
 /**
  * Read SKILL.md content through a pinned descriptor to avoid TOCTOU races
