@@ -326,10 +326,16 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
   // the gateway bounds request bodies via MCP_APP_OPERATION_MAX_BODY_BYTES.
   // The initial view load uses a fixed 30s budget; operation fetches derive
   // their deadline from the owning MCP server's requestTimeoutMs (carried in
-  // the view payload) plus a small grace for gateway overhead, so a valid
-  // long-running tool call is not aborted before the server-side budget.
+  // the view payload). The budget is doubled because a single browser
+  // operation request can span two server-side phases that each consume up
+  // to requestTimeoutMs: an invalidated catalog rebuild (getCatalog() in
+  // requireCallableTool or the runtime operation) followed by the upstream
+  // call itself (callTool / readResource with its own requestTimeoutMs). A
+  // single-budget deadline would abort a valid long-running call while the
+  // server continues it, inviting duplicate side effects on retry.
   const MCP_APP_VIEW_LOAD_TIMEOUT_MS = 30_000;
   const DEFAULT_OPERATION_TIMEOUT_MS = 60_000;
+  const OPERATION_TIMEOUT_PHASES = 2;
   const OPERATION_TIMEOUT_GRACE_MS = 5_000;
   const withFetchDeadline = async <T>(
     input: string,
@@ -348,7 +354,8 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
   };
   const request = (method: string, params: unknown): Promise<unknown> => {
     const operationDeadlineMs =
-      (payload?.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS) + OPERATION_TIMEOUT_GRACE_MS;
+      OPERATION_TIMEOUT_PHASES * (payload?.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS) +
+      OPERATION_TIMEOUT_GRACE_MS;
     return withFetchDeadline(
       config.viewPath,
       {

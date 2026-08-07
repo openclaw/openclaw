@@ -502,4 +502,122 @@ describe("standalone host fetch deadline", () => {
     vi.advanceTimersByTime(60_000);
     expect(hostReplaceChildren).toHaveBeenCalledTimes(1);
   });
+
+  it("covers catalog rebuild plus upstream call in the operation deadline via the serialized shell", async () => {
+    // Regression: a single browser operation request can span two server-side
+    // phases that each consume up to requestTimeoutMs — an invalidated
+    // catalog rebuild (getCatalog() in requireCallableTool) followed by the
+    // upstream call (callTool with its own requestTimeoutMs). The browser
+    // deadline must cover both phases so a valid long-running operation is
+    // not aborted while the server continues it (inviting duplicate side
+    // effects on retry).
+    const hostReplaceChildren = vi.fn();
+    const iframeContentWindow = { postMessage: vi.fn() };
+    const iframe = {
+      src: "",
+      title: "",
+      referrerPolicy: "",
+      style: { height: "600px" },
+      setAttribute: vi.fn(),
+      contentWindow: iframeContentWindow,
+      remove: vi.fn(),
+    };
+    vi.stubGlobal("document", {
+      getElementById: () => ({ replaceChildren: hostReplaceChildren }),
+      createElement: (name: string) => (name === "iframe" ? iframe : {}),
+    });
+    vi.stubGlobal("location", { hash: "#test-ticket", origin: "http://localhost:18900" });
+    const addEventListenerMock = vi.fn();
+    vi.stubGlobal("addEventListener", addEventListenerMock);
+    vi.stubGlobal("navigator", { language: "en" });
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    vi.stubGlobal("innerWidth", 1024);
+
+    const fetchMock = vi.fn(async (_input: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        // Operation fetch — stall until the abort signal fires so the
+        // deadline is the only path to completion.
+        const signal = init?.signal as AbortSignal | undefined;
+        return new Promise<Response>((_, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+        });
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          sandboxUrl: "/mcp-app-sandbox",
+          sandboxPort: 18_901,
+          html: "<p>app</p>",
+          toolInput: {},
+          toolResult: {},
+          serverTools: true,
+          operationTimeoutMs: 90_000,
+        }),
+      } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const bootstrap = await extractBootstrap();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Execute the generated bootstrap itself so the test cannot drift into a reimplementation.
+    new Function(bootstrap)();
+
+    // Let the view load settle — the iframe is placed in the host element.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hostReplaceChildren).toHaveBeenCalledWith(expect.objectContaining({ title: "MCP App" }));
+
+    // The serialized shell registered a "message" listener for iframe traffic.
+    const messageListener = addEventListenerMock.mock.calls.find(
+      (call: unknown[]) => call[0] === "message",
+    )?.[1] as ((event: unknown) => void) | undefined;
+    expect(messageListener).toBeDefined();
+
+    const sandboxOrigin = "http://localhost:18901";
+    const send = (data: unknown): void =>
+      messageListener?.({ data, origin: sandboxOrigin, source: iframeContentWindow });
+
+    // Complete the MCP handshake so the tools/call handler accepts requests.
+    send({
+      jsonrpc: "2.0",
+      id: "init",
+      method: "ui/initialize",
+      params: {
+        protocolVersion: "2026-01-26",
+        appInfo: { name: "test", version: "1.0.0" },
+        appCapabilities: {},
+      },
+    });
+    send({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+
+    // Trigger a tools/call — this issues a POST fetch bound by the operation
+    // deadline (2 * operationTimeoutMs + grace = 185_000ms).
+    send({
+      jsonrpc: "2.0",
+      id: "call-1",
+      method: "tools/call",
+      params: { name: "app-only", arguments: {} },
+    });
+
+    // The old single-budget deadline (operationTimeoutMs + 5s = 95_000ms)
+    // would have aborted here. The doubled deadline must still be pending.
+    await vi.advanceTimersByTimeAsync(95_000);
+    expect(iframeContentWindow.postMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: "call-1", error: expect.anything() }),
+      expect.any(String),
+    );
+
+    // Advance past the full lifecycle deadline (2 * 90_000 + 5_000 = 185_000).
+    await vi.advanceTimersByTimeAsync(90_001);
+    expect(iframeContentWindow.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jsonrpc: "2.0",
+        id: "call-1",
+        error: expect.objectContaining({
+          code: -32000,
+          message: expect.stringContaining("aborted"),
+        }),
+      }),
+      expect.any(String),
+    );
+  });
 });
