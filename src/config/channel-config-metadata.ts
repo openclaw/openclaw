@@ -2,9 +2,10 @@
  * Converts plugin manifest metadata into deterministic config UI metadata for docs, validation, and runtime schema.
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
+import { resolveManifestOwnerActivationState } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
@@ -18,8 +19,16 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   originRank: number;
-  schemaPreferOver?: readonly string[];
-  schemaOwnerActivated?: boolean;
+};
+
+/** One plugin's claim on a channel id, with the policy facts that decide ownership. */
+type ChannelSchemaClaim = {
+  record: PluginManifestRecord;
+  preferOver?: readonly string[];
+  originRank: number;
+  activated: boolean;
+  explicitlyEnabled: boolean;
+  behindCloserDeclaration: boolean;
 };
 
 type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
@@ -139,31 +148,104 @@ function declaresChannelPreferenceOver(
   return (preferOver ?? []).some((entry) => entry.trim().toLowerCase() === target);
 }
 
-/** Decides whether the recorded channel schema owner survives a competing channel config. */
-function keepsChannelSchemaOwnership(params: {
-  current: ChannelMetadataRecord;
-  originRank: number;
-  pluginId: string;
-  pluginActivated: boolean;
-}): boolean {
-  const { current } = params;
-  if (current.configSchema === undefined && current.configUiHints === undefined) {
-    return false;
+function keepHighestRanked<T>(claims: readonly T[], rank: (claim: T) => number): readonly T[] {
+  const best = Math.max(...claims.map(rank));
+  return claims.filter((claim) => rank(claim) === best);
+}
+
+/** Ranks a claim above the claims it supersedes and below the claims that supersede it. */
+function channelReplacementRank(
+  claim: ChannelSchemaClaim,
+  claims: readonly ChannelSchemaClaim[],
+): number {
+  const supersedes = claims.some(
+    (other) => other !== claim && declaresChannelPreferenceOver(claim.preferOver, other.record.id),
+  );
+  const superseded = claims.some(
+    (other) => other !== claim && declaresChannelPreferenceOver(other.preferOver, claim.record.id),
+  );
+  return (supersedes ? 1 : 0) - (superseded ? 1 : 0);
+}
+
+/**
+ * Selects one owner across every claim on a channel id, strongest tier first: effective plugin
+ * policy (metadata snapshots keep disabled plugins, and an inactive plugin must never own the
+ * schema that validates a live channel), then origin closeness, then explicit operator selection
+ * (runtime only supersedes an implicitly selected plugin, so an explicit one keeps the schema that
+ * validates its existing keys), then the declared preferOver replacement, then the incumbent a
+ * closer-origin declaration already froze. Claims that tie on every tier keep the last-claim-wins
+ * registry order.
+ */
+function selectChannelSchemaOwner(claims: readonly ChannelSchemaClaim[]): PluginManifestRecord {
+  let eligible = keepHighestRanked(claims, (claim) => (claim.activated ? 1 : 0));
+  eligible = keepHighestRanked(eligible, (claim) => -claim.originRank);
+  eligible = keepHighestRanked(eligible, (claim) => (claim.explicitlyEnabled ? 1 : 0));
+  const contenders = eligible;
+  eligible = keepHighestRanked(contenders, (claim) => channelReplacementRank(claim, contenders));
+  const owners = keepHighestRanked(eligible, (claim) => (claim.behindCloserDeclaration ? 0 : 1));
+  return expectDefined(owners.at(-1), "channel schema owner").record;
+}
+
+/** Resolves the winning channel config claim per channel id before any metadata is written. */
+function selectChannelSchemaOwners(
+  registry: PluginManifestRegistry,
+  config?: OpenClawConfig,
+): Map<string, PluginManifestRecord> {
+  // Without config every plugin counts as an equally eligible owner, which keeps registry-only
+  // callers (docs baseline, contract tests) on pure manifest metadata.
+  const normalizedPlugins = config ? normalizePluginsConfig(config.plugins) : undefined;
+  const claimsByChannelId = new Map<string, ChannelSchemaClaim[]>();
+  const closestDeclaredRank = new Map<string, number>();
+  const declareChannel = (channelId: string, originRank: number): void => {
+    const closest = closestDeclaredRank.get(channelId);
+    if (closest === undefined || originRank < closest) {
+      closestDeclaredRank.set(channelId, originRank);
+    }
+  };
+
+  for (const record of registry.plugins) {
+    const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+    for (const channelId of record.channels) {
+      declareChannel(channelId, originRank);
+    }
+    const channelConfigs = Object.entries(record.channelConfigs ?? {});
+    if (channelConfigs.length === 0) {
+      continue;
+    }
+    const activation = normalizedPlugins
+      ? resolveManifestOwnerActivationState({
+          plugin: record,
+          normalizedConfig: normalizedPlugins,
+          rootConfig: config,
+        })
+      : { activated: true, explicitlyEnabled: false };
+    for (const [channelId, channelConfig] of channelConfigs) {
+      const claim: ChannelSchemaClaim = {
+        record,
+        preferOver: channelConfig.preferOver,
+        originRank,
+        activated: activation.activated,
+        explicitlyEnabled: activation.explicitlyEnabled,
+        // A closer-origin plugin that declared this channel id first keeps the incumbent owner,
+        // so a farther-origin claim behind it cannot take a schema that closer metadata shadows.
+        behindCloserDeclaration: (closestDeclaredRank.get(channelId) ?? originRank) < originRank,
+      };
+      declareChannel(channelId, originRank);
+      const claims = claimsByChannelId.get(channelId);
+      if (claims) {
+        claims.push(claim);
+      } else {
+        claimsByChannelId.set(channelId, [claim]);
+      }
+    }
   }
-  if (current.originRank !== params.originRank) {
-    // A closer-origin channel config owns schema/UI hints even if a farther plugin also
-    // advertises the same channel id.
-    return current.originRank < params.originRank;
-  }
-  // Metadata snapshots keep disabled plugins, so effective plugin policy breaks equal-origin
-  // ties first: an inactive plugin must never own the schema that validates a live channel.
-  const currentActivated = current.schemaOwnerActivated ?? true;
-  if (currentActivated !== params.pluginActivated) {
-    return currentActivated;
-  }
-  // Equal origin and equal policy: the channel config that declared preferOver keeps ownership,
-  // so registry traversal order cannot hand the channel schema back to the plugin it supersedes.
-  return declaresChannelPreferenceOver(current.schemaPreferOver, params.pluginId);
+
+  return new Map(
+    [...claimsByChannelId].map(([channelId, claims]) => [
+      channelId,
+      selectChannelSchemaOwner(claims),
+    ]),
+  );
 }
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
@@ -203,20 +285,10 @@ export function collectChannelSchemaMetadataWithOwnership(
   config?: OpenClawConfig,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
-  // Without config every plugin counts as active, which keeps registry-only callers
-  // (docs baseline, contract tests) on pure manifest metadata.
-  const normalizedPlugins = config ? normalizePluginsConfig(config.plugins) : undefined;
-  const isPluginActivated = (record: PluginManifestRecord): boolean =>
-    !normalizedPlugins ||
-    isActivatedManifestOwner({
-      plugin: record,
-      normalizedConfig: normalizedPlugins,
-      rootConfig: config,
-    });
+  const schemaOwners = selectChannelSchemaOwners(registry, config);
 
   for (const record of registry.plugins) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
-    const pluginActivated = isPluginActivated(record);
     const rootLabel = record.channelCatalogMeta?.label;
     const rootDescription = record.channelCatalogMeta?.blurb;
 
@@ -233,21 +305,18 @@ export function collectChannelSchemaMetadataWithOwnership(
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
           schemaPluginOrigin: current?.schemaPluginOrigin,
-          schemaPreferOver: current?.schemaPreferOver,
-          schemaOwnerActivated: current?.schemaOwnerActivated,
           originRank,
         });
       }
     }
 
     for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
-      const current = byChannelId.get(channelId);
-      if (
-        current &&
-        keepsChannelSchemaOwnership({ current, originRank, pluginId: record.id, pluginActivated })
-      ) {
+      // Ownership is decided across every claim on this channel id before any metadata is
+      // written, so registry traversal order can no longer overwrite the selected owner.
+      if (schemaOwners.get(channelId) !== record) {
         continue;
       }
+      const current = byChannelId.get(channelId);
       byChannelId.set(channelId, {
         id: channelId,
         label: channelConfig.label ?? rootLabel ?? current?.label,
@@ -260,8 +329,6 @@ export function collectChannelSchemaMetadataWithOwnership(
         configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
         schemaPluginId: channelConfig.schema === undefined ? undefined : record.id,
         schemaPluginOrigin: channelConfig.schema === undefined ? undefined : record.origin,
-        schemaPreferOver: channelConfig.schema === undefined ? undefined : channelConfig.preferOver,
-        schemaOwnerActivated: pluginActivated,
         originRank,
       });
     }
@@ -269,14 +336,7 @@ export function collectChannelSchemaMetadataWithOwnership(
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(
-      ({
-        originRank: _originRank,
-        schemaPreferOver: _schemaPreferOver,
-        schemaOwnerActivated: _schemaOwnerActivated,
-        ...entry
-      }) => entry,
-    );
+    .map(({ originRank: _originRank, ...entry }) => entry);
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */
