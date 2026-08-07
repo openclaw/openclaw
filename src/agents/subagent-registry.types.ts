@@ -4,6 +4,7 @@ import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
@@ -53,6 +54,7 @@ export type PendingFinalDeliveryPayload = {
   endedAt?: number;
   outcome?: SubagentRunOutcome;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
   terminalReply?: AgentRunTerminalReplySnapshot;
@@ -154,7 +156,7 @@ export type SubagentCompletionDeliveryState = {
   steeringLeasedAt?: number;
   steeringInjectedAt?: number;
   suspendedAt?: number;
-  suspendedReason?: "retry-limit" | "expiry" | "permanent_failure";
+  suspendedReason?: "retry-limit" | "expiry" | "ambiguous" | "permanent_failure";
   dismissedAt?: number;
   discardedAt?: number;
   discardReason?: "expired";
@@ -260,6 +262,7 @@ export type SubagentRunRecord = {
   /** Durable requester-stop policy until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;

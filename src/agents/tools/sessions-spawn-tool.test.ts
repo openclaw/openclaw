@@ -294,6 +294,40 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.timeoutSeconds).toBeUndefined();
   });
 
+  it("exposes native announceTarget without coupling it to ACP streamTo", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        announceTarget?: { enum?: string[]; description?: string };
+        streamTo?: { enum?: string[]; description?: string };
+      };
+    };
+
+    expect(schema.properties?.announceTarget?.enum).toEqual(["parent"]);
+    expect(schema.properties?.announceTarget?.description).toContain("Native completion routing");
+    expect(schema.properties?.streamTo?.description).toContain("ACP only");
+
+    await tool.execute("call-native-parent", {
+      task: "investigate",
+      announceTarget: "parent",
+    });
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.announceTarget).toBe("parent");
+
+    await expect(
+      tool.execute("call-acp-parent", {
+        runtime: "acp",
+        task: "investigate with acp",
+        agentId: "codex",
+        announceTarget: "parent",
+      }),
+    ).rejects.toThrow(
+      'sessions_spawn announceTarget is only supported for runtime="subagent". Use streamTo="parent" for ACP.',
+    );
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
     const schema = tool.parameters as { properties?: Record<string, unknown> };
@@ -720,6 +754,11 @@ describe("sessions_spawn tool", () => {
       "attachAs",
       { attachAs: { mountPath: "inputs" } },
       "Parameters unavailable with visible=true: attachAs: attachment staging is not wired to the sessions.create path",
+    ],
+    [
+      "announceTarget",
+      { announceTarget: "parent" },
+      "Parameters unavailable with visible=true: announceTarget: native completion routing is not wired to the visible sessions.create path",
     ],
   ] as const)("rejects visible %s overrides with a reason", async (_name, override, message) => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });

@@ -150,6 +150,11 @@ export async function maybeSpawnVisibleSession(params: {
       params.raw.attachAs,
       "attachment staging is not wired to the sessions.create path",
     ],
+    [
+      "announceTarget",
+      params.raw.announceTarget,
+      "native completion routing is not wired to the visible sessions.create path",
+    ],
   ] as const;
   const unsupportedEntries = unsupported.filter(([, value]) => value !== undefined);
   if (unsupportedEntries.length > 0) {

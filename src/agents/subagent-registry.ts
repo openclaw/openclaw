@@ -205,7 +205,7 @@ function scheduleSubagentDeliveryResumeRetry(
 function finalizeResumedAnnounceGiveUpInBackground(
   runId: string,
   entry: SubagentRunRecord,
-  reason: "expiry" | "permanent_failure",
+  reason: "expiry" | "ambiguous" | "permanent_failure",
 ) {
   void runWithGatewayIndependentRootWorkAdmission(async () => {
     await finalizeResumedAnnounceGiveUp({ runId, entry, reason });
@@ -253,6 +253,22 @@ export function resumeSubagentRun(runId: string) {
     return;
   }
   if (typeof entry.execution.endedAt === "number" && isDeliverySuspended(entry)) {
+    return;
+  }
+  if (entry.delivery?.disposition === "intentional_non_delivery") {
+    if (startSubagentAnnounceCleanupFlow(runId, entry)) {
+      resumedRuns.add(runId);
+    }
+    return;
+  }
+  const terminalDeliveryDisposition =
+    entry.delivery?.disposition === "ambiguous" ||
+    entry.delivery?.disposition === "permanent_failure"
+      ? entry.delivery.disposition
+      : undefined;
+  if (terminalDeliveryDisposition) {
+    finalizeResumedAnnounceGiveUpInBackground(runId, entry, terminalDeliveryDisposition);
+    resumedRuns.add(runId);
     return;
   }
   // Yielded runs stay paused until explicitly steered, except orchestrators

@@ -20,6 +20,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
   allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
+  allowedMissingColumns: ["subagent_runs.announce_target"],
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
     "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],

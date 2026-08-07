@@ -419,6 +419,7 @@ export function createSubagentRegistryLifecycleDelivery(
   const loadPendingFinalDeliveryPayload = (
     entry: SubagentRunRecord,
   ): PendingFinalDeliveryPayload => {
+    const payload = entry.delivery?.payload;
     return {
       requesterSessionKey:
         entry.delivery?.payload?.requesterSessionKey ?? entry.requesterSessionKey,
@@ -432,8 +433,8 @@ export function createSubagentRegistryLifecycleDelivery(
       startedAt: entry.delivery?.payload?.startedAt ?? entry.execution.startedAt,
       endedAt: entry.delivery?.payload?.endedAt ?? entry.execution.endedAt,
       outcome: entry.delivery?.payload?.outcome ?? entry.execution.outcome,
-      expectsCompletionMessage:
-        entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
+      expectsCompletionMessage: payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
+      announceTarget: payload?.announceTarget ?? entry.announceTarget,
       spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
       wakeOnDescendantSettle:
         entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,

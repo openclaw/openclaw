@@ -1,4 +1,5 @@
 import type { FastMode } from "../shared/fast-mode.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -27,6 +28,7 @@ export type SpawnSubagentParams = {
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
+  announceTarget?: SubagentAnnounceTarget;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{

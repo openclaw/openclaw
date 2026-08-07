@@ -144,6 +144,11 @@
         "agentId": {
           "type": "string"
         },
+        "announceTarget": {
+          "description": "Native completion routing. Set \"parent\" to wake the requester session without automatic external delivery; omit to preserve the normal parent-first completion path.",
+          "enum": ["parent"],
+          "type": "string"
+        },
         "attachAs": {
           "description": "Attachment mount hint; unavailable with visible=true.",
           "properties": {

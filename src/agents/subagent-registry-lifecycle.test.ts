@@ -341,6 +341,7 @@ async function runNoReplyMirrorScenario(params: {
   text?: string;
   idempotencyKey?: string;
   idempotencyKeyForEntry?: (entry: SubagentRunRecord) => string;
+  announceTarget?: "parent";
 }): Promise<SubagentRunRecord> {
   // A failed direct announce can still be mirrored from the requester history;
   // the idempotency key prevents stale or unrelated assistant text from winning.
@@ -348,6 +349,7 @@ async function runNoReplyMirrorScenario(params: {
     endedAt: 4_000,
     expectsCompletionMessage: true,
     retainAttachmentsOnKeep: true,
+    announceTarget: params.announceTarget,
   });
   const text = params.text ?? "final completion reply";
   const idempotencyKey =
@@ -3633,6 +3635,46 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
+  it("records intentional completion silence without claiming requester delivery", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow = vi.fn(
+      async (announceParams: {
+        onDeliveryResult?: (delivery: {
+          delivered: false;
+          path: "direct";
+          terminal: true;
+          disposition: "intentional_non_delivery";
+        }) => void;
+      }) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          terminal: true,
+          disposition: "intentional_non_delivery",
+        });
+        return true;
+      },
+    );
+
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await expect(completeRun(controller, entry, { triggerCleanup: true })).resolves.toBeUndefined();
+
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    expect(entry.delivery).toMatchObject({
+      status: "discarded",
+      disposition: "intentional_non_delivery",
+    });
+    expect(entry.delivery?.deliveredAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
   it("credits only current-run requester delivery mirrors before retrying NO_REPLY", async () => {
     const entry = await runNoReplyMirrorScenario({ timestamp: 12_345 });
 
@@ -3741,6 +3783,76 @@ describe("subagent registry lifecycle hardening", () => {
       "completion agent did not produce a visible reply",
     );
     expect(hasDeliveredTaskStatusUpdate(sameWindowSiblingEntry.runId)).toBe(false);
+  });
+
+  it("does not credit a delivery mirror for parent-only completion", async () => {
+    const entry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      announceTarget: "parent",
+    });
+
+    await waitForLifecycleState(() => expect(entry.delivery?.suspendedAt).toBeTypeOf("number"));
+    expect(entry.delivery?.deliveredAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
+    expect(entry.delivery?.lastError).toBe("completion agent did not produce a visible reply");
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
+    expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "chat.history" }),
+    );
+  });
+
+  it("does not re-run announce for a persisted ambiguous delivery", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      outcome: { status: "ok" },
+      delivery: {
+        status: "pending",
+        disposition: "ambiguous",
+        lastError:
+          "parent-only completion committed an outbound side effect without a source-matched receipt",
+      },
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+
+    await waitForLifecycleState(() => expect(entry.delivery?.suspendedAt).toBeTypeOf("number"));
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(entry.delivery).toMatchObject({
+      status: "suspended",
+      disposition: "ambiguous",
+      suspendedReason: "ambiguous",
+    });
+  });
+
+  it("settles persisted intentional silence without re-running announce", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      outcome: { status: "ok" },
+      delivery: {
+        status: "pending",
+        disposition: "intentional_non_delivery",
+      },
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(entry.delivery).toMatchObject({
+      status: "discarded",
+      disposition: "intentional_non_delivery",
+    });
+    expect(entry.delivery?.deliveredAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
   });
 
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {

@@ -1,6 +1,8 @@
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
+import { shouldAnnounceCompletionForInitialChildRun } from "./subagent-announce-target.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { resolveSubagentAgentGatewayTimeoutMs } from "./subagent-spawn-gateway.js";
@@ -25,6 +27,7 @@ export function buildSubagentLaunchRequest(params: {
   };
   childIdem: string;
   deliverInitialChildRunDirectly: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   outputSchema?: Record<string, unknown>;
   childSystemPrompt: string;
   thinkingOverride?: string;
@@ -144,9 +147,11 @@ export function buildSubagentLaunchRequest(params: {
       channelId: params.currentChannelId,
       messageId: params.currentMessageId,
     },
-    shouldAnnounceCompletion: params.deliverInitialChildRunDirectly
-      ? false
-      : params.expectsCompletionMessage,
+    shouldAnnounceCompletion: shouldAnnounceCompletionForInitialChildRun({
+      deliverInitialChildRunDirectly: params.deliverInitialChildRunDirectly,
+      announceTarget: params.announceTarget,
+      expectsCompletionMessage: params.expectsCompletionMessage,
+    }),
     spawnedMetadata,
   };
 }

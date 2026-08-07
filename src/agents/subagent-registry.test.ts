@@ -5573,6 +5573,91 @@ describe("subagent registry seam flow", () => {
     expect(run?.completion?.resultText).toBe("child completed successfully");
   });
 
+  it("does not re-run a terminally ambiguous parent-only completion restored after restart", async () => {
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+      mergeOnly?: boolean;
+    }) => {
+      params.runs.set(
+        "run-resume-ambiguous",
+        createSubagentRunRecord({
+          runId: "run-resume-ambiguous",
+          task: "resume ambiguous completion",
+          createdAt: Date.parse("2026-03-24T11:58:00Z"),
+          startedAt: Date.parse("2026-03-24T11:59:00Z"),
+          endedAt: Date.parse("2026-03-24T11:59:30Z"),
+          endedReason: "subagent-complete",
+          expectsCompletionMessage: true,
+          outcome: { status: "ok" },
+          completion: { required: true, resultText: "child completed successfully" },
+          delivery: {
+            status: "pending",
+            disposition: "ambiguous",
+            lastError: "parent-only completion is still in flight; delivery is not yet verified",
+          },
+        }),
+      );
+      return 1;
+    }) as never);
+
+    mod.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    await waitForFast(() => {
+      expect(findRequesterRun("run-resume-ambiguous")?.delivery).toMatchObject({
+        status: "suspended",
+        disposition: "ambiguous",
+        suspendedReason: "ambiguous",
+      });
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("settles intentional silence restored after restart without re-running announce", async () => {
+    mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
+      runs: Map<string, unknown>;
+      mergeOnly?: boolean;
+    }) => {
+      params.runs.set(
+        "run-resume-intentional-silence",
+        createSubagentRunRecord({
+          runId: "run-resume-intentional-silence",
+          task: "resume intentional completion silence",
+          createdAt: Date.parse("2026-03-24T11:58:00Z"),
+          startedAt: Date.parse("2026-03-24T11:59:00Z"),
+          endedAt: Date.parse("2026-03-24T11:59:30Z"),
+          endedReason: "subagent-complete",
+          expectsCompletionMessage: true,
+          outcome: { status: "ok" },
+          completion: { required: true, resultText: "NO_REPLY" },
+          delivery: {
+            status: "pending",
+            disposition: "intentional_non_delivery",
+          },
+        }),
+      );
+      return 1;
+    }) as never);
+
+    mod.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    await waitForFast(() => {
+      expect(findRequesterRun("run-resume-intentional-silence")?.delivery).toMatchObject({
+        status: "discarded",
+        disposition: "intentional_non_delivery",
+      });
+    });
+    const run = findRequesterRun("run-resume-intentional-silence");
+    expect(run?.delivery?.deliveredAt).toBeUndefined();
+    expect(run?.delivery?.announcedAt).toBeUndefined();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("clears suspended final delivery fields when reactivating a subagent run", () => {
     const endedAt = Date.parse("2026-03-24T11:59:30Z");
     mod.addSubagentRunForTests({

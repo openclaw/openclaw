@@ -26,6 +26,7 @@ function isDeliveryTerminalForRequesterSettle(entry: Pick<SubagentRunRecord, "de
     isDeliverySuspended(entry) ||
     entry.delivery?.disposition === "delivered" ||
     entry.delivery?.disposition === "intentional_non_delivery" ||
+    entry.delivery?.disposition === "ambiguous" ||
     entry.delivery?.disposition === "permanent_failure"
   );
 }

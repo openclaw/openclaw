@@ -1216,6 +1216,7 @@ export interface SubagentRuns {
   accumulated_runtime_ms: number | null;
   agent_dir: string | null;
   announce_retry_count: number | null;
+  announce_target: string | null;
   archive_at_ms: number | null;
   child_session_key: string;
   cleanup: string;
