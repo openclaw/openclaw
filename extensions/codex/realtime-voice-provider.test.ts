@@ -134,10 +134,10 @@ describe("Codex realtime voice provider", () => {
     });
     expect(
       provider.resolveConfig?.({
-        rawConfig: { model: "gpt-realtime-2.1", version: "v1", voice: "verse" },
+        rawConfig: { model: "gpt-realtime-1.5", version: "v2", voice: "cedar" },
         cfg: {} as never,
       }),
-    ).toEqual({ model: "gpt-realtime-2.1", version: "v1", voice: "verse" });
+    ).toEqual({ model: "gpt-realtime-1.5", version: "v2", voice: "cedar" });
   });
 
   it("runs the existing bound session and adapts telephony audio", async () => {

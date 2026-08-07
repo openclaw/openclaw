@@ -36,7 +36,7 @@ const CODEX_REALTIME_MAX_QUEUED_AUDIO_BYTES =
   CODEX_REALTIME_SAMPLE_RATE_HZ * CODEX_REALTIME_CHANNELS * 2 * 2;
 const CODEX_REALTIME_AUDIO_RPC_TIMEOUT_MS = 10_000;
 
-type CodexRealtimeVersion = "v1" | "v3";
+type CodexRealtimeVersion = "v1" | "v2" | "v3";
 
 type RealtimeCompletion = {
   promise: Promise<RealtimeVoiceCloseReason>;
@@ -70,10 +70,10 @@ function readRealtimeVersion(value: unknown): CodexRealtimeVersion {
   if (!version) {
     return "v3";
   }
-  if (version === "v1" || version === "v3") {
+  if (version === "v1" || version === "v2" || version === "v3") {
     return version;
   }
-  throw new Error('Codex realtime version must be "v1" or "v3"');
+  throw new Error('Codex realtime version must be "v1", "v2", or "v3"');
 }
 
 class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {

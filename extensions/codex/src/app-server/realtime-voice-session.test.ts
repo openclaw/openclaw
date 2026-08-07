@@ -100,7 +100,7 @@ describe("Codex app-server realtime voice bridge", () => {
     expect(onClose).toHaveBeenCalledWith("completed");
   });
 
-  it("supports Codex Realtime V1 on the bound thread for public API models", async () => {
+  it("supports Codex Realtime V2 on the bound thread for public API models", async () => {
     const requestRpc = vi.fn(async () => ({}));
     const client = { request: requestRpc } as unknown as CodexAppServerClient;
     const bridge = realtimeVoiceSessionTesting.createBridge(
@@ -108,9 +108,9 @@ describe("Codex app-server realtime voice bridge", () => {
       "thread-1",
       {
         providerConfig: {
-          model: "gpt-realtime-2.1",
-          version: "v1",
-          voice: "verse",
+          model: "gpt-realtime-1.5",
+          version: "v2",
+          voice: "cedar",
         },
         instructions: "Keep replies brief.",
         onAudio: vi.fn(),
@@ -127,11 +127,11 @@ describe("Codex app-server realtime voice bridge", () => {
         threadId: "thread-1",
         outputModality: "audio",
         transport: { type: "websocket" },
-        version: "v1",
+        version: "v2",
         includeStartupContext: true,
         prompt: "Keep replies brief.",
-        model: "gpt-realtime-2.1",
-        voice: "verse",
+        model: "gpt-realtime-1.5",
+        voice: "cedar",
       },
       { signal: expect.any(AbortSignal) },
     );
@@ -144,14 +144,16 @@ describe("Codex app-server realtime voice bridge", () => {
       client,
       "thread-1",
       {
-        providerConfig: { version: "v2" },
+        providerConfig: { version: "v4" },
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),
       },
       new AbortController().signal,
     );
 
-    await expect(bridge.connect()).rejects.toThrow('Codex realtime version must be "v1" or "v3"');
+    await expect(bridge.connect()).rejects.toThrow(
+      'Codex realtime version must be "v1", "v2", or "v3"',
+    );
     expect(requestRpc).not.toHaveBeenCalled();
   });
 
