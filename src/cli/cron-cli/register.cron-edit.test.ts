@@ -58,10 +58,8 @@ describe("cron edit command", () => {
   });
 
   it("preserves existing trigger.once when only the script body is replaced (#119916)", async () => {
-    const scriptPath = path.join(
-      await fs.promises.mkdtemp(path.join(os.tmpdir(), "cron-edit-cli-")),
-      "next.js",
-    );
+    const fixtureDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cron-edit-cli-"));
+    const scriptPath = path.join(fixtureDir, "next.js");
     await fs.promises.writeFile(scriptPath, "return { fire: true };", "utf8");
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {
@@ -70,9 +68,13 @@ describe("cron edit command", () => {
       return { ok: true };
     });
 
-    await createCronProgram().parseAsync(["edit", "job-1", "--trigger-script", scriptPath], {
-      from: "user",
-    });
+    try {
+      await createCronProgram().parseAsync(["edit", "job-1", "--trigger-script", scriptPath], {
+        from: "user",
+      });
+    } finally {
+      await fs.promises.rm(fixtureDir, { recursive: true, force: true });
+    }
 
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "cron.update",
