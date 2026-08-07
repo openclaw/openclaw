@@ -20,6 +20,8 @@ type ZstdStreamCodec = {
   createDecompress: () => Transform;
 };
 
+type ZstdTransformConstructor = new () => Transform;
+
 // node:zlib ships zstd since Node 22.15/23.8; Bun may not implement it yet.
 // Feature-detect so the Bun path writes plain JSONL archives instead of
 // crashing, and mixed plain/compressed archives always stay readable.
@@ -46,17 +48,27 @@ function resolveZstdStreamCodec(): ZstdStreamCodec | null {
   const candidate = zlib as Partial<{
     createZstdCompress: () => Transform;
     createZstdDecompress: () => Transform;
+    ZstdCompress: ZstdTransformConstructor;
+    ZstdDecompress: ZstdTransformConstructor;
   }>;
-  if (
-    typeof candidate.createZstdCompress !== "function" ||
-    typeof candidate.createZstdDecompress !== "function"
-  ) {
+  const ZstdCompress = candidate.ZstdCompress;
+  const ZstdDecompress = candidate.ZstdDecompress;
+  const createCompress =
+    typeof candidate.createZstdCompress === "function"
+      ? candidate.createZstdCompress.bind(zlib)
+      : typeof ZstdCompress === "function"
+        ? () => new ZstdCompress()
+        : null;
+  const createDecompress =
+    typeof candidate.createZstdDecompress === "function"
+      ? candidate.createZstdDecompress.bind(zlib)
+      : typeof ZstdDecompress === "function"
+        ? () => new ZstdDecompress()
+        : null;
+  if (!createCompress || !createDecompress) {
     return null;
   }
-  return {
-    createCompress: candidate.createZstdCompress.bind(zlib),
-    createDecompress: candidate.createZstdDecompress.bind(zlib),
-  };
+  return { createCompress, createDecompress };
 }
 
 const zstdStreamCodec = resolveZstdStreamCodec();
@@ -88,8 +100,9 @@ export function createSessionArchiveCompressionStream(): {
   suffix: "" | typeof SESSION_ARCHIVE_ZSTD_SUFFIX;
 } {
   if (!zstdStreamCodec) {
-    // A sync-only fallback would materialize the entire transcript and defeat
-    // this writer's bounded-memory contract. Keep partial runtimes on plain JSONL.
+    // Supported Node releases expose zstd transforms alongside sync helpers.
+    // A truly sync-only compatibility runtime stays on plain JSONL because a
+    // sync fallback would materialize the transcript and defeat this contract.
     return { stream: null, suffix: "" };
   }
   return {

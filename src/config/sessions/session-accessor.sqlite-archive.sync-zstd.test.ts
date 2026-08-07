@@ -1,41 +1,58 @@
 import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import zlib from "node:zlib";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
-let readSessionArchiveContentSync: typeof import("./archive-compression.js").readSessionArchiveContentSync;
-let writeSqliteTranscriptArchive: typeof import("./session-accessor.sqlite-archive.js").writeSqliteTranscriptArchive;
-
-describe("SQLite transcript archive sync-only zstd fallback", () => {
+describe("SQLite transcript archive partial zstd capabilities", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let archiveDirectory: string;
-
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("node:zlib", async () => {
-      const actual = await vi.importActual<typeof import("node:zlib")>("node:zlib");
-      return {
-        ...actual,
-        default: {
-          ...actual,
-          createZstdCompress: undefined,
-          createZstdDecompress: undefined,
-        },
-      };
-    });
-    ({ readSessionArchiveContentSync } = await import("./archive-compression.js"));
-    ({ writeSqliteTranscriptArchive } = await import("./session-accessor.sqlite-archive.js"));
-    archiveDirectory = tempDirs.make("openclaw-archive-sync-zstd-");
-  });
 
   afterEach(() => {
     vi.doUnmock("node:zlib");
     vi.resetModules();
   });
 
-  it("keeps multi-chunk archives complete and reusable without buffering for zstd", async () => {
-    const sessionId = "sync-only-zstd-session";
+  it("reuses a sync-created legacy zstd archive through transform constructors", async () => {
+    const { readSessionArchiveContentSync, writeSqliteTranscriptArchive } =
+      await loadArchiveModules({ hideFactories: true });
+    const archiveDirectory = tempDirs.make("openclaw-archive-zstd-constructors-");
+    const sessionId = "constructor-zstd-session";
     const content = `${JSON.stringify({ id: sessionId, text: "compressible".repeat(8192) })}\n`;
     const bytes = Buffer.from(content, "utf8");
+    const legacyPath = path.join(
+      archiveDirectory,
+      `${sessionId}.jsonl.deleted.2026-01-01T00-00-00.000Z.zst`,
+    );
+    fs.writeFileSync(legacyPath, zlib.zstdCompressSync(bytes));
+
+    const archivedPath = await writeSqliteTranscriptArchive({
+      archiveDirectory,
+      contentChunks: splitBuffer(bytes, 97),
+      reason: "deleted",
+      sessionId,
+    });
+
+    expect(archivedPath).toBe(legacyPath);
+    expect(readSessionArchiveContentSync(archivedPath)).toBe(content);
+    expect(
+      fs
+        .readdirSync(archiveDirectory)
+        .filter((entry) => entry.startsWith(`${sessionId}.jsonl.deleted.`)),
+    ).toEqual([path.basename(legacyPath)]);
+  });
+
+  it("keeps a reusable plain fallback when no zstd transforms exist", async () => {
+    const { readSessionArchiveContentSync, writeSqliteTranscriptArchive } =
+      await loadArchiveModules({ hideConstructors: true, hideFactories: true });
+    const archiveDirectory = tempDirs.make("openclaw-archive-true-sync-zstd-");
+    const sessionId = "true-sync-only-zstd-session";
+    const content = `${JSON.stringify({ id: sessionId, text: "compressible".repeat(8192) })}\n`;
+    const bytes = Buffer.from(content, "utf8");
+    const legacyPath = path.join(
+      archiveDirectory,
+      `${sessionId}.jsonl.deleted.2026-01-01T00-00-00.000Z.zst`,
+    );
+    fs.writeFileSync(legacyPath, zlib.zstdCompressSync(bytes));
 
     const first = await writeSqliteTranscriptArchive({
       archiveDirectory,
@@ -52,14 +69,44 @@ describe("SQLite transcript archive sync-only zstd fallback", () => {
 
     expect(first.endsWith(".zst")).toBe(false);
     expect(second).toBe(first);
+    expect(readSessionArchiveContentSync(legacyPath)).toBe(content);
     expect(readSessionArchiveContentSync(first)).toBe(content);
     expect(
       fs
         .readdirSync(archiveDirectory)
         .filter((entry) => entry.startsWith(`${sessionId}.jsonl.deleted.`)),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 });
+
+async function loadArchiveModules(options: {
+  hideConstructors?: boolean;
+  hideFactories?: boolean;
+}): Promise<{
+  readSessionArchiveContentSync: typeof import("./archive-compression.js").readSessionArchiveContentSync;
+  writeSqliteTranscriptArchive: typeof import("./session-accessor.sqlite-archive.js").writeSqliteTranscriptArchive;
+}> {
+  vi.resetModules();
+  vi.doMock("node:zlib", async () => {
+    const actual = await vi.importActual<typeof import("node:zlib")>("node:zlib");
+    return {
+      ...actual,
+      default: {
+        ...actual,
+        createZstdCompress: options.hideFactories ? undefined : actual.createZstdCompress,
+        createZstdDecompress: options.hideFactories ? undefined : actual.createZstdDecompress,
+        ZstdCompress: options.hideConstructors ? undefined : actual.ZstdCompress,
+        ZstdDecompress: options.hideConstructors ? undefined : actual.ZstdDecompress,
+      },
+    };
+  });
+  const archiveCompression = await import("./archive-compression.js");
+  const sqliteArchive = await import("./session-accessor.sqlite-archive.js");
+  return {
+    readSessionArchiveContentSync: archiveCompression.readSessionArchiveContentSync,
+    writeSqliteTranscriptArchive: sqliteArchive.writeSqliteTranscriptArchive,
+  };
+}
 
 function* splitBuffer(content: Buffer, chunkSize: number): IterableIterator<Buffer> {
   for (let offset = 0; offset < content.length; offset += chunkSize) {
