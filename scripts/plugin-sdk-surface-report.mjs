@@ -223,7 +223,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: WhatsApp poll_vote_received plugin hook event contract.
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
-      4835,
+      // +1: simple channel secret contract factory replacing repeated collectors.
+      4836,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -273,7 +274,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: auth-profile preservation decision for native model pickers.
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
-      2911,
+      // +1: simple channel secret contract factory replacing repeated collectors.
+      2912,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
