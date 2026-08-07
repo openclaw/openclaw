@@ -43,6 +43,75 @@ describe("CodexAppServerEventProjector usage projection", () => {
     });
   });
 
+  it("preserves exact response reasoning and cache-write token ownership", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("rawResponse/completed", {
+        responseId: "response-1",
+        usage: {
+          totalTokens: 150,
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          cacheWriteInputTokens: 5,
+          outputTokens: 50,
+          reasoningOutputTokens: 35,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expectUsageFields(result.attemptUsage, {
+      input: 75,
+      output: 50,
+      cacheRead: 20,
+      cacheWrite: 5,
+      total: 150,
+    });
+    expect(result.attemptUsage?.reasoningTokens).toBe(35);
+    expect(result.lastAssistant?.usage.reasoningTokens).toBe(35);
+    expect(result.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 100,
+      totalTokens: 150,
+    });
+  });
+
+  it("preserves fallback thread reasoning and cache-write token ownership", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: {
+          last: {
+            totalTokens: 150,
+            inputTokens: 100,
+            cachedInputTokens: 20,
+            cacheWriteInputTokens: 5,
+            outputTokens: 50,
+            reasoningOutputTokens: 35,
+          },
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expectUsageFields(result.attemptUsage, {
+      input: 75,
+      output: 50,
+      cacheRead: 20,
+      cacheWrite: 5,
+      total: 150,
+    });
+    expect(result.attemptUsage?.reasoningTokens).toBe(35);
+    expect(result.lastAssistant?.usage.reasoningTokens).toBe(35);
+    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+  });
+
   it("ignores cumulative thread usage after exact response usage", async () => {
     const projector = await createProjector();
 
