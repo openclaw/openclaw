@@ -476,6 +476,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         loadProviderUsageSummary({
           timeoutMs: usageSummaryTimeoutMs,
           providers: [currentUsageProvider],
+          includeProfiles: false,
           agentDir: statusAgentDir,
           workspaceDir: statusWorkspaceDir,
           config: cfg,

@@ -186,6 +186,9 @@ describe("Codex usage after runtime fallback", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
       expect.not.objectContaining({ auth: expect.anything() }),
     );
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ includeProfiles: false }),
+    );
   });
 });
 

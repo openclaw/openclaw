@@ -31,6 +31,15 @@ describe("mergeUsageSummaries", () => {
     const merged = mergeUsageSummaries(
       {
         updatedAt: 1,
+        profiles: [
+          {
+            provider: "openai",
+            authProfileId: "openai:work",
+            capturedAt: 1,
+            displayName: "OpenAI",
+            windows: [{ label: "Week", usedPercent: 40 }],
+          },
+        ],
         providers: [
           {
             provider: "openai",
@@ -55,6 +64,15 @@ describe("mergeUsageSummaries", () => {
 
     expect(merged).toEqual({
       updatedAt: 1,
+      profiles: [
+        {
+          provider: "openai",
+          authProfileId: "openai:work",
+          capturedAt: 1,
+          displayName: "OpenAI",
+          windows: [{ label: "Week", usedPercent: 40 }],
+        },
+      ],
       providers: [
         {
           provider: "openai",
