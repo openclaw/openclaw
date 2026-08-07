@@ -64,7 +64,9 @@ async function readNextcloudTalkErrorSnippet(response: Response): Promise<string
     const text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
     // Redact credentials that a misbehaving upstream may reflect in error bodies
     // (e.g. Authorization headers echoed back in the response).
-    return redactToolPayloadText(collapseErrorSnippet(text));
+    // Redact before collapsing so a credential that crosses the snippet-length
+    // cutoff is fully matched and scrubbed, not left as a raw partial prefix.
+    return collapseErrorSnippet(redactToolPayloadText(text));
   } catch {
     return "";
   }
