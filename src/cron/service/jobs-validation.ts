@@ -280,7 +280,7 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-export function hasConcreteFailureDestination(
+function hasConcreteFailureDestination(
   destination: CronDelivery["failureDestination"] | undefined,
 ): boolean {
   return Boolean(
@@ -323,9 +323,7 @@ function hasConcreteChatDeliveryTarget(delivery: ChatDeliveryTargetFields | unde
  * routing (including completion destinations). Used so retarget-to-main without
  * a delivery patch can still clear inherited announce delivery.
  */
-export function patchRequestsUnsupportedMainDelivery(
-  delivery: CronDeliveryPatch | undefined,
-): boolean {
+function patchRequestsUnsupportedMainDelivery(delivery: CronDeliveryPatch | undefined): boolean {
   if (!delivery) {
     return false;
   }
