@@ -245,6 +245,51 @@ describe("openclaw attach (action)", () => {
     }
   });
 
+  it("guards against repeated Ctrl+C by clearing the previous escalation timer", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      // First Ctrl+C
+      handler();
+      expect(spawnedChild.kill).toHaveBeenCalledWith("SIGINT");
+      // Second Ctrl+C before escalation fires: must clear the first timer
+      handler();
+      // Advance well past the first timer's deadline; only the second
+      // timer should still be alive.
+      vi.advanceTimersByTime(5_000);
+      expect(spawnedChild.kill).toHaveBeenCalledTimes(3); // SIGINT ×2 + SIGKILL
+      spawnedChild.emit("exit", null, "SIGKILL");
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disarms the escalation timer at the child terminal event before async revocation", async () => {
+    // Simulate a stalled revoke: the gateway never responds, so
+    // revokeOnce() hangs.  The timer must still be cleared when the
+    // child exits — a stale timer firing on an exited or reused PID
+    // is a merge risk.
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      handler();
+      // Child exits *during* the grace period (before SIGKILL fires)
+      spawnedChild.emit("exit", 0, null);
+      // Advance past the timer deadline — timer was already disarmed.
+      vi.advanceTimersByTime(10_000);
+      // SIGKILL must NOT have been called (timer disarmed at exit).
+      expect(spawnedChild.kill).not.toHaveBeenCalledWith("SIGKILL");
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("revokes the grant after the force-kill timer triggers", async () => {
     vi.useFakeTimers();
     try {

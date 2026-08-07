@@ -138,7 +138,23 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
       });
 
       let forceKillTimer: NodeJS.Timeout | undefined;
+      const disarm = () => {
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = undefined;
+        }
+      };
       const onSigint = () => {
+        // guard against repeated Ctrl+C: clear any previous escalation
+        // timer so stale timers do not fire on an exited or reused PID.
+        disarm();
+        // On Windows, Node ignores the signal argument and always uses
+        // TerminateProcess, so a grace period is not achievable.  Stop
+        // the child immediately on an honest best-effort platform path.
+        if (process.platform === "win32") {
+          child.kill();
+          return;
+        }
         child.kill("SIGINT");
         // Escalate to SIGKILL after a grace period so the child
         // cannot keep the parent alive indefinitely by ignoring SIGINT.
@@ -148,16 +164,16 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
       };
       const onSigterm = () => child.kill("SIGTERM");
       const finish = (code: number) => {
-        if (forceKillTimer) {
-          clearTimeout(forceKillTimer);
-          forceKillTimer = undefined;
-        }
         process.off("SIGINT", onSigint);
         process.off("SIGTERM", onSigterm);
         defaultRuntime.exit(code);
       };
 
       child.on("error", (error) => {
+        // disarm the escalation timer at the terminal event boundary
+        // before async revocation; a stalled revoke must not leave a
+        // timer able to signal an exited or PID-reused process.
+        disarm();
         void (async () => {
           defaultRuntime.error(`Failed to launch '${opts.bin}': ${String(error)}`);
           await revokeOnce();
@@ -165,6 +181,10 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
         })();
       });
       child.on("exit", (code, signal) => {
+        // disarm the escalation timer at the terminal event boundary
+        // before async revocation; a stalled revoke must not leave a
+        // timer able to signal an exited or PID-reused process.
+        disarm();
         void (async () => {
           await revokeOnce();
           const signalCode = signal
