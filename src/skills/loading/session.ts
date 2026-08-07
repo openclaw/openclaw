@@ -1,10 +1,9 @@
-import { closeSync, existsSync, fstatSync, openSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
-import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
@@ -19,8 +18,8 @@ const MAX_NAME_LENGTH = 64;
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
 
-/** Max file size for a single SKILL.md. Matches workspace skill loading limit. */
-const MAX_SKILL_FILE_BYTES = 256_000;
+export { readBoundedSkillFile } from "./bounded-skill-read.js";
+import { readBoundedSkillFile } from "./bounded-skill-read.js";
 
 export interface Skill {
   name: string;
@@ -209,38 +208,6 @@ function loadSkillsFromDirInternal(
   }
 
   return { skills, diagnostics };
-}
-
-/**
- * Read SKILL.md content through a pinned descriptor to avoid TOCTOU races
- * and bound memory on oversized files.
- * Emits an operator-visible warning and throws on oversized input.
- */
-export function readBoundedSkillFile(filePath: string): string {
-  const fd = openSync(filePath, "r");
-  try {
-    const stats = fstatSync(fd);
-    if (stats.size > MAX_SKILL_FILE_BYTES) {
-      console.warn(`Skill file rejected (exceeds ${MAX_SKILL_FILE_BYTES} bytes): ${filePath}`);
-      throw Object.assign(
-        new Error(`skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes (${stats.size} bytes)`),
-        { code: "E2BIG" },
-      );
-    }
-    try {
-      return readFileDescriptorBoundedSync(fd, MAX_SKILL_FILE_BYTES).toString("utf-8");
-    } catch (error) {
-      if (error instanceof RangeError) {
-        console.warn(`Skill file rejected (exceeds ${MAX_SKILL_FILE_BYTES} bytes): ${filePath}`);
-        throw Object.assign(new Error(`skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes`), {
-          code: "E2BIG",
-        });
-      }
-      throw error;
-    }
-  } finally {
-    closeSync(fd);
-  }
 }
 
 function loadSkillFromFile(

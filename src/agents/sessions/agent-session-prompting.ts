@@ -7,7 +7,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import { readBoundedSkillFile } from "../../skills/loading/session.js";
+import { readBoundedSkillFile } from "../../skills/loading/bounded-skill-read.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
