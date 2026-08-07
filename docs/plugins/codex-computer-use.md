@@ -380,8 +380,8 @@ OpenClaw Gateway so old threads and hook registrations are dropped, then
 retry in a fresh session.
 
 **Turn-start auto-install refuses a source.** This is intentional. Add the
-source with explicit `/codex computer-use install --source
-<marketplace-source>` first, then future turn-start auto-install can use the
+source with explicit `/codex computer-use install --source <marketplace-source>`
+first, then future turn-start auto-install can use the
 discovered local or remote marketplace.
 
 ## Related

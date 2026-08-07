@@ -26,8 +26,9 @@ without starting OpenClaw.
 The classic wizard remains available for custom providers, remote Gateway
 setup, channel pairing, daemon controls, skills, and imports. Run it explicitly
 with `openclaw onboard --classic`; the guided inference picker does not delegate
-into it. After inference passes, OpenClaw can use `open channel wizard for
-<channel>` to hand channel setup that needs secrets to a masked terminal wizard.
+into it. After inference passes, OpenClaw can use
+`open channel wizard for <channel>` to hand channel setup that needs secrets to
+a masked terminal wizard.
 Workspace skills and web search are configured the same conversational way:
 `configure skills` and `configure web search` host those setup flows in the
 chat, and `open search wizard` hands credential entry to the masked terminal
