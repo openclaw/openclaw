@@ -268,7 +268,7 @@ export type ChatState = {
   chatHistoryPagination?: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
-  /** Active leaf of the history snapshot currently rendered by this pane. */
+  /** Rendered branch precondition: null means authoritative empty; undefined means unknown. */
   chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
@@ -1158,32 +1158,6 @@ function ownsClearChatView(state: ClearChatHistoryState, owner: ClearChatViewOwn
   );
 }
 
-function clearPostResetBranchPrecondition(
-  state: ClearChatHistoryState,
-  target: {
-    client: NonNullable<ClearChatHistoryState["client"]>;
-    connectionEpoch: number;
-    sessionKey: string;
-    agentId?: string;
-  },
-  history: ChatHistoryResult | undefined,
-) {
-  if (
-    !history ||
-    !Object.hasOwn(history.sessionInfo ?? {}, "activeLeafEntryId") ||
-    history.sessionInfo?.activeLeafEntryId !== null ||
-    state.client !== target.client ||
-    state.connectionEpoch !== target.connectionEpoch ||
-    !state.connected ||
-    !visibleSessionMatches(state, target.sessionKey, target.agentId)
-  ) {
-    return;
-  }
-  // Reset can leave old branch metadata visible after the transcript becomes
-  // empty. The first post-reset send must establish the new branch itself.
-  delete state.chatDisplayedLeafEntryId;
-}
-
 export async function clearChatHistory(
   state: ClearChatHistoryState,
 ): Promise<ClearChatHistoryResult> {
@@ -1235,13 +1209,7 @@ export async function clearChatHistory(
         // ambiguous reset may already have destroyed. Clearing first also
         // prevents history loading from preserving a pre-reset optimistic tail.
         resetChatHistoryProjection(state, agentParams.agentId);
-        const history = await loadChatHistory(state);
-        historyRefreshed = Boolean(history);
-        clearPostResetBranchPrecondition(
-          state,
-          { client, connectionEpoch, sessionKey, agentId: agentParams.agentId },
-          history,
-        );
+        historyRefreshed = Boolean(await loadChatHistory(state));
       }
       if (ownsClearChatView(state, feedbackOwner)) {
         setChatError(
@@ -1279,12 +1247,7 @@ export async function clearChatHistory(
     clearToolStream: true,
     clearRunStatus: !hadActiveRun,
   });
-  const history = await loadChatHistory(state);
-  clearPostResetBranchPrecondition(
-    state,
-    { client, connectionEpoch, sessionKey, agentId: agentParams.agentId },
-    history,
-  );
+  await loadChatHistory(state);
   if (ownsClearChatView(state, originalViewOwner)) {
     scheduleChatScroll(state);
   }
