@@ -20,7 +20,7 @@ function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
       } catch (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
     request.on("error", reject);
@@ -60,8 +60,8 @@ describe("ClickClack inbound replay transport", () => {
     const server = createServer((request: IncomingMessage, response: ServerResponse) => {
       void (async () => {
         const payload = await readJsonBody(request);
-        const body = String(payload.body ?? "");
-        const nonce = String(payload.nonce ?? "");
+        const body = typeof payload.body === "string" ? payload.body : "";
+        const nonce = typeof payload.nonce === "string" ? payload.nonce : "";
         const existing = visibleMessages.get(nonce);
         if (existing === undefined) {
           visibleMessages.set(nonce, body);
