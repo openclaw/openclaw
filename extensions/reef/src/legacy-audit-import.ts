@@ -67,6 +67,12 @@ async function registerAuditEntry(
     entry,
     ...(nextHash ? { nextHash } : {}),
   };
+  const recordBytes = Buffer.byteLength(JSON.stringify(record));
+  if (recordBytes > REEF_LEGACY_AUDIT_RECORD_MAX_BYTES) {
+    throw new Error(
+      `Reef audit record exceeds ${REEF_LEGACY_AUDIT_RECORD_MAX_BYTES} byte plugin-state value limit`,
+    );
+  }
   const key = reefAuditEntryKey(entry.entryHash);
   const existing = await store.lookup(key);
   if (existing && JSON.stringify(existing) !== JSON.stringify(record)) {
@@ -101,62 +107,77 @@ export async function streamLegacyReefAuditWindow(
   let observedTotal = 0;
   let observedLastHash = "";
   let observedLastSeq = 0;
-  await forEachLegacyReefJsonlRecord(filePath, "reject-torn", async (value, recordBytes) => {
-    if (recordBytes > REEF_LEGACY_AUDIT_RECORD_MAX_BYTES) {
-      throw new Error(
-        `Reef legacy JSONL audit record exceeds ${REEF_LEGACY_AUDIT_RECORD_MAX_BYTES} byte plugin-state value limit`,
-      );
-    }
-    const entry = value as AuditEntry;
-    if (
-      !verifyChainSegment([entry], {
-        previousHash,
-        previousSeq,
-        head: entry.entryHash,
-      })
-    ) {
-      throw new Error("invalid Reef audit chain");
-    }
-    previousHash = entry.entryHash;
-    previousSeq = entry.event.seq;
-    observedTotal += 1;
-    observedLastHash = entry.entryHash;
-    observedLastSeq = entry.event.seq;
-    if (index >= windowStart) {
-      if (pending) {
-        await registerAuditEntry(store, pending, entry.entryHash);
-        persistedCount += 1;
+  // Every row this attempt writes (or attempts to write) is tracked so a
+  // failed import can remove its own unheaded prefix. Before the head record
+  // exists, rows in this namespace can only be leftovers of failed attempts,
+  // so removing the tracked keys on abort cannot destroy committed state and
+  // unblocks a later restore-and-rerun with a repaired journal.
+  const writtenKeys: string[] = [];
+  try {
+    await forEachLegacyReefJsonlRecord(filePath, "reject-torn", async (value, recordBytes) => {
+      if (recordBytes > REEF_LEGACY_AUDIT_RECORD_MAX_BYTES) {
+        throw new Error(
+          `Reef legacy JSONL audit record exceeds ${REEF_LEGACY_AUDIT_RECORD_MAX_BYTES} byte plugin-state value limit`,
+        );
       }
-      if (persistedCount === 0) {
-        oldestHash = entry.entryHash;
+      const entry = value as AuditEntry;
+      if (
+        !verifyChainSegment([entry], {
+          previousHash,
+          previousSeq,
+          head: entry.entryHash,
+        })
+      ) {
+        throw new Error("invalid Reef audit chain");
       }
-      pending = entry;
-    }
-    index += 1;
-  });
-  if (
-    observedTotal !== expected.totalEntries ||
-    observedLastHash !== expected.lastHash ||
-    observedLastSeq !== expected.lastSeq
-  ) {
-    throw new Error("Reef audit journal changed between validation and import");
-  }
-  if (pending) {
-    await registerAuditEntry(store, pending);
-    persistedCount += 1;
-    lastEntry = pending;
-  }
-  if (persistedCount > 0) {
+      previousHash = entry.entryHash;
+      previousSeq = entry.event.seq;
+      observedTotal += 1;
+      observedLastHash = entry.entryHash;
+      observedLastSeq = entry.event.seq;
+      if (index >= windowStart) {
+        if (pending) {
+          writtenKeys.push(reefAuditEntryKey(pending.entryHash));
+          await registerAuditEntry(store, pending, entry.entryHash);
+          persistedCount += 1;
+        }
+        if (persistedCount === 0) {
+          oldestHash = entry.entryHash;
+        }
+        pending = entry;
+      }
+      index += 1;
+    });
     if (
-      !(await headStore.registerIfAbsent(REEF_AUDIT_HEAD_KEY, {
-        kind: "head",
-        hash: lastEntry!.entryHash,
-        seq: lastEntry!.event.seq,
-        oldestHash,
-      }))
+      observedTotal !== expected.totalEntries ||
+      observedLastHash !== expected.lastHash ||
+      observedLastSeq !== expected.lastSeq
     ) {
-      throw new Error("audit head appeared during import");
+      throw new Error("Reef audit journal changed between validation and import");
     }
+    if (pending) {
+      writtenKeys.push(reefAuditEntryKey(pending.entryHash));
+      await registerAuditEntry(store, pending);
+      persistedCount += 1;
+      lastEntry = pending;
+    }
+    if (persistedCount > 0) {
+      if (
+        !(await headStore.registerIfAbsent(REEF_AUDIT_HEAD_KEY, {
+          kind: "head",
+          hash: lastEntry!.entryHash,
+          seq: lastEntry!.event.seq,
+          oldestHash,
+        }))
+      ) {
+        throw new Error("audit head appeared during import");
+      }
+    }
+  } catch (error) {
+    for (const key of writtenKeys) {
+      await store.delete(key);
+    }
+    throw error;
   }
   return { persistedCount, oldestHash };
 }

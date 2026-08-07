@@ -310,9 +310,9 @@ describe("Reef doctor journal capacity", () => {
         streamLegacyReefAuditWindow(auditPath, summary, store, headStore),
       ).rejects.toThrow("Reef audit journal changed between validation and import");
       await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toBeUndefined();
-      await expect(
-        store.lookup(reefAuditEntryKey(entries.at(-1)!.entryHash)),
-      ).resolves.toBeUndefined();
+      for (const entry of entries) {
+        await expect(store.lookup(reefAuditEntryKey(entry.entryHash))).resolves.toBeUndefined();
+      }
     });
   });
 
@@ -362,6 +362,127 @@ describe("Reef doctor journal capacity", () => {
         overflowPolicy: "reject-new",
       });
       await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toBeUndefined();
+      const store = context.openPluginStateKeyedStore<ReefAuditStateRecord>({
+        namespace: REEF_AUDIT_NAMESPACE,
+        maxEntries: REEF_AUDIT_STORE_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      for (const entry of entries) {
+        await expect(store.lookup(reefAuditEntryKey(entry.entryHash))).resolves.toBeUndefined();
+      }
+
+      // Restore the valid journal and rerun: the aborted attempt must not
+      // leave rows behind that conflict with the repaired source.
+      fs.writeFileSync(filePath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+      const recovered = await migrationById("reef-audit-jsonl-to-plugin-state").migrateLegacyState(
+        params,
+      );
+
+      expect(recovered.warnings).toEqual([]);
+      expect(recovered.changes).toEqual([
+        "Migrated 3 Reef audit entries -> plugin state",
+        expect.stringContaining("Archived Reef audit trail legacy source"),
+      ]);
+      expect(fs.existsSync(`${filePath}.migrated`)).toBe(true);
+      await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toMatchObject({
+        hash: entries.at(-1)!.entryHash,
+        seq: 3,
+        oldestHash: entries[0]!.entryHash,
+      });
+    });
+  });
+
+  it("rejects an audit entry whose serialized store record exceeds the value limit", async () => {
+    await withTempDir("openclaw-reef-doctor-audit-wrapped-limit-", async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      vi.spyOn(os, "homedir").mockReturnValue(stateDir);
+      const legacyDir = path.join(stateDir, ".openclaw", "data", "reef");
+      const filePath = path.join(legacyDir, "audit.jsonl");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      // The raw legacy entry fits the 65,536-byte per-value limit, but the
+      // persisted record wraps it with kind plus the next hash, so the stored
+      // value itself exceeds the limit and must be rejected before any write.
+      const probeAudit = new MemoryAuditStore(new Uint8Array(32).fill(1));
+      await probeAudit.appendEvent("one", { payload: "x" }, 10);
+      const probeEntry = (await probeAudit.entries())[0]!;
+      const probeRaw = Buffer.byteLength(JSON.stringify(probeEntry));
+      const overhead =
+        Buffer.byteLength(
+          JSON.stringify({ kind: "entry", entry: probeEntry, nextHash: "h".repeat(64) }),
+        ) - probeRaw;
+      const bodySize = Math.max(1, 65_536 - 20 - probeRaw + 1);
+      const audit = new MemoryAuditStore(new Uint8Array(32).fill(1));
+      await audit.appendEvent("one", { payload: "x".repeat(bodySize) }, 10);
+      await audit.appendEvent("two", { id: 2 }, 11);
+      const entries = await audit.entries();
+      const firstRaw = Buffer.byteLength(JSON.stringify(entries[0]));
+      const firstWrapped = Buffer.byteLength(
+        JSON.stringify({
+          kind: "entry",
+          entry: entries[0],
+          nextHash: entries[1]!.entryHash,
+        }),
+      );
+      expect(firstRaw).toBeLessThanOrEqual(65_536);
+      expect(firstWrapped).toBeGreaterThan(65_536);
+      expect(overhead).toBeGreaterThan(0);
+      fs.writeFileSync(filePath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+      const context = createDoctorContext(env);
+      const params = {
+        config: {},
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context,
+      };
+      const result = await migrationById("reef-audit-jsonl-to-plugin-state").migrateLegacyState(
+        params,
+      );
+
+      expect(result.warnings).toEqual([
+        expect.stringContaining("Reef audit record exceeds 65536 byte plugin-state value limit"),
+      ]);
+      expect(result.changes).toEqual([]);
+      expect(fs.existsSync(`${filePath}.migrated`)).toBe(false);
+      const headStore = context.openPluginStateKeyedStore<ReefAuditHeadRecord>({
+        namespace: REEF_AUDIT_HEAD_NAMESPACE,
+        maxEntries: REEF_AUDIT_HEAD_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      const store = context.openPluginStateKeyedStore<ReefAuditStateRecord>({
+        namespace: REEF_AUDIT_NAMESPACE,
+        maxEntries: REEF_AUDIT_STORE_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      });
+      await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toBeUndefined();
+      for (const entry of entries) {
+        await expect(store.lookup(reefAuditEntryKey(entry.entryHash))).resolves.toBeUndefined();
+      }
+
+      // Replace the oversized source with a storable journal and rerun: the
+      // failed attempt must not leave rows behind.
+      const repairAudit = new MemoryAuditStore(new Uint8Array(32).fill(1));
+      await repairAudit.appendEvent("repaired", { id: 1 }, 10);
+      await repairAudit.appendEvent("repaired", { id: 2 }, 11);
+      const repairedEntries = await repairAudit.entries();
+      fs.writeFileSync(
+        filePath,
+        `${repairedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      );
+      const recovered = await migrationById("reef-audit-jsonl-to-plugin-state").migrateLegacyState(
+        params,
+      );
+
+      expect(recovered.warnings).toEqual([]);
+      expect(recovered.changes).toEqual([
+        "Migrated 2 Reef audit entries -> plugin state",
+        expect.stringContaining("Archived Reef audit trail legacy source"),
+      ]);
+      await expect(headStore.lookup(REEF_AUDIT_HEAD_KEY)).resolves.toMatchObject({
+        hash: repairedEntries.at(-1)!.entryHash,
+        seq: 2,
+      });
     });
   });
 });
