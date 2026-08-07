@@ -17,8 +17,40 @@ type FileTransferToolDescriptor = Pick<
   "label" | "name" | "description" | "parameters"
 >;
 
-function readNodeCommandParams(paramsJSON: string | null | undefined): unknown {
-  return paramsJSON ? JSON.parse(paramsJSON) : {};
+type NodeCommandParamsParseError = {
+  ok: false;
+  code: "INVALID_PARAMS";
+  message: string;
+};
+
+function readNodeCommandParams<T>(
+  paramsJSON: string | null | undefined,
+): T | NodeCommandParamsParseError {
+  if (!paramsJSON) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(paramsJSON) as T;
+  } catch (err) {
+    return {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: `node command params must be valid JSON: ${String(err)}`,
+    };
+  }
+}
+
+function isParseError(value: unknown): value is NodeCommandParamsParseError {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "ok" in value &&
+    (value as { ok?: unknown }).ok === false &&
+    "code" in value &&
+    (value as { code?: unknown }).code === "INVALID_PARAMS" &&
+    "message" in value &&
+    typeof (value as { message?: unknown }).message === "string"
+  );
 }
 
 function createLazyTool(
@@ -45,8 +77,11 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
+      const params = readNodeCommandParams<Parameters<typeof handleFileFetch>[0]>(paramsJSON);
+      if (isParseError(params)) {
+        return JSON.stringify(params);
+      }
       const { handleFileFetch } = await import("./src/node-host/file-fetch.js");
-      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileFetch>[0];
       const result = await handleFileFetch(params);
       return JSON.stringify(result);
     },
@@ -56,8 +91,11 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
+      const params = readNodeCommandParams<Parameters<typeof handleDirList>[0]>(paramsJSON);
+      if (isParseError(params)) {
+        return JSON.stringify(params);
+      }
       const { handleDirList } = await import("./src/node-host/dir-list.js");
-      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirList>[0];
       const result = await handleDirList(params);
       return JSON.stringify(result);
     },
@@ -67,8 +105,11 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
+      const params = readNodeCommandParams<Parameters<typeof handleDirFetch>[0]>(paramsJSON);
+      if (isParseError(params)) {
+        return JSON.stringify(params);
+      }
       const { handleDirFetch } = await import("./src/node-host/dir-fetch.js");
-      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirFetch>[0];
       const result = await handleDirFetch(params);
       return JSON.stringify(result);
     },
@@ -78,8 +119,11 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
+      const params = readNodeCommandParams<Parameters<typeof handleFileWrite>[0]>(paramsJSON);
+      if (isParseError(params)) {
+        return JSON.stringify(params);
+      }
       const { handleFileWrite } = await import("./src/node-host/file-write.js");
-      const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileWrite>[0];
       const result = await handleFileWrite(params);
       return JSON.stringify(result);
     },
