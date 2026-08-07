@@ -2,7 +2,7 @@
 // Adds workspace-root guards, adaptive read paging, image validation, memory
 // append-only writes, and parameter cleanup around the session file tools.
 
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
@@ -1112,10 +1112,67 @@ function resolveHostPath(filePath: string): string {
   return path.resolve(expandTildeToOsHome(filePath));
 }
 
+async function writeHostFileRange(
+  handle: FileHandle,
+  payload: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+) {
+  let written = 0;
+  while (written < length) {
+    const { bytesWritten } = await handle.write(
+      payload,
+      offset + written,
+      length - written,
+      position + written,
+    );
+    if (bytesWritten <= 0) {
+      throw new Error(`host file write made no progress at byte ${position + written}`);
+    }
+    written += bytesWritten;
+  }
+}
+
+async function overwriteHostFileInPlace(handle: FileHandle, payload: Buffer, currentSize: number) {
+  if (payload.length > currentSize) {
+    try {
+      await writeHostFileRange(
+        handle,
+        payload,
+        currentSize,
+        payload.length - currentSize,
+        currentSize,
+      );
+    } catch (error) {
+      await handle.truncate(currentSize).catch(() => undefined);
+      throw error;
+    }
+  }
+  await writeHostFileRange(handle, payload, 0, Math.min(payload.length, currentSize), 0);
+  if (payload.length < currentSize) {
+    await handle.truncate(payload.length);
+  }
+}
+
 async function writeHostFile(absolutePath: string, content: string) {
   const resolved = resolveHostPath(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
-  await fs.writeFile(resolved, content, "utf-8");
+  const handle = await fs.open(resolved, "r+").catch(() => undefined);
+  if (!handle) {
+    await fs.writeFile(resolved, content, "utf-8");
+    return;
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      await fs.writeFile(resolved, content, "utf-8");
+      return;
+    }
+    await overwriteHostFileInPlace(handle, Buffer.from(content, "utf-8"), stat.size);
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 async function statHostFile(absolutePath: string) {
