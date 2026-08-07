@@ -133,6 +133,13 @@ describe("mime detection", () => {
       }),
       expected: "application/yaml",
     },
+    {
+      name: "maps vCard files to text/vcard",
+      input: async () => ({
+        filePath: "/tmp/contact.vcf",
+      }),
+      expected: "text/vcard",
+    },
   ] as const)("$name", async ({ input, expected }) => {
     await expectDetectedMime({
       input: await input(),
@@ -440,6 +447,7 @@ describe("mimeTypeFromFilePath", () => {
     { filePath: "clip.wmv", expected: "video/x-ms-wmv" },
     { filePath: "https://cdn.example.com/bad%E0%A4%A%2Emp4", expected: undefined },
     { filePath: "debug.log", expected: "text/plain" },
+    { filePath: "contact.vcf", expected: "text/vcard" },
     { filePath: "config.yml", expected: "application/yaml" },
     { filePath: "config.yaml", expected: "application/yaml" },
     { filePath: "page.xml", expected: "text/xml" },
@@ -493,6 +501,8 @@ describe("extensionForMime", () => {
     { mime: "video/quicktime", expected: ".mov" },
     { mime: "application/pdf", expected: ".pdf" },
     { mime: "application/yaml", expected: ".yaml" },
+    { mime: "text/vcard", expected: ".vcf" },
+    { mime: "Text/VCard", expected: ".vcf" },
     { mime: "text/plain", expected: ".txt" },
     { mime: "text/markdown", expected: ".md" },
     { mime: "text/html", expected: ".html" },
@@ -594,6 +604,7 @@ describe("mediaKindFromMime", () => {
 
   it.each([
     { mime: "text/plain", expected: "document" },
+    { mime: "text/vcard", expected: "document" },
     { mime: "text/csv", expected: "document" },
     { mime: "text/html; charset=utf-8", expected: "document" },
     { mime: "model/gltf+json", expected: undefined },
