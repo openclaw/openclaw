@@ -85,6 +85,7 @@ actor TalkModeRuntime {
     private var realtimeMode: String?
     private var realtimeTransport: String?
     private var realtimeBrain: String?
+    private var realtimeRelayEnabled = false
     private var realtimeSession: RealtimeTalkRelaySession?
     private var speechLocaleID: String?
     private var lastInterruptedAtSeconds: Double?
@@ -274,16 +275,11 @@ actor TalkModeRuntime {
 
     private func shouldAttemptRealtimeRelay() -> Bool {
         guard self.realtimeMode == "realtime" else { return false }
-        guard self.realtimeTransport == nil || self.realtimeTransport == "gateway-relay" else {
+        guard self.realtimeRelayEnabled else {
             self.logger.warning(
-                "talk macOS realtime transport unsupported: " +
-                    "\(self.realtimeTransport ?? "unknown", privacy: .public); using native fallback")
-            return false
-        }
-        guard self.realtimeBrain == nil || self.realtimeBrain == "agent-consult" else {
-            self.logger.warning(
-                "talk macOS realtime brain unsupported: " +
-                    "\(self.realtimeBrain ?? "unknown", privacy: .public); using native fallback")
+                "talk macOS realtime relay not explicitly enabled: " +
+                    "transport=\(self.realtimeTransport ?? "missing", privacy: .public) " +
+                    "brain=\(self.realtimeBrain ?? "missing", privacy: .public); using native fallback")
             return false
         }
         return true
@@ -1526,6 +1522,7 @@ extension TalkModeRuntime {
         self.realtimeMode = cfg.realtimeMode
         self.realtimeTransport = cfg.realtimeTransport
         self.realtimeBrain = cfg.realtimeBrain
+        self.realtimeRelayEnabled = cfg.enablesMacOSRealtimeRelay
         let configuredSilenceMs = cfg.silenceTimeoutMs
         let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
         let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")

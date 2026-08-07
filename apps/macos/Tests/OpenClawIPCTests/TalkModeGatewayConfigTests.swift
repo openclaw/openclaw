@@ -80,6 +80,7 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.realtimeMode == "realtime")
         #expect(parsed.realtimeTransport == "gateway-relay")
         #expect(parsed.realtimeBrain == "agent-consult")
+        #expect(parsed.enablesMacOSRealtimeRelay)
     }
 
     @Test func `realtime config infers its sole provider and reads provider defaults`() {
@@ -103,6 +104,7 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.realtimeMode == "realtime")
         #expect(parsed.realtimeTransport == nil)
         #expect(parsed.realtimeBrain == nil)
+        #expect(!parsed.enablesMacOSRealtimeRelay)
     }
 
     @Test func `realtime provider config lookup is case insensitive`() {

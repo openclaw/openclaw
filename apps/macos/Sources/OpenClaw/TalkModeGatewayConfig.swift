@@ -22,6 +22,12 @@ struct TalkModeGatewayConfigState {
     let realtimeMode: String?
     let realtimeTransport: String?
     let realtimeBrain: String?
+
+    var enablesMacOSRealtimeRelay: Bool {
+        self.realtimeMode == "realtime" &&
+            self.realtimeTransport == "gateway-relay" &&
+            self.realtimeBrain == "agent-consult"
+    }
 }
 
 enum TalkModeGatewayConfigParser {
