@@ -307,7 +307,7 @@ export function createGatewayHooksRequestHandler(params: {
     // Dispatch-time accepted agent, frozen before the queue so a default-agent
     // reload between dispatch and queue execution cannot retarget global wakes
     // at a different agent than the one the isolated run actually used.
-    let acceptedHookAgentId: string | undefined;
+    let acceptedHookAgentId: string | undefined = undefined;
     const reportHookFailure = (err: unknown) => {
       logHooks.warn(`hook agent failed: ${String(err)}`);
       enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
