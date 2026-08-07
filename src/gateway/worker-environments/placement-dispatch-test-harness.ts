@@ -37,6 +37,7 @@ export function createHarness(
     verifyFailureCall?: number;
     leaseFails?: boolean;
     leaseFailureCount?: number;
+    leaseError?: Error;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
     resumeError?: Error;
@@ -172,6 +173,9 @@ export function createHarness(
       return {
         assertActive: vi.fn(async () => {
           log.push("workspace:lease");
+          if (options.leaseError) {
+            throw options.leaseError;
+          }
           if (options.leaseFails || remainingLeaseFailures > 0) {
             remainingLeaseFailures -= 1;
             throw new Error("workspace quiescence expired");

@@ -8,7 +8,10 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
-import { WorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
+import {
+  findWorkerWorkspaceOperatorRecoveryError,
+  WorkerWorkspaceOperatorRecoveryError,
+} from "./tunnel-contract.js";
 import {
   createWorkerSshRunner,
   type WorkerSshProcess,
@@ -289,14 +292,14 @@ describe("worker tunnel manager", () => {
     }
   });
 
-  it("classifies a retained quiescence lease as requiring operator recovery", async () => {
+  it("preserves operator recovery classification from heartbeat renewal", async () => {
     const nonce = "a".repeat(32);
     const fake = fakeRunner((argv) => {
       const remoteCommand = argv.at(-1) ?? "";
       if (remoteCommand.includes('process.stdout.write("quiesced "')) {
         return success(`quiesced ${nonce}\n`);
       }
-      if (remoteCommand.includes("async function resume()")) {
+      if (remoteCommand.includes('process.stdout.write("renewed "')) {
         return {
           ...success(),
           code: WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE,
@@ -307,7 +310,7 @@ describe("worker tunnel manager", () => {
     });
     const manager = createWorkerTunnelManager({ runner: fake.runner });
     const starting = manager.start({
-      environmentId: "worker:quiescence-terminal-recovery",
+      environmentId: "worker:quiescence-terminal-renewal",
       ownerEpoch: 3,
       ssh: SSH,
       gateway: { host: "127.0.0.1", port: 18789 },
@@ -317,12 +320,17 @@ describe("worker tunnel manager", () => {
     fake.starts[0]?.process.becomeReady();
     const handle = await starting;
 
+    vi.useFakeTimers();
     try {
       const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
-      await expect(quiescence.resume()).rejects.toBeInstanceOf(
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      const error = await quiescence.assertActive().catch((cause: unknown) => cause);
+      expect(findWorkerWorkspaceOperatorRecoveryError(error)).toBeInstanceOf(
         WorkerWorkspaceOperatorRecoveryError,
       );
+      await quiescence.resume();
     } finally {
+      vi.useRealTimers();
       await handle.stop();
     }
   });

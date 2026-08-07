@@ -1,6 +1,8 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
+import { isRetainedFailedWorkspaceResultOwner } from "./placement-workspace-result.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  cleanupWorkerWorkspaceResultRef,
   deleteStagedWorkerWorkspaceResult,
   hasWorkerWorkspaceResultRef,
   preparedWorkerWorkspaceResultRef,
@@ -52,6 +54,12 @@ export async function forceAbandonWorkerEnvironment(params: {
 }): Promise<void> {
   const { environmentId, placements } = params;
   const recoveryError = FORCED_WORKER_ABANDONMENT_ERROR;
+  const pendingResults = placements
+    .listPendingWorkspaceResults()
+    .filter((pending) => pending.environmentId === environmentId);
+  const pendingResultsBySession = new Map(
+    pendingResults.map((pending) => [pending.sessionId, pending] as const),
+  );
   const journalOwners = params.placements
     .listWorkspaceReconciliationOwners()
     .filter((owner) => owner.environmentId === environmentId);
@@ -70,16 +78,19 @@ export async function forceAbandonWorkerEnvironment(params: {
       placement?.state === "failed" &&
       placement.recoveryError.startsWith(recoveryError) &&
       placement.generation > owner.placementGeneration;
+    const pending = pendingResultsBySession.get(owner.sessionId);
+    const isRetainedFailedOwner =
+      pending !== undefined && isRetainedFailedWorkspaceResultOwner(placement, pending);
     if (
       placement &&
-      (isCurrentOwner || isForceFailedOwner) &&
+      (isCurrentOwner || isForceFailedOwner || isRetainedFailedOwner) &&
       placement.environmentId === owner.environmentId &&
       placement.activeOwnerEpoch === owner.ownerEpoch
     ) {
       try {
         const journal = placements.loadWorkspaceReconciliation(
           owner,
-          isForceFailedOwner ? { allowFailedOwner: true } : undefined,
+          isForceFailedOwner || isRetainedFailedOwner ? { allowFailedOwner: true } : undefined,
         );
         if (journal) {
           journalCleanups.push({ owner, placement, journal });
@@ -94,23 +105,33 @@ export async function forceAbandonWorkerEnvironment(params: {
     placement: { sessionId: string; sessionKey: string; agentId: string };
     refs: string[];
   }> = [];
-  for (const pending of placements.listPendingWorkspaceResults()) {
-    if (pending.environmentId === environmentId) {
-      const placement = placements.get(pending.sessionId);
-      if (
-        (placement?.state === "active" || placement?.state === "draining") &&
-        placement.environmentId === pending.environmentId &&
-        placement.activeOwnerEpoch === pending.ownerEpoch &&
-        placement.generation === pending.placementGeneration
-      ) {
-        const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
-        stagedResultCleanups.push({
-          placement,
-          refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
-        });
-      }
-      placements.abandonWorkspaceResult(pending);
+  for (const pending of pendingResults) {
+    const placement = placements.get(pending.sessionId);
+    const isCurrentOwner =
+      (placement?.state === "active" || placement?.state === "draining") &&
+      placement.environmentId === pending.environmentId &&
+      placement.activeOwnerEpoch === pending.ownerEpoch &&
+      placement.generation === pending.placementGeneration;
+    const isRetainedFailedOwner = isRetainedFailedWorkspaceResultOwner(placement, pending);
+    if (placement && (isCurrentOwner || isRetainedFailedOwner)) {
+      const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
+      stagedResultCleanups.push({
+        placement,
+        refs: [
+          finalRef,
+          preparedWorkerWorkspaceResultRef(finalRef),
+          cleanupWorkerWorkspaceResultRef(finalRef),
+        ],
+      });
     }
+    if (isRetainedFailedOwner) {
+      placements.fail({
+        sessionId: placement.sessionId,
+        expectedGeneration: placement.generation,
+        recoveryError,
+      });
+    }
+    placements.abandonWorkspaceResult(pending);
   }
   for (const placement of placements.listForReconcile()) {
     if (placement.environmentId !== environmentId) {

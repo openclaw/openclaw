@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
-import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-record.js";
 import { getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
@@ -13,7 +13,7 @@ type WorkspaceResultDatabase = Pick<
 
 const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
-type WorkerWorkspacePendingResult = {
+export type WorkerWorkspacePendingResult = {
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;
@@ -25,6 +25,19 @@ type WorkerWorkspacePendingResult = {
   workspaceAcceptedAtMs: number | null;
   stagedResultRef: string | null;
 };
+
+export function isRetainedFailedWorkspaceResultOwner(
+  placement: WorkerSessionPlacementRecord | undefined,
+  pending: WorkerWorkspacePendingResult,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "failed" }> {
+  return (
+    placement?.state === "failed" &&
+    placement.turnClaim === null &&
+    placement.environmentId === pending.environmentId &&
+    placement.activeOwnerEpoch === pending.ownerEpoch &&
+    placement.generation > pending.placementGeneration
+  );
+}
 
 export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): void {
   executeSqliteQuerySync(

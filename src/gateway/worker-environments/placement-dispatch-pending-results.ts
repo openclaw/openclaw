@@ -6,8 +6,9 @@ import type {
   WorkerDispatchPlacementStore,
   WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import { isRetainedFailedWorkspaceResultOwner } from "./placement-workspace-result.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { WorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
+import { findWorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -86,13 +87,7 @@ export async function recoverPendingWorkspaceResults(
       continue;
     }
     const placement = placements.get(pending.sessionId);
-    if (
-      placement?.state === "failed" &&
-      placement.turnClaim === null &&
-      placement.environmentId === pending.environmentId &&
-      placement.activeOwnerEpoch === pending.ownerEpoch &&
-      placement.generation > pending.placementGeneration
-    ) {
+    if (isRetainedFailedWorkspaceResultOwner(placement, pending)) {
       // A failed placement plus its matching pending row is the durable
       // operator-recovery owner. Only explicit forced abandonment may clear it.
       retainedResultOwners.add(pending.sessionId);
@@ -475,8 +470,9 @@ export async function recoverPendingWorkspaceResults(
         }
       });
     } catch (error) {
-      if (error instanceof WorkerWorkspaceOperatorRecoveryError) {
-        failure.recordRetainedResultFailure(placement, error);
+      const operatorRecoveryError = findWorkerWorkspaceOperatorRecoveryError(error);
+      if (operatorRecoveryError) {
+        failure.recordRetainedResultFailure(placement, operatorRecoveryError);
       }
       // Keep the result, claim, and environment fenced. The next sweep retries.
     }

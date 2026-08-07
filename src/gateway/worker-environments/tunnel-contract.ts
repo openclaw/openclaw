@@ -20,6 +20,21 @@ export class WorkerWorkspaceOperatorRecoveryError extends Error {
   }
 }
 
+export function findWorkerWorkspaceOperatorRecoveryError(
+  error: unknown,
+): WorkerWorkspaceOperatorRecoveryError | undefined {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    if (current instanceof WorkerWorkspaceOperatorRecoveryError) {
+      return current;
+    }
+    seen.add(current);
+    current = current.cause;
+  }
+  return undefined;
+}
+
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;

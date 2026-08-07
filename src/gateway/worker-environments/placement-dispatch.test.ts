@@ -14,6 +14,7 @@ import {
   REQUEST,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { WorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
 
@@ -218,11 +219,13 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
-  it("records terminal quiescence recovery while retaining the pending result", async () => {
+  it("retains final-fence terminal recovery until forced abandonment after restart", async () => {
     const terminalMessage =
       "Worker workspace sync failed: workspace quiescence recovery timed out; lease retained for operator recovery";
     const harness = createHarness(placementStore, {
-      resumeError: new WorkerWorkspaceOperatorRecoveryError(new Error(terminalMessage)),
+      leaseError: new Error("Worker workspace quiescence renewal failed", {
+        cause: new WorkerWorkspaceOperatorRecoveryError(new Error(terminalMessage)),
+      }),
     });
     const active = harness.placements.seedActive(2);
     harness.markEnvironmentOwnerEpoch(2);
@@ -273,6 +276,15 @@ describe("worker placement dispatch", () => {
     });
     expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
     expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
+
+    await restartedHarness.service.forceDestroyEnvironment(active.environmentId);
+
+    expect(restartedHarness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      turnClaim: null,
+    });
+    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
   });
 
   it("fails a pending result with diagnostics when its worker is proven lost", async () => {
