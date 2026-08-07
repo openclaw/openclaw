@@ -1915,6 +1915,64 @@ describe("subscribeEmbeddedAgentSession", () => {
       expect(subscription.assistantTexts).toEqual(["Hello world"]);
     });
 
+    it("replaces already-delivered live block chunks with the cumulative text instead of duplicating them", () => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+        onBlockReply,
+        blockReplyChunking: {
+          minChars: 8,
+          maxChars: 200,
+          breakPreference: "sentence",
+        },
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Hello world. ");
+      emitAssistantTextDelta(emit, "Next sentence. ");
+
+      // Normal live block streaming already committed each chunk into
+      // assistantTexts before the deadline; the timeout flush must not append
+      // the cumulative buffer on top of them (P1: avoid duplicating live block
+      // chunks during timeout flushing).
+      expect(subscription.assistantTexts).toEqual(["Hello world.", "Next sentence."]);
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Hello world. Next sentence."]);
+      expect(onBlockReply).toHaveBeenCalled();
+    });
+
+    it("folds a queued suffix into the already-committed live projection without duplicating it", () => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+        onBlockReply,
+        blockReplyChunking: {
+          minChars: 8,
+          maxChars: 200,
+          breakPreference: "sentence",
+        },
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Hello world. ");
+
+      // Pre-abort flush replaces the live chunk with the buffered projection.
+      subscription.flushPartialAssistantText();
+      expect(subscription.assistantTexts).toEqual(["Hello world."]);
+
+      // A message_update serialized behind the abort lands after the first
+      // flush; the live path also commits the new chunk. The re-flush must
+      // reconcile the whole segment instead of appending the suffix twice.
+      emitAssistantTextDelta(emit, "Next sentence. ");
+      expect(subscription.assistantTexts).toEqual(["Hello world.", "Next sentence."]);
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Hello world. Next sentence."]);
+    });
+
     it("retains hidden-tag context across flushes so a queued suffix inside an unclosed think tag never leaks", () => {
       const { emit, subscription } = createSubscribedHarness({
         runId: "run",

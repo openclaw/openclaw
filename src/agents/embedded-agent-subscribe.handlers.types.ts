@@ -179,7 +179,9 @@ export type EmbeddedAgentSubscribeState = {
   pendingEventChain: Promise<void> | null;
   /**
    * Number of visible characters already committed to assistantTexts by the
-   * timeout flush for the current message. Used to keep the flush idempotent
+   * timeout flush for the current message. Together with
+   * {@link EmbeddedAgentSubscribeState.assistantTextBaseline} it keeps the
+   * flush exactly-once against both earlier flushes and live block chunks
    * (never re-append already-emitted text) while the raw deltaBuffer is
    * retained across flushes so an unclosed hidden tag stays visible to the
    * filter. Reset wherever deltaBuffer resets (message/item boundary).

@@ -1554,48 +1554,42 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // is re-filtered against the full buffer: an unclosed <think>/<final> tag
     // from the first flush remains visible to the filter and cannot leak its
     // continuation as visible output (P1: retain tag context across flushes).
-    // Only the uncommitted suffix is pushed when the refreshed text extends the
-    // previous flush (P1: avoid re-adding already emitted stream text).
+    // The refreshed cumulative text is the terminal authority for this message,
+    // so a committed segment (live block chunks and/or an earlier flush) is
+    // REPLACED rather than extended: append-based dedupe would either re-add
+    // the whole cumulative buffer on top of already-delivered chunks or
+    // double-count a queued suffix that the live path already committed
+    // (P1: avoid duplicating live block chunks during timeout flushing).
     const visibleText = finalizeFlushedAssistantText(text);
-    const previousVisibleText = state.flushedVisibleText;
-    if (previousVisibleText && !visibleText.startsWith(previousVisibleText)) {
-      // The sanitizer retracted or rewrote the previously flushed prefix — a
-      // later queued event (e.g. an orphan reasoning close) can turn text that
-      // looked visible into hidden content. Replace the flushed entry with the
-      // refreshed full text instead of extending it, so hidden reasoning never
-      // stays committed and the visible answer is not lost (P1: reconcile
-      // sanitizer retractions).
-      if (assistantTexts.length > state.assistantTextBaseline) {
-        if (visibleText) {
-          assistantTexts[assistantTexts.length - 1] = visibleText;
+    const committedSegmentCount = assistantTexts.length - state.assistantTextBaseline;
+
+    if (committedSegmentCount > 0 || state.flushedVisibleCursor > 0) {
+      // Live block chunks (and/or an earlier flush) have already committed this
+      // message's visible projection into assistantTexts. Replacing the segment
+      // with the refreshed cumulative text is exactly-once:
+      //   - no re-add of text the live projection already delivered;
+      //   - a queued suffix that arrived after the first flush is folded in
+      //     instead of appended to an entry that already contains it;
+      //   - a sanitizer retraction (e.g. orphan reasoning close) replaces the
+      //     stale bytes with the terminal view, or removes them entirely.
+      if (visibleText) {
+        if (committedSegmentCount > 0) {
+          assistantTexts.splice(state.assistantTextBaseline, committedSegmentCount, visibleText);
           rememberAssistantText(visibleText);
         } else {
-          assistantTexts.splice(-1, 1);
-          state.assistantTextBaseline = Math.min(
-            state.assistantTextBaseline,
-            assistantTexts.length,
-          );
+          pushAssistantText(visibleText);
         }
-      } else if (visibleText) {
-        pushAssistantText(visibleText);
+      } else if (committedSegmentCount > 0) {
+        assistantTexts.splice(state.assistantTextBaseline, committedSegmentCount);
       }
       state.flushedVisibleText = visibleText;
       state.flushedVisibleCursor = visibleText.length;
       return;
     }
-    const cursor = Math.min(state.flushedVisibleCursor, visibleText.length);
-    const uncommitted = visibleText.slice(cursor);
-    if (uncommitted) {
-      if (state.flushedVisibleCursor > 0 && assistantTexts.length > state.assistantTextBaseline) {
-        // Continuation of the text an earlier flush already committed for this
-        // message: append to the same entry so downstream "\n\n" joining does
-        // not split one streamed answer across entries.
-        const merged = `${assistantTexts[assistantTexts.length - 1]}${uncommitted}`;
-        assistantTexts[assistantTexts.length - 1] = merged;
-        rememberAssistantText(merged);
-      } else {
-        pushAssistantText(uncommitted);
-      }
+
+    // Nothing committed yet for this message: this flush is the salvage.
+    if (visibleText) {
+      pushAssistantText(visibleText);
     }
     state.flushedVisibleText = visibleText;
     state.flushedVisibleCursor = visibleText.length;
