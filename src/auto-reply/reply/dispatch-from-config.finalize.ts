@@ -261,6 +261,18 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
 
   await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
+  if (state.hasPendingFailedProgressDeliveries()) {
+    let cleanDeliveryConfirmed = getObservedReplyDelivery();
+    if (!cleanDeliveryConfirmed) {
+      const settleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
+      cleanDeliveryConfirmed = settleResult === "settled" && turnLedger.hasCleanTerminalDelivery();
+    }
+    if (cleanDeliveryConfirmed) {
+      state.discardPendingFailedProgressDeliveries();
+    } else {
+      await state.flushPendingFailedProgressDeliveries();
+    }
+  }
   // Observed delivery is plugin-attested visibility, a trust level the transport
   // ledger intentionally does not own. Directedness gates both the fallback and
   // eligibility: only a turn that positively addressed the bot may surface a
@@ -278,6 +290,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !deliberateSilentTerminalReply &&
     !pendingContinuation &&
     !getObservedReplyDelivery() &&
+    !state.hasVisibleToolErrorProgress() &&
     !replyAcceptedByActiveRun &&
     !turnLedger.hasVisibleDelivery() &&
     !turnLedger.hasForeignQueuedAdmissions();

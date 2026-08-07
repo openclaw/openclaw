@@ -432,7 +432,7 @@ describe("executeFollowupTurn", () => {
     expect(onPlanUpdate).toHaveBeenCalledWith({ title: "quiet plan" });
   });
 
-  it("tracks a visible failed item before suppressing duplicate default warnings", async () => {
+  it("buffers a regular-verbose failed item until terminal delivery is known", async () => {
     const onItemEvent = vi.fn(async () => undefined);
     let warningSuppressed: boolean | undefined;
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
@@ -454,8 +454,14 @@ describe("executeFollowupTurn", () => {
     });
     await result.progress.drain();
 
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(warningSuppressed).toBeUndefined();
+    expect(result.progress.hasPendingFailed()).toBe(true);
+
+    await result.progress.flushFailed();
+
     expect(onItemEvent).toHaveBeenCalledOnce();
-    expect(warningSuppressed).toBe(true);
+    expect(result.progress.visibleToolErrorObserved()).toBe(true);
   });
 
   it("tracks a full-verbosity failed command before suppressing duplicate warnings", async () => {

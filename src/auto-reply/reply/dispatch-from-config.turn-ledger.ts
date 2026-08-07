@@ -4,7 +4,7 @@
 // routed transport result is recorded, so no delivery lane can bypass the
 // no-visible-reply fallback gate with a fresh inference flag.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "../reply-payload.js";
+import { isReplyPayloadStatusNotice, type ReplyPayload } from "../reply-payload.js";
 import {
   captureReplyDispatchDeliveryOutcome,
   type ReplyDispatchDeliveryOutcome,
@@ -27,13 +27,19 @@ type ReplyTurnLedger = {
   /** Enqueue on the dispatcher and record the payload's settled visibility. */
   sendQueued: (kind: ReplyDispatchKind, payload: ReplyPayload) => LedgerQueuedSend;
   /** Record a routed transport result; routed sends settle at their call site. */
-  recordRoutedDelivery: (payload: ReplyPayload, delivered: boolean) => void;
+  recordRoutedDelivery: (
+    payload: ReplyPayload,
+    delivered: boolean,
+    kind?: ReplyDispatchKind,
+  ) => void;
   /** Resolve every admitted payload's outcome so the fallback gate decides after
    * beforeDeliver hooks and transport delivery, not at admission. Only a
    * "settled" result proves the visibility verdict is complete. */
   settleQueued: (abortSignal?: AbortSignal) => Promise<LedgerSettleResult>;
   /** True once any settled, contentful, non-suppressed delivery exists. */
   hasVisibleDelivery: () => boolean;
+  /** True once a clean block/final payload is confirmed delivered. */
+  hasCleanTerminalDelivery: () => boolean;
   /** True when the dispatcher admitted payloads the dispatch pipeline never sent
    * (channel-owned sends). Their settlement is unknown, so the fallback gate
    * treats them conservatively as visible: silence over a double-send. */
@@ -42,8 +48,16 @@ type ReplyTurnLedger = {
 
 export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLedger {
   let visibleDeliveries = 0;
+  let cleanTerminalDeliveries = 0;
   let queuedAdmissions = 0;
   const pendingOutcomes: Array<Promise<void>> = [];
+  const isCleanTerminalPayload = (kind: ReplyDispatchKind, payload: ReplyPayload) =>
+    kind !== "tool" &&
+    payload.isError !== true &&
+    payload.isReasoning !== true &&
+    payload.isCommentary !== true &&
+    !isReplyPayloadStatusNotice(payload) &&
+    hasOutboundReplyContent(payload, { trimText: true });
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload): boolean => {
     if (kind === "tool") {
       return dispatcher.sendToolResult(payload);
@@ -83,13 +97,19 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
           if (contentful && outcome !== "cancelled" && outcome !== "failed-before-deliver") {
             visibleDeliveries += 1;
           }
+          if (outcome === "delivered" && isCleanTerminalPayload(kind, payload)) {
+            cleanTerminalDeliveries += 1;
+          }
         }),
       );
       return { queued: true, outcome: capture.promise };
     },
-    recordRoutedDelivery(payload, delivered) {
+    recordRoutedDelivery(payload, delivered, kind = "final") {
       if (delivered && hasOutboundReplyContent(payload, { trimText: true })) {
         visibleDeliveries += 1;
+      }
+      if (delivered && isCleanTerminalPayload(kind, payload)) {
+        cleanTerminalDeliveries += 1;
       }
     },
     async settleQueued(abortSignal) {
@@ -145,6 +165,7 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       }
     },
     hasVisibleDelivery: () => visibleDeliveries > 0,
+    hasCleanTerminalDelivery: () => cleanTerminalDeliveries > 0,
     hasForeignQueuedAdmissions: () => {
       const counts = dispatcher.getQueuedCounts();
       return counts.tool + counts.block + counts.final > queuedAdmissions;

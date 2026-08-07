@@ -44,6 +44,11 @@ vi.mock("./followup-turn-execution.js", () => ({
 
 vi.mock("./followup-delivery.js", () => ({
   deliverFollowupDecision: (...args: unknown[]) => state.deliver(...args),
+  isCleanFollowupTerminalPayload: (payload: ReplyPayload) =>
+    payload.isError !== true &&
+    payload.isReasoning !== true &&
+    payload.isCommentary !== true &&
+    Boolean(payload.text?.trim() || payload.mediaUrl),
   resolveFollowupDeliveryDecision: (...args: unknown[]) => state.resolveDecision(...args),
 }));
 
@@ -129,6 +134,9 @@ function createRejectedExecution(order: string[] = []): FollowupExecutionResult 
       drain: vi.fn(async () => {
         order.push("progress-drained");
       }),
+      discardFailed: vi.fn(),
+      flushFailed: vi.fn(async () => false),
+      hasPendingFailed: vi.fn(() => false),
       visibleToolErrorObserved: () => false,
     },
   } as FollowupExecutionResult;
@@ -335,5 +343,78 @@ describe("createFollowupRunner", () => {
     })(turn.queued);
 
     expect(onObservedReplyDelivery).toHaveBeenCalledOnce();
+  });
+
+  it("discards buffered failed progress after a clean final is delivered", async () => {
+    const turn = createTurn();
+    const execution = createRejectedExecution();
+    const discardFailed = vi.fn();
+    const flushFailed = vi.fn(async () => false);
+    execution.progress.hasPendingFailed = vi.fn(() => true);
+    execution.progress.discardFailed = discardFailed;
+    execution.progress.flushFailed = flushFailed;
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockResolvedValue(execution);
+    state.account.mockResolvedValue(undefined);
+    state.resolveDecision.mockReturnValue({ kind: "deliver", payloads: [{ text: "recovered" }] });
+    state.deliver.mockResolvedValue("non_error");
+
+    await createFollowupRunner({
+      typing: createTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    })(turn.queued);
+
+    expect(discardFailed).toHaveBeenCalledOnce();
+    expect(flushFailed).not.toHaveBeenCalled();
+  });
+
+  it("flushes buffered failed progress when a clean final is not delivered", async () => {
+    const turn = createTurn();
+    const execution = createRejectedExecution();
+    const discardFailed = vi.fn();
+    const flushFailed = vi.fn(async () => false);
+    execution.progress.hasPendingFailed = vi.fn(() => true);
+    execution.progress.discardFailed = discardFailed;
+    execution.progress.flushFailed = flushFailed;
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockResolvedValue(execution);
+    state.account.mockResolvedValue(undefined);
+    state.resolveDecision.mockReturnValue({ kind: "deliver", payloads: [{ text: "recovered" }] });
+    state.deliver.mockResolvedValue("none");
+
+    await createFollowupRunner({
+      typing: createTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    })(turn.queued);
+
+    expect(discardFailed).not.toHaveBeenCalled();
+    expect(flushFailed).toHaveBeenCalledOnce();
+  });
+
+  it("uses visible buffered failure instead of duplicating a terminal fallback", async () => {
+    const turn = createTurn();
+    const execution = createRejectedExecution();
+    const flushFailed = vi.fn(async () => true);
+    execution.progress.hasPendingFailed = vi.fn(() => true);
+    execution.progress.flushFailed = flushFailed;
+    const terminalFailurePayload = { text: "terminal failure", isError: true };
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockResolvedValue(execution);
+    state.account.mockResolvedValue({ terminalFailurePayload });
+    state.resolveDecision.mockReturnValue({
+      kind: "deliver",
+      payloads: [terminalFailurePayload],
+    });
+
+    await createFollowupRunner({
+      typing: createTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    })(turn.queued);
+
+    expect(flushFailed).toHaveBeenCalledOnce();
+    expect(state.deliver).not.toHaveBeenCalled();
   });
 });
