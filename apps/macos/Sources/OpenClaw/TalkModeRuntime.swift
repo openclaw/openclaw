@@ -138,6 +138,7 @@ actor TalkModeRuntime {
         }
 
         if let realtimeSession {
+            let relayGeneration = self.realtimeRelayGeneration
             do {
                 try await MainActor.run {
                     try realtimeSession.setInputPaused(paused)
@@ -147,8 +148,14 @@ actor TalkModeRuntime {
                     await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
                 }
             } catch {
+                // Only the unpause branch throws, and the session restores its own input-paused
+                // state on the way out. Without this the runtime would report Talk as running
+                // with no microphone, so route it through the typed close-and-recover path.
                 self.logger.error(
                     "talk realtime pause transition failed: \(error.localizedDescription, privacy: .public)")
+                await self.handleRealtimeInputRestartFailure(
+                    error.localizedDescription,
+                    relayGeneration: relayGeneration)
             }
             return
         }

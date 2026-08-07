@@ -168,10 +168,14 @@ extension TalkModeRuntime {
         relayGeneration: UInt64) async
     {
         guard self.realtimeRelayGeneration == relayGeneration,
-              self.realtimeSession != nil
+              let session = self.realtimeSession
         else { return }
         self.logger.warning(
             "talk realtime terminated=\(String(describing: termination), privacy: .public)")
+        // Session-owned terminations close before signalling; runtime-initiated ones do not.
+        // stop() is idempotent, so closing here keeps a dead relay and its event subscription
+        // from outliving their owner while recovery starts a replacement session.
+        await MainActor.run { session.stop() }
         self.realtimeSession = nil
         let activeDuration = self.realtimeSessionReadyAt.map { Date().timeIntervalSince($0) } ?? 0
         self.realtimeSessionReadyAt = nil
