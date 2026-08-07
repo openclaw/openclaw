@@ -24,6 +24,7 @@ import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   resumeScheduledTaskAutoStartAfterUpdate,
+  SchtasksAccessDeniedError,
   suspendScheduledTaskAutoStartForUpdate,
 } from "../../daemon/schtasks.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
@@ -323,6 +324,17 @@ async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
   try {
     suspended = await recovery.suspended;
   } catch (err) {
+    if (err instanceof SchtasksAccessDeniedError) {
+      const restartCommand = replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME);
+      defaultRuntime.log(
+        theme.warn(
+          `Could not disable the Windows Scheduled Task before update (${String(err)}); leaving it enabled and continuing. Run \`${restartCommand}\` from an elevated shell if the gateway fails to restart after update.`,
+        ),
+      );
+      await recovery.restore().catch(() => undefined);
+      recovery.complete();
+      return undefined;
+    }
     await recovery.restore().catch(() => undefined);
     recovery.complete();
     throw err;
