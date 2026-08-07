@@ -710,6 +710,79 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
+  it("rejects oversized frames against the negotiated payload before sending", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        policy: { maxPayload: 128 },
+      },
+    });
+    await vi.waitFor(() => expect(client.connected).toBe(true));
+    ws.sent.length = 0;
+
+    await expect(client.request("chat.send", { text: "x".repeat(256) })).rejects.toThrow(
+      "gateway request chat.send exceeds negotiated max payload",
+    );
+    expect(ws.sent).toHaveLength(0);
+
+    const request = client.request("sessions.list", { includeGlobal: true });
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("sessions.list");
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { sessions: [] },
+    });
+    await expect(request).resolves.toEqual({ sessions: [] });
+  });
+
+  it("rejects oversized pre-auth connect frames before sending", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    await vi.waitFor(() => expect(client.connected).toBe(true));
+    ws.sent.length = 0;
+
+    await expect(client.request("connect", { pathEnv: "x".repeat(70 * 1024) })).rejects.toThrow(
+      "gateway request connect exceeds pre-auth max payload",
+    );
+    expect(ws.sent).toHaveLength(0);
+
+    const request = client.request("sessions.list", { includeGlobal: true });
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("sessions.list");
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { sessions: [] },
+    });
+    await expect(request).resolves.toEqual({ sessions: [] });
+  });
+
   it("tracks inbound activity and delegates forced reconnect to the shared socket", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",

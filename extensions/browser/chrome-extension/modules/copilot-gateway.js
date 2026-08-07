@@ -125,6 +125,7 @@ export class CopilotGatewayClient {
     this.statusListeners = new Set();
     this.lifecycle = null;
     this.tokenRecovery = null;
+    this.maxPayloadBytes = 25 * 1024 * 1024;
   }
 
   onEvent(listener) {
@@ -158,6 +159,17 @@ export class CopilotGatewayClient {
     const protocol = new GatewayProtocolClient({
       createSocket: (handlers) => createBrowserSocket(gatewayScope, handlers, this.WebSocketImpl),
       createRequestId: () => crypto.randomUUID(),
+      validateRequestFrame: (frame, method) => {
+        const frameBytes = new TextEncoder().encode(frame).byteLength;
+        const isConnect = method === "connect";
+        const limit = isConnect ? 64 * 1024 : this.maxPayloadBytes;
+        if (frameBytes > limit) {
+          throw new RangeError(
+            `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
+              `(${frameBytes} > ${limit} bytes)`,
+          );
+        }
+      },
       buildConnectPlan: ({ nonce, challengeTs }) =>
         lifecycle.buildPlan({
           client: {
@@ -191,6 +203,14 @@ export class CopilotGatewayClient {
         locale: navigator.language,
       }),
       onConnectHello: (hello, { plan }) => {
+        const advertisedMaxPayload = hello?.policy?.maxPayload;
+        if (
+          typeof advertisedMaxPayload === "number" &&
+          Number.isFinite(advertisedMaxPayload) &&
+          advertisedMaxPayload > 0
+        ) {
+          this.maxPayloadBytes = advertisedMaxPayload;
+        }
         void lifecycle.acceptHello(hello, plan);
       },
       onHello: (hello) => {

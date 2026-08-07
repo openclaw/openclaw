@@ -23,6 +23,12 @@ type MockLoggingConfig = {
   redactSensitive?: "off" | "tools";
 };
 
+const TEST_GATEWAY_POLICY = {
+  maxPayload: 1_000_000,
+  maxBufferedBytes: 1_000_000,
+  tickIntervalMs: 60_000,
+} as const;
+
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const wsConstructorObservers = vi.hoisted((): Array<(url: string, options: unknown) => void> => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
@@ -599,6 +605,7 @@ describe("GatewayClient request errors", () => {
         payload: {
           type: "hello-ok",
           auth: { role: "operator", scopes: ["operator.admin"] },
+          policy: TEST_GATEWAY_POLICY,
         },
       }),
     );
@@ -907,6 +914,7 @@ describe("GatewayClient close handling", () => {
           payload: {
             type: "hello-ok",
             auth: { role: "operator", scopes: ["operator.admin"] },
+            policy: TEST_GATEWAY_POLICY,
           },
         }),
       );
@@ -1441,6 +1449,7 @@ describe("GatewayClient connect auth payload", () => {
         payload: {
           type: "hello-ok",
           auth: { role: "operator", scopes: ["operator.admin"] },
+          policy: TEST_GATEWAY_POLICY,
         },
       }),
     );
