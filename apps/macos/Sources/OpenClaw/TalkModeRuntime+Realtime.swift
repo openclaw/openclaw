@@ -366,16 +366,23 @@ extension TalkModeRuntime {
 
     func _test_handleRealtimeTermination(
         _ termination: RealtimeTalkRelayTermination,
-        relayGeneration: UInt64) async
+        relayGeneration: UInt64) async -> Bool
     {
         await self.handleRealtimeTermination(termination, relayGeneration: relayGeneration)
+        return self.realtimeRestartTask != nil
     }
 
     func _test_handleRealtimeInputRestartFailure(
         _ message: String,
-        relayGeneration: UInt64) async
+        relayGeneration: UInt64) async -> Bool
     {
         await self.handleRealtimeInputRestartFailure(message, relayGeneration: relayGeneration)
+        return self.realtimeRestartTask != nil
+    }
+
+    func _test_setPausedAndHasPendingRealtimeRestart(_ paused: Bool) async -> Bool {
+        await self.setPaused(paused)
+        return self.realtimeRestartTask != nil
     }
 
     func _test_realtimeSessionIsActive() -> Bool {
@@ -384,10 +391,6 @@ extension TalkModeRuntime {
 
     func _test_rapidRealtimeRestartCount() -> Int {
         self.rapidRealtimeRestartCount
-    }
-
-    func _test_hasPendingRealtimeRestart() -> Bool {
-        self.realtimeRestartTask != nil
     }
 
     func _test_cancelRealtimeRecovery() {

@@ -164,7 +164,7 @@ struct TalkModeRuntimeSpeechTests {
             onSpeakingChanged: { _ in })
         let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
 
-        await runtime._test_handleRealtimeTermination(
+        _ = await runtime._test_handleRealtimeTermination(
             .remoteClose(reason: "stale"),
             relayGeneration: relayGeneration &- 1)
         #expect(await runtime._test_realtimeSessionIsActive())
@@ -172,13 +172,13 @@ struct TalkModeRuntimeSpeechTests {
         await runtime._test_handleRealtimeStatus(
             "Listening (Realtime)",
             relayGeneration: relayGeneration)
-        await runtime._test_handleRealtimeTermination(
+        let recoveryScheduled = await runtime._test_handleRealtimeTermination(
             .audioCaptureFailed(message: "microphone unavailable"),
             relayGeneration: relayGeneration)
 
         #expect(await !(runtime._test_realtimeSessionIsActive()))
         #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
-        #expect(await runtime._test_hasPendingRealtimeRestart())
+        #expect(recoveryScheduled)
 
         await runtime._test_cancelRealtimeRecovery()
         session.stop()
@@ -192,13 +192,13 @@ struct TalkModeRuntimeSpeechTests {
             audioCapture: RuntimeTestAudioCapture())
         let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
 
-        await runtime._test_handleRealtimeInputRestartFailure(
+        let recoveryScheduled = await runtime._test_handleRealtimeInputRestartFailure(
             "selected microphone unavailable",
             relayGeneration: relayGeneration)
 
         #expect(await !(runtime._test_realtimeSessionIsActive()))
         #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
-        #expect(await runtime._test_hasPendingRealtimeRestart())
+        #expect(recoveryScheduled)
 
         // Ownership must not be dropped while the server relay stays live; recovery would then
         // run a second session against the same gateway lease.
@@ -219,13 +219,13 @@ struct TalkModeRuntimeSpeechTests {
 
         await runtime.setPaused(true)
         audioCapture.startError = RuntimeTestAudioCaptureError.inputUnavailable
-        await runtime.setPaused(false)
+        let recoveryScheduled = await runtime._test_setPausedAndHasPendingRealtimeRestart(false)
 
         // Talk must never stay enabled with no microphone and no route back: the failed unpause
         // has to reach the same bounded recovery / native-speech fallback as any other capture loss.
         #expect(await !(runtime._test_realtimeSessionIsActive()))
         #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
-        #expect(await runtime._test_hasPendingRealtimeRestart())
+        #expect(recoveryScheduled)
 
         let recorded = await waitForRelayClose(requests)
         #expect(recorded == ["talk.session.close"])
