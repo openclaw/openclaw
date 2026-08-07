@@ -425,6 +425,37 @@ describe("worker placement dispatch", () => {
     expect(harness.log).toContain("workspace:resume");
   });
 
+  it("records terminal operator recovery from explicit reclaim", async () => {
+    const terminalMessage =
+      "Worker workspace sync failed: workspace quiescence recovery timed out; lease retained for operator recovery";
+    const harness = createHarness(placementStore, {
+      leaseError: new Error("Worker workspace quiescence renewal failed", {
+        cause: new WorkerWorkspaceOperatorRecoveryError(new Error(terminalMessage)),
+      }),
+    });
+    await harness.service.dispatch(REQUEST);
+    const request = {
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    };
+
+    await expect(harness.service.reclaim(request)).rejects.toThrow(
+      "Worker workspace quiescence renewal failed",
+    );
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: terminalMessage,
+      turnClaim: null,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    await expect(harness.service.reclaim(request)).rejects.toThrow(
+      `cannot stop cloud worker from placement failed`,
+    );
+  });
+
   it("keeps the active worker when the accepted local result changes", async () => {
     const harness = createHarness(placementStore, { localVerifyFails: true });
     await harness.service.dispatch(REQUEST);

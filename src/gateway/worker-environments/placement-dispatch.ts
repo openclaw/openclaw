@@ -15,7 +15,10 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
-import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
+import {
+  findWorkerWorkspaceOperatorRecoveryError,
+  WorkerTunnelOwnerDisconnectedError,
+} from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
@@ -424,6 +427,29 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         try {
           return await finishReclaim();
         } catch (error) {
+          const operatorRecoveryError = findWorkerWorkspaceOperatorRecoveryError(error);
+          if (operatorRecoveryError) {
+            const owned = placements.get(current.sessionId);
+            const retainsReclaimResult = placements
+              .listPendingWorkspaceResults()
+              .some(
+                (pending) =>
+                  pending.sessionId === reclaimClaim.sessionId &&
+                  pending.claimId === reclaimClaim.claimId &&
+                  pending.runId === reclaimClaim.runId,
+              );
+            if (
+              owned?.state === "active" &&
+              owned.generation === current.generation &&
+              owned.environmentId === current.environmentId &&
+              owned.activeOwnerEpoch === current.activeOwnerEpoch &&
+              owned.turnClaim?.claimId === reclaimClaim.claimId &&
+              retainsReclaimResult
+            ) {
+              failure.recordRetainedResultFailure(owned, operatorRecoveryError);
+            }
+            throw error;
+          }
           // An unstaged final-fence failure is retryable even after an unchanged
           // manifest commit; the journal remains authoritative for the next attempt.
           await cancelUnstagedFailedReclaim(
