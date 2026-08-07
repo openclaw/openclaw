@@ -61,6 +61,46 @@ describe("buildFeishuAgentBody", () => {
     expect(body).not.toContain("\ud83d");
     expect(body).not.toContain("\ude00");
   });
+
+  it("appends a durable attachments block for inbound media (#108534)", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "<media:document> (large-schema.sql)",
+        senderName: "Sender Name",
+        senderOpenId: "ou-sender",
+        messageId: "msg-42",
+      },
+      mediaList: [
+        {
+          path: "/home/user/.openclaw/media/inbound/abc-123.sql",
+          contentType: "application/sql",
+          placeholder: "<media:document>",
+        },
+      ],
+    });
+
+    expect(body).toContain("<attachments>");
+    expect(body).toContain("- path: /home/user/.openclaw/media/inbound/abc-123.sql");
+    expect(body).toContain("kind: document");
+    expect(body).toContain("contentType: application/sql");
+    expect(body).toContain("</attachments>");
+    // Inline preview remains untouched.
+    expect(body).toContain("<media:document> (large-schema.sql)");
+  });
+
+  it("omits the attachments block when mediaList is empty", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "plain text",
+        senderName: "Sender Name",
+        senderOpenId: "ou-sender",
+        messageId: "msg-42",
+      },
+      mediaList: [],
+    });
+
+    expect(body).not.toContain("<attachments>");
+  });
 });
 
 describe("parseMessageContent media captions", () => {
