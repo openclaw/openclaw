@@ -209,6 +209,38 @@ describe("CopilotSessionRegistry", () => {
     await expect(registry.finishRun(GATEWAY_SCOPE, "session-10", "run-10")).resolves.toBe(true);
     expect(registry.pendingAborts(GATEWAY_SCOPE)).toEqual([]);
   });
+
+  it("continues queued cancellation and archive writes after a transient storage failure", async () => {
+    const mock = storage();
+    const registry = new CopilotSessionRegistry(mock as never);
+    await registry.initialize(new Set([10]));
+    await registry.put(10, {
+      gatewayScope: GATEWAY_SCOPE,
+      sessionKey: "session-10",
+    });
+    await registry.startRun(10, GATEWAY_SCOPE, "run-10");
+
+    const persist = mock.local.set.bind(mock.local);
+    let failNextWrite = true;
+    mock.local.set = async (update) => {
+      if (failNextWrite) {
+        failNextWrite = false;
+        throw new Error("transient session storage failure");
+      }
+      await persist(update);
+    };
+
+    const failedCancellation = registry.queueAbort(10, GATEWAY_SCOPE);
+    const finishedRun = registry.finishRun(GATEWAY_SCOPE, "session-10", "run-10");
+
+    await expect(failedCancellation).rejects.toThrow("transient session storage failure");
+    await expect(finishedRun).resolves.toBe(true);
+    expect(registry.pendingAborts(GATEWAY_SCOPE)).toEqual([]);
+    await expect(registry.closeTab(10)).resolves.toMatchObject({ sessionKey: "session-10" });
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([
+      expect.objectContaining({ sessionKey: "session-10", tabId: 10 }),
+    ]);
+  });
 });
 
 describe("CopilotPanelBindingRegistry", () => {
@@ -225,5 +257,31 @@ describe("CopilotPanelBindingRegistry", () => {
     await expect(bindings.resolve(first)).resolves.toBe(7);
     await bindings.remove(7);
     await expect(bindings.resolve(first)).resolves.toBeNull();
+  });
+
+  it("retries and persists a queued panel binding after a transient storage failure", async () => {
+    const area = storageArea();
+    const persist = area.set.bind(area);
+    let failNextWrite = true;
+    area.set = async (update) => {
+      if (failNextWrite) {
+        failNextWrite = false;
+        throw new Error("transient panel storage failure");
+      }
+      await persist(update);
+    };
+    const bindings = new CopilotPanelBindingRegistry(area as never);
+
+    const failedBinding = bindings.bind(17);
+    const recoveredBinding = bindings.bind(17);
+
+    await expect(failedBinding).rejects.toThrow("transient panel storage failure");
+    const token = await recoveredBinding;
+    expect(area.setCalls).toHaveLength(1);
+    expect(area.values.copilotPanelBindingsV1).toEqual({ 17: token });
+    await expect(bindings.resolve(token)).resolves.toBe(17);
+    await bindings.remove(17);
+    expect(area.setCalls).toHaveLength(2);
+    await expect(bindings.resolve(token)).resolves.toBeNull();
   });
 });

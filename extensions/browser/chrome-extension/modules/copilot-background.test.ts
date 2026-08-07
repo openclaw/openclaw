@@ -444,51 +444,62 @@ describe("browser copilot background", () => {
     ]);
   });
 
-  it("revokes and aborts active custody when the browser relay disconnects", async () => {
-    const gatewayScope = "ws://127.0.0.1:18789/";
-    const revokeDebugger = vi.fn(async () => undefined);
-    const request = vi.fn(async () => ({ ok: true }));
-    const gateway = {
-      ready: true,
-      onEvent: vi.fn(),
-      onStatus: vi.fn(),
-      request,
-      start: vi.fn(),
-      stop: vi.fn(),
-    };
-    const controller = createCopilotController({
-      chromeApi: {
-        runtime: { onConnect: eventHook() },
-        tabs: { query: vi.fn(async () => [{ id: 12 }]) },
-        storage: { local: storageArea(), session: storageArea() },
-      } as never,
-      getConfig: vi.fn(async () => ({
-        relayUrl: "ws://127.0.0.1:18792/browser/extension",
-        gatewayUrl: gatewayScope,
-      })),
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
-      attachDebugger: vi.fn(),
-      detachDebugger: vi.fn(),
-      revokeDebugger,
-      restoreDebugger: vi.fn(async () => undefined),
-      scheduleTabsSync: vi.fn(),
-      gateway: gateway as never,
-    });
-    await controller.initialize();
-    await controller.onRelayStatus({ ready: true, label: "Browser relay connected" });
-    await controller.registry.put(12, { gatewayScope, sessionKey: "session-12" });
-    await controller.registry.startRun(12, gatewayScope, "run-12");
+  it.each([false, true])(
+    "revokes and aborts active custody when the browser relay disconnects (storage failure: %s)",
+    async (storageFailure) => {
+      const gatewayScope = "ws://127.0.0.1:18789/";
+      const revokeDebugger = vi.fn(async () => undefined);
+      const request = vi.fn(async () => ({ ok: true }));
+      const localStorage = storageArea();
+      const gateway = {
+        ready: true,
+        onEvent: vi.fn(),
+        onStatus: vi.fn(),
+        request,
+        start: vi.fn(),
+        stop: vi.fn(),
+      };
+      const controller = createCopilotController({
+        chromeApi: {
+          runtime: { onConnect: eventHook() },
+          tabs: { query: vi.fn(async () => [{ id: 12 }]) },
+          storage: { local: localStorage, session: storageArea() },
+        } as never,
+        getConfig: vi.fn(async () => ({
+          relayUrl: "ws://127.0.0.1:18792/browser/extension",
+          gatewayUrl: gatewayScope,
+        })),
+        isTabShared: vi.fn(),
+        addTabToOpenClawGroup: vi.fn(),
+        attachDebugger: vi.fn(),
+        detachDebugger: vi.fn(),
+        revokeDebugger,
+        restoreDebugger: vi.fn(async () => undefined),
+        scheduleTabsSync: vi.fn(),
+        gateway: gateway as never,
+      });
+      await controller.initialize();
+      await controller.onRelayStatus({ ready: true, label: "Browser relay connected" });
+      await controller.registry.put(12, { gatewayScope, sessionKey: "session-12" });
+      await controller.registry.startRun(12, gatewayScope, "run-12");
+      if (storageFailure) {
+        localStorage.set.mockRejectedValueOnce(new Error("transient session storage failure"));
+      }
 
-    await controller.onRelayStatus({ ready: false, label: "Browser relay reconnecting" });
+      await controller.onRelayStatus({ ready: false, label: "Browser relay reconnecting" });
 
-    expect(revokeDebugger).toHaveBeenCalledWith(12);
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "session-12",
-      runId: "run-12",
-    });
-    expect(controller.registry.pendingAborts(gatewayScope)).toEqual([]);
-  });
+      expect(revokeDebugger).toHaveBeenCalledWith(12);
+      expect(request).toHaveBeenCalledWith("sessions.abort", {
+        key: "session-12",
+        runId: "run-12",
+      });
+      expect(controller.registry.pendingAborts(gatewayScope)).toEqual([]);
+      await expect(
+        controller.onRelayStatus({ ready: true, label: "Browser relay connected" }),
+      ).resolves.toBeUndefined();
+      expect(controller.registry.get(12, gatewayScope)).not.toHaveProperty("activeRunId");
+    },
+  );
 
   it("restores durable debugger denial before a suspended worker reconnects", async () => {
     const gatewayScope = "ws://127.0.0.1:18789/";
