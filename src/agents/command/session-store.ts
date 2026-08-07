@@ -3,6 +3,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { setSessionRuntimeModel, type SessionEntry } from "../../config/sessions.js";
+import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -267,6 +268,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
+  }
+  if (!preserveUserFacingRunState) {
+    const accountedGoal = resolveSessionGoalDisplayState(next, now);
+    if (accountedGoal) {
+      next.goal = accountedGoal;
+    }
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
