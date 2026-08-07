@@ -55,13 +55,28 @@ function collapseErrorSnippet(text: string): string {
 }
 
 /** Reads a bounded, collapsed error-body snippet without buffering hostile responses. */
-async function readNextcloudTalkErrorSnippet(response: Response): Promise<string> {
+async function readNextcloudTalkErrorSnippet(
+  response: Response,
+  opts?: { extraRedactions?: readonly string[] },
+): Promise<string> {
   try {
     // readResponseTextLimited caps the read at the byte budget and cancels the
     // upstream stream once full, so a hostile endpoint cannot stream an
     // unbounded body into memory. Collapse the bounded prefix locally to keep a
     // short, log-safe error snippet (no new plugin SDK surface required).
-    const text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
+    let text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
+    // Scrub plugin-generated secret values that a misbehaving upstream may
+    // reflect in error bodies (e.g. the HMAC signature sent in
+    // X-Nextcloud-Talk-Bot-Signature). Scrub before generic redaction so exact
+    // known values are removed even when the generic redactor has no pattern
+    // for this header.
+    if (opts?.extraRedactions) {
+      for (const value of opts.extraRedactions) {
+        if (value) {
+          text = text.replaceAll(value, "[redacted]");
+        }
+      }
+    }
     // Redact credentials that a misbehaving upstream may reflect in error bodies
     // (e.g. Authorization headers echoed back in the response).
     // Redact before collapsing so a credential that crosses the snippet-length
@@ -222,7 +237,9 @@ export async function sendMessageNextcloudTalk(
 
   try {
     if (!response.ok) {
-      const errorBody = await readNextcloudTalkErrorSnippet(response);
+      const errorBody = await readNextcloudTalkErrorSnippet(response, {
+        extraRedactions: [signature],
+      });
       const status = response.status;
       let errorMsg = `Nextcloud Talk send failed (${status})`;
 
@@ -322,7 +339,9 @@ export async function sendReactionNextcloudTalk(
 
   try {
     if (!response.ok) {
-      const errorBody = await readNextcloudTalkErrorSnippet(response);
+      const errorBody = await readNextcloudTalkErrorSnippet(response, {
+        extraRedactions: [signature],
+      });
       throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
     }
 
