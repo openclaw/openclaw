@@ -150,4 +150,29 @@ describe("worker session placement gate", () => {
     store.releaseTurn(claim);
     expect(gate.validateWorkerTurn(binding)).toBe(false);
   });
+
+  it("retains an environment only for an exact terminal pending-result owner", () => {
+    const claim = preclaim("run-worker-terminal");
+    store.markWorkspaceResultPending(claim);
+    const active = store.get(SESSION.sessionId);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    store.failPendingWorkspaceResult({
+      sessionId: active.sessionId,
+      expectedGeneration: active.generation,
+      recoveryError: "workspace recovery retained for operator action",
+    });
+    const gate = createWorkerSessionPlacementGate(store);
+
+    expect(gate.isEnvironmentRetainedForOperatorRecovery(ENVIRONMENT_ID)).toBe(true);
+    expect(gate.isEnvironmentRetainedForOperatorRecovery("environment-other")).toBe(false);
+
+    const pending = store.listPendingWorkspaceResults()[0]!;
+    store.forceAbandonPendingWorkspaceResult({
+      pending,
+      recoveryError: "forced abandonment",
+    });
+    expect(gate.isEnvironmentRetainedForOperatorRecovery(ENVIRONMENT_ID)).toBe(false);
+  });
 });

@@ -9,16 +9,19 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createGatewayWorkerPlacementRuntime } from "../server-worker-placement-startup.js";
 import {
   createDispatchEnvironmentFixtures,
   REQUEST,
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
+import { createHarness } from "./placement-dispatch-test-harness.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
   forceAbandonWorkerEnvironment,
 } from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import type { WorkerEnvironmentService } from "./service.js";
 import {
   cleanupWorkerWorkspaceResultRef,
   hasWorkerWorkspaceResultRef,
@@ -174,6 +177,23 @@ describe("forced worker environment abandonment", () => {
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restartedHarness = createHarness(store, { workspacePath });
+    const environments = {
+      ...restartedHarness.environments,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+    } as unknown as WorkerEnvironmentService;
+    const runtime = createGatewayWorkerPlacementRuntime({
+      placements: store,
+      environments,
+      admitNewPlacements: false,
+      revokeSessionAuthority: vi.fn(),
+      warn: vi.fn(),
+    });
+    const sidecar = await runtime.startRuntime({
+      isClosePreludeStarted: () => false,
+      registerSidecar: vi.fn(),
+    });
     expect(store.get(active.sessionId)).toMatchObject({
       state: "failed",
       recoveryError: terminalMessage,
@@ -181,6 +201,7 @@ describe("forced worker environment abandonment", () => {
     });
     expect(store.listPendingWorkspaceResults()).toHaveLength(1);
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    await sidecar?.stop();
 
     await forceAbandonWorkerEnvironment({
       placements: store,

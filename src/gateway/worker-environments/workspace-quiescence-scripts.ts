@@ -402,6 +402,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
   const check = async () => {
     try {
       const lease = parseLease(fs.readFileSync(watchedLeasePath, "utf8"), watchedNonce);
+      if (lease.recovery !== undefined) return;
       const remainingMs = lease.expiresAtMs - Date.now();
       if (remainingMs > 0) {
         setTimeout(check, Math.min(remainingMs, 60 * 1000));
@@ -409,7 +410,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       }
       // Re-read at expiry so a renewal that raced this wake-up wins before SIGCONT.
       const current = parseLease(fs.readFileSync(watchedLeasePath, "utf8"), watchedNonce);
-      if (current.watchdog === null) return;
+      if (current.recovery !== undefined || current.watchdog === null) return;
       if (current.expiresAtMs > Date.now()) {
         setTimeout(check, Math.min(current.expiresAtMs - Date.now(), 60 * 1000));
         return;

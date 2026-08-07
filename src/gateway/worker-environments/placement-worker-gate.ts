@@ -43,6 +43,9 @@ export function createWorkerSessionPlacementGate(
   };
 
   return {
+    isEnvironmentRetainedForOperatorRecovery: (environmentId) =>
+      store.isEnvironmentRetainedForOperatorRecovery(environmentId),
+
     validateWorkerTurn,
 
     updateAckCursors(binding): void {

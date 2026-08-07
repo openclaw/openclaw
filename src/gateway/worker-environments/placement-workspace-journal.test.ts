@@ -7,7 +7,10 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-force-abandon.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  isForcedWorkerAbandonmentPlacement,
+} from "./placement-force-abandon.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -32,8 +35,7 @@ describe("worker placement workspace journal", () => {
 
   const prune = () =>
     store.pruneOrphanedWorkspaceReconciliations({
-      retainFailedOwner: (recoveryError) =>
-        recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
+      retainFailedOwnerWithoutPending: isForcedWorkerAbandonmentPlacement,
     });
 
   const seedJournal = () => {
@@ -111,5 +113,109 @@ describe("worker placement workspace journal", () => {
 
     expect(prune()).toEqual([]);
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+  });
+
+  it("retains a terminal failed owner with its matching pending result", () => {
+    const { active, owner } = seedJournal();
+    const claim = store.claimTurn({
+      ...REQUEST,
+      claimId: "terminal-result-claim",
+      runId: "terminal-result-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    store.markWorkspaceResultPending(claim);
+    store.failPendingWorkspaceResult({
+      sessionId: active.sessionId,
+      expectedGeneration: active.generation,
+      recoveryError:
+        "workspace quiescence recovery timed out; lease retained for operator recovery",
+    });
+
+    expect(prune()).toEqual([]);
+    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+  });
+
+  it("prunes a failed journal whose generation does not match its pending result", () => {
+    const active = seedActivePlacement(store, { environmentId: "worker-1", ownerEpoch: 7 });
+    if (active.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const claim = store.claimTurn({
+      ...REQUEST,
+      claimId: "mismatched-result-claim",
+      runId: "mismatched-result-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    const draining = store.startDrain({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    if (draining.state !== "draining") {
+      throw new Error("expected draining placement");
+    }
+    const owner = {
+      sessionId: draining.sessionId,
+      environmentId: draining.environmentId,
+      ownerEpoch: draining.activeOwnerEpoch,
+      placementGeneration: draining.generation,
+    };
+    const basePack = Buffer.from("mismatched workspace base pack");
+    store.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "a".repeat(32),
+      baseManifestRef: draining.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"b".repeat(64)}`,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "c".repeat(40),
+      basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+      basePack,
+    });
+    store.markWorkspaceResultPending(claim);
+    store.failPendingWorkspaceResult({
+      sessionId: draining.sessionId,
+      expectedGeneration: draining.generation,
+      recoveryError: "terminal recovery retained for operator action",
+    });
+
+    expect(prune()).toEqual([owner]);
+    expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
+  });
+
+  it("prunes an ordinary failed owner without a pending result", () => {
+    const { active, owner } = seedJournal();
+    const draining = store.startDrain({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    if (draining.state !== "draining") {
+      throw new Error("expected draining placement");
+    }
+    const reconciling = store.startReconcile({
+      sessionId: draining.sessionId,
+      environmentId: draining.environmentId,
+      ownerEpoch: draining.activeOwnerEpoch,
+      expectedGeneration: draining.generation,
+    });
+    store.fail({
+      sessionId: reconciling.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError: "ordinary placement failure",
+    });
+
+    expect(prune()).toEqual([owner]);
+    expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
   });
 });

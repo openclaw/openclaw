@@ -81,7 +81,16 @@ export function clearWorkerWorkspaceReconciliation(
   );
 }
 
-export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntime) {
+export function createPlacementWorkspaceJournalOps(
+  runtime: PlacementStoreRuntime,
+  deps: {
+    hasMatchingRetainedFailedResultOwner: (
+      db: DatabaseSync,
+      placement: WorkerSessionPlacementRecord | undefined,
+      owner: WorkerWorkspaceJournalOwner,
+    ) => boolean;
+  },
+) {
   const { now, read, write } = runtime;
   return {
     listWorkspaceReconciliationOwners(): WorkerWorkspaceJournalOwner[] {
@@ -101,7 +110,7 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
     },
 
     pruneOrphanedWorkspaceReconciliations(options: {
-      retainFailedOwner: (recoveryError: string) => boolean;
+      retainFailedOwnerWithoutPending: (placement: WorkerSessionPlacementRecord) => boolean;
     }): WorkerWorkspaceJournalOwner[] {
       return write((db) => {
         const rows = executeSqliteQuerySync(
@@ -121,13 +130,18 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
           };
           const placement = find(db, owner.sessionId);
           const stillOwned = isCurrentJournalOwner(placement, owner);
+          const retainedFailedResultOwner = deps.hasMatchingRetainedFailedResultOwner(
+            db,
+            placement,
+            owner,
+          );
           const retainedFailedOwner =
             placement?.state === "failed" &&
             placement.environmentId === owner.environmentId &&
             placement.activeOwnerEpoch === owner.ownerEpoch &&
             placement.generation > owner.placementGeneration &&
-            options.retainFailedOwner(placement.recoveryError);
-          if (stillOwned || retainedFailedOwner) {
+            options.retainFailedOwnerWithoutPending(placement);
+          if (stillOwned || retainedFailedResultOwner || retainedFailedOwner) {
             continue;
           }
           // Generation and owner epoch only advance, so a mismatched exact owner cannot rebind.

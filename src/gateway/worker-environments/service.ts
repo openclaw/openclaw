@@ -169,6 +169,7 @@ type WorkerTurnRequest =
   | { kind: "transcript"; seq: number };
 
 export type WorkerSessionPlacementGate = {
+  isEnvironmentRetainedForOperatorRecovery(environmentId: string): boolean;
   validateWorkerTurn(binding: WorkerPlacementTurnBinding): boolean;
   updateAckCursors(
     binding: WorkerPlacementTurnBinding & {
@@ -717,6 +718,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const reconcileRecord = async (initialRecord: WorkerEnvironmentRecord): Promise<void> => {
     let record = initialRecord;
+    if (options.placementStore?.isEnvironmentRetainedForOperatorRecovery(record.environmentId)) {
+      return;
+    }
     if (record.state === "requested" && record.destroyRequestedAtMs !== null) {
       return void cancelRequested(record);
     }

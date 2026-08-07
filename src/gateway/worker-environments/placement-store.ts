@@ -38,6 +38,7 @@ import {
 } from "./placement-workspace-journal.js";
 import {
   createPlacementWorkspaceResultOps,
+  hasMatchingRetainedFailedWorkspaceResultOwner,
   hasWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
 import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
@@ -119,7 +120,9 @@ export function createWorkerSessionPlacementStore(
 
   return {
     ...createPlacementTurnClaimOps(runtime),
-    ...createPlacementWorkspaceJournalOps(runtime),
+    ...createPlacementWorkspaceJournalOps(runtime, {
+      hasMatchingRetainedFailedResultOwner: hasMatchingRetainedFailedWorkspaceResultOwner,
+    }),
     ...createPlacementWorkspaceResultOps(runtime),
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {

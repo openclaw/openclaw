@@ -1,4 +1,5 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
+import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 import { isRetainedFailedWorkspaceResultOwner } from "./placement-workspace-result.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
@@ -11,6 +12,14 @@ import {
 
 export const FORCED_WORKER_ABANDONMENT_ERROR =
   "Cloud worker result abandoned by forced operator teardown";
+
+export function isForcedWorkerAbandonmentPlacement(
+  placement: WorkerSessionPlacementRecord | undefined,
+): placement is Extract<WorkerSessionPlacementRecord, { state: "failed" }> {
+  return (
+    placement?.state === "failed" && placement.recoveryError === FORCED_WORKER_ABANDONMENT_ERROR
+  );
+}
 
 async function tryResolveWorkspacePath(
   resolveWorkspacePath: (placement: {
@@ -75,8 +84,7 @@ export async function forceAbandonWorkerEnvironment(params: {
       (placement?.state === "active" || placement?.state === "draining") &&
       placement.generation === owner.placementGeneration;
     const isForceFailedOwner =
-      placement?.state === "failed" &&
-      placement.recoveryError.startsWith(recoveryError) &&
+      isForcedWorkerAbandonmentPlacement(placement) &&
       placement.generation > owner.placementGeneration;
     const pending = pendingResultsBySession.get(owner.sessionId);
     const isRetainedFailedOwner =
