@@ -292,6 +292,60 @@ describe("GatewayConnection disconnect status", () => {
     await started;
   });
 
+  it("resolves start() immediately when the abort signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    createQQWSClientMock.mockResolvedValue(new FakeWebSocket());
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+    });
+
+    await expect(connection.start()).resolves.toBeUndefined();
+    expect(createQQWSClientMock).not.toHaveBeenCalled();
+  });
+
+  it("closes a socket created after aborting during startup", async () => {
+    let resolveSocket: ((ws: FakeWebSocket) => void) | undefined;
+    createQQWSClientMock.mockImplementation(
+      () =>
+        new Promise<FakeWebSocket>((resolve) => {
+          resolveSocket = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+    });
+
+    const started = connection.start();
+    await vi.waitFor(() => {
+      expect(resolveSocket).toBeDefined();
+    });
+    controller.abort();
+    // Simulate a socket still in CONNECTING state: the real ws library
+    // emits an error event when close() aborts an in-progress handshake.
+    // Production code must own that error before calling close().
+    const ws = new FakeWebSocket();
+    ws.readyState = 0; // WebSocket.CONNECTING
+    ws.close = vi.fn(() => {
+      ws.emit("error", new Error("socket hang up"));
+    });
+    resolveSocket?.(ws);
+
+    await expect(started).resolves.toBeUndefined();
+    expect(ws.close).toHaveBeenCalledOnce();
+  });
+
   it("continues shutdown cleanup and rejects when one cleanup step fails", async () => {
     const cleanupError = new Error("ingress stop failed");
     const stop = vi.fn(async () => {
