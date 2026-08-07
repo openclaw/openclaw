@@ -12,6 +12,7 @@ struct RealtimeTalkSettingsTests {
                     "speakerVoice": "cedar",
                     "mode": "realtime",
                     "transport": "gateway-relay",
+                    "brain": "agent-consult",
                 ],
             ],
         ]
@@ -21,6 +22,26 @@ struct RealtimeTalkSettingsTests {
         #expect(draft.explicitlyUsesOpenAI)
         #expect(draft.model == "gpt-live-1-codex")
         #expect(draft.voice == "cedar")
+    }
+
+    @Test func `does not enable realtime when brain is missing or unsupported`() {
+        for brain in [nil, "client-direct"] as [String?] {
+            var realtime: [String: Any] = [
+                "provider": "openai",
+                "mode": "realtime",
+                "transport": "gateway-relay",
+            ]
+            if let brain {
+                realtime["brain"] = brain
+            }
+
+            let draft = RealtimeTalkSettingsConfig.parse([
+                "talk": ["realtime": realtime],
+            ])
+
+            #expect(!draft.enabled)
+            #expect(draft.explicitlyUsesOpenAI)
+        }
     }
 
     @Test func `parses provider defaults without enabling realtime`() {

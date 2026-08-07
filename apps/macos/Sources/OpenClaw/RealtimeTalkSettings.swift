@@ -42,7 +42,8 @@ enum RealtimeTalkSettingsConfig {
         let explicitlyUsesOpenAI = selectsOpenAI || openAI != nil
         let enabled = selectsOpenAI &&
             Self.string(realtime?["mode"])?.caseInsensitiveCompare("realtime") == .orderedSame &&
-            Self.string(realtime?["transport"])?.caseInsensitiveCompare("gateway-relay") == .orderedSame
+            Self.string(realtime?["transport"])?.caseInsensitiveCompare("gateway-relay") == .orderedSame &&
+            Self.string(realtime?["brain"])?.caseInsensitiveCompare("agent-consult") == .orderedSame
 
         return RealtimeTalkSettingsDraft(
             enabled: enabled,
