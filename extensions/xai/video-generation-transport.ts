@@ -1,8 +1,6 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   assertOkOrThrowHttpError,
-  createProviderOperationDeadline,
-  createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   type ProviderOperationTimeoutMs,
@@ -73,14 +71,7 @@ export async function downloadXaiVideo(
     maxBytes: number;
   } & XaiVideoRequestPolicy,
 ): Promise<GeneratedVideoAsset> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? params.defaultTimeoutMs,
-    label: "xAI generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? params.defaultTimeoutMs,
-  });
+  const timeoutMs = resolveXaiVideoFetchTimeoutMs(params.timeoutMs, params.defaultTimeoutMs);
   const { response, release } = await fetchXaiVideoResponse({
     url: params.url,
     stage: "download",
@@ -95,14 +86,16 @@ export async function downloadXaiVideo(
   });
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
+    // fetchWithSsrFGuard keeps its abort until release(), so continuous drips still hit the
+    // request wall-clock. chunkTimeoutMs is shorter than the guarded-request deadline so
+    // a mid-body stall produces the download-owned idle error instead of a generic request
+    // timeout; a continuously dripping CDN body resets the idle on every chunk.
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `xAI generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
+      chunkTimeoutMs: Math.ceil(timeoutMs / 2),
       onOverflow: ({ maxBytes }) =>
         new Error(`xAI generated video download exceeds ${maxBytes} bytes`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`xAI generated video download stalled after ${chunkTimeoutMs}ms`),
     });
     return {
       buffer,
