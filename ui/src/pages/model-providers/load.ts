@@ -23,6 +23,13 @@ export type ModelProvidersData = {
   catalogModels: ModelCatalogEntry[] | null;
   config: Record<string, unknown> | null;
   providerUsage: UsageSummary | null;
+  /**
+   * True only when `usage.status` rejected. A successful call with no usage is
+   * still `providerUsage: null`, so the page cannot tell "no usage yet" from
+   * "the request failed" without this; without it a failed load stamps
+   * `updatedAt` and the empty cards count as fresh forever.
+   */
+  providerUsageUnavailable: boolean;
   costByProvider: SessionModelUsage[] | null;
   updatedAt: number | null;
   error: string | null;
@@ -34,6 +41,7 @@ export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   catalogModels: null,
   config: null,
   providerUsage: null,
+  providerUsageUnavailable: false,
   costByProvider: null,
   updatedAt: null,
   error: null,
@@ -81,7 +89,10 @@ export async function loadModelProvidersData(
       request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
         .catch(() => null),
-      request<UsageSummary>("usage.status").catch(() => null),
+      request<UsageSummary>("usage.status").then(
+        (result) => ({ ok: true as const, result }),
+        () => ({ ok: false as const }),
+      ),
       requestSessionUsage(client, {
         startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
         endDate: localDate(0),
@@ -97,11 +108,30 @@ export async function loadModelProvidersData(
     models,
     catalogModels,
     config,
-    providerUsage,
+    providerUsage: providerUsage.ok ? (providerUsage.result ?? null) : null,
+    providerUsageUnavailable: !providerUsage.ok,
     costByProvider,
     updatedAt: Date.now(),
     // Auth status is the primary provider list; its failure is the only one
     // worth surfacing as a page-level error.
     error: authStatus.ok ? null : errorMessage(authStatus.error),
   };
+}
+
+/**
+ * Decides whether the page should reload. A load whose `usage.status` rejected
+ * still stamps `updatedAt`, so it must recover on the gateway's connected
+ * transition; keying that on the transition rather than each render stops a
+ * persistently failing usage request from spinning the loader.
+ */
+export function shouldReloadModelProviders(params: {
+  data: ModelProvidersData | null;
+  previousPhase: string | null;
+  clientChanged: boolean;
+}): boolean {
+  const { data, previousPhase, clientChanged } = params;
+  if (data === null || data.updatedAt === null || clientChanged) {
+    return true;
+  }
+  return previousPhase !== null && previousPhase !== "connected" && data.providerUsageUnavailable;
 }

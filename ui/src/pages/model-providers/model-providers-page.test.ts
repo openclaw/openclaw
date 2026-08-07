@@ -173,6 +173,41 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
+  it("refetches provider usage after a same-client reconnect when usage.status failed", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    const base = request.getMockImplementation();
+    let usageCalls = 0;
+    request.mockImplementation(async (method: string): Promise<unknown> => {
+      if (method === "usage.status") {
+        usageCalls += 1;
+        if (usageCalls === 1) {
+          throw new Error("usage.status unavailable");
+        }
+        return { updatedAt: 2, providers: [] };
+      }
+      return await base!(method);
+    });
+
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.data?.updatedAt).toBeTruthy());
+    // The load still completed, so without the recovery path this payload counts
+    // as fresh forever and the usage cards stay empty.
+    expect(page.data?.providerUsageUnavailable).toBe(true);
+    expect(usageCalls).toBe(1);
+
+    const reRender = () => {
+      (page as unknown as { requestUpdate: () => void }).requestUpdate();
+    };
+    snapshot.phase = "connecting";
+    reRender();
+    await page.updateComplete;
+    snapshot.phase = "connected";
+    reRender();
+
+    await vi.waitFor(() => expect(usageCalls).toBe(2));
+    await vi.waitFor(() => expect(page.data?.providerUsageUnavailable).toBe(false));
+  });
+
   it("links the page subtitle to the model providers guide", async () => {
     const { context } = createHarness("main");
     const page = appendPage(context);

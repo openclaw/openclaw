@@ -36,6 +36,7 @@ import {
   loadModelProvidersData,
   MODEL_PROVIDERS_COST_DAYS,
   type ModelProvidersData,
+  shouldReloadModelProviders,
 } from "./load.ts";
 import { readModelBehaviorConfig } from "./model-behavior.ts";
 import {
@@ -117,6 +118,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
   private observedClient: GatewayBrowserClient | null = null;
+  // Gateway phase from the previous render. A payload whose usage request failed
+  // recovers on the connected transition, not per render, so a persistently
+  // failing usage.status cannot spin the loader.
+  private observedPhase: string | null = null;
   private clientEpoch = 0;
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
@@ -200,6 +205,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
       void this.context.agents.ensureList();
     }
+    const previousPhase = this.observedPhase;
+    this.observedPhase = snapshot.phase;
     if (
       snapshot.phase !== "connected" ||
       !snapshot.client ||
@@ -207,8 +214,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const stale = this.data === null || this.data.updatedAt === null;
-    if (stale || snapshot.client !== this.dataClient) {
+    const clientChanged = snapshot.client !== this.dataClient;
+    if (shouldReloadModelProviders({ data: this.data, previousPhase, clientChanged })) {
       void this.refresh({ force: false });
     }
   }
