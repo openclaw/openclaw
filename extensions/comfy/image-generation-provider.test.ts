@@ -56,7 +56,13 @@ function parseJsonBody(call: number): Record<string, unknown> {
   return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
 
-function mockLocalImageResponses(promptId = "local-prompt-1") {
+function mockLocalImageResponses(
+  promptId = "local-prompt-1",
+  download: { body: BodyInit; contentType: string } = {
+    body: Buffer.from("png-data"),
+    contentType: "image/png",
+  },
+) {
   fetchWithSsrFGuardMock
     .mockResolvedValueOnce({
       response: new Response(JSON.stringify({ prompt_id: promptId }), {
@@ -84,9 +90,9 @@ function mockLocalImageResponses(promptId = "local-prompt-1") {
       release: vi.fn(async () => {}),
     })
     .mockResolvedValueOnce({
-      response: new Response(Buffer.from("png-data"), {
+      response: new Response(download.body, {
         status: 200,
-        headers: { "content-type": "image/png" },
+        headers: { "content-type": download.contentType },
       }),
       release: vi.fn(async () => {}),
     });
@@ -439,6 +445,27 @@ describe("comfy image-generation provider", () => {
       },
     });
   });
+
+  it.each([
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty image", contentType: "image/png", body: "" },
+  ])(
+    "rejects a successful $name output download as generated image",
+    async ({ contentType, body }) => {
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockLocalImageResponses("local-image-invalid-download", { body, contentType });
+
+      const provider = buildComfyImageGenerationProvider();
+      await expect(
+        provider.generateImage({
+          provider: "comfy",
+          model: "workflow",
+          prompt: "draw a lobster",
+          cfg: buildComfyConfig(testWorkflowConfig()),
+        }),
+      ).rejects.toThrow("Comfy image output download: malformed image response");
+    },
+  );
 
   it("honors local private-network access for service-discovery hostnames", async () => {
     setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
