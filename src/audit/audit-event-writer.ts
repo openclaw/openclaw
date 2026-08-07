@@ -2,9 +2,12 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { AuditEventInput } from "./audit-event-types.js";
+import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
 
 const MAX_PENDING_AUDIT_EVENTS = 4_096;
 // The worker can be synchronously blocked inside SQLite's busy timeout. Keep
@@ -18,11 +21,26 @@ type AuditWriterMessage =
   | { type: "maintenance-error"; error: string }
   | { type: "stopped" };
 
+type AuditWriterWorkMessage =
+  | { type: "record-event"; input: AuditEventInput }
+  | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork };
+
+type AuditWriterCommand = AuditWriterWorkMessage | { type: "stop" };
+
 export type AuditEventWriter = {
   ready: Promise<void>;
   record: (input: AuditEventInput) => boolean;
-  stop: () => Promise<void>;
+  /** Reports only queue acceptance; persistence succeeds or fails asynchronously. */
+  recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
+  stop: (finalInputs?: readonly AuditEventInput[]) => Promise<void>;
 };
+
+function formatAuditWriterError(error: unknown): string {
+  return truncateUtf16Safe(
+    redactSensitiveText(error instanceof Error ? error.message : String(error), { mode: "tools" }),
+    512,
+  );
+}
 
 function resolveAuditEventWriterUrl(currentModuleUrl = import.meta.url): URL {
   const currentPath = fileURLToPath(currentModuleUrl);
@@ -56,10 +74,11 @@ export function createAuditEventWriter(
       execArgv: sourceWorkerExecArgv,
     });
   } catch (error) {
-    options.onError?.(error instanceof Error ? error.message : String(error));
+    options.onError?.(formatAuditWriterError(error));
     return {
       ready: Promise.resolve(),
       record: () => false,
+      recordExecutionIdentity: () => false,
       stop: async () => {},
     };
   }
@@ -92,7 +111,43 @@ export function createAuditEventWriter(
     finish?.();
   };
   const fail = (error: unknown) => {
-    options.onError?.(error instanceof Error ? error.message : String(error));
+    options.onError?.(formatAuditWriterError(error));
+  };
+  const postToWorker = (message: AuditWriterCommand) => {
+    // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin
+    worker.postMessage(message);
+  };
+
+  const enqueue = (message: AuditWriterWorkMessage): boolean => {
+    if (stopped || unavailable || pending >= maxPending) {
+      if (!stopped) {
+        fail(
+          unavailable
+            ? "audit event writer is unavailable; dropping metadata"
+            : `audit event queue is full (${maxPending}); dropping metadata`,
+        );
+      }
+      return false;
+    }
+    pending += 1;
+    try {
+      postToWorker(message);
+      return true;
+    } catch (error) {
+      pending -= 1;
+      if (message.type === "record-execution-identity") {
+        fail("audit execution identity envelope could not be queued");
+      } else {
+        unavailable = true;
+        void worker.terminate();
+        fail(error);
+      }
+      return false;
+    }
+  };
+  const postFinalRecord = (input: AuditEventInput) => {
+    postToWorker({ type: "record-event", input });
   };
 
   worker.on("message", (message: AuditWriterMessage) => {
@@ -133,37 +188,28 @@ export function createAuditEventWriter(
 
   return {
     ready,
-    record: (input) => {
-      if (stopped || unavailable || pending >= maxPending) {
-        if (!stopped) {
-          fail(
-            unavailable
-              ? "audit event writer is unavailable; dropping metadata"
-              : `audit event queue is full (${maxPending}); dropping metadata`,
-          );
-        }
-        return false;
-      }
-      pending += 1;
-      try {
-        // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
-        // oxlint-disable-next-line unicorn/require-post-message-target-origin
-        worker.postMessage({ type: "record", input });
-        return true;
-      } catch (error) {
-        pending -= 1;
-        unavailable = true;
-        fail(error);
-        return false;
-      }
-    },
-    stop: async () => {
+    record: (input) => enqueue({ type: "record-event", input }),
+    recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
+    stop: async (finalInputs = []) => {
       if (stopped) {
         return;
       }
       stopped = true;
       if (unavailable) {
         return;
+      }
+      for (const input of finalInputs) {
+        pending += 1;
+        try {
+          // Shutdown records bypass the live queue cap but retain worker message
+          // ordering, so the following stop drains them before exit.
+          postFinalRecord(input);
+        } catch (error) {
+          pending -= 1;
+          unavailable = true;
+          fail(error);
+          return;
+        }
       }
       await new Promise<void>((resolve) => {
         resolveStop = resolve;
@@ -173,9 +219,7 @@ export function createAuditEventWriter(
           finishStop();
         }, AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS);
         try {
-          // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
-          // oxlint-disable-next-line unicorn/require-post-message-target-origin
-          worker.postMessage({ type: "stop" });
+          postToWorker({ type: "stop" });
         } catch (error) {
           fail(error);
           finishStop();
