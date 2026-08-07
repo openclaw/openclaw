@@ -107,23 +107,35 @@ function resolveStatusChannelFeatureLine(params: {
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
+// Status loaders evict rejected imports so a transient module-load failure on
+// one /status request self-heals on the next instead of poisoning every reply.
 const loadStatusMessageRuntime = createLazyPromise(
   () =>
     import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
-  { cacheRejections: true },
+  { cacheRejections: false },
 );
 const loadAgentThinkingRuntime = createLazyRuntimeModule(
   () => import("../agents/thinking-runtime.js"),
+  { cacheRejections: false },
 );
-const loadThinkingLevelRuntime = createLazyRuntimeModule(() => import("../auto-reply/thinking.js"));
+const loadThinkingLevelRuntime = createLazyRuntimeModule(
+  () => import("../auto-reply/thinking.js"),
+  {
+    cacheRejections: false,
+  },
+);
 const loadStatusSubagentsRuntime = createLazyRuntimeModule(
   () => import("./status-subagents.runtime.js"),
+  { cacheRejections: false },
 );
 
-const loadStatusQueueRuntime = createLazyRuntimeModule(() => import("./status-queue.runtime.js"));
+const loadStatusQueueRuntime = createLazyRuntimeModule(() => import("./status-queue.runtime.js"), {
+  cacheRejections: false,
+});
 
 const loadStatusPluginHealthRuntime = createLazyRuntimeModule(
   () => import("./status-plugin-health.runtime.js"),
+  { cacheRejections: false },
 );
 
 // Context lookup stays synchronous/non-refreshing so status output does not

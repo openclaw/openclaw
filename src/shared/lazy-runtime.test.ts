@@ -34,4 +34,18 @@ describe("lazy runtime helpers", () => {
     await expect(load()).rejects.toThrow("sticky");
     expect(importer).toHaveBeenCalledOnce();
   });
+
+  it("retries rejected imports when rejections are not cached", async () => {
+    const importer = vi.fn(async () => {
+      if (importer.mock.calls.length === 1) {
+        throw new Error("transient");
+      }
+      return { value: "recovered" };
+    });
+    const load = createLazyRuntimeModule(importer, { cacheRejections: false });
+
+    await expect(load()).rejects.toThrow("transient");
+    await expect(load()).resolves.toEqual({ value: "recovered" });
+    expect(importer).toHaveBeenCalledTimes(2);
+  });
 });
