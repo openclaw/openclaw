@@ -13,6 +13,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -145,7 +146,10 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
-  const running = mainRow?.hasActiveRun === true;
+  // Raw gateway rows can keep hasActiveRun true alongside a terminal status
+  // (reconcileSessionRunTerminal preserves registry-active rows), so the ring
+  // must follow the status-aware helper or it never stops spinning.
+  const running = mainRow ? isSessionRunActive(mainRow) : false;
   const unread = mainRow?.unread === true && !active;
   // Home shares the sidebar's leading-slot contract: run state rings its icon
   // instead of drifting to the row edge, which stays reserved for counts.
