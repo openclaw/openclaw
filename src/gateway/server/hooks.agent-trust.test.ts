@@ -940,6 +940,7 @@ describe("dispatchAgentHook trust handling", () => {
       await waitForFast(() => expect(enqueueSystemEventMock).toHaveBeenCalled());
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("Hook Email: done", {
         sessionKey: "global",
+        ownerAgentId: expectedAgentId,
       });
       await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
       const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -970,7 +971,7 @@ describe("dispatchAgentHook trust handling", () => {
       await waitForFast(() => expect(enqueueSystemEventMock).toHaveBeenCalled());
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Email (error): Error: agent exploded",
-        { sessionKey: "global" },
+        { sessionKey: "global", ownerAgentId: expectedAgentId },
       );
       await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
       const wake = requestHeartbeatMock.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -1005,7 +1006,7 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Config (error): Error: config exploded",
-        { sessionKey: "global" },
+        { sessionKey: "global", ownerAgentId: "hooks" },
       ),
     );
     await waitForFast(() => expect(requestHeartbeatMock).toHaveBeenCalledTimes(1));
