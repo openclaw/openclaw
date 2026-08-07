@@ -2112,6 +2112,35 @@ describe("channel turn kernel", () => {
     );
   });
 
+  it("abandons the ingress claim when dispatch fails before adoption", async () => {
+    const onAdopted = vi.fn();
+    const onAbandoned = vi.fn();
+    const dispatchError = new Error("preflight compaction failed");
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {
+      throw dispatchError;
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "test",
+        agentId: "main",
+        routeSessionKey: "agent:main:test:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx(),
+        recordInboundSession: createRecordInboundSession([]),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          deliver: vi.fn(async () => undefined),
+        },
+        turnAdoptionLifecycle: { onAdopted, onAbandoned },
+      }),
+    ).rejects.toThrow(dispatchError);
+
+    expect(onAdopted).not.toHaveBeenCalled();
+    expect(onAbandoned).toHaveBeenCalledOnce();
+  });
+
   it("does not run afterRecord when session recording fails", async () => {
     const recordError = new Error("session store failed");
     const afterRecord = vi.fn();

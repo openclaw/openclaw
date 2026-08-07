@@ -81,6 +81,23 @@ function resolveRecordSessionKey<TDispatchResult>(
   return explicitSessionKey;
 }
 
+/**
+ * A turn that fails before adoption must settle its ingress claim (release for
+ * retry) instead of leaving the pre-adoption stall watchdog to dead-letter it
+ * minutes later. Safe post-adoption: the drain treats onAbandoned as a no-op
+ * after adopted/settled, so a late error cannot release a tombstoned claim.
+ */
+async function abandonPreAdoptionIngressClaim<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<void> {
+  try {
+    await params.runDispatchLifecycle?.turnAdoptionLifecycle?.onAbandoned?.();
+  } catch {
+    // Preserve the original turn failure; the drain's release path reports its
+    // own write errors and keeps heartbeat ownership on failure.
+  }
+}
+
 function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   params: Pick<
     PreparedChannelTurn<TDispatchResult>,
@@ -296,6 +313,7 @@ async function runPreparedChannelTurnCoreInTrace<
     } catch {
       // Preserve the original session-recording error.
     }
+    await abandonPreAdoptionIngressClaim(params);
     throw err;
   }
 
@@ -337,6 +355,7 @@ async function runPreparedChannelTurnCoreInTrace<
         error: err,
       },
     });
+    await abandonPreAdoptionIngressClaim(params);
     throw err;
   }
   emit({
