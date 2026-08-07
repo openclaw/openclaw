@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { defaultRuntime } from "../../../runtime.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -14,6 +15,7 @@ import {
   resolveFollowupDeliveryContextKey,
   resolveFollowupReplyAnchor,
 } from "./drain.js";
+import { persistFollowupQueuesOrThrow } from "./persist.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
@@ -132,6 +134,44 @@ export function enqueueFollowupRun(
     return false;
   }
 
+  // Snapshot before overflow mutations so a failed durable admit can restore
+  // pre-existing queue work instead of permanently dropping/summarizing it.
+  const admissionSnapshot = {
+    items: queue.items.slice(),
+    summarySources: queue.summarySources.slice(),
+    summaryLines: queue.summaryLines.slice(),
+    summaryElisions: queue.summaryElisions.map((elision) => ({
+      contextKey: elision.contextKey,
+      count: elision.count,
+      sources: elision.sources.slice(),
+      summaryLines: elision.summaryLines.slice(),
+      sourceRefs: elision.sourceRefs,
+    })),
+    droppedCount: queue.droppedCount,
+    lastEnqueuedAt: queue.lastEnqueuedAt,
+    lastRun: queue.lastRun,
+    evictedSummaryCount: queue.evictedSummaryCount,
+  };
+  const restoreAdmissionSnapshot = () => {
+    queue.items.splice(0, queue.items.length, ...admissionSnapshot.items);
+    queue.summarySources.splice(
+      0,
+      queue.summarySources.length,
+      ...admissionSnapshot.summarySources,
+    );
+    queue.summaryLines.splice(0, queue.summaryLines.length, ...admissionSnapshot.summaryLines);
+    queue.summaryElisions.splice(
+      0,
+      queue.summaryElisions.length,
+      ...admissionSnapshot.summaryElisions,
+    );
+    queue.droppedCount = admissionSnapshot.droppedCount;
+    queue.lastEnqueuedAt = admissionSnapshot.lastEnqueuedAt;
+    queue.lastRun = admissionSnapshot.lastRun;
+    queue.evictedSummaryCount = admissionSnapshot.evictedSummaryCount;
+  };
+  const deferredOverflowDrops: FollowupRun[] = [];
+
   const elidedSummaryLines: string[] = [];
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
@@ -145,7 +185,8 @@ export function enqueueFollowupRun(
       }
       for (const item of dropped) {
         item.onQueueDisposition?.("queue-cap-old");
-        completeFollowupRunLifecycle(item);
+        // Defer lifecycle completion until durable admit succeeds.
+        deferredOverflowDrops.push(item);
       }
     },
     isProtected: (item) => item.protectFromQueueOverflow === true,
@@ -183,11 +224,16 @@ export function enqueueFollowupRun(
             queue.activeSummarySources.add(compactSource);
           }
         }
-        trimSummaryElisionsToCap(queue);
+        // Defer irreversible lifecycle completion until SQLite admission succeeds;
+        // a failed write must restore summarized sources as live queued work.
+        deferredOverflowDrops.push(
+          ...trimSummaryElisionsToCap(queue, { deferLifecycleCompletion: true }),
+        );
       }
     }
   }
   if (!shouldEnqueue) {
+    restoreAdmissionSnapshot();
     run.onQueueDisposition?.("queue-cap");
     completeFollowupRunLifecycle(run);
     return false;
@@ -202,6 +248,19 @@ export function enqueueFollowupRun(
     queue.items.unshift(run);
   } else {
     queue.items.push(run);
+  }
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    restoreAdmissionSnapshot();
+    defaultRuntime.error?.(
+      `rejected followup enqueue for ${key}: persistence failed: ${String(err)}`,
+    );
+    completeFollowupRunLifecycle(run);
+    return false;
+  }
+  for (const dropped of deferredOverflowDrops) {
+    completeFollowupRunLifecycle(dropped);
   }
   if (recentMessageIdKey) {
     recordRecentQueueMessageId(run, recentMessageIdKey);

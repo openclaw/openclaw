@@ -1,9 +1,9 @@
 /** Shared Vitest harness mocks and helpers for doctor command e2e-style tests. */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { createDoctorConfigSnapshot } from "./doctor-config-snapshot.test-helpers.js";
@@ -12,11 +12,17 @@ import {
   testServiceAuditCodes,
 } from "./doctor-service-audit.test-helpers.js";
 import type { LegacyStateDetection } from "./doctor-state-migrations.js";
+import {
+  createCommandWithTimeoutResult,
+  createGatewayUpdateResult,
+  createLegacyConfigSnapshot,
+} from "./doctor.e2e-harness.fixtures.js";
 
 let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
 let originalUpdateInProgress: string | undefined;
 let tempStateDir: string | undefined;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function setStdinTty(value: boolean | undefined) {
   try {
@@ -27,38 +33,6 @@ function setStdinTty(value: boolean | undefined) {
   } catch {
     // ignore
   }
-}
-
-function createGatewayUpdateResult() {
-  return {
-    status: "skipped",
-    mode: "unknown",
-    steps: [],
-    durationMs: 0,
-  } as const;
-}
-
-function createCommandWithTimeoutResult() {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-  } as const;
-}
-
-function createLegacyConfigSnapshot() {
-  return {
-    path: "/tmp/openclaw.json",
-    exists: false,
-    raw: null,
-    parsed: {},
-    valid: true,
-    config: {},
-    issues: [],
-    legacyIssues: [],
-  } as const;
 }
 
 export const readConfigFileSnapshot = vi.fn() as unknown as MockFn;
@@ -350,6 +324,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       knownChannelIds: [],
       defaultAccountIds: {},
       accountIds: {},
+      hasLegacy: false,
+    },
+    followupQueueSidecar: {
+      sourcePath: "/tmp/state/live-chat-followup-queues.json",
       hasLegacy: false,
     },
     channelPlans: {
@@ -741,7 +719,7 @@ beforeEach(() => {
   originalStateDir = process.env.OPENCLAW_STATE_DIR;
   originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-"));
+  tempStateDir = tempDirs.make("openclaw-doctor-state-");
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
@@ -761,8 +739,5 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
   }
-  if (tempStateDir) {
-    fs.rmSync(tempStateDir, { recursive: true, force: true });
-    tempStateDir = undefined;
-  }
+  tempStateDir = undefined;
 });

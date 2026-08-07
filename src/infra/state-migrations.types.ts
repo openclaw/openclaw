@@ -148,6 +148,10 @@ export type LegacyStateDetection = {
   };
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
+  followupQueueSidecar: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   warnings: string[];
   notices: string[];
   preview: string[];

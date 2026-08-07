@@ -73,6 +73,10 @@ import {
   migrateLegacyExecApprovals,
 } from "./state-migrations.exec-approvals.js";
 import {
+  detectLegacyFollowupQueueSidecar,
+  migrateLegacyFollowupQueueSidecar,
+} from "./state-migrations.followup-queue.js";
+import {
   existsDir,
   fileExists,
   readSessionStoreJson5,
@@ -565,6 +569,7 @@ export async function detectLegacyStateMigrations(params: {
     ),
     configuredAccountIds,
   });
+  const followupQueueSidecar = detectLegacyFollowupQueueSidecar({ stateDir });
   const channelPlans = await collectChannelLegacyStateMigrationPlans({
     cfg: params.cfg,
     env,
@@ -694,6 +699,11 @@ export async function detectLegacyStateMigrations(params: {
       preview.push(message);
     }
   }
+  if (followupQueueSidecar.hasLegacy) {
+    preview.push(
+      `- Followup queue sidecar: ${followupQueueSidecar.sourcePath} → shared SQLite state`,
+    );
+  }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
   }
@@ -793,6 +803,7 @@ export async function detectLegacyStateMigrations(params: {
     subagentRegistry,
     rescuePending,
     channelPairing,
+    followupQueueSidecar,
     warnings: pluginPlanWarnings,
     notices: [],
     preview,
@@ -1050,6 +1061,12 @@ function buildLegacyStateMigrationSteps(
     ),
     sharedStep(() => migrateLegacyTaskStateSidecars({ stateDir })),
     sharedStep(() => migrateLegacyDeliveryQueues({ stateDir })),
+    sharedStep(() =>
+      migrateLegacyFollowupQueueSidecar({
+        detected: detected.followupQueueSidecar,
+        stateDir,
+      }),
+    ),
     ownerStep(detected.voiceWake, migrateLegacyVoiceWakeSettings, "shared"),
     ownerStep(detected.updateCheck, migrateLegacyUpdateCheckState, "shared"),
     ownerStep(detected.configHealth, migrateLegacyConfigHealth, "shared", false),
@@ -1419,7 +1436,8 @@ export async function autoMigrateLegacyState(params: {
     !detected.deviceAuth.hasLegacy &&
     !detected.restartSentinel?.hasLegacy &&
     !detected.workspace.hasLegacy &&
-    !detected.channelPairing.hasLegacy
+    !detected.channelPairing.hasLegacy &&
+    !detected.followupQueueSidecar.hasLegacy
   ) {
     const acpSessionMetadataStep = migrationSteps.find(
       (step) => step.kind === "acp-session-metadata",
