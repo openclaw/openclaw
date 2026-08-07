@@ -578,6 +578,21 @@ export function createWorkerSessionTurnPlacementProvider(
     },
     async executeTurn(claim, turn, runLocal, onAdmitted) {
       const current = options.placements.get(claim.sessionId);
+      // Recover only pre-worker failures: a `failed` placement that never reached
+      // active worker ownership (activeOwnerEpoch is null) has no worker state to
+      // reconcile, so the next turn can safely reclaim it to local instead of
+      // rejecting every turn until a manual state-store repair. A `failed`
+      // placement reached from reconciling still holds worker ownership and may
+      // have unreconciled remote workspace changes; recovering those must go
+      // through the drain/reconcile path, not an unconditional local reset, so
+      // leave them to the existing recovery machinery instead of discarding work.
+      if (current?.state === "failed" && current.activeOwnerEpoch === null) {
+        options.placements.reclaimFailedToLocal({
+          sessionId: current.sessionId,
+          expectedGeneration: current.generation,
+        });
+        return await executeLocalTurn({ claim, placements: options.placements, runLocal });
+      }
       if (
         !current &&
         (options.admitNewPlacements === false ||

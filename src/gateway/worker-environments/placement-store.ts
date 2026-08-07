@@ -483,6 +483,39 @@ export function createWorkerSessionPlacementStore(
       return outcome.record;
     },
 
+    reclaimFailedToLocal(input: {
+      sessionId: string;
+      expectedGeneration: number;
+    }): WorkerSessionPlacementRecord {
+      const sessionId = required(input.sessionId, "session id");
+      return write((db) => {
+        const current = getRequired(db, sessionId);
+        if (current.state !== "failed" || current.generation !== input.expectedGeneration) {
+          throw new Error(
+            `Cannot reclaim failed worker placement for session ${sessionId}: expected failed@${input.expectedGeneration}, found ${current.state}@${current.generation}`,
+          );
+        }
+        // Only pre-worker failures are safe to reclaim to local. A failed
+        // placement that still holds worker ownership (activeOwnerEpoch set, i.e.
+        // it reached `active` and failed from reconciling) may carry unreconciled
+        // remote workspace changes and must recover via drain/reconcile instead
+        // of an unconditional local reset that would discard that work.
+        if (current.activeOwnerEpoch !== null) {
+          throw new Error(
+            `Cannot reclaim failed worker placement for session ${sessionId}: worker ownership was reached, reconcile before local recovery`,
+          );
+        }
+        if (current.turnClaim) {
+          throw new Error(
+            `Cannot reclaim failed worker placement for session ${sessionId} during an active turn`,
+          );
+        }
+        // `local` clears all worker metadata and the recovery diagnostic per the
+        // record shape; the failure was already surfaced when the placement failed.
+        return updateTransition(db, current, "local", {}, now());
+      });
+    },
+
     adoptActive(input: {
       sessionId: string;
       environmentId: string;
