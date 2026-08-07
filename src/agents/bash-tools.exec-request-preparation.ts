@@ -30,7 +30,7 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
-  timeout?: number;
+  timeoutSeconds?: number;
   pty?: boolean;
   elevated?: boolean;
   host?: string;
