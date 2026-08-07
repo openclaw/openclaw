@@ -134,7 +134,8 @@ export function combineNonStreamingReplyParts(parts: readonly string[]): string 
           : "\n\n";
     combined += separator + part;
   }
-  return combined.trim();
+  // Horizontal indentation on the first line can be an indented Markdown code block.
+  return combined.replace(/^[\r\n]+/u, "").trimEnd();
 }
 
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {

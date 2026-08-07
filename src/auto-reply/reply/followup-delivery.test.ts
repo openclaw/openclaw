@@ -464,6 +464,44 @@ describe("resolveFollowupDeliveryDecision", () => {
     ).toEqual({ kind: "suppress", reason: "room-event" });
   });
 
+  it("delivers queued internal WebChat room-event finals", () => {
+    const turn = createTurn();
+    turn.queued.currentInboundEventKind = "room_event";
+    turn.queued.originatingChannel = "webchat";
+    turn.queued.originatingChatType = "direct";
+    turn.queued.run.messageProvider = "webchat";
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution: createSettledExecution("visible WebChat reply"),
+        accounting: createAccounting([{ text: "visible WebChat reply" }]),
+        opts: { onBlockReply: vi.fn(async () => {}) },
+      }),
+    ).toMatchObject({ kind: "deliver", payloads: [{ text: "visible WebChat reply" }] });
+  });
+
+  it("keeps message-tool-only internal WebChat room events silent without recovery", () => {
+    const turn = createTurn();
+    turn.queued.currentInboundEventKind = "room_event";
+    turn.queued.originatingChannel = "webchat";
+    turn.queued.originatingChatType = "direct";
+    turn.queued.run.messageProvider = "webchat";
+    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+    const privateFinal =
+      "This is a substantive private answer that should not trigger recovery. " +
+      "The room event must remain intentionally silent.";
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn,
+        execution: createSettledExecution(privateFinal),
+        accounting: createAccounting([{ text: privateFinal }]),
+        opts: { onBlockReply: vi.fn(async () => {}) },
+      }),
+    ).toEqual({ kind: "suppress", reason: "message-tool-only" });
+  });
+
   it("honors the admission-time send policy before any final projection", () => {
     expect(
       resolveFollowupDeliveryDecision({

@@ -90,6 +90,19 @@ describe("session-memory transcript extraction", () => {
     ).toBe("assistant: Answer [REMOVED_SPECIAL_TOKEN]");
   });
 
+  it("preserves every structured text block after an empty leading block", () => {
+    expect(
+      getRecentSessionContentFromEvents([
+        message("assistant", [
+          { type: "text", text: "" },
+          { type: "thinking", thinking: "hidden chain" },
+          { type: "text", text: "First visible paragraph" },
+          { type: "text", text: "Second paragraph <|reserved_special_token_42|>" },
+        ]),
+      ]),
+    ).toBe("assistant: First visible paragraph\nSecond paragraph [REMOVED_SPECIAL_TOKEN]");
+  });
+
   it("filters non-message entries", () => {
     const memoryContent = extractSessionContent(
       createSessionContent([

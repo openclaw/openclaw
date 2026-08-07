@@ -10,12 +10,12 @@ const MIN_SUBSTRING_DUPLICATE_RATIO = 0.5;
  * Normalize text for duplicate comparison.
  * - Trims whitespace
  * - Lowercases
- * - Strips emoji (Emoji_Presentation and Extended_Pictographic)
+ * - Strips emoji, their presentation selectors, and compound-sequence joiners
  * - Collapses multiple spaces to single space
  */
 export function normalizeTextForComparison(text: string): string {
   return normalizeLowercaseStringOrEmpty(text)
-    .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
+    .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}|\u{200D}|\u{FE0E}|\u{FE0F}/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 }

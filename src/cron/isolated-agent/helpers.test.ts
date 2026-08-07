@@ -76,6 +76,15 @@ describe("isHeartbeatOnlyResponse", () => {
     ).toBe(true);
   });
 
+  it("returns false when a visible update follows an earlier heartbeat ack", () => {
+    expect(
+      isHeartbeatOnlyResponse(
+        [{ text: "HEARTBEAT_OK" }, { text: "Found an urgent message from your manager." }],
+        ACK_MAX,
+      ),
+    ).toBe(false);
+  });
+
   it("returns false when media is present even with HEARTBEAT_OK text", () => {
     expect(
       isHeartbeatOnlyResponse(

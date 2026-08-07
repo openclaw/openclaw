@@ -236,6 +236,39 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
+  it("does not delete unrelated files that merely end in an archive-like suffix", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const activeKey = "agent:main:main";
+      const transcriptPath = path.join(dir, "keep.jsonl");
+      const stamp = formatSessionArchiveTimestamp(Date.now() - 24 * 60 * 60 * 1000);
+      const unrelatedPath = path.join(dir, `notes.deleted.${stamp}`);
+      const archivePath = path.join(dir, `old-session.jsonl.deleted.${stamp}`);
+      const store: Record<string, SessionEntry> = {
+        [activeKey]: { sessionId: "keep", updatedAt: Date.now() },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
+      await fs.writeFile(unrelatedPath, "u".repeat(260), "utf-8");
+      await fs.writeFile(archivePath, "a".repeat(260), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: { maxDiskBytes: 300, highWaterBytes: 220 },
+        warnOnly: false,
+      });
+
+      await expectPathExists(unrelatedPath);
+      await expectPathExists(transcriptPath);
+      await expectPathMissing(archivePath);
+      expectBudgetResult(result);
+      expect(result.removedFiles).toBe(1);
+      expect(result.removedEntries).toBe(0);
+    });
+  });
+
   it("reclaims stale store temps under pressure but never a fresh in-flight one (#56827)", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");

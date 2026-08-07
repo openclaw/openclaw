@@ -16,10 +16,10 @@ const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   // Compressed archives carry a trailing .zst; strip it so every classifier
   // sees one canonical `<id>.jsonl.<reason>.<timestamp>` shape.
-  const marker = `.${reason}.`;
+  const marker = `.jsonl.${reason}.`;
   const normalized = stripSessionArchiveCompressionSuffix(fileName);
   const index = normalized.lastIndexOf(marker);
-  if (index < 0) {
+  if (index <= 0) {
     return false;
   }
   const raw = normalized.slice(index + marker.length);
@@ -171,10 +171,10 @@ export function parseSessionArchiveTimestamp(
   fileName: string,
   reason: SessionArchiveReason,
 ): number | null {
-  const marker = `.${reason}.`;
+  const marker = `.jsonl.${reason}.`;
   const normalized = stripSessionArchiveCompressionSuffix(fileName);
   const index = normalized.lastIndexOf(marker);
-  if (index < 0) {
+  if (index <= 0) {
     return null;
   }
   const raw = normalized.slice(index + marker.length);

@@ -25,13 +25,14 @@ export function shouldSkipHeartbeatOnlyDelivery(
   if (hasAnyNonTextContent) {
     return false;
   }
-  // Heartbeat acks may include tiny punctuation/noise; strip the token before
-  // deciding whether there is user-visible text worth delivering.
-  return payloads.some((payload) => {
-    const result = stripHeartbeatToken(payload.text, {
-      mode: "heartbeat",
-      maxAckChars: ackMaxChars,
-    });
-    return result.shouldSkip;
-  });
+  // Only the terminal text decides whether the run stays quiet; an earlier ack
+  // must not discard a later report or alert from the same agent turn.
+  const terminalPayload = payloads.findLast((payload) => Boolean(payload.text?.trim()));
+  if (!terminalPayload) {
+    return true;
+  }
+  return stripHeartbeatToken(terminalPayload.text, {
+    mode: "heartbeat",
+    maxAckChars: ackMaxChars,
+  }).shouldSkip;
 }

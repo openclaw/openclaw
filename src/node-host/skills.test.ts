@@ -128,7 +128,7 @@ metadata:
     const skills = scanNodeHostedSkills({ skillsDir: root, warn });
 
     expect(skills.map((skill) => skill.name)).toEqual(["valid-skill"]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid or missing frontmatter"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("description is required"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(malformedFile));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("BAD_INDENT"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("exceeds 65536 bytes"));
@@ -148,7 +148,7 @@ metadata:
     expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(nestedFile));
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(`${candidateFile}): has invalid or missing frontmatter`),
+      expect.stringContaining(`${candidateFile}): description is required`),
     );
   });
 

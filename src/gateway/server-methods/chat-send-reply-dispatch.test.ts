@@ -7,6 +7,12 @@ import {
 } from "./chat-send-reply-dispatch.js";
 
 describe("buildTranscriptReplyText", () => {
+  it("preserves leading indentation in an authored Markdown code block", () => {
+    expect(buildTranscriptReplyText([{ text: "\n    npm test\n    npm run lint\n" }])).toBe(
+      "    npm test\n    npm run lint",
+    );
+  });
+
   it("preserves authored indentation across split fenced-code reply payloads", () => {
     expect(
       buildTranscriptReplyText([
@@ -24,6 +30,10 @@ describe("buildTranscriptReplyText", () => {
         { text: "  nested: true\r\n```" },
       ]),
     ).toBe("```yaml\r\nroot:\r\n  nested: true\r\n```");
+  });
+
+  it("keeps whitespace-only assistant replies empty", () => {
+    expect(buildTranscriptReplyText([{ text: " \t\r\n  " }, { text: "\n\t" }])).toBe("");
   });
 
   it("keeps reply directives and safe media while suppressing reasoning", () => {

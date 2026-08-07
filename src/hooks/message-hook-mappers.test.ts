@@ -132,6 +132,33 @@ describe("message hook mappers", () => {
     expect(canonical.guildId).toBe("guild-1");
   });
 
+  it.each(["group", "channel"])(
+    "preserves %s conversation routing when the conversation has no label",
+    (chatType) => {
+      const canonical = deriveInboundMessageHookContext(
+        makeInboundCtx({
+          Provider: "claim-chat",
+          Surface: "claim-chat",
+          OriginatingChannel: "claim-chat",
+          From: "claim-chat:user:123",
+          To: "channel:room-456",
+          OriginatingTo: "channel:room-456",
+          ChatType: chatType,
+          GroupChannel: undefined,
+          GroupSubject: undefined,
+        }),
+      );
+
+      expect(canonical.isGroup).toBe(true);
+      expect(canonical.groupId).toBe("channel:room-456");
+      expect(toPluginInboundClaimPair(canonical).context.conversationId).toBe("channel:room-456");
+      expect(toInternalMessagePreprocessedContext(canonical, {} as OpenClawConfig)).toMatchObject({
+        isGroup: true,
+        groupId: "channel:room-456",
+      });
+    },
+  );
+
   it("normalizes canonical inbound message id precedence", () => {
     expect(
       deriveInboundMessageHookContext(

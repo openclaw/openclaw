@@ -237,8 +237,14 @@ export function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPa
 }
 
 export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
+  const messageId = result.messageId?.trim();
+  // Adapter no-op sentinels are not delivery evidence, even when the result
+  // also carries the destination's chat/channel identifier.
+  if (messageId === "unknown" || messageId === "suppressed" || messageId === "skipped") {
+    return false;
+  }
   return Boolean(
-    result.messageId ||
+    messageId ||
     result.chatId ||
     result.channelId ||
     result.roomId ||

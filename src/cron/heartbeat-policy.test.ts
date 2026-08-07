@@ -7,13 +7,28 @@ describe("shouldSkipHeartbeatOnlyDelivery", () => {
     expect(shouldSkipHeartbeatOnlyDelivery([], 300)).toBe(true);
   });
 
-  it("suppresses when any payload is a heartbeat ack and no media is present", () => {
+  it("suppresses when the final text payload is a heartbeat ack", () => {
     expect(
       shouldSkipHeartbeatOnlyDelivery(
         [{ text: "Checked inbox and calendar." }, { text: "HEARTBEAT_OK" }],
         300,
       ),
     ).toBe(true);
+  });
+
+  it("does not suppress a report emitted after an earlier heartbeat ack", () => {
+    expect(
+      shouldSkipHeartbeatOnlyDelivery(
+        [{ text: "HEARTBEAT_OK" }, { text: "An urgent calendar conflict needs attention." }],
+        300,
+      ),
+    ).toBe(false);
+  });
+
+  it("ignores empty text payloads after the terminal heartbeat ack", () => {
+    expect(shouldSkipHeartbeatOnlyDelivery([{ text: "HEARTBEAT_OK" }, { text: "  " }], 300)).toBe(
+      true,
+    );
   });
 
   it("does not suppress when media is present", () => {

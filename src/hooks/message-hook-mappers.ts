@@ -160,7 +160,10 @@ export function deriveInboundMessageHookContext(
     ctx.To ??
     ctx.From ??
     internalSessionConversationId(channelId, ctx.SessionKey);
-  const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
+  const isGroup =
+    ctx.ChatType === "group" ||
+    ctx.ChatType === "channel" ||
+    Boolean(ctx.GroupSubject || ctx.GroupChannel);
   const media = normalizeMediaFacts(ctx.media);
   const hookMedia = projectMessageHookMediaFacts(media);
   const compact = (values: Array<string | undefined>) => {

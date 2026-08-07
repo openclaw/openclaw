@@ -295,6 +295,14 @@ describe("queued delivery evidence", () => {
 });
 
 describe("agent reply visibility", () => {
+  it.each([
+    { text: "Hidden reply", visible: false },
+    { mediaUrls: ["/tmp/private.png"], visible: false },
+    { presentation: { title: "Hidden card" }, visible: false },
+  ])("does not treat explicitly hidden payloads as visible", (payload) => {
+    expect(hasVisibleAgentPayload({ payloads: [payload] })).toBe(false);
+  });
+
   it("distinguishes visible replies from intentional silent payloads", () => {
     const result = { payloads: [{ text: "NO_REPLY" }] };
     expect(hasVisibleAgentPayload(result)).toBe(true);

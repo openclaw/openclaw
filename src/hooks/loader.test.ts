@@ -53,6 +53,7 @@ describe("loader", () => {
     hookName: string;
     handlerCode?: string;
     events?: string[];
+    hookKey?: string;
   }): Promise<string> {
     const sourceDir = params.sourceDir ?? path.join(tmpDir, "hooks");
     const hookDir = path.join(sourceDir, params.hookName);
@@ -64,7 +65,12 @@ describe("loader", () => {
         "---",
         `name: ${params.hookName}`,
         `description: ${params.hookName} test hook`,
-        `metadata: {"openclaw":{"events":${JSON.stringify(events)}}}`,
+        `metadata: ${JSON.stringify({
+          openclaw: {
+            events,
+            ...(params.hookKey ? { hookKey: params.hookKey } : {}),
+          },
+        })}`,
         "---",
         "",
         `# ${params.hookName}`,
@@ -239,6 +245,34 @@ describe("loader", () => {
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
       expect(event.messages).toEqual(["keep-hook"]);
+    });
+
+    it("loads an explicitly configured hook through its metadata hook key", async () => {
+      const hooksDir = path.join(tmpDir, "managed-hooks");
+      await writeDiscoveredHook({
+        sourceDir: hooksDir,
+        hookName: "named-hook",
+        hookKey: "configured-alias",
+      });
+
+      const count = await loadInternalHooks(
+        {
+          hooks: {
+            internal: {
+              entries: {
+                "configured-alias": { enabled: true },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        tmpDir,
+        { managedHooksDir: hooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" },
+      );
+
+      expect(count).toBe(1);
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["named-hook"]);
     });
 
     it("registers unknown event keys anyway (advisory warning, not a load failure)", async () => {

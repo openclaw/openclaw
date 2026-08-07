@@ -31,7 +31,10 @@ import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import {
+  isInternalSourceReplyChannel,
+  resolveSourceReplyVisibilityPolicy,
+} from "./source-reply-delivery-mode.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
@@ -71,7 +74,14 @@ export function resolveFollowupDeliveryDecision(params: {
   if (turn.sendPolicy === "deny") {
     return { kind: "suppress", reason: "send-policy" };
   }
-  if (turn.queued.currentInboundEventKind === "room_event") {
+  // Internal WebChat room events remain visible; only external ambient events suppress replies.
+  if (
+    turn.queued.currentInboundEventKind === "room_event" &&
+    !isInternalSourceReplyChannel({
+      Provider: turn.queued.run.messageProvider,
+      Surface: turn.queued.originatingChannel ?? turn.queued.run.messageProvider,
+    })
+  ) {
     return { kind: "suppress", reason: "room-event" };
   }
   if (
@@ -173,7 +183,7 @@ export function resolveFollowupDeliveryDecision(params: {
           sendPolicyDenied: sourcePolicy.sendPolicyDenied,
           successfulSourceReplyDelivery: completedSourceDelivery,
           isHeartbeat: opts?.isHeartbeat === true,
-          isRoomEvent: false,
+          isRoomEvent: turn.queued.currentInboundEventKind === "room_event",
         });
   if (recovery.kind === "retry") {
     return {

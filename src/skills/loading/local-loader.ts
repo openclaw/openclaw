@@ -72,7 +72,11 @@ function loadSingleSkillDirectory(params: {
   const fallbackName = path.basename(params.skillDir).trim();
   const name = frontmatter.name?.trim() || fallbackName;
   const description = frontmatter.description?.trim();
-  if (!name || !description) {
+  if (!description) {
+    params.onDiagnostic?.({ path: skillFilePath, message: "description is required" });
+    return null;
+  }
+  if (!name) {
     return null;
   }
   const invocation = resolveSkillInvocationPolicy(frontmatter);

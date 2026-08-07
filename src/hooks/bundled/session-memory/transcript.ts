@@ -1,4 +1,5 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
+import { collectTextContentBlocks } from "../../../agents/content-blocks.js";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -37,19 +38,7 @@ function extractTextMessageContent(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
   }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const candidate = block as { type?: unknown; text?: unknown };
-    if (candidate.type === "text" && typeof candidate.text === "string") {
-      return candidate.text;
-    }
-  }
-  return undefined;
+  return collectTextContentBlocks(content).join("\n") || undefined;
 }
 
 type RenderedSessionMemoryMessage = {

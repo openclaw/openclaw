@@ -110,6 +110,9 @@ export function hasVisibleAgentPayload(
         return false;
       }
       const record = payload as AgentPayloadLike;
+      if (record.visible === false) {
+        return false;
+      }
       if (options.includeErrorPayloads === false && record.isError === true) {
         return false;
       }

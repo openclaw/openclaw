@@ -427,8 +427,11 @@ metadata:
     const brokenFile = path.join(brokenDir, "SKILL.md");
     const unterminatedDir = path.join(workspaceDir, "skills", "unterminated");
     const unterminatedFile = path.join(unterminatedDir, "SKILL.md");
+    const missingDescriptionDir = path.join(workspaceDir, "skills", "missing-description");
+    const missingDescriptionFile = path.join(missingDescriptionDir, "SKILL.md");
     await fs.mkdir(brokenDir, { recursive: true });
     await fs.mkdir(unterminatedDir, { recursive: true });
+    await fs.mkdir(missingDescriptionDir, { recursive: true });
     await fs.writeFile(
       brokenFile,
       `---
@@ -443,6 +446,7 @@ description: Broken skill
       "---\nname: unterminated\ndescription: Missing closing delimiter\n",
       "utf8",
     );
+    await fs.writeFile(missingDescriptionFile, "---\nname: missing-description\n---\n", "utf8");
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "valid"),
       name: "valid",
@@ -462,6 +466,9 @@ description: Broken skill
     expect(warningText).toContain(
       "invalid frontmatter: UNTERMINATED_FRONTMATTER: missing closing --- delimiter",
     );
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("missing-description");
+    expect(warningText).toContain(missingDescriptionFile);
+    expect(warningText).toContain("description is required");
   });
 
   it("applies agent skill filters and replacement semantics", async () => {

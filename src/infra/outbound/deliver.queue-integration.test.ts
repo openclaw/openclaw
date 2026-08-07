@@ -621,10 +621,15 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledTimes(2);
   });
 
-  it("never acknowledges a platform send that returns no message identity", async () => {
+  it.each([
+    {},
+    { messageId: "unknown", chatId: "!room:example" },
+    { messageId: "suppressed", channelId: "!room:example" },
+    { messageId: "skipped", conversationId: "!room:example" },
+  ])("never acknowledges an ambiguous platform send (%j)", async (result) => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const sendMatrix = vi.fn().mockResolvedValue({});
-    const deliveryIntentId = "cron-direct-delivery:v1:no-platform-identity";
+    const sendMatrix = vi.fn().mockResolvedValue(result);
+    const intentId = "cron-direct-delivery:v1:no-platform-identity";
     const params = {
       cfg: {} as OpenClawConfig,
       channel: "matrix" as const,
@@ -632,21 +637,18 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       payloads: [{ text: "provider returned no message identity" }],
       deps: { matrix: sendMatrix },
       queuePolicy: "required" as const,
-      deliveryIntentId,
+      deliveryIntentId: intentId,
       completionRetention: boundedCronCompletionRetention,
       reusePendingDeliveryIntent: true,
     };
 
     await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
-    expect(
-      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
-    ).toBe("pending");
-    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
-      id: deliveryIntentId,
-      recoveryState: "unknown_after_send",
-    });
+    const queueStatus = getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, intentId, tmpDir);
+    expect(queueStatus).toBe("pending");
+    const [pendingDelivery] = await loadPendingDeliveries(tmpDir);
+    expect(pendingDelivery).toMatchObject({ id: intentId, recoveryState: "unknown_after_send" });
     await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
+      `Stable delivery intent is already queued: ${intentId}`,
     );
     expect(sendMatrix).toHaveBeenCalledOnce();
   });

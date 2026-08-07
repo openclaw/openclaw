@@ -15,6 +15,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { shouldIncludeHook } from "./config.js";
 import { hasConfiguredInternalHooks, resolveConfiguredInternalHookNames } from "./configured.js";
+import { resolveHookKey } from "./frontmatter.js";
 import { buildImportUrl } from "./import-url.js";
 import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
@@ -119,7 +120,7 @@ export async function loadInternalHooks(
 
     // Filter by eligibility
     const eligible = hookEntries.filter((entry) => {
-      if (configuredNames && !configuredNames.has(entry.hook.name)) {
+      if (configuredNames && !configuredNames.has(resolveHookKey(entry.hook.name, entry))) {
         return false;
       }
       return shouldIncludeHook({ entry, config: cfg });
