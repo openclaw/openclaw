@@ -7,7 +7,7 @@ export function shouldDetachChildForProcessTree(): boolean {
 
 export function signalChildProcessTree(
   child: Pick<ChildProcess, "kill" | "pid">,
-  signal: "SIGTERM" | "SIGKILL",
+  signal: NodeJS.Signals,
 ): void {
   if (typeof child.pid === "number" && child.pid > 0) {
     signalProcessTree(child.pid, signal, {

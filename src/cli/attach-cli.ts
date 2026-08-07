@@ -10,6 +10,7 @@ import {
 import { getRuntimeConfig } from "../config/io.js";
 import { callGateway } from "../gateway/call.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { signalProcessTree } from "../process/kill-tree.js";
 import { defaultRuntime } from "../runtime.js";
 
 type AttachGrant = {
@@ -144,25 +145,26 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
           forceKillTimer = undefined;
         }
       };
+      const killTree = (signal: NodeJS.Signals) => {
+        if (child.pid != null) {
+          signalProcessTree(child.pid, signal);
+        }
+      };
       const onSigint = () => {
-        // guard against repeated Ctrl+C: clear any previous escalation
+        // Guard against repeated Ctrl+C: clear any previous escalation
         // timer so stale timers do not fire on an exited or reused PID.
         disarm();
-        // On Windows, Node ignores the signal argument and always uses
-        // TerminateProcess, so a grace period is not achievable.  Stop
-        // the child immediately on an honest best-effort platform path.
-        if (process.platform === "win32") {
-          child.kill();
-          return;
-        }
-        child.kill("SIGINT");
-        // Escalate to SIGKILL after a grace period so the child
+        // Forward SIGINT to the launched process tree so wrappers that
+        // spawn descendant workloads receive the signal and can shut down
+        // their entire tree before the grant is revoked.
+        killTree("SIGINT");
+        // Escalate to SIGKILL after a grace period so a stuck descendant
         // cannot keep the parent alive indefinitely by ignoring SIGINT.
         forceKillTimer = setTimeout(() => {
-          child.kill("SIGKILL");
+          killTree("SIGKILL");
         }, 5_000).unref();
       };
-      const onSigterm = () => child.kill("SIGTERM");
+      const onSigterm = () => killTree("SIGTERM");
       const finish = (code: number) => {
         process.off("SIGINT", onSigint);
         process.off("SIGTERM", onSigterm);

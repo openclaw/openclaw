@@ -65,7 +65,7 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
 
 export function signalProcessTree(
   pid: number,
-  signal: "SIGTERM" | "SIGKILL",
+  signal: NodeJS.Signals,
   opts?: { detached?: boolean; onComplete?: () => void },
 ): void {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -149,11 +149,7 @@ function isProcessGroupLeader(pid: number): boolean {
   return pgid === pid;
 }
 
-function signalProcessTreeUnix(
-  pid: number,
-  signal: "SIGTERM" | "SIGKILL",
-  useGroupKill: boolean,
-): void {
+function signalProcessTreeUnix(pid: number, signal: NodeJS.Signals, useGroupKill: boolean): void {
   if (useGroupKill) {
     try {
       process.kill(-pid, signal);
@@ -233,7 +229,7 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
 
 function signalProcessTreeWindows(
   pid: number,
-  signal: "SIGTERM" | "SIGKILL",
+  signal: NodeJS.Signals,
   onExit?: (code: number | null) => void,
 ): void {
   void signalProcessTreeWindowsAndWait(pid, signal, onExit);
@@ -241,7 +237,7 @@ function signalProcessTreeWindows(
 
 function signalProcessTreeWindowsAndWait(
   pid: number,
-  signal: "SIGTERM" | "SIGKILL",
+  signal: NodeJS.Signals,
   onExit?: (code: number | null) => void,
 ): Promise<void> {
   const args =
