@@ -10,7 +10,6 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
-import { readBestEffortConfig } from "../../config/io.runtime.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
@@ -312,6 +311,9 @@ async function createAgentSessionImpl(
     options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, agentDir));
 
   if (!resourceLoader) {
+    // Load config I/O lazily so SDK consumers that supply their own resource loader
+    // do not pay for the config runtime.
+    const { readBestEffortConfig } = await import("../../config/io.runtime.js");
     const cfg = await readBestEffortConfig({ skipPluginValidation: true });
     resourceLoader = new DefaultResourceLoader({
       cwd,

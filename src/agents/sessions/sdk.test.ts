@@ -20,6 +20,9 @@ const thinkingMocks = vi.hoisted(() => ({
 const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
+const configIoMocks = vi.hoisted(() => ({
+  readBestEffortConfig: vi.fn(() => ({ skills: { limits: { maxSkillFileBytes: 123_456 } } })),
+}));
 const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
@@ -27,6 +30,9 @@ vi.mock("../../auto-reply/thinking.js", () => ({
 }));
 vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
+}));
+vi.mock("../../config/io.runtime.js", () => ({
+  readBestEffortConfig: configIoMocks.readBestEffortConfig,
 }));
 import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -72,6 +78,38 @@ describe("createAgentSession runtime ownership", () => {
     expect(getStreamLlmRuntime(session.agent.streamFn)).toBe(
       getModelRegistryRuntime(modelRegistry).llmRuntime,
     );
+  });
+
+  it("loads config I/O lazily only for the fallback resource loader", async () => {
+    configIoMocks.readBestEffortConfig.mockClear();
+
+    await createAgentSession({
+      model: testModel,
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: createTestModelRegistry(),
+    });
+
+    expect(configIoMocks.readBestEffortConfig).not.toHaveBeenCalled();
+  });
+
+  it("uses the fallback resource loader when none is provided", async () => {
+    const root = sdkSessionTempDirs.make("openclaw-sdk-fallback-loader-");
+    const agentDir = path.join(root, "agent");
+    const cwd = path.join(root, "cwd");
+
+    const { session } = await createAgentSession({
+      agentDir,
+      cwd,
+      model: testModel,
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(configIoMocks.readBestEffortConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(session.resourceLoader).toBeDefined();
   });
 
   it("keeps the default SQLite session inside an explicit agent directory", async () => {
