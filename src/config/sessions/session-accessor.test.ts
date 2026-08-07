@@ -1160,17 +1160,22 @@ describe("session accessor seam", () => {
     // Mirror-only sessionStore callers (entry from memory, not a persisted
     // SQLite row) must stay on the legacy append — the guarded transaction
     // requires a persisted row to validate and would reject as session-rebound.
+    // Populate the mirror with an entry and deliberately create NO SQLite row,
+    // so resolveTranscriptTurnTarget resolves from the mirror (resolved.existing)
+    // and loadSessionEntry finds nothing — entryFromPersistedStore stays false.
+    const sessionStore = {} as Record<string, import("./types.js").SessionEntry>;
     const scope = {
       agentId: "main",
       sessionId: "mirror-only-session",
       sessionKey: "agent:main:mirror-only",
       storePath,
-      sessionStore: {} as Record<string, import("./types.js").SessionEntry>,
+      sessionStore,
     };
-    await replaceSessionEntry(
-      { sessionKey: scope.sessionKey, storePath },
-      { sessionId: scope.sessionId, updatedAt: Date.now() },
-    );
+    sessionStore[scope.sessionKey] = {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+    };
+    // No replaceSessionEntry: the SQLite store has no row for this key.
 
     const result = await persistSessionTranscriptTurn(scope, {
       messages: [
