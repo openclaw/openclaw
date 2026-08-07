@@ -73,7 +73,7 @@ agent decides whether a user-facing update is needed.
 
 <AccordionGroup>
   <Accordion title="Non-blocking, push-based completion">
-    - `sessions_spawn` is non-blocking; it returns a run id immediately.
+    - Accepted `sessions_spawn` launches are non-blocking and return a run id immediately. Request validation failures return an error without creating a child session.
     - On completion, the sub-agent reports back to the parent/requester session.
     - Agent turns that need child results should call `sessions_yield` after spawning required work. That ends the current turn and lets the completion event arrive as the next model-visible message.
     - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
@@ -212,7 +212,7 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
 <ParamField path="model" type="string">
-  Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
+  Override the sub-agent model. For native sub-agents, OpenClaw resolves this against the target agent's model policy before creating the child session; invalid or disallowed values return an error.
 </ParamField>
 <ParamField path="runTimeoutSeconds" type="integer">
   Override the configured run timeout for this child. Must be a non-negative integer; `0` disables the timeout. Applies to native, ACP, and visible sessions.
@@ -690,7 +690,7 @@ still need normal device approval for scope upgrades.
 
 - Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
-- `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
+- Accepted `sessions_spawn` launches return `{ status: "accepted", runId, childSessionKey }` immediately; synchronous validation failures return an error without launching a child.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1-5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
