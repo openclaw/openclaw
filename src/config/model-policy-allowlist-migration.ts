@@ -1,5 +1,11 @@
 // Shared legacy model allowlist detection for runtime, doctor, and config writes.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../utils.js";
+import {
+  isModelPolicyCompatSelector,
+  isValidExactModelPolicyRef,
+  parseModelPolicyWildcardRef,
+} from "./model-policy-ref.js";
 
 export const MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER = "modelPolicyAllowlist";
 
@@ -50,6 +56,34 @@ function collectLegacyDefaultModelAllowRefs(defaults: unknown): string[] | null 
   if (!isRecord(defaults.models)) {
     return null;
   }
-  const refs = Object.keys(defaults.models).filter((key) => key.trim().length > 0);
-  return refs.length > 0 ? refs : null;
+  // Aliases configured on the legacy map stay valid policy refs, so keys matching
+  // a declared alias are preserved alongside exact refs, wildcards, and compat
+  // selectors. Bare slashless provider keys without an alias are runtime-dead and
+  // rejected by the config writer, so they are dropped instead of copied verbatim.
+  const aliases = new Set<string>();
+  for (const entry of Object.values(defaults.models)) {
+    if (isRecord(entry)) {
+      const alias = normalizeLowercaseStringOrEmpty(entry.alias);
+      if (alias) {
+        aliases.add(alias);
+      }
+    }
+  }
+  const refs = Object.keys(defaults.models).filter((key) => {
+    const trimmed = key.trim();
+    if (trimmed.length === 0) {
+      return false;
+    }
+    return (
+      aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+      isModelPolicyCompatSelector(trimmed) ||
+      isValidExactModelPolicyRef(trimmed) ||
+      parseModelPolicyWildcardRef(trimmed) !== null
+    );
+  });
+  // Return an empty array (not null) when every legacy key is invalid so the
+  // runtime treats the map as a known-but-empty restriction (fail-closed).
+  // The Doctor migration handles the empty case separately to avoid stamping
+  // the migration marker and retiring the legacy restriction.
+  return refs.length > 0 ? refs : [];
 }

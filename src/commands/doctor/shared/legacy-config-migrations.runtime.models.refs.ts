@@ -6,7 +6,7 @@ import { normalizeAgentModelRefForConfig } from "../../../config/model-input.js"
 import {
   computeModelPolicyAllowlist,
   hasModelPolicyAllowlistMigrationMarker,
-  MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER,
+  MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER as MIGRATION_MARKER,
 } from "../../../config/model-policy-allowlist-migration.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 
@@ -397,13 +397,9 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
 }
 
 export function collectLegacyDefaultModelAllowRefs(raw: Record<string, unknown>): string[] | null {
-  // Marker seeding at the config write boundary ships atomically with metadata-only
-  // model maps. Therefore an unmarked map is legacy even if a general write version advanced.
+  // Unmarked maps are legacy even if a general write version advanced.
   const defaults = getRecord(getRecord(raw.agents)?.defaults);
-  return computeModelPolicyAllowlist({
-    root: raw,
-    defaults,
-  });
+  return computeModelPolicyAllowlist({ root: raw, defaults });
 }
 
 export function migrateExplicitDefaultModelAllowPolicy(
@@ -422,20 +418,27 @@ export function migrateExplicitDefaultModelAllowPolicy(
     return;
   }
   const defaultAllow = collectLegacyDefaultModelAllowRefs(raw);
-  if (defaultAllow) {
-    const mutableDefaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
-    const mutableModelPolicy = ensureRecord(mutableDefaults, "modelPolicy");
-    // The policy builder still retains configured defaults/fallbacks, so copying the
-    // original keys reproduces the legacy effective set, including wildcard expansion.
-    mutableModelPolicy.allow = defaultAllow;
+  if (defaultAllow === null) {
+    return; // Already migrated.
   }
-  const migrations = ensureRecord(ensureRecord(raw, "meta"), "migrations");
-  migrations[MODEL_POLICY_ALLOWLIST_MIGRATION_MARKER] = true;
-  changes.push(
-    defaultAllow
-      ? "Copied the legacy default model map to agents.defaults.modelPolicy.allow."
-      : "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
-  );
+  if (defaultAllow.length === 0) {
+    const modelKeys = Object.keys(getRecord(defaults?.models) ?? {});
+    if (modelKeys.every((key) => key.trim().length === 0)) {
+      // Blank-only keys carry no policy meaning — stamp as known-unrestricted.
+      ensureRecord(ensureRecord(raw, "meta"), "migrations")[MIGRATION_MARKER] = true;
+      changes.push("Recorded the legacy default model map as unrestricted.");
+      return;
+    }
+    // Bare provider keys — do NOT stamp; stamping would silently broaden access.
+    changes.push(
+      `Legacy default model map contains only bare provider keys (${modelKeys.join(", ")}) that need manual policy replacement. Run openclaw doctor --fix after updating the map.`,
+    );
+    return;
+  }
+  const mutableDefaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+  ensureRecord(mutableDefaults, "modelPolicy").allow = defaultAllow;
+  ensureRecord(ensureRecord(raw, "meta"), "migrations")[MIGRATION_MARKER] = true;
+  changes.push("Copied the legacy default model map to agents.defaults.modelPolicy.allow.");
 }
 
 function rewriteModelRefString(value: string, path: string, changes: string[]): string {
@@ -645,7 +648,10 @@ function rewriteProviderCatalogModelIds(
         models.push(row.model);
         continue;
       }
-      let merged: Record<string, unknown> = { ...preferredRecord, id: row.normalizedId };
+      let merged: Record<string, unknown> = {
+        ...preferredRecord,
+        id: row.normalizedId,
+      };
       for (const candidate of grouped) {
         if (candidate === preferred || !candidate.modelRecord) {
           continue;

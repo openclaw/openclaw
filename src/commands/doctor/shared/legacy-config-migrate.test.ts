@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
@@ -56,7 +57,9 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
 
 describe("legacy session typing config migrate", () => {
   it("moves session typingMode to agent defaults", () => {
-    const res = migrateLegacyConfigForTest({ session: { typingMode: "thinking" } });
+    const res = migrateLegacyConfigForTest({
+      session: { typingMode: "thinking" },
+    });
 
     expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
     expect(res.config?.session).toEqual({});
@@ -172,7 +175,10 @@ describe("legacy MCP server config migrate", () => {
       "Moved mcp.servers.enabled.disabled false → enabled true.",
       "Removed mcp.servers.canonical.disabled true because enabled is already set to true.",
     ]);
-    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({
+      config: null,
+      changes: [],
+    });
   });
 
   it("migrates node-host MCP server disabled flags", () => {
@@ -208,13 +214,20 @@ describe("legacy MCP server config migrate", () => {
       mcp: {
         servers: {
           legacy: { command: "example-mcp", workingDirectory: "/legacy" },
-          canonical: { command: "example-mcp", cwd: "/canonical", workingDirectory: "/legacy" },
+          canonical: {
+            command: "example-mcp",
+            cwd: "/canonical",
+            workingDirectory: "/legacy",
+          },
         },
       },
       nodeHost: {
         mcp: {
           servers: {
-            legacy: { command: "example-mcp", workingDirectory: "/node-legacy" },
+            legacy: {
+              command: "example-mcp",
+              workingDirectory: "/node-legacy",
+            },
           },
         },
       },
@@ -247,7 +260,10 @@ describe("legacy MCP server config migrate", () => {
       "Canonicalized legacy aliases in mcp.servers.canonical.",
       "Canonicalized legacy aliases in nodeHost.mcp.servers.legacy.",
     ]);
-    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({
+      config: null,
+      changes: [],
+    });
   });
 });
 
@@ -1146,7 +1162,9 @@ describe("legacy silent reply config migrate", () => {
       internal: "allow",
     });
     expect(res.config?.agents?.defaults).not.toHaveProperty("silentReplyRewrite");
-    expect(res.config?.surfaces?.telegram?.silentReply).toEqual({ group: "allow" });
+    expect(res.config?.surfaces?.telegram?.silentReply).toEqual({
+      group: "allow",
+    });
     expect(res.config?.surfaces?.telegram).not.toHaveProperty("silentReplyRewrite");
     expectMigrationChangesToIncludeFragments(res.changes, [
       "Removed agents.defaults.silentReply.direct",
@@ -2596,7 +2614,10 @@ describe("legacy migrate sandbox scope aliases", () => {
       enabled: true,
       network: "",
     });
-    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({
+      config: null,
+      changes: [],
+    });
   });
 
   it("disables explicit per-agent network none in keyed rosters", () => {
@@ -2628,7 +2649,10 @@ describe("legacy migrate sandbox scope aliases", () => {
       network: "openclaw-sandbox-browser",
       headless: true,
     });
-    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({
+      config: null,
+      changes: [],
+    });
   });
 
   it("disables explicit per-agent network none in legacy list rosters", () => {
@@ -2663,7 +2687,10 @@ describe("legacy migrate sandbox scope aliases", () => {
       network: "openclaw-sandbox-browser",
       autoStart: false,
     });
-    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({
+      config: null,
+      changes: [],
+    });
   });
 
   it("leaves supported sandbox browser networks unchanged", () => {
@@ -2684,7 +2711,10 @@ describe("legacy migrate sandbox scope aliases", () => {
     };
 
     expect(findLegacyConfigIssues(raw)).toEqual([]);
-    expect(migrateLegacyConfigForTest(raw)).toEqual({ config: null, changes: [] });
+    expect(migrateLegacyConfigForTest(raw)).toEqual({
+      config: null,
+      changes: [],
+    });
   });
 });
 
@@ -3104,7 +3134,12 @@ describe("legacy migrate heartbeat config", () => {
   it.each([
     [
       "moves top-level heartbeat into agents.defaults.heartbeat",
-      { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
+      {
+        heartbeat: {
+          model: "anthropic/claude-3-5-haiku-20241022",
+          every: "30m",
+        },
+      },
       "agents",
       { model: "anthropic/claude-sonnet-4-6", every: "30m" },
       [
@@ -3122,8 +3157,13 @@ describe("legacy migrate heartbeat config", () => {
     [
       "keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat",
       {
-        heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" },
-        agents: { defaults: { heartbeat: { every: "1h", target: "telegram" } } },
+        heartbeat: {
+          model: "anthropic/claude-3-5-haiku-20241022",
+          every: "30m",
+        },
+        agents: {
+          defaults: { heartbeat: { every: "1h", target: "telegram" } },
+        },
       },
       "agents",
       { every: "1h", target: "telegram", model: "anthropic/claude-sonnet-4-6" },
@@ -3136,7 +3176,9 @@ describe("legacy migrate heartbeat config", () => {
       "keeps explicit channels.defaults.heartbeat values when merging top-level heartbeat visibility",
       {
         heartbeat: { showOk: true, showAlerts: true },
-        channels: { defaults: { heartbeat: { showOk: false, useIndicator: false } } },
+        channels: {
+          defaults: { heartbeat: { showOk: false, useIndicator: false } },
+        },
       },
       "channels",
       { showOk: false, showAlerts: true, useIndicator: false },
@@ -3147,7 +3189,9 @@ describe("legacy migrate heartbeat config", () => {
     [
       "preserves agents.defaults.heartbeat precedence over top-level heartbeat legacy key",
       {
-        agents: { defaults: { heartbeat: { every: "1h", target: "telegram" } } },
+        agents: {
+          defaults: { heartbeat: { every: "1h", target: "telegram" } },
+        },
         heartbeat: {
           every: "30m",
           target: "discord",
@@ -3542,12 +3586,18 @@ describe("legacy model compat migrate", () => {
       "github-copilot/gpt-5.4-mini": { alias: "old-mini" },
     });
     expect(
-      (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { summaryModel?: string } })
-        ?.config?.summaryModel,
+      (
+        res.config?.plugins?.entries?.["lossless-claw"] as {
+          config?: { summaryModel?: string };
+        }
+      )?.config?.summaryModel,
     ).toBe("anthropic/claude-sonnet-4-6");
     expect(
-      (res.config?.plugins?.entries?.["lossless-claw"] as { config?: { dataPath?: string } })
-        ?.config?.dataPath,
+      (
+        res.config?.plugins?.entries?.["lossless-claw"] as {
+          config?: { dataPath?: string };
+        }
+      )?.config?.dataPath,
     ).toBe("/tmp/claude-opus-4-5");
     expect(
       (
@@ -4158,7 +4208,9 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config?.models?.providers?.vllm?.params).toEqual({ temperature: 0.2 });
+    expect(res.config?.models?.providers?.vllm?.params).toEqual({
+      temperature: 0.2,
+    });
     expect(res.config?.models?.providers?.vllm?.models).toEqual([
       {
         id: "Qwen/Qwen3-8B",
@@ -4261,7 +4313,9 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config?.models?.providers?.vllm?.params).toEqual({ temperature: 0.2 });
+    expect(res.config?.models?.providers?.vllm?.params).toEqual({
+      temperature: 0.2,
+    });
     expect(res.config?.models?.providers?.vllm?.models).toEqual([
       {
         id: "Qwen/Qwen3-8B",
@@ -4783,6 +4837,97 @@ describe("legacy flat memory search field migrate", () => {
     expect(res.changes).toContain(
       "Removed retired runtime tuning knobs; built-in defaults now apply.",
     );
+  });
+});
+
+describe("legacy modelPolicy allowlist migrate (issue #114964)", () => {
+  it("drops bare slashless provider keys when copying the legacy default model map", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            openai: {},
+            "kimi/k3": {},
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["kimi/k3"],
+    });
+    expect(res.changes).toContain(
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    );
+  });
+
+  it("emits an actionable diagnostic when every legacy key is a bare slashless provider key", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            openai: {},
+          },
+        },
+      },
+    });
+
+    // Fail-closed: when every legacy key is invalid, do NOT write an empty
+    // allowlist or stamp the migration marker. The legacy map stays visible
+    // and Doctor emits an actionable diagnostic telling the operator which
+    // keys need manual policy replacement.
+    expect(res.config?.agents?.defaults?.modelPolicy).toBeUndefined();
+    expect(res.changes).toContain(
+      "Legacy default model map contains only bare provider keys (openai) that need manual policy replacement. Run openclaw doctor --fix after updating the map.",
+    );
+    expect(res.changes).not.toContain(
+      "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
+    );
+  });
+
+  it("keeps legacy keys that carry an explicit alias alongside wildcard refs", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            opus: { alias: "opus" },
+            "anthropic/*": {},
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["opus", "anthropic/*"],
+    });
+  });
+
+  it("produces an allowlist that passes config write validation (the doctor --fix failure)", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: {
+          models: {
+            openai: {},
+            "openai/*": {},
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["openai/*", "anthropic/claude-sonnet-4-6"],
+    });
+    // Before the fix the bare "openai" key was copied verbatim and the config
+    // writer rejected the migrated allowlist, aborting the entire repair run.
+    // Assert the model-policy surface specifically: full-config validation can
+    // still flag unrelated legacy issues (that is doctor's documented contract).
+    const validated = validateConfigObjectRaw(structuredClone(res.config));
+    const modelPolicyIssues = validated.ok
+      ? []
+      : validated.issues.filter((issue) => issue.path.includes("modelPolicy"));
+    expect(modelPolicyIssues).toEqual([]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
