@@ -22,6 +22,8 @@ const ALLOWED_PRODUCTION_IMPORTERS = [
   "src/agents/embedded-agent-runner/run/internal-params.ts",
   "src/agents/embedded-agent-runner/run/lane-controller.ts",
   "src/agents/harness/side-question-execution-attribution.ts",
+  // Gateway caller capture is the host boundary that binds admitted attribution to approval calls.
+  "src/agents/tools/gateway-caller-context.ts",
   "src/auto-reply/reply/agent-runner-cli-candidate.ts",
   "src/auto-reply/reply/agent-runner-execution-identity.ts",
   "src/auto-reply/reply/agent-runner-execution.types.ts",

@@ -45,6 +45,7 @@ export function createCodexAttemptServerRequestController(
   const { connection } = runtime;
   const {
     params,
+    options,
     computerUseConfig,
     runAbortController,
     appServer,
@@ -98,6 +99,7 @@ export function createCodexAttemptServerRequestController(
           markCurrentTurnRequestProgress();
         }
         return await handleCodexAppServerElicitationRequest({
+          approvalAuthority: options.approvalAuthority,
           requestParams: request.params,
           paramsForRun: params,
           threadId: resourceState.thread.threadId,
@@ -126,6 +128,7 @@ export function createCodexAttemptServerRequestController(
             markCurrentTurnRequestProgress();
           }
           return handleCodexAppServerApprovalRequest({
+            approvalAuthority: options.approvalAuthority,
             method: request.method,
             requestParams: request.params,
             paramsForRun: params,

@@ -11,6 +11,7 @@ import type {
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { bindApprovalExecutionIdentity } from "./approval-execution-identity.js";
 import { buildWaitResponse, type WaitReasonResolver } from "./approval-wait-response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -247,8 +248,10 @@ export function registerPendingApprovalRecord<TPayload>(params: {
   timeoutMs: number;
   respond: RespondFn;
   context: GatewayRequestContext;
+  client?: GatewayClient | null;
 }): Promise<ExecApprovalDecision | null> | undefined {
   try {
+    bindApprovalExecutionIdentity({ ...params, cfg: params.context.getRuntimeConfig() });
     return params.manager.register(params.record, params.timeoutMs);
   } catch (err) {
     respondApprovalStorageUnavailable({ ...params, operation: "request", error: err });

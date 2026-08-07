@@ -7,6 +7,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import { createAbortError as createNamedAbortError } from "../../infra/abort-signal.js";
 import {
@@ -62,6 +63,11 @@ import {
   resolveFailoverStatus,
 } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import {
+  captureGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+  type GatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { LIVE_SESSION_LIMITS, resolveClaudeLiveMode } from "./claude-live-session-policy.js";
 import {
@@ -80,6 +86,8 @@ type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
   diagnosticRefs: ClaudeLiveDiagnosticRefs;
+  /** Trusted identity captured at turn admission; live process callbacks outlive that async scope. */
+  gatewayCallerIdentity?: GatewayToolCallerIdentity;
   /** Enclosing run abort signal; authoritative for tool terminal reason on turn failure. */
   abortSignal?: AbortSignal;
   outputLimits: ClaudeLiveOutputLimits;
@@ -1272,16 +1280,18 @@ function handleClaudeLiveControlRequest(
     return;
   }
   void (async () => {
-    const outcome = await requestClaudeNativeToolApproval({
-      toolName,
-      toolInput,
-      pluginId: session.providerId,
-      sessionKey: turn.diagnosticRefs.sessionKey,
-      agentId: turn.diagnosticRefs.agentId,
-      toolCallId: toolUseId,
-      abortSignal: turn.abortSignal,
-      ask: turn.execPermission.ask,
-    });
+    const outcome = await withGatewayToolCallerIdentity(turn.gatewayCallerIdentity, async () =>
+      requestClaudeNativeToolApproval({
+        toolName,
+        toolInput,
+        pluginId: session.providerId,
+        sessionKey: turn.diagnosticRefs.sessionKey,
+        agentId: turn.diagnosticRefs.agentId,
+        toolCallId: toolUseId,
+        abortSignal: turn.abortSignal,
+        ask: turn.execPermission.ask,
+      }),
+    );
     const runAborted = turn.abortSignal?.aborted === true;
     const allowed = !runAborted && outcome.kind === "allow";
     if (!runAborted && outcome.kind === "allow" && outcome.grantAlways) {
@@ -1691,6 +1701,22 @@ function createTurn(params: {
       ...(params.context.params.sessionKey ? { sessionKey: params.context.params.sessionKey } : {}),
       ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     },
+    gatewayCallerIdentity: captureGatewayToolCallerIdentity(
+      params.context.params.agentId,
+      {
+        agentSessionKey: params.context.params.sessionKey,
+        agentChannel: params.context.params.messageChannel ?? params.context.params.messageProvider,
+        currentChannelId: params.context.params.currentChannelId,
+        agentAccountId: params.context.params.agentAccountId,
+        currentThreadTs: params.context.params.currentThreadTs,
+      },
+      {
+        attribution: params.context.params.attribution,
+        executionIdentityEnabled: isExecutionIdentityCollectionEnabled(
+          params.context.params.config,
+        ),
+      },
+    ),
     abortSignal: params.context.params.abortSignal,
     outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),

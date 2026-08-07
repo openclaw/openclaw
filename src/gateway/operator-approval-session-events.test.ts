@@ -85,6 +85,8 @@ function createPendingRecord(
       sessionKey: params.sourceSessionKey ?? SOURCE_SESSION_KEY,
       sessionId: "private-session-id",
       runId: "private-run-id",
+      contextId: null,
+      executionId: null,
       toolCallId: "private-tool-call-id",
       toolName: "exec",
     },

@@ -9,12 +9,17 @@ import { toErrorObject } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
+import type {
+  AgentHarnessPluginApprovalResult,
+  NativeHookRelayApprovalAuthority,
+} from "../agent-harness-approval-authority.types.js";
 import {
   cancelDeferredPluginToolApproval,
   requestDeferredPluginToolApproval,
   type DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import { resolveNativeHookRelayApprovalAuthority } from "./native-hook-relay-approval-authority.js";
 import {
   nativeHookRelayParamsWereRewritten,
   normalizeNativeHookToolName,
@@ -73,6 +78,7 @@ function nativeHookRelayPreToolUseApprovalKey(params: {
 }
 
 export function setNativeHookRelayPreToolUseApproval(params: {
+  registration: NativeHookRelayRegistration;
   relayId: string;
   toolUseId?: string;
   deferredApproval: DeferredPluginToolApproval;
@@ -86,10 +92,13 @@ export function setNativeHookRelayPreToolUseApproval(params: {
   if (previousApproval) {
     cancelDeferredPluginToolApproval(previousApproval.deferredApproval);
   }
-  pendingPreToolUseApprovals.set(key, {
+  const approvalAuthority = resolveNativeHookRelayApprovalAuthority(params.registration);
+  const pendingApproval: NativeHookRelayPreToolUseApproval = {
     deferredApproval: params.deferredApproval,
     originalParamsFingerprint: params.originalParamsFingerprint,
-  });
+    ...(approvalAuthority ? { approvalAuthority } : {}),
+  };
+  pendingPreToolUseApprovals.set(key, pendingApproval);
   if (pendingPreToolUseApprovals.size > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
     const oldestKey = pendingPreToolUseApprovals.keys().next().value;
     if (oldestKey) {
@@ -141,7 +150,13 @@ async function resolveNativeHookRelayPreToolUseApproval(
   pendingApproval: NativeHookRelayPreToolUseApproval,
   signal?: AbortSignal,
 ): Promise<NativeHookRelayDeferredApprovalOutcome> {
-  const outcome = await nativeHookRelayDeferredToolApprovalRequester({
+  const requester =
+    nativeHookRelayDeferredToolApprovalRequester !== requestDeferredPluginToolApproval
+      ? nativeHookRelayDeferredToolApprovalRequester
+      : (pendingApproval.approvalAuthority?.resolveDeferredToolApproval.bind(
+          pendingApproval.approvalAuthority,
+        ) ?? nativeHookRelayDeferredToolApprovalRequester);
+  const outcome = await requester({
     deferredApproval: pendingApproval.deferredApproval,
     signal,
   });
@@ -236,12 +251,21 @@ async function startNativeHookRelayPermissionApprovalWithBudget(params: {
     );
     return "defer";
   }
-  const approval: Promise<NativeHookRelayPermissionApprovalResult> =
-    nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
-      if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
-        pendingPermissionApprovals.delete(params.approvalKey);
-      }
-    });
+  const approvalAuthority = resolveNativeHookRelayApprovalAuthority(params.registration);
+  const requester =
+    nativeHookRelayPermissionApprovalRequester !== requestNativeHookRelayPermissionApproval
+      ? nativeHookRelayPermissionApprovalRequester
+      : approvalAuthority
+        ? (request: NativeHookRelayPermissionApprovalRequest) =>
+            requestNativeHookRelayPermissionApproval(request, approvalAuthority)
+        : nativeHookRelayPermissionApprovalRequester;
+  const approval: Promise<NativeHookRelayPermissionApprovalResult> = requester(
+    params.request,
+  ).finally(() => {
+    if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
+      pendingPermissionApprovals.delete(params.approvalKey);
+    }
+  });
   pendingPermissionApprovals.set(params.approvalKey, approval);
   return approval;
 }
@@ -475,45 +499,54 @@ export function removeNativeHookRelayPermissionState(relayId: string): void {
 
 async function requestNativeHookRelayPermissionApproval(
   request: NativeHookRelayPermissionApprovalRequest,
+  approvalAuthority?: NativeHookRelayApprovalAuthority,
 ): Promise<NativeHookRelayPermissionApprovalResult> {
   const timeoutMs = DEFAULT_PERMISSION_TIMEOUT_MS;
-  const requestResult: { id?: string; decision?: string | null } = await callGatewayTool(
-    "plugin.approval.request",
-    { timeoutMs: timeoutMs + 10_000 },
-    {
-      pluginId: `openclaw-native-hook-relay-${request.provider}`,
-      title: truncateText(
-        `${nativeHookRelayProviderDisplayName(request.provider)} permission request`,
-        MAX_APPROVAL_TITLE_LENGTH,
-      ),
-      description: truncateText(
-        formatPermissionApprovalDescription(request),
-        MAX_APPROVAL_DESCRIPTION_LENGTH,
-      ),
-      severity: "warning",
-      toolName: request.toolName,
-      toolCallId: request.toolCallId,
-      allowedDecisions: [
-        PluginApprovalResolutions.ALLOW_ONCE,
-        PluginApprovalResolutions.ALLOW_ALWAYS,
-        PluginApprovalResolutions.DENY,
-      ],
-      agentId: request.agentId,
-      sessionKey: request.sessionKey,
-      timeoutMs,
-      twoPhase: true,
-    },
-    { expectFinal: false },
-  );
+  const requestPayload = {
+    pluginId: `openclaw-native-hook-relay-${request.provider}`,
+    title: truncateText(
+      `${nativeHookRelayProviderDisplayName(request.provider)} permission request`,
+      MAX_APPROVAL_TITLE_LENGTH,
+    ),
+    description: truncateText(
+      formatPermissionApprovalDescription(request),
+      MAX_APPROVAL_DESCRIPTION_LENGTH,
+    ),
+    severity: "warning" as const,
+    toolName: request.toolName,
+    toolCallId: request.toolCallId,
+    allowedDecisions: [
+      PluginApprovalResolutions.ALLOW_ONCE,
+      PluginApprovalResolutions.ALLOW_ALWAYS,
+      PluginApprovalResolutions.DENY,
+    ] as Array<"allow-once" | "allow-always" | "deny">,
+    timeoutMs,
+    gatewayTimeoutMs: timeoutMs + 10_000,
+  };
+  const { gatewayTimeoutMs, ...gatewayPayload } = requestPayload;
+  const requestResult: AgentHarnessPluginApprovalResult | undefined = approvalAuthority
+    ? await approvalAuthority.requestPluginApproval(requestPayload)
+    : await callGatewayTool<AgentHarnessPluginApprovalResult | undefined>(
+        "plugin.approval.request",
+        { timeoutMs: gatewayTimeoutMs },
+        {
+          ...gatewayPayload,
+          agentId: request.agentId,
+          sessionKey: request.sessionKey,
+          twoPhase: true,
+        },
+        { expectFinal: false },
+      );
   const approvalId = requestResult?.id;
   if (!approvalId) {
     return "defer";
   }
   let decision: string | null | undefined;
-  if (Object.hasOwn(requestResult ?? {}, "decision")) {
+  if (requestResult && Object.hasOwn(requestResult, "decision")) {
     decision = requestResult.decision;
   } else {
     const waitResult = await waitForNativeHookRelayApprovalDecision({
+      approvalAuthority,
       approvalId,
       signal: request.signal,
       timeoutMs,
@@ -535,16 +568,25 @@ async function requestNativeHookRelayPermissionApproval(
 }
 
 async function waitForNativeHookRelayApprovalDecision(params: {
+  approvalAuthority?: NativeHookRelayApprovalAuthority;
   approvalId: string;
   signal?: AbortSignal;
   timeoutMs: number;
-}): Promise<{ id?: string; decision?: string | null } | undefined> {
-  const waitPromise: Promise<{ id?: string; decision?: string | null } | undefined> =
-    callGatewayTool(
-      "plugin.approval.waitDecision",
-      { timeoutMs: params.timeoutMs + 10_000 },
-      { id: params.approvalId },
-    ).catch((error: unknown) => {
+}): Promise<AgentHarnessPluginApprovalResult | undefined> {
+  const waitPromise: Promise<AgentHarnessPluginApprovalResult | undefined> = (
+    params.approvalAuthority
+      ? params.approvalAuthority.waitForPluginApprovalDecision({
+          approvalId: params.approvalId,
+          gatewayTimeoutMs: params.timeoutMs + 10_000,
+        })
+      : callGatewayTool<AgentHarnessPluginApprovalResult | undefined>(
+          "plugin.approval.waitDecision",
+          { timeoutMs: params.timeoutMs + 10_000 },
+          { id: params.approvalId },
+        )
+  )
+    .then((result) => result ?? undefined)
+    .catch((error: unknown) => {
       if (isApprovalNotFoundError(error)) {
         return undefined;
       }

@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import type { NativeHookRelayApprovalAuthority } from "../agent-harness-approval-authority.types.js";
+import { bindNativeHookRelayApprovalAuthority } from "./native-hook-relay-approval-authority.js";
 import {
   clearNativeHookRelayBridgesForTests,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
@@ -182,6 +184,19 @@ export function registerNativeHookRelay(
     },
     unregister: () => unregisterNativeHookRelay(relayId, registration),
   };
+  return handle;
+}
+
+/** Register a relay whose approval calls inherit one exact host-admitted caller. */
+export function registerNativeHookRelayWithApprovalAuthority(
+  params: RegisterNativeHookRelayParams,
+  approvalAuthority: NativeHookRelayApprovalAuthority,
+): ActiveNativeHookRelayRegistrationHandle {
+  const handle = registerNativeHookRelay(params);
+  const registration = relays.get(handle.relayId);
+  if (registration) {
+    bindNativeHookRelayApprovalAuthority(registration, approvalAuthority);
+  }
   return handle;
 }
 

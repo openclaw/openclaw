@@ -3,6 +3,7 @@
  * app-server tool events can still run OpenClaw policy and diagnostics.
  */
 import { createHash } from "node:crypto";
+import type { AgentHarnessApprovalAuthority } from "openclaw/plugin-sdk/agent-harness-approval-authority-runtime";
 import {
   registerNativeHookRelay,
   type BeforeToolCallFailureDisposition,
@@ -127,6 +128,7 @@ export function emitCodexNativePreToolUseFailureDiagnostic(params: {
 
 /** Registers an OpenClaw native hook relay for a Codex app-server turn. */
 export function createCodexNativeHookRelay(params: {
+  approvalAuthority?: AgentHarnessApprovalAuthority;
   options:
     | {
         enabled?: boolean;
@@ -155,7 +157,9 @@ export function createCodexNativeHookRelay(params: {
   if (params.options?.enabled === false) {
     return undefined;
   }
-  return registerNativeHookRelay({
+  const registerRelay =
+    params.approvalAuthority?.registerNativeHookRelay ?? registerNativeHookRelay;
+  return registerRelay({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
       agentId: params.agentId,

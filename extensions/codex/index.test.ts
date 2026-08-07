@@ -852,6 +852,7 @@ describe("codex plugin", () => {
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "hello" },
       {
+        approvalAuthority: undefined,
         agentHarnessCodingToolsFactory: undefined,
         bindingStore: testCodexAppServerBindingStore,
         pluginConfig: { appServer: {} },
@@ -918,6 +919,12 @@ describe("codex plugin", () => {
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "calendar" },
       {
+        approvalAuthority: expect.objectContaining({
+          registerNativeHookRelay: expect.any(Function),
+          requestPluginApproval: expect.any(Function),
+          runBeforeToolCallApproval: expect.any(Function),
+          waitForPluginApprovalDecision: expect.any(Function),
+        }),
         agentHarnessCodingToolsFactory: expect.any(Function),
         bindingStore: expect.any(Object),
         pluginConfig: liveConfig.plugins.entries.codex.config,
@@ -926,7 +933,64 @@ describe("codex plugin", () => {
     );
   });
 
-  it("enables the native hook relay for public Codex side questions", async () => {
+  it("injects side-question approval authority through the production owner loader", async () => {
+    const registerAgentHarness = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(),
+        registerAgentHarness,
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+    const harness = mockCallArg(registerAgentHarness) as ReturnType<
+      typeof createCodexAppServerAgentHarness
+    >;
+    if (!harness.runSideQuestion) {
+      throw new Error("Expected Codex harness to expose side questions");
+    }
+    const sideQuestion = { question: "btw" } as never;
+    runCodexAppServerSideQuestionMock.mockImplementation(async (_params, options) => {
+      expect(_params).toBe(sideQuestion);
+      expect(options.approvalAuthority).toBeDefined();
+      await expect(
+        options.approvalAuthority?.runBeforeToolCallApproval({
+          toolName: "read",
+          params: { path: "README.md" },
+          ctx: { runId: "side-local-run" },
+        }),
+      ).resolves.toMatchObject({
+        blocked: false,
+        params: { path: "README.md" },
+      });
+      return { text: "ok" };
+    });
+
+    await harness.runSideQuestion(sideQuestion);
+
+    expect(runCodexAppServerSideQuestionMock).toHaveBeenCalledWith(sideQuestion, {
+      approvalAuthority: expect.objectContaining({
+        registerNativeHookRelay: expect.any(Function),
+        requestPluginApproval: expect.any(Function),
+        runBeforeToolCallApproval: expect.any(Function),
+        waitForPluginApprovalDecision: expect.any(Function),
+      }),
+      agentHarnessCodingToolsFactory: expect.any(Function),
+      bindingStore: expect.any(Object),
+      pluginConfig: {},
+      nativeHookRelay: { enabled: true },
+    });
+  });
+
+  it("leaves side-question approval authority undefined without owner injection", async () => {
     const harness = createCodexAppServerAgentHarness({
       pluginConfig: { appServer: {} },
       bindingStore: testCodexAppServerBindingStore,
@@ -943,6 +1007,7 @@ describe("codex plugin", () => {
     expect(runCodexAppServerSideQuestionMock).toHaveBeenCalledWith(
       { question: "btw" },
       {
+        approvalAuthority: undefined,
         bindingStore: testCodexAppServerBindingStore,
         pluginConfig: { appServer: {} },
         nativeHookRelay: { enabled: true },

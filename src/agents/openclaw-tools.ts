@@ -192,6 +192,8 @@ export function createOpenClawTools(
      * boundary should opt out explicitly.
      */
     wrapBeforeToolCallHook?: boolean;
+    /** Internal: an outer finalized-tool boundary owns Gateway caller identity wrapping. */
+    deferGatewayCallerIdentity?: boolean;
     /** Override or extend the default hook context used by construction-time wrapping. */
     beforeToolCallHookContext?: HookContext;
     /** Records hot-path tool-prep stages for reply startup diagnostics. */
@@ -739,10 +741,12 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
-    hookAgentId,
-    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
-  );
+  const wrapGatewayCallerIdentity = options?.deferGatewayCallerIdentity
+    ? (tool: AnyAgentTool) => tool
+    : createGatewayToolCallerWrapper(
+        hookAgentId,
+        options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
+      );
 
   if (options?.wrapBeforeToolCallHook === false) {
     return allTools.map(wrapGatewayCallerIdentity);

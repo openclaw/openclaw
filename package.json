@@ -46,6 +46,7 @@
     "!dist/plugin-sdk/acp-runtime.d.ts",
     "!dist/plugin-sdk/acp-runtime-backend.d.ts",
     "!dist/plugin-sdk/agent-core.d.ts",
+    "!dist/plugin-sdk/agent-harness-approval-authority-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-exec-review-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-task-runtime.d.ts",
     "!dist/plugin-sdk/agent-harness-tool-authority-runtime.d.ts",

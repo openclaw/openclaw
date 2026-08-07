@@ -377,6 +377,7 @@ export function createExecApprovalHandlers(
         timeoutMs,
         respond,
         context,
+        client,
       });
       if (!decisionPromise) {
         return;

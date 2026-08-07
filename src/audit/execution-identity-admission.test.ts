@@ -3,8 +3,10 @@ import {
   configureExecutionIdentityAdmissionSink,
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
+  getExecutionIdentityAdmissionScope,
   hasExecutionIdentityAdmissionSink,
   parseExecutionIdentityAdmissionEnvelope,
+  runWithExecutionIdentityAdmissionScope,
   type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionWork,
@@ -101,7 +103,11 @@ describe("execution identity admission envelope", () => {
       { rawGrantRef: "a", state: "present" },
       { rawGrantRef: "z", state: "present" },
     ]);
-    expect(envelope.invoker?.displayLabel).not.toContain("sk-1234567890abcdef");
+    expect(
+      envelope.invoker && !("state" in envelope.invoker)
+        ? envelope.invoker.displayLabel
+        : undefined,
+    ).not.toContain("sk-1234567890abcdef");
     expect(Object.isFrozen(envelope)).toBe(true);
     expect(Object.isFrozen(envelope.ingress)).toBe(true);
     expect(Object.isFrozen(envelope.assurance)).toBe(true);
@@ -116,6 +122,12 @@ describe("execution identity admission envelope", () => {
       captureEnvelope(facts({ runId: "" }), {
         runtimeInstanceId: "runtime-1",
       }),
+    ).toThrow("expected admission envelope");
+    expect(() =>
+      captureEnvelope(
+        facts({ invoker: { state: "unknown", rawPrincipalRef: "must-not-hide" } as never }),
+        { runtimeInstanceId: "runtime-1" },
+      ),
     ).toThrow("expected admission envelope");
     expect(() =>
       captureEnvelope(
@@ -231,5 +243,46 @@ describe("execution identity admission envelope", () => {
     }
     expect(work).toHaveBeenCalledWith({ kind: "retry-reference", token });
     expect(JSON.stringify(work.mock.calls)).not.toContain("raw-private-reference");
+  });
+
+  it("preserves explicit principal-less unknown as deterministic bounded evidence", () => {
+    const envelope = captureEnvelope(facts({ invoker: { state: "unknown" } }), {
+      contextId: "context-unknown",
+      executionId: "execution-unknown",
+      now: 123,
+      runtimeInstanceId: "runtime-1",
+    });
+
+    expect(envelope.invoker).toEqual({ state: "unknown" });
+    expect(parseExecutionIdentityAdmissionEnvelope(structuredClone(envelope))).toEqual(envelope);
+    expect(JSON.stringify(envelope)).not.toContain("rawPrincipalRef");
+  });
+
+  it("isolates immutable private scopes across concurrent executions", async () => {
+    const first = createExecutionIdentityAdmissionToken("run-1", {
+      contextId: "context-1",
+      executionId: "execution-1",
+      now: 1,
+    });
+    const second = createExecutionIdentityAdmissionToken("run-2", {
+      contextId: "context-2",
+      executionId: "execution-2",
+      now: 2,
+    });
+
+    const observed = await Promise.all(
+      [first, second].map(
+        async (token) =>
+          await runWithExecutionIdentityAdmissionScope({ token, retryOnly: false }, async () => {
+            await Promise.resolve();
+            const scope = getExecutionIdentityAdmissionScope();
+            expect(Object.isFrozen(scope)).toBe(true);
+            expect(Object.isFrozen(scope?.token)).toBe(true);
+            return scope?.token.executionId;
+          }),
+      ),
+    );
+    expect(observed).toEqual(["execution-1", "execution-2"]);
+    expect(getExecutionIdentityAdmissionScope()).toBeUndefined();
   });
 });

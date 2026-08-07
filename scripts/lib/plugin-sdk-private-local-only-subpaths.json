@@ -6,6 +6,7 @@
   "acp-runtime",
   "acp-runtime-backend",
   "agent-core",
+  "agent-harness-approval-authority-runtime",
   "agent-harness-exec-review-runtime",
   "agent-harness-task-runtime",
   "agent-harness-tool-authority-runtime",

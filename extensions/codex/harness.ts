@@ -38,6 +38,11 @@ type CodexAgentHarnessToolAuthority = {
   createForSideQuestion: (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarnessSideQuestion"];
 };
 
+type CodexAgentHarnessApprovalAuthority = {
+  createForAttempt: (typeof import("openclaw/plugin-sdk/agent-harness-approval-authority-runtime"))["createApprovalAuthorityForAgentHarnessAttempt"];
+  createForSideQuestion: (typeof import("openclaw/plugin-sdk/agent-harness-approval-authority-runtime"))["createApprovalAuthorityForAgentHarnessSideQuestion"];
+};
+
 async function disposeSharedCodexAppServerClients(): Promise<void> {
   const dispose = (
     globalThis as typeof globalThis & {
@@ -61,6 +66,7 @@ export function createCodexAppServerAgentHarness(options: {
   runtime?: PluginRuntime;
   bindingStore: CodexAppServerBindingStore;
   sessionCatalogControl?: CodexSessionCatalogControl;
+  approvalAuthority?: CodexAgentHarnessApprovalAuthority;
   toolAuthority?: CodexAgentHarnessToolAuthority;
 }): AgentHarness {
   const harnessRuntimeId = options?.id ?? "codex";
@@ -186,6 +192,7 @@ export function createCodexAppServerAgentHarness(options: {
       // cold provider catalog reads do not pull in the whole Codex runtime.
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
+        approvalAuthority: await options.approvalAuthority?.createForAttempt(params),
         agentHarnessCodingToolsFactory: options.toolAuthority?.createForAttempt,
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
@@ -228,6 +235,7 @@ export function createCodexAppServerAgentHarness(options: {
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
       return runCodexAppServerSideQuestion(params, {
+        approvalAuthority: await options.approvalAuthority?.createForSideQuestion(params),
         agentHarnessCodingToolsFactory: options.toolAuthority?.createForSideQuestion,
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,

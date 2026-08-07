@@ -3,6 +3,7 @@ import { createExecutionIdentityAdmissionToken } from "../audit/execution-identi
 import {
   createAgentExecutionAttribution,
   rebindAgentExecutionAttribution,
+  resolveAgentExecutionIdentityAdmission,
 } from "./agent-execution-attribution.js";
 
 describe("createAgentExecutionAttribution", () => {
@@ -53,6 +54,24 @@ describe("createAgentExecutionAttribution", () => {
     expect(attribution.contextId).toBeTruthy();
     expect(attribution.executionId).toBeTruthy();
     expect(attribution.createdAt).toBeGreaterThan(0);
+  });
+
+  it("materializes the same execution token from canonical attribution", () => {
+    const attribution = createAgentExecutionAttribution({
+      runId: "run-materialized",
+      lifecycleGeneration: "generation-materialized",
+    });
+
+    expect(resolveAgentExecutionIdentityAdmission(attribution)).toEqual({
+      token: {
+        tokenVersion: 1,
+        runId: attribution.runId,
+        contextId: attribution.contextId,
+        executionId: attribution.executionId,
+        createdAt: attribution.createdAt,
+      },
+      retryOnly: false,
+    });
   });
 
   it("does not apply the opt-in audit token bounds to default runtime attribution", () => {

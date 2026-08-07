@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
 import {
   bindApprovalReviewerDeviceIds,
   handleApprovalResolve,
@@ -32,6 +33,13 @@ function createApprovalClient(params: {
   deviceId?: string;
   scopes?: string[];
   approvalRuntime?: boolean;
+  executionIdentity?: {
+    tokenVersion: 1;
+    contextId: string;
+    executionId: string;
+    runId: string;
+    createdAt: number;
+  };
 }): GatewayClient {
   return {
     connId: params.connId,
@@ -40,7 +48,23 @@ function createApprovalClient(params: {
       device: params.deviceId ? { id: params.deviceId } : undefined,
       scopes: params.scopes ?? ["operator.approvals"],
     },
-    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+    ...(params.approvalRuntime || params.executionIdentity
+      ? {
+          internal: {
+            ...(params.approvalRuntime ? { approvalRuntime: true as const } : {}),
+            ...(params.executionIdentity
+              ? {
+                  agentRuntimeIdentity: {
+                    kind: "agentRuntime" as const,
+                    agentId: "main",
+                    sessionKey: "agent:main:main",
+                    executionIdentity: params.executionIdentity,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
   } as GatewayClient;
 }
 
@@ -1618,6 +1642,173 @@ describe("handlePendingApprovalRequest", () => {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
   });
+
+  it.each([
+    {
+      name: "exact",
+      approvalKind: "exec" as const,
+      enabled: true,
+      requestAgentId: undefined,
+      requestRunId: "run-1",
+      requestSessionKey: undefined,
+      trusted: true,
+      expectedBound: true,
+    },
+    {
+      name: "plugin-style",
+      approvalKind: "plugin" as const,
+      enabled: true,
+      requestAgentId: undefined,
+      requestRunId: undefined,
+      requestSessionKey: undefined,
+      trusted: true,
+      expectedBound: true,
+    },
+    {
+      name: "exec-owner-mismatch",
+      approvalKind: "exec" as const,
+      enabled: true,
+      requestRunId: "run-1",
+      requestAgentId: "forged",
+      requestSessionKey: "agent:forged:main",
+      trusted: true,
+      expectedBound: true,
+    },
+    {
+      name: "plugin-owner-mismatch",
+      approvalKind: "plugin" as const,
+      enabled: true,
+      requestRunId: undefined,
+      requestAgentId: "forged",
+      requestSessionKey: "agent:forged:main",
+      trusted: true,
+      expectedBound: true,
+    },
+    {
+      name: "mismatch",
+      approvalKind: "exec" as const,
+      enabled: true,
+      requestAgentId: undefined,
+      requestRunId: "run-other",
+      requestSessionKey: undefined,
+      trusted: true,
+      expectedBound: false,
+    },
+    {
+      name: "disabled",
+      approvalKind: "exec" as const,
+      enabled: false,
+      requestAgentId: undefined,
+      requestRunId: "run-1",
+      requestSessionKey: undefined,
+      trusted: true,
+      expectedBound: false,
+    },
+    {
+      name: "ordinary-rpc",
+      approvalKind: "exec" as const,
+      enabled: true,
+      requestAgentId: undefined,
+      requestRunId: "run-1",
+      requestSessionKey: undefined,
+      trusted: false,
+      expectedBound: false,
+    },
+  ])(
+    "persists $name execution identity only from enabled trusted matching runtime state",
+    ({
+      approvalKind,
+      enabled,
+      requestAgentId,
+      requestRunId,
+      requestSessionKey,
+      trusted,
+      expectedBound,
+      name,
+    }) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-approval-binding-${name}-`));
+      const databaseOptions = { path: path.join(tempDir, "state.sqlite") };
+      const request = {
+        ...(approvalKind === "exec"
+          ? { command: "echo safe" }
+          : { title: "Plugin action", description: "Approve a plugin action" }),
+        ...(requestRunId ? { runId: requestRunId } : {}),
+        ...(requestAgentId ? { agentId: requestAgentId } : {}),
+        ...(requestSessionKey ? { sessionKey: requestSessionKey } : {}),
+      };
+      const manager = new ExecApprovalManager<typeof request>({
+        approvalKind,
+        persistence: { runtimeEpoch: "binding-test", databaseOptions },
+      });
+      const record = manager.create(request, 60_000, `binding-${name}`);
+      const executionIdentity = {
+        tokenVersion: 1 as const,
+        contextId: "context-1",
+        executionId: "execution-1",
+        runId: "run-1",
+        createdAt: 1,
+      };
+      if (!expectedBound) {
+        record.sourceRuntimeIdentity = {
+          agentId: "stale",
+          sessionKey: "agent:stale:main",
+          executionIdentity,
+        };
+      }
+      try {
+        const decision = registerPendingApprovalRecord({
+          manager,
+          record,
+          timeoutMs: 60_000,
+          respond: vi.fn(),
+          context: {
+            getRuntimeConfig: () => ({
+              logging: { audit: { enabled, executionIdentity: enabled } },
+            }),
+          } as GatewayRequestContext,
+          client: trusted
+            ? createApprovalClient({
+                connId: "conn-agent",
+                clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+                executionIdentity,
+              })
+            : createApprovalClient({
+                connId: "conn-ordinary",
+                clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+              }),
+        });
+        expect(decision).toBeDefined();
+        const persisted = getOperatorApprovalDetailed({
+          id: record.id,
+          nowMs: record.createdAtMs,
+          databaseOptions,
+        });
+        expect(persisted).toMatchObject({
+          outcome: "found",
+          record: {
+            source: expectedBound
+              ? {
+                  agentId: "main",
+                  sessionKey: "agent:main:main",
+                  runId: "run-1",
+                  contextId: "context-1",
+                  executionId: "execution-1",
+                }
+              : {
+                  agentId: requestAgentId ?? null,
+                  sessionKey: requestSessionKey ?? null,
+                  runId: requestRunId ?? null,
+                  contextId: null,
+                  executionId: null,
+                },
+          },
+        });
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("sanitizes a no-route storage failure while failing the waiter closed", async () => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);

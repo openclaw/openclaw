@@ -1,4 +1,5 @@
 // Persistent operator approval lifecycle and first-answer-wins transitions.
+import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   type ApprovalPresentation,
@@ -14,6 +15,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
   OperatorApprovals,
@@ -54,6 +56,8 @@ export type OperatorApprovalSource = {
   sessionKey: string | null;
   sessionId: string | null;
   runId: string | null;
+  contextId: string | null;
+  executionId: string | null;
   toolCallId: string | null;
   toolName: string | null;
 };
@@ -141,8 +145,27 @@ type TerminalizeOperatorApprovalsResult = {
   records: OperatorApprovalRecord[];
 };
 
-type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
+type OperatorApprovalDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "operator_approval_execution_identities" | "operator_approvals"
+>;
 type OperatorApprovalRow = Selectable<OperatorApprovals>;
+type OperatorApprovalExecutionIdentity = { contextId: string; executionId: string };
+type StoredOperatorApprovalExecutionIdentity = OperatorApprovalExecutionIdentity | null | undefined;
+
+const ensuredExecutionIdentityDatabases = new WeakSet<DatabaseSync>();
+const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
+  approval_id TEXT NOT NULL PRIMARY KEY,
+  source_context_id TEXT NOT NULL CHECK (
+    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
+  ),
+  source_execution_id TEXT NOT NULL CHECK (
+    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
+  ),
+  FOREIGN KEY (approval_id) REFERENCES operator_approvals(approval_id) ON DELETE CASCADE
+) STRICT;
+`;
 
 type OperatorApprovalHistoryCursor = {
   resolvedAtMs: number;
@@ -217,6 +240,84 @@ function parseStringArray(raw: string): string[] | null {
 function normalizeString(value: string | null | undefined): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
+}
+
+function ensureOperatorApprovalExecutionIdentitySchema(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const database = openOpenClawStateDatabase(options);
+  if (ensuredExecutionIdentityDatabases.has(database.db)) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      // sqlite-allow-raw -- feature-local additive schema DDL; rows use Kysely below.
+      db.exec(OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL);
+    },
+    options,
+    { operationLabel: "operator-approval.execution-identity.schema.ensure" },
+  );
+  ensuredExecutionIdentityDatabases.add(database.db);
+}
+
+function parseStoredOperatorApprovalExecutionIdentity(row: {
+  source_context_id: string;
+  source_execution_id: string;
+}): OperatorApprovalExecutionIdentity | null {
+  const contextId = normalizeString(row.source_context_id);
+  const executionId = normalizeString(row.source_execution_id);
+  if (
+    contextId === null ||
+    executionId === null ||
+    contextId.length > 256 ||
+    executionId.length > 256 ||
+    row.source_context_id !== contextId ||
+    row.source_execution_id !== executionId
+  ) {
+    return null;
+  }
+  return { contextId, executionId };
+}
+
+function readOperatorApprovalExecutionIdentity(
+  database: ReturnType<typeof openOpenClawStateDatabase>,
+  approvalId: string,
+): StoredOperatorApprovalExecutionIdentity {
+  if (!tableExists(database.db, "operator_approval_execution_identities")) {
+    return undefined;
+  }
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    stateDb
+      .selectFrom("operator_approval_execution_identities")
+      .select(["source_context_id", "source_execution_id"])
+      .where("approval_id", "=", approvalId),
+  );
+  return row ? parseStoredOperatorApprovalExecutionIdentity(row) : undefined;
+}
+
+function readOperatorApprovalExecutionIdentities(
+  database: ReturnType<typeof openOpenClawStateDatabase>,
+  approvalIds: readonly string[],
+): ReadonlyMap<string, StoredOperatorApprovalExecutionIdentity> {
+  if (
+    approvalIds.length === 0 ||
+    !tableExists(database.db, "operator_approval_execution_identities")
+  ) {
+    return new Map();
+  }
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .selectFrom("operator_approval_execution_identities")
+      .selectAll()
+      .where("approval_id", "in", approvalIds),
+  ).rows;
+  return new Map(
+    rows.map((row) => [row.approval_id, parseStoredOperatorApprovalExecutionIdentity(row)]),
+  );
 }
 
 function requireString(value: string, label: string): string {
@@ -356,7 +457,11 @@ function hasValidLifecycleTuple(params: {
   );
 }
 
-function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRecord | null {
+function decodeOperatorApprovalRow(
+  database: ReturnType<typeof openOpenClawStateDatabase>,
+  row: OperatorApprovalRow,
+  executionIdentities?: ReadonlyMap<string, StoredOperatorApprovalExecutionIdentity>,
+): OperatorApprovalRecord | null {
   const presentation = parseApprovalPresentation(row.presentation_json);
   const reviewerDeviceIds = parseStringArray(row.reviewer_device_ids_json);
   const audienceSessionKeys = parseStringArray(row.audience_session_keys_json);
@@ -365,6 +470,9 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
   const decision = row.decision as OperatorApprovalDecision | null;
   const terminalReason = row.terminal_reason as OperatorApprovalTerminalReason | null;
   const resolverKind = row.resolver_kind as OperatorApprovalResolverKind | null;
+  const executionIdentity = executionIdentities
+    ? executionIdentities.get(row.approval_id)
+    : readOperatorApprovalExecutionIdentity(database, row.approval_id);
   if (
     !presentation ||
     !isWellFormedApprovalId(row.approval_id) ||
@@ -391,7 +499,8 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
     (row.requested_by_device_token_auth !== 0 && row.requested_by_device_token_auth !== 1) ||
     (decision !== null && !OPERATOR_APPROVAL_DECISIONS.has(decision)) ||
     (terminalReason !== null && !OPERATOR_APPROVAL_TERMINAL_REASONS.has(terminalReason)) ||
-    (resolverKind !== null && !OPERATOR_APPROVAL_RESOLVER_KINDS.has(resolverKind))
+    (resolverKind !== null && !OPERATOR_APPROVAL_RESOLVER_KINDS.has(resolverKind)) ||
+    executionIdentity === null
   ) {
     return null;
   }
@@ -423,6 +532,8 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
       sessionKey: row.source_session_key,
       sessionId: row.source_session_id,
       runId: row.source_run_id,
+      contextId: executionIdentity?.contextId ?? null,
+      executionId: executionIdentity?.executionId ?? null,
       toolCallId: row.source_tool_call_id,
       toolName: row.source_tool_name,
     },
@@ -557,8 +668,11 @@ function expirePendingRow(params: {
   return selectOperatorApprovalRow(params.database, params.id);
 }
 
-function requireDecodedRecord(row: OperatorApprovalRow): OperatorApprovalRecord {
-  const record = decodeOperatorApprovalRow(row);
+function requireDecodedRecord(
+  database: ReturnType<typeof openOpenClawStateDatabase>,
+  row: OperatorApprovalRow,
+): OperatorApprovalRecord {
+  const record = decodeOperatorApprovalRow(database, row);
   if (!record) {
     throw new Error(`operator approval '${row.approval_id}' became corrupt during a transaction`);
   }
@@ -566,6 +680,7 @@ function requireDecodedRecord(row: OperatorApprovalRow): OperatorApprovalRecord 
 }
 
 function inputMatchesExistingRow(
+  database: ReturnType<typeof openOpenClawStateDatabase>,
   input: NewOperatorApproval,
   row: OperatorApprovalRow,
   serialized: {
@@ -575,6 +690,7 @@ function inputMatchesExistingRow(
   },
 ): boolean {
   const source = input.source ?? {};
+  const executionIdentity = readOperatorApprovalExecutionIdentity(database, row.approval_id);
   return (
     row.status === "pending" &&
     row.kind === input.kind &&
@@ -587,6 +703,9 @@ function inputMatchesExistingRow(
     row.source_session_key === normalizeString(source.sessionKey) &&
     row.source_session_id === normalizeString(source.sessionId) &&
     row.source_run_id === normalizeString(source.runId) &&
+    executionIdentity !== null &&
+    (executionIdentity?.contextId ?? null) === normalizeString(source.contextId) &&
+    (executionIdentity?.executionId ?? null) === normalizeString(source.executionId) &&
     row.source_tool_call_id === normalizeString(source.toolCallId) &&
     row.source_tool_name === normalizeString(source.toolName) &&
     row.audience_session_keys_json === serialized.audienceSessionKeysJson &&
@@ -625,6 +744,20 @@ export function insertOperatorApproval(params: {
     );
   }
   const audienceSessionKeysJson = JSON.stringify(audienceSessionKeys);
+  const source = input.source ?? {};
+  const sourceContextId = normalizeString(source.contextId);
+  const sourceExecutionId = normalizeString(source.executionId);
+  if ((sourceContextId === null) !== (sourceExecutionId === null)) {
+    throw new Error(
+      "operator approval execution identity must bind context and execution together",
+    );
+  }
+  if ((sourceContextId?.length ?? 0) > 256 || (sourceExecutionId?.length ?? 0) > 256) {
+    throw new Error("operator approval execution identity exceeds its bounded contract");
+  }
+  if (sourceContextId !== null) {
+    ensureOperatorApprovalExecutionIdentitySchema(params.databaseOptions);
+  }
   const serialized = {
     presentationJson,
     reviewerDeviceIdsJson,
@@ -644,7 +777,6 @@ export function insertOperatorApproval(params: {
     if (hasApprovalLocatorNamespaceConflict({ database, id, resolutionRef })) {
       return { outcome: "conflict" };
     }
-    const source = input.source ?? {};
     const result = executeSqliteQuerySync(
       database.db,
       stateDb
@@ -680,11 +812,21 @@ export function insertOperatorApproval(params: {
         })
         .onConflict((conflict) => conflict.column("approval_id").doNothing()),
     );
+    if (result.numAffectedRows === 1n && sourceContextId !== null && sourceExecutionId !== null) {
+      executeSqliteQuerySync(
+        database.db,
+        stateDb.insertInto("operator_approval_execution_identities").values({
+          approval_id: id,
+          source_context_id: sourceContextId,
+          source_execution_id: sourceExecutionId,
+        }),
+      );
+    }
     const row = selectOperatorApprovalRow(database, id);
     if (!row) {
       throw new Error(`operator approval '${id}' was not readable after insert`);
     }
-    const record = decodeOperatorApprovalRow(row);
+    const record = decodeOperatorApprovalRow(database, row);
     if (!record) {
       denyCorruptPendingRow({
         database,
@@ -697,7 +839,7 @@ export function insertOperatorApproval(params: {
     if (result.numAffectedRows === 1n) {
       return { outcome: "inserted", record };
     }
-    return inputMatchesExistingRow(input, row, serialized)
+    return inputMatchesExistingRow(database, input, row, serialized)
       ? { outcome: "existing", record }
       : { outcome: "conflict" };
   }, params.databaseOptions);
@@ -725,7 +867,7 @@ export function getOperatorApprovalDetailed(params: {
         return { outcome: "not-found" };
       }
     }
-    const record = decodeOperatorApprovalRow(row);
+    const record = decodeOperatorApprovalRow(database, row);
     if (record) {
       return { outcome: "found", record };
     }
@@ -791,8 +933,12 @@ export function listPendingOperatorApprovals(
         );
       }
       const rows = executeSqliteQuerySync(database.db, query).rows;
+      const executionIdentities = readOperatorApprovalExecutionIdentities(
+        database,
+        rows.map((row) => row.approval_id),
+      );
       for (const row of rows) {
-        const record = decodeOperatorApprovalRow(row);
+        const record = decodeOperatorApprovalRow(database, row, executionIdentities);
         if (!record) {
           denyCorruptPendingRow({
             database,
@@ -874,8 +1020,12 @@ export function listTerminalOperatorApprovals(
       );
     }
     const rows = executeSqliteQuerySync(database.db, query).rows;
+    const executionIdentities = readOperatorApprovalExecutionIdentities(
+      database,
+      rows.map((row) => row.approval_id),
+    );
     for (const row of rows) {
-      const record = decodeOperatorApprovalRow(row);
+      const record = decodeOperatorApprovalRow(database, row, executionIdentities);
       if (record) {
         records.push(record);
       }
@@ -926,7 +1076,7 @@ export function resolveOperatorApproval(params: {
     if (!matchesExpectedApprovalOwner({ row, expectedKind: params.expectedKind, runtimeEpoch })) {
       return { outcome: "not-found" };
     }
-    let record = decodeOperatorApprovalRow(row);
+    let record = decodeOperatorApprovalRow(database, row);
     if (!record) {
       denyCorruptPendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
       return { outcome: "corrupt" };
@@ -943,7 +1093,7 @@ export function resolveOperatorApproval(params: {
       if (!row) {
         return { outcome: "not-found" };
       }
-      record = requireDecodedRecord(row);
+      record = requireDecodedRecord(database, row);
       return { outcome: "expired", record };
     }
     if (!Array.prototype.includes.call(record.presentation.allowedDecisions, params.decision)) {
@@ -977,7 +1127,7 @@ export function resolveOperatorApproval(params: {
     if (!row) {
       return { outcome: "not-found" };
     }
-    record = requireDecodedRecord(row);
+    record = requireDecodedRecord(database, row);
     if (result.numAffectedRows === 1n) {
       return { outcome: "resolved", record };
     }
@@ -991,7 +1141,7 @@ export function resolveOperatorApproval(params: {
       if (!expiredRow) {
         return { outcome: "not-found" };
       }
-      return { outcome: "expired", record: requireDecodedRecord(expiredRow) };
+      return { outcome: "expired", record: requireDecodedRecord(database, expiredRow) };
     }
     return {
       outcome: "already-resolved",
@@ -1036,10 +1186,10 @@ export function forceDenyOperatorApproval(params: {
       if (!expiredRow) {
         return { outcome: "not-found" };
       }
-      const expiredRecord = decodeOperatorApprovalRow(expiredRow);
+      const expiredRecord = decodeOperatorApprovalRow(database, expiredRow);
       return expiredRecord ? { outcome: "expired", record: expiredRecord } : { outcome: "corrupt" };
     }
-    const record = decodeOperatorApprovalRow(row);
+    const record = decodeOperatorApprovalRow(database, row);
     if (!record) {
       denyCorruptPendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
       return { outcome: "corrupt" };
@@ -1076,7 +1226,7 @@ export function forceDenyOperatorApproval(params: {
     if (!terminalRow) {
       return { outcome: "not-found" };
     }
-    return { outcome: "denied", record: requireDecodedRecord(terminalRow) };
+    return { outcome: "denied", record: requireDecodedRecord(database, terminalRow) };
   }, params.databaseOptions);
 }
 
@@ -1129,10 +1279,14 @@ export function expireDueOperatorApprovals(params: {
         updated_at_ms: nowMs,
       });
     }
+    const executionIdentities = readOperatorApprovalExecutionIdentities(
+      database,
+      terminalRows.map((row) => row.approval_id),
+    );
     return {
       affected: Number(result.numAffectedRows ?? 0n),
       records: terminalRows
-        .map((row) => decodeOperatorApprovalRow(row))
+        .map((row) => decodeOperatorApprovalRow(database, row, executionIdentities))
         .filter((record): record is OperatorApprovalRecord => record !== null),
     };
   }, params.databaseOptions);
@@ -1195,10 +1349,14 @@ export function closeOrphanedOperatorApprovals(params: {
         });
       }
     }
+    const executionIdentities = readOperatorApprovalExecutionIdentities(
+      database,
+      terminalRows.map((row) => row.approval_id),
+    );
     return {
       affected,
       records: terminalRows
-        .map((row) => decodeOperatorApprovalRow(row))
+        .map((row) => decodeOperatorApprovalRow(database, row, executionIdentities))
         .filter((record): record is OperatorApprovalRecord => record !== null),
     };
   }, params.databaseOptions);
@@ -1239,7 +1397,7 @@ export function consumeOperatorApprovalAllowOnce(params: {
         return { outcome: "not-found" };
       }
     }
-    let record = decodeOperatorApprovalRow(row);
+    let record = decodeOperatorApprovalRow(database, row);
     if (!record) {
       denyCorruptPendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
       return { outcome: "corrupt" };
@@ -1288,7 +1446,7 @@ export function consumeOperatorApprovalAllowOnce(params: {
     if (!row) {
       return { outcome: "not-found" };
     }
-    record = requireDecodedRecord(row);
+    record = requireDecodedRecord(database, row);
     if (result.numAffectedRows === 1n) {
       return { outcome: "consumed", record };
     }

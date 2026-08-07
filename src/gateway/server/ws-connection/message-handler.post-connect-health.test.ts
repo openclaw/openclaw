@@ -1186,6 +1186,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         agentRuntimeIdentityToken: await mintAgentRuntimeIdentityToken({
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
+          executionIdentity: {
+            tokenVersion: 1,
+            contextId: "context-1",
+            executionId: "execution-1",
+            runId: "run-1",
+            createdAt: 123,
+          },
         }),
       },
     });
@@ -1195,12 +1202,21 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     const connectedClient = harness.client as {
       internal?: {
-        agentRuntimeIdentity?: { agentId?: string; sessionKey?: string };
+        agentRuntimeIdentity?: {
+          agentId?: string;
+          sessionKey?: string;
+          executionIdentity?: { contextId?: string; executionId?: string; runId?: string };
+        };
       };
     } | null;
     expect(connectedClient?.internal?.agentRuntimeIdentity).toMatchObject({
       agentId: "ops",
       sessionKey: "agent:ops:telegram:direct:alice",
+      executionIdentity: {
+        contextId: "context-1",
+        executionId: "execution-1",
+        runId: "run-1",
+      },
     });
   });
 

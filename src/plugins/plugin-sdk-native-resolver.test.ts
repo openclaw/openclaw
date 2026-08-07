@@ -637,36 +637,39 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(() => requireFromPlugin.resolve("openclaw/plugin-sdk/source-only")).toThrow();
   });
 
-  it("keeps harness tool authority out of the forgeable native resolver", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-authority-"));
-    const { loaderModulePath } = writeFakeOpenClawPackage(root);
-    addFakePluginSdkDistExport(root, "agent-harness-tool-authority-runtime");
-    const installedCodexEntry = writeExternalPluginEntry(
-      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-installed-codex-")),
-    );
+  it.each(["agent-harness-approval-authority-runtime", "agent-harness-tool-authority-runtime"])(
+    "keeps %s out of the forgeable native resolver",
+    (authoritySubpath) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-authority-"));
+      const { loaderModulePath } = writeFakeOpenClawPackage(root);
+      addFakePluginSdkDistExport(root, authoritySubpath);
+      const installedCodexEntry = writeExternalPluginEntry(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-installed-codex-")),
+      );
 
-    const installedAliases = installOpenClawPluginSdkNativeResolver({
-      modulePath: loaderModulePath,
-      pluginModulePath: installedCodexEntry,
-      pluginSdkResolution: "dist",
-      trustedInstalledPrivateSdkOwner: "codex",
-    });
+      const installedAliases = installOpenClawPluginSdkNativeResolver({
+        modulePath: loaderModulePath,
+        pluginModulePath: installedCodexEntry,
+        pluginSdkResolution: "dist",
+        trustedInstalledPrivateSdkOwner: "codex",
+      });
 
-    const authoritySpecifier = "openclaw/plugin-sdk/agent-harness-tool-authority-runtime";
-    expect(installedAliases).not.toContain(authoritySpecifier);
-    const resolveFilename = Reflect.get(Module, "_resolveFilename") as (
-      request: string,
-      parent: NodeJS.Module,
-      isMain: boolean,
-    ) => string;
-    expect(() =>
-      resolveFilename(
-        authoritySpecifier,
-        { filename: installedCodexEntry } as NodeJS.Module,
-        false,
-      ),
-    ).toThrow();
-  });
+      const authoritySpecifier = `openclaw/plugin-sdk/${authoritySubpath}`;
+      expect(installedAliases).not.toContain(authoritySpecifier);
+      const resolveFilename = Reflect.get(Module, "_resolveFilename") as (
+        request: string,
+        parent: NodeJS.Module,
+        isMain: boolean,
+      ) => string;
+      expect(() =>
+        resolveFilename(
+          authoritySpecifier,
+          { filename: installedCodexEntry } as NodeJS.Module,
+          false,
+        ),
+      ).toThrow();
+    },
+  );
 
   it("scopes private SSRF SDK aliases to bundled local IPC native parents", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-ssrf-"));

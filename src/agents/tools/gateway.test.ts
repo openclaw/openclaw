@@ -674,6 +674,38 @@ describe("gateway tool defaults", () => {
     });
   });
 
+  it("retries approval creation unbound when an older gateway rejects optional identity", async () => {
+    mocks.callGateway
+      .mockRejectedValueOnce(
+        new Error(
+          "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+        ),
+      )
+      .mockResolvedValueOnce({ id: "approval-id" });
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        executionIdentity: {
+          tokenVersion: 1,
+          contextId: "context-1",
+          executionId: "execution-1",
+          runId: "run-1",
+          createdAt: 123,
+        },
+      },
+      async () =>
+        await callGatewayTool("exec.approval.request", {}, { command: "echo ok", runId: "run-1" }),
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway.mock.calls[0]?.[0].agentRuntimeIdentityToken).toEqual(
+      expect.any(String),
+    );
+    expect(mocks.callGateway.mock.calls[1]?.[0].agentRuntimeIdentityToken).toBeUndefined();
+  });
+
   it("strips turn-source fields for gateways with the preceding node schema", async () => {
     const schemaError = Object.assign(
       new Error("invalid node.invoke params: at root: unexpected property 'turnSourceChannel'"),

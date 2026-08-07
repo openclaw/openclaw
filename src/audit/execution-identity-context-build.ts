@@ -71,24 +71,26 @@ export function buildExecutionIdentityContext(
     domainRef,
     ensureRawRef(envelope.runtimeInstanceId, "runtime instance id"),
   );
-  const invoker = envelope.invoker
-    ? {
-        state: "present" as const,
-        principal: {
-          kind: envelope.invoker.kind,
-          domainRef,
-          principalRef: hmacRef(
-            db,
-            "principal",
-            `${domainRef}:${envelope.invoker.kind}`,
-            envelope.invoker.rawPrincipalRef,
-          ),
-          ...(envelope.invoker.displayLabel !== undefined
-            ? { displayLabel: envelope.invoker.displayLabel }
-            : {}),
-        },
-      }
-    : { state: "absent" as const };
+  const invoker = !envelope.invoker
+    ? { state: "absent" as const }
+    : "state" in envelope.invoker
+      ? { state: "unknown" as const }
+      : {
+          state: "present" as const,
+          principal: {
+            kind: envelope.invoker.kind,
+            domainRef,
+            principalRef: hmacRef(
+              db,
+              "principal",
+              `${domainRef}:${envelope.invoker.kind}`,
+              envelope.invoker.rawPrincipalRef,
+            ),
+            ...(envelope.invoker.displayLabel !== undefined
+              ? { displayLabel: envelope.invoker.displayLabel }
+              : {}),
+          },
+        };
   const assurance = uniqueSorted(
     envelope.assurance.map((item) => ({
       kind: item.kind,
@@ -104,7 +106,8 @@ export function buildExecutionIdentityContext(
     })),
     (grant) => `${grant.grantRef}\0${grant.state}`,
   );
-  const missingEvidence = envelope.invoker ? [] : ["invoker.principal"];
+  const hasInvokerPrincipal = envelope.invoker && !("state" in envelope.invoker);
+  const missingEvidence = hasInvokerPrincipal ? [] : ["invoker.principal"];
   const context: ExecutionIdentityContextV1 = {
     schemaVersion: 1,
     contextId,
@@ -133,7 +136,11 @@ export function buildExecutionIdentityContext(
     runtimeInstance: { runtimeRef, kind: envelope.runtime.kind, state: "present" },
     applicableGrants,
     assurance,
-    coverageState: envelope.invoker ? "attribution-only" : "unattributed",
+    coverageState: hasInvokerPrincipal
+      ? "attribution-only"
+      : envelope.invoker
+        ? "unknown"
+        : "unattributed",
     missingEvidence,
   };
   if (!validateExecutionIdentityContextV1(context)) {

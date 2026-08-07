@@ -94,7 +94,13 @@ function createNeverBundleDependencyMatcher(packageJson) {
 const HOST_PLUGIN_SDK_IMPORT_RE =
   /(?:\bfrom\s+|\bimport\s*(?:\(\s*)?|\b(?:require|_+require\d*)\(\s*)["'](openclaw\/plugin-sdk\/[^"']+)["']/gu;
 const OWNER_RESTRICTED_HOST_IMPORTS_BY_PACKAGE_NAME = new Map([
-  ["@openclaw/codex", new Set(["openclaw/plugin-sdk/agent-harness-tool-authority-runtime"])],
+  [
+    "@openclaw/codex",
+    new Set([
+      "openclaw/plugin-sdk/agent-harness-approval-authority-runtime",
+      "openclaw/plugin-sdk/agent-harness-tool-authority-runtime",
+    ]),
+  ],
   ["@openclaw/copilot", new Set(["openclaw/plugin-sdk/agent-harness-tool-authority-runtime"])],
 ]);
 

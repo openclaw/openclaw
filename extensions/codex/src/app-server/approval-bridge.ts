@@ -1,3 +1,7 @@
+import type {
+  AgentHarnessApprovalAuthority,
+  AgentHarnessBeforeToolCallApprovalRequest,
+} from "openclaw/plugin-sdk/agent-harness-approval-authority-runtime";
 /**
  * Bridges Codex app-server approval requests into OpenClaw policy hooks and
  * plugin approval UX.
@@ -60,6 +64,7 @@ type SanitizedApprovalPreview = {
  * the app-server response payload when the request belongs to this run.
  */
 export async function handleCodexAppServerApprovalRequest(params: {
+  approvalAuthority?: AgentHarnessApprovalAuthority;
   method: string;
   requestParams: JsonValue | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
@@ -104,6 +109,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
 
   try {
     const policyOutcome = await runOpenClawToolPolicyForApprovalRequest({
+      approvalAuthority: params.approvalAuthority,
       method: params.method,
       requestParams,
       paramsForRun: params.paramsForRun,
@@ -142,6 +148,7 @@ export async function handleCodexAppServerApprovalRequest(params: {
     // Codex app-server approval requests do not expose an enforceable resolved
     // executable, so unresolved requests must stay on the human approval route.
     const requestResult = await requestPluginApproval({
+      approvalAuthority: params.approvalAuthority,
       paramsForRun: params.paramsForRun,
       title: context.title,
       description: context.description,
@@ -179,7 +186,11 @@ export async function handleCodexAppServerApprovalRequest(params: {
     const requestUnavailable = approvalRequestExplicitlyUnavailable(requestResult);
     const decision = requestUnavailable
       ? null
-      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
+      : await waitForPluginApprovalDecision({
+          approvalAuthority: params.approvalAuthority,
+          approvalId,
+          signal: params.signal,
+        });
     const approvalExpired = !requestUnavailable && decision === null;
     const outcome = params.signal?.aborted ? "cancelled" : mapExecDecisionToOutcome(decision);
     if (outcome === "cancelled") {
@@ -392,6 +403,7 @@ type ApprovalPolicyOutcome =
   | { outcome: "allowed" };
 
 async function runOpenClawToolPolicyForApprovalRequest(params: {
+  approvalAuthority?: AgentHarnessApprovalAuthority;
   method: string;
   requestParams: JsonObject | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
@@ -444,7 +456,7 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
     messageTo: params.paramsForRun.messageTo,
   }).channelId;
   const requester = buildCodexHookRequester(params.paramsForRun);
-  const outcome = await runBeforeToolCallHook({
+  const approvalRequest: AgentHarnessBeforeToolCallApprovalRequest = {
     toolName: policyRequest.toolName,
     params: policyRequest.params,
     ...(params.context.approvalId ? { toolCallId: params.context.approvalId } : {}),
@@ -470,7 +482,10 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
       turnSourceAccountId: params.paramsForRun.agentAccountId,
       turnSourceThreadId: params.paramsForRun.currentThreadTs,
     },
-  });
+  };
+  const outcome = params.approvalAuthority
+    ? await params.approvalAuthority.runBeforeToolCallApproval(approvalRequest)
+    : await runBeforeToolCallHook(approvalRequest);
   if (outcome.blocked) {
     return {
       outcome: "denied",

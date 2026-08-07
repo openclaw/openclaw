@@ -817,25 +817,27 @@ describe("plugin-sdk package contract guardrails", () => {
     });
   });
 
-  it("keeps the agent harness tool authority runtime owner-restricted", () => {
-    const entrypoint = "agent-harness-tool-authority-runtime";
-    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
-    const packageExports = new Set(collectPluginSdkPackageExports());
-    const typedExports = collectTypedPluginSdkPackageExports();
-    const excludedDeclarations = collectPackExcludedPluginSdkDeclarations();
+  it.each(["agent-harness-approval-authority-runtime", "agent-harness-tool-authority-runtime"])(
+    "keeps %s owner-restricted",
+    (entrypoint) => {
+      const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
+      const packageExports = new Set(collectPluginSdkPackageExports());
+      const typedExports = collectTypedPluginSdkPackageExports();
+      const excludedDeclarations = collectPackExcludedPluginSdkDeclarations();
 
-    expect({
-      localOnly: localOnly.has(entrypoint),
-      packageExport: packageExports.has(entrypoint),
-      typedExport: typedExports.has(entrypoint),
-      declarationExcluded: excludedDeclarations.has(entrypoint),
-    }).toEqual({
-      localOnly: true,
-      packageExport: false,
-      typedExport: false,
-      declarationExcluded: true,
-    });
-  });
+      expect({
+        localOnly: localOnly.has(entrypoint),
+        packageExport: packageExports.has(entrypoint),
+        typedExport: typedExports.has(entrypoint),
+        declarationExcluded: excludedDeclarations.has(entrypoint),
+      }).toEqual({
+        localOnly: true,
+        packageExport: false,
+        typedExport: false,
+        declarationExcluded: true,
+      });
+    },
+  );
 
   it("keeps configured local-origin fetch helpers out of deprecated infra-runtime", () => {
     const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk/infra-runtime.ts"), "utf8");

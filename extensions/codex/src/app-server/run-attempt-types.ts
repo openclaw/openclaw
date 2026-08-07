@@ -6,6 +6,7 @@ import type { CodexAppServerBindingStore } from "./session-binding.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 
 export type CodexRunAttemptOptions = {
+  approvalAuthority?: import("openclaw/plugin-sdk/agent-harness-approval-authority-runtime").AgentHarnessApprovalAuthority;
   agentHarnessCodingToolsFactory?: (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarness"];
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;

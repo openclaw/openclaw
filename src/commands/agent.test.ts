@@ -8,7 +8,6 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 // Register shared mocks before imports bind their production exports.
 import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
-import { executionIdentity } from "../agents/agent-command-execution-identity.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
@@ -18,6 +17,7 @@ import * as modelSelectionModule from "../agents/model-selection.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { getExecutionIdentityAdmissionScope } from "../audit/execution-identity-admission.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -159,6 +159,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         verboseLevel: params.resolvedVerboseLevel,
         timeoutMs: params.timeoutMs,
         runId: params.runId,
+        attribution: opts.executionAttribution,
         lane: opts.lane,
         abortSignal: opts.abortSignal,
         extraSystemPrompt: opts.extraSystemPrompt,
@@ -454,8 +455,15 @@ describe("agentCommand", () => {
   it("replaces private execution attribution on runtime-shaped public ingress", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store);
-      const record = vi.spyOn(executionIdentity, "record").mockImplementation(() => undefined);
+      const cfg = mockConfig(home, store);
+      cfg.logging = { audit: { enabled: true, executionIdentity: true } };
+      let observedContextId: string | undefined;
+      let canonicalContextId: string | undefined;
+      vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(async (params) => {
+        observedContextId = getExecutionIdentityAdmissionScope()?.token.contextId;
+        canonicalContextId = params.opts.executionAttribution?.contextId;
+        return createDefaultAgentResult();
+      });
       const inheritedAttribution = {
         runId: "public-ingress-run",
         contextId: "inherited-context",
@@ -491,13 +499,11 @@ describe("agentCommand", () => {
           runtime,
         );
 
-        const recordedAttribution = record.mock.calls[0]?.[0].attribution;
-        expect(recordedAttribution).toMatchObject({ runId: "public-ingress-run" });
-        expect(recordedAttribution?.contextId).not.toBe("inherited-context");
-        expect(recordedAttribution?.contextId).not.toBe("forged-context");
-        expect(recordedAttribution).not.toHaveProperty("executionIdentityAdmission");
+        expect(observedContextId).toBeTruthy();
+        expect(canonicalContextId).toBe(observedContextId);
+        expect(observedContextId).not.toBe("forged-context");
+        expect(observedContextId).not.toBe("inherited-context");
       } finally {
-        record.mockRestore();
         if (priorDescriptor) {
           // oxlint-disable-next-line no-extend-native -- Restore the exact pre-test prototype descriptor.
           Object.defineProperty(Object.prototype, "executionAttribution", priorDescriptor);

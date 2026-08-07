@@ -1,3 +1,7 @@
+import {
+  createApprovalAuthorityForAgentHarnessAttempt,
+  createApprovalAuthorityForAgentHarnessSideQuestion,
+} from "openclaw/plugin-sdk/agent-harness-approval-authority-runtime";
 /**
  * Bundled Codex plugin entry: app-server harness, media understanding,
  * migration provider, CLI-session commands, and binding hooks.
@@ -168,6 +172,10 @@ export default definePluginEntry({
     }
     api.registerAgentHarness(
       createCodexAppServerAgentHarness({
+        approvalAuthority: {
+          createForAttempt: createApprovalAuthorityForAgentHarnessAttempt,
+          createForSideQuestion: createApprovalAuthorityForAgentHarnessSideQuestion,
+        },
         bindingStore,
         sessionCatalogControl,
         toolAuthority: {

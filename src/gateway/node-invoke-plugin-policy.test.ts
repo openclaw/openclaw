@@ -25,6 +25,13 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 const DEMO_PLUGIN_ID = "demo";
 const DEMO_COMMAND = "demo.read";
 const DEMO_PARAMS = { path: "/tmp/x" };
+const EXECUTION_IDENTITY = {
+  tokenVersion: 1 as const,
+  contextId: "context-node-policy",
+  executionId: "execution-node-policy",
+  runId: "run-node-policy",
+  createdAt: 123,
+};
 const tempDirs: string[] = [];
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
@@ -576,6 +583,86 @@ describe("applyPluginNodeInvokePolicy", () => {
 
     await expectApprovalResolution(resultPromise, manager, record);
   });
+
+  it.each([
+    {
+      label: "enabled",
+      executionIdentityEnabled: true,
+      expectedRuntimeIdentity: {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        executionIdentity: EXECUTION_IDENTITY,
+      },
+      expectedSource: {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        runId: "run-node-policy",
+        contextId: "context-node-policy",
+        executionId: "execution-node-policy",
+      },
+    },
+    {
+      label: "disabled",
+      executionIdentityEnabled: false,
+      expectedRuntimeIdentity: undefined,
+      expectedSource: {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        runId: null,
+        contextId: null,
+        executionId: null,
+      },
+    },
+  ])(
+    "keeps $label execution identity collection authoritative for durable plugin policy approvals",
+    async ({ executionIdentityEnabled, expectedRuntimeIdentity, expectedSource }) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-policy-binding-"));
+      tempDirs.push(stateDir);
+      const databaseOptions = { path: path.join(stateDir, "state.sqlite") };
+      const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+        approvalKind: "plugin",
+        persistence: { runtimeEpoch: "node-policy-binding-test", databaseOptions },
+        resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+      });
+      setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+      const { context } = createContext({
+        pluginApprovalManager: manager,
+        getRuntimeConfig: () => ({
+          gateway: { nodes: { commands: { allow: [DEMO_COMMAND] } } },
+          logging: {
+            audit: { enabled: true, executionIdentity: executionIdentityEnabled },
+          },
+        }),
+        getApprovalClientConnIds: createApprovalClientLookup([
+          createApprovalClient({
+            connId: "conn-owner-approval",
+            clientId: "client-owner",
+            deviceId: "device-owner",
+          }),
+        ]),
+      });
+      const client: GatewayClient = {
+        ...createOperatorClient(),
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "ops",
+            sessionKey: "agent:ops:main",
+            executionIdentity: EXECUTION_IDENTITY,
+          },
+        },
+      };
+      const resultPromise = invokeDemoPolicy(context, client);
+
+      const record = await expectSinglePendingApproval(manager);
+      expect(record.sourceRuntimeIdentity).toStrictEqual(expectedRuntimeIdentity);
+      const persisted = listPendingOperatorApprovals({ kind: "plugin", databaseOptions });
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]?.source).toMatchObject(expectedSource);
+
+      await expectApprovalResolution(resultPromise, manager, record);
+    },
+  );
 
   it("forwards plugin policy approvals to the originating turn source", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();

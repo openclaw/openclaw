@@ -2,6 +2,10 @@
 import { createHmac } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  parseExecutionIdentityAdmissionToken,
+  type ExecutionIdentityAdmissionToken,
+} from "../audit/execution-identity-admission.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
@@ -29,6 +33,7 @@ export type AgentRuntimeIdentity = {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  executionIdentity?: ExecutionIdentityAdmissionToken;
 };
 
 export type AgentRuntimeSessionSpawnContext = {
@@ -48,6 +53,7 @@ type AgentRuntimeIdentityTokenPayload = {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  executionIdentity?: ExecutionIdentityAdmissionToken;
 };
 
 function decodeStringList(value: unknown): string[] | undefined {
@@ -214,6 +220,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       messageActionContext?: unknown;
       cronSelfManagementContext?: unknown;
       sessionSpawnContext?: unknown;
+      executionIdentity?: unknown;
     };
     if (
       raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
@@ -265,6 +272,14 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     if (raw.sessionSpawnContext !== undefined && !sessionSpawnContext) {
       return undefined;
     }
+    let executionIdentity: ExecutionIdentityAdmissionToken | undefined;
+    if (raw.executionIdentity !== undefined) {
+      try {
+        executionIdentity = parseExecutionIdentityAdmissionToken(raw.executionIdentity);
+      } catch {
+        return undefined;
+      }
+    }
     return {
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
@@ -273,6 +288,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(messageActionContext ? { messageActionContext } : {}),
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+      ...(executionIdentity ? { executionIdentity } : {}),
     };
   } catch {
     return undefined;
@@ -287,6 +303,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  executionIdentity?: ExecutionIdentityAdmissionToken;
 }): Promise<string> {
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
@@ -321,6 +338,9 @@ export async function mintAgentRuntimeIdentityToken(params: {
     ...(messageActionContext ? { messageActionContext } : {}),
     ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
     ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
+    ...(params.executionIdentity
+      ? { executionIdentity: parseExecutionIdentityAdmissionToken(params.executionIdentity) }
+      : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
   return `${payload}.${signature}`;
@@ -357,5 +377,6 @@ export async function verifyAgentRuntimeIdentityToken(
       ? { cronSelfManagementContext: payload.cronSelfManagementContext }
       : {}),
     ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
+    ...(payload.executionIdentity ? { executionIdentity: payload.executionIdentity } : {}),
   };
 }

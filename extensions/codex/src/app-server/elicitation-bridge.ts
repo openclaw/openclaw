@@ -1,3 +1,4 @@
+import type { AgentHarnessApprovalAuthority } from "openclaw/plugin-sdk/agent-harness-approval-authority-runtime";
 // Codex plugin module implements elicitation bridge behavior.
 import {
   embeddedAgentLog,
@@ -71,6 +72,7 @@ const MAX_DISPLAY_VALUE_DEPTH = 3;
 const DISPLAY_TEXT_SCAN_MAX_LENGTH = 4096;
 
 export async function handleCodexAppServerElicitationRequest(params: {
+  approvalAuthority?: AgentHarnessApprovalAuthority;
   requestParams: JsonValue | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
@@ -101,6 +103,7 @@ export async function handleCodexAppServerElicitationRequest(params: {
       return declineElicitationResponse();
     }
     return await buildPluginPolicyElicitationResponse({
+      approvalAuthority: params.approvalAuthority,
       entry: pluginResolution.entry,
       requestParams,
       paramsForRun: params.paramsForRun,
@@ -116,6 +119,7 @@ export async function handleCodexAppServerElicitationRequest(params: {
   }
 
   const outcome = await requestPluginApprovalOutcome({
+    approvalAuthority: params.approvalAuthority,
     paramsForRun: params.paramsForRun,
     title: approvalPrompt.title,
     description: approvalPrompt.description,
@@ -275,6 +279,7 @@ function normalizePluginIdentityText(value: string): string {
 }
 
 async function buildPluginPolicyElicitationResponse(params: {
+  approvalAuthority?: AgentHarnessApprovalAuthority;
   entry: CodexAppPolicyContextEntry;
   requestParams: JsonObject;
   paramsForRun: EmbeddedRunAttemptParams;
@@ -296,6 +301,7 @@ async function buildPluginPolicyElicitationResponse(params: {
       return response;
     }
     const outcome = await requestPluginApprovalOutcome({
+      approvalAuthority: params.approvalAuthority,
       paramsForRun: params.paramsForRun,
       title: approvalPrompt.title,
       description: approvalPrompt.description,
@@ -640,6 +646,7 @@ function sanitizeDisplayText(value: string): string {
 }
 
 async function requestPluginApprovalOutcome(params: {
+  approvalAuthority?: AgentHarnessApprovalAuthority;
   paramsForRun: EmbeddedRunAttemptParams;
   title: string;
   description: string;
@@ -648,6 +655,7 @@ async function requestPluginApprovalOutcome(params: {
 }): Promise<AppServerApprovalOutcome> {
   try {
     const requestResult = await requestPluginApproval({
+      approvalAuthority: params.approvalAuthority,
       paramsForRun: params.paramsForRun,
       title: params.title,
       description: params.description,
@@ -663,7 +671,11 @@ async function requestPluginApprovalOutcome(params: {
 
     const decision = approvalRequestExplicitlyUnavailable(requestResult)
       ? null
-      : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
+      : await waitForPluginApprovalDecision({
+          approvalAuthority: params.approvalAuthority,
+          approvalId,
+          signal: params.signal,
+        });
     return mapExecDecisionToOutcome(decision);
   } catch {
     return params.signal?.aborted ? "cancelled" : "denied";

@@ -7,6 +7,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { executionIdentity } from "./agent-command-execution-identity.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   prepareAgentCommandExecution,
@@ -55,7 +56,11 @@ export async function runLocalAgentCommand<TResult>(params: {
             await withAgentPluginRegistry({
               config: prepared.cfg,
               workspaceDir: prepared.workspaceDir,
-              run: () => params.run(prepared, resolvedDeps),
+              run: () =>
+                executionIdentity.runPrepared({
+                  prepared,
+                  run: (scopedPrepared) => params.run(scopedPrepared, resolvedDeps),
+                }),
             }),
         }),
     ),

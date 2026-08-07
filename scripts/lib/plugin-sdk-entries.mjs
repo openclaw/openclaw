@@ -85,6 +85,7 @@ export const packagedPrivatePluginSdkRuntimeEntrypoints =
   );
 
 const ownerRestrictedPrivatePluginSdkRuntimeEntrypointSet = new Set([
+  "agent-harness-approval-authority-runtime",
   "agent-harness-tool-authority-runtime",
 ]);
 

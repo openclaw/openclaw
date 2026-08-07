@@ -8,6 +8,7 @@ import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { getToolHookMatcherScope } from "../../plugins/hooks.js";
 import { mergePluginToolMatcherScopes } from "../../plugins/tool-hook-matcher.js";
 import { getTrustedToolPolicyMatcherScope } from "../../plugins/trusted-tool-policy.js";
+import type { AgentHarnessBeforeToolCallApprovalRequest } from "../agent-harness-approval-authority.types.js";
 import {
   cancelDeferredPluginToolApproval,
   hasBeforeToolCallPolicy,
@@ -17,6 +18,7 @@ import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js
 import { payloadTextResult } from "../tools/common.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
+import { resolveNativeHookRelayApprovalAuthority } from "./native-hook-relay-approval-authority.js";
 import {
   nativeHookRelayParamsWereRewritten,
   normalizeNativeHookToolName,
@@ -124,7 +126,7 @@ async function runNativeHookRelayPreToolUse(params: {
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
-  const outcome = await runBeforeToolCallHook({
+  const approvalRequest: AgentHarnessBeforeToolCallApprovalRequest = {
     toolName,
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
@@ -143,7 +145,11 @@ async function runNativeHookRelayPreToolUse(params: {
         ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
         : {}),
     },
-  });
+  };
+  const approvalAuthority = resolveNativeHookRelayApprovalAuthority(params.registration);
+  const outcome = approvalAuthority
+    ? await approvalAuthority.runBeforeToolCallApproval(approvalRequest)
+    : await runBeforeToolCallHook(approvalRequest);
   if (outcome.blocked) {
     return params.adapter.renderPreToolUseBlockResponse(
       outcome.reason,
@@ -155,6 +161,7 @@ async function runNativeHookRelayPreToolUse(params: {
   if (outcome.deferredApproval) {
     if (
       !setNativeHookRelayPreToolUseApproval({
+        registration: params.registration,
         relayId: params.registration.relayId,
         toolUseId: params.invocation.toolUseId,
         deferredApproval: outcome.deferredApproval,

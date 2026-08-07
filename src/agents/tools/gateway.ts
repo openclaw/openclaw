@@ -24,12 +24,14 @@ import {
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
 import { getOperatorApprovalRuntimeToken } from "../../gateway/operator-approval-runtime-token.js";
+import { resolveGlobalDedupeCache } from "../../infra/dedupe.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
 } from "../../infra/device-identity.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readPositiveIntegerParam, readStringParam } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
@@ -42,6 +44,8 @@ export type GatewayCallOptions = {
 };
 
 type GatewayOverrideTarget = "local" | "remote";
+
+const log = createSubsystemLogger("agents/tools/gateway");
 
 /** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
@@ -225,7 +229,31 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.runs",
 ]);
 
-const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>(["node.invoke"]);
+const APPROVAL_IDENTITY_BINDING_METHODS = new Set<string>([
+  "exec.approval.request",
+  "plugin.approval.request",
+]);
+
+const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "node.invoke",
+  ...APPROVAL_IDENTITY_BINDING_METHODS,
+]);
+
+const LEGACY_APPROVAL_IDENTITY_WARNING_DEDUPE = resolveGlobalDedupeCache(
+  Symbol.for("openclaw.agents.gateway.legacyApprovalIdentityWarning"),
+  { ttlMs: 0, maxSize: 1 },
+);
+
+function warnLegacyApprovalIdentityFallbackOnce(): void {
+  // One running Gateway version governs both approval methods, so report the
+  // successful downgrade once per process instead of once per request or run.
+  if (LEGACY_APPROVAL_IDENTITY_WARNING_DEDUPE.check("warned")) {
+    return;
+  }
+  log.warn(
+    "Approval request succeeded without execution attribution because the running Gateway is from an older OpenClaw build. Restart it with `openclaw gateway restart` so future approvals can record attribution.",
+  );
+}
 
 function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
@@ -355,6 +383,9 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     if (params.required) {
       throw new Error("trusted agent runtime identity required for this gateway call");
     }
+    return undefined;
+  }
+  if (APPROVAL_IDENTITY_BINDING_METHODS.has(params.method) && !identity.executionIdentity) {
     return undefined;
   }
   const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
@@ -564,12 +595,22 @@ export async function callGatewayTool<T = Record<string, unknown>>(
       });
     }
     if (agentRuntimeIdentityToken && isStaleGatewayAgentRuntimeIdentityRejection(error)) {
-      if (method === "node.invoke" && extra?.requireAgentRuntimeIdentity !== true) {
-        return await callGateway<T>({
+      if (
+        OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS.has(method) &&
+        extra?.requireAgentRuntimeIdentity !== true
+      ) {
+        const result = await callGateway<T>({
           ...callOptions,
-          params: stripNodeInvokeTurnSource(callOptions.params),
+          params:
+            method === "node.invoke"
+              ? stripNodeInvokeTurnSource(callOptions.params)
+              : callOptions.params,
           agentRuntimeIdentityToken: undefined,
         });
+        if (APPROVAL_IDENTITY_BINDING_METHODS.has(method)) {
+          warnLegacyApprovalIdentityFallbackOnce();
+        }
+        return result;
       }
       throw staleGatewayAgentRuntimeIdentityError(error);
     }

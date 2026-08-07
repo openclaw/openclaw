@@ -251,6 +251,37 @@ describe("Codex app-server elicitation bridge", () => {
     ]);
   });
 
+  it.each([
+    ["MCP", buildApprovalElicitation(), undefined],
+    ["Computer Use", buildComputerUseApprovalElicitation(), "computer-use"],
+  ])(
+    "uses host approval authority for %s elicitations",
+    async (_label, requestParams, serverName) => {
+      const requestPluginApproval = vi.fn(async () => ({ id: "plugin:authority" }));
+      const waitForPluginApprovalDecision = vi.fn(async () => ({
+        id: "plugin:authority",
+        decision: "allow-once" as const,
+      }));
+
+      await handleCodexAppServerElicitationRequest({
+        approvalAuthority: {
+          requestPluginApproval,
+          waitForPluginApprovalDecision,
+          runBeforeToolCallApproval: vi.fn(),
+          registerNativeHookRelay: vi.fn(),
+        } as never,
+        requestParams,
+        paramsForRun: createParams(),
+        ...codexTestTurnIds(),
+        ...(serverName ? { computerUseMcpServerName: serverName } : {}),
+      });
+
+      expect(requestPluginApproval).toHaveBeenCalledTimes(1);
+      expect(waitForPluginApprovalDecision).toHaveBeenCalledTimes(1);
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not trust request-time decisions for two-phase MCP approvals", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({

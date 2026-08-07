@@ -14,6 +14,7 @@ import type {
 } from "../plugins/types.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeSession } from "./node-registry.js";
+import { bindApprovalExecutionIdentity } from "./server-methods/approval-execution-identity.js";
 import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
@@ -115,6 +116,11 @@ function createApprovalRuntime(params: {
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client: params.client });
+      bindApprovalExecutionIdentity({
+        cfg: params.context.getRuntimeConfig(),
+        client: params.client,
+        record,
+      });
       const respond: RespondFn = () => {};
       // Register directly: persistence and presentation-validation failures
       // must throw so the plugin policy fails closed before any request

@@ -3771,6 +3771,7 @@ describe("exec approval handlers", () => {
     };
 
     const context = {
+      getRuntimeConfig: () => ({}),
       broadcast: (event: string, payload: unknown) => {
         if (event !== "exec.approval.requested") {
           return;

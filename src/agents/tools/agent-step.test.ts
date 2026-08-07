@@ -1,7 +1,11 @@
 // Agent step tests cover nested session handoff, transcript bookkeeping, and
 // MCP runtime retirement after completed nested turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getExecutionIdentityAdmissionScope } from "../../audit/execution-identity-admission.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import { executionIdentity } from "../agent-command-execution-identity.js";
+import type { PreparedAgentCommandExecution } from "../command/prepare.js";
 import { runAgentStep } from "./agent-step.js";
 import { testing } from "./agent-step.test-support.js";
 
@@ -25,6 +29,7 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
 describe("runAgentStep", () => {
   afterEach(() => {
     testing.setDepsForTest();
+    resetAgentRunRegistryForTest();
     vi.clearAllMocks();
   });
 
@@ -132,6 +137,48 @@ describe("runAgentStep", () => {
     expect(ingress?.message).toContain("internal announce step");
     expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(ingress?.transcriptMessage).toBe("");
+  });
+
+  it("starts an in-process transcript step as an independent execution identity root", async () => {
+    const prepared = (runId: string) =>
+      ({
+        runId,
+        cfg: { logging: { audit: { enabled: true, executionIdentity: true } } },
+        opts: { message: "test", runId },
+      }) as PreparedAgentCommandExecution;
+    let childExecutionId: string | undefined;
+    testing.setDepsForTest({
+      agentCommandFromIngress: async () =>
+        await executionIdentity.runPrepared({
+          prepared: prepared("in-process-child"),
+          run: async () => {
+            childExecutionId = getExecutionIdentityAdmissionScope()?.token.executionId;
+            return {
+              payloads: [{ text: "done", mediaUrl: null }],
+              meta: { durationMs: 1 },
+            };
+          },
+        }),
+    });
+
+    await executionIdentity.runPrepared({
+      prepared: prepared("parent"),
+      run: async () => {
+        const parent = getExecutionIdentityAdmissionScope();
+        await expect(
+          runAgentStep({
+            sessionKey: "agent:main:subagent:child",
+            message: "internal announce step",
+            transcriptMessage: "",
+            extraSystemPrompt: "announce only",
+            timeoutMs: 10_000,
+          }),
+        ).resolves.toBe("done");
+        expect(childExecutionId).toBeTruthy();
+        expect(childExecutionId).not.toBe(parent?.token.executionId);
+        expect(getExecutionIdentityAdmissionScope()).toBe(parent);
+      },
+    });
   });
 
   it("does not return failed transcript-mode output as an announce reply", async () => {

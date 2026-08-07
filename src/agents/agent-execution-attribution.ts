@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  createExecutionIdentityAdmissionToken,
   parseExecutionIdentityAdmissionToken,
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
@@ -84,5 +85,22 @@ export function rebindAgentExecutionAttribution(
   return freezeAgentExecutionAttribution({
     ...attribution,
     lifecycleGeneration: requireAttributionField(lifecycleGeneration, "lifecycleGeneration"),
+  });
+}
+
+/** Materialize the one admission token owned by this host-created attribution. */
+export function resolveAgentExecutionIdentityAdmission(
+  attribution: AgentExecutionAttribution,
+): AgentExecutionIdentityAdmission {
+  const admission = attribution.executionIdentityAdmission;
+  return Object.freeze({
+    token: admission
+      ? parseExecutionIdentityAdmissionToken(admission.token)
+      : createExecutionIdentityAdmissionToken(attribution.runId, {
+          contextId: attribution.contextId,
+          executionId: attribution.executionId,
+          now: attribution.createdAt,
+        }),
+    retryOnly: admission?.retryOnly === true,
   });
 }

@@ -34,6 +34,19 @@ export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAg
     enumerable: true,
   });
   const taggedSource = source as unknown as Record<symbol, unknown>;
+  const diagnosticOptions = taggedSource[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
+  if (
+    diagnosticOptions &&
+    typeof diagnosticOptions === "object" &&
+    "emitDiagnostics" in diagnosticOptions
+  ) {
+    // The execute closure reads this exact mutable object. Cloning it would make
+    // toggles on a later wrapper diverge from the options used by execution.
+    Object.defineProperty(target, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
+      value: diagnosticOptions,
+      enumerable: false,
+    });
+  }
   const sourceTool = taggedSource[BEFORE_TOOL_CALL_SOURCE_TOOL];
   if (sourceTool && typeof sourceTool === "object") {
     Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {

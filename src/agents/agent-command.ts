@@ -231,7 +231,6 @@ async function agentCommandInternal(
     });
     return await sessionWorkAdmission.run(async () => {
       executionIdentity.record({
-        attribution: executionAttribution,
         agentId: sessionAgentId,
         cfg,
         ingress: admissionIngress,
@@ -653,13 +652,17 @@ async function agentCommandFromIngressInternal(
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
       restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
       run: async (prepared) =>
-        await agentCommandInternal(
+        await executionIdentity.runPrepared({
           prepared,
-          prepared.opts,
-          { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-          runtime,
-          deps,
-        ),
+          run: async (scopedPrepared) =>
+            await agentCommandInternal(
+              scopedPrepared,
+              scopedPrepared.opts,
+              { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+              runtime,
+              deps,
+            ),
+        }),
     });
 
     if (result) {

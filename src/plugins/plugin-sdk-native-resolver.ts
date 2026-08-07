@@ -315,6 +315,8 @@ function listPluginSdkNativeAliases(
     // A process-global resolver cannot authenticate caller-supplied parent metadata.
     .filter(
       ([specifier]) =>
+        specifier !== "openclaw/plugin-sdk/agent-harness-approval-authority-runtime" &&
+        specifier !== "openclaw/plugin-sdk/agent-harness-approval-authority-runtime.js" &&
         specifier !== "openclaw/plugin-sdk/agent-harness-tool-authority-runtime" &&
         specifier !== "openclaw/plugin-sdk/agent-harness-tool-authority-runtime.js",
     )

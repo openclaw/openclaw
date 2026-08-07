@@ -84,6 +84,30 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips one bounded signed execution identity", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const executionIdentity = {
+      tokenVersion: 1 as const,
+      contextId: "context-1",
+      executionId: "execution-1",
+      runId: "run-1",
+      createdAt: 123,
+    };
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      executionIdentity,
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "session-1",
+      executionIdentity,
+    });
+  });
+
   it("round-trips a signed visible-session spawn policy", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

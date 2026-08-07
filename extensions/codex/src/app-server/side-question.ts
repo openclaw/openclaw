@@ -161,6 +161,7 @@ Do not modify files, source, git state, permissions, configuration, workspace st
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParams,
   options: {
+    approvalAuthority?: import("openclaw/plugin-sdk/agent-harness-approval-authority-runtime").AgentHarnessApprovalAuthority;
     agentHarnessCodingToolsFactory?: (typeof import("openclaw/plugin-sdk/agent-harness-tool-authority-runtime"))["createOpenClawCodingToolsForAgentHarnessSideQuestion"];
     bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
@@ -448,6 +449,7 @@ export async function runCodexAppServerSideQuestion(
         }
         if (request.method === "mcpServer/elicitation/request") {
           return handleCodexAppServerElicitationRequest({
+            approvalAuthority: options.approvalAuthority,
             requestParams: request.params,
             paramsForRun: sideRunParams,
             threadId: childThreadId,
@@ -463,6 +465,7 @@ export async function runCodexAppServerSideQuestion(
         }
         if (isCodexAppServerApprovalRequest(request.method)) {
           return handleCodexAppServerApprovalRequest({
+            approvalAuthority: options.approvalAuthority,
             method: request.method,
             requestParams: request.params,
             paramsForRun: sideRunParams,
@@ -553,6 +556,7 @@ export async function runCodexAppServerSideQuestion(
     });
     nativeHookRelay = options.nativeHookRelay
       ? registerCodexSideNativeHookRelay({
+          approvalAuthority: options.approvalAuthority,
           options: options.nativeHookRelay,
           events: nativeHookRelayEvents,
           agentId: sessionAgentId,
@@ -799,6 +803,7 @@ function resolveCodexSideNativeHookRelayEvents(params: {
 }
 
 function registerCodexSideNativeHookRelay(params: {
+  approvalAuthority?: import("openclaw/plugin-sdk/agent-harness-approval-authority-runtime").AgentHarnessApprovalAuthority;
   options: {
     enabled?: boolean;
     ttlMs?: number;
@@ -820,7 +825,9 @@ function registerCodexSideNativeHookRelay(params: {
   if (params.options.enabled === false) {
     return undefined;
   }
-  return registerNativeHookRelay({
+  const registerRelay =
+    params.approvalAuthority?.registerNativeHookRelay ?? registerNativeHookRelay;
+  return registerRelay({
     provider: "codex",
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,

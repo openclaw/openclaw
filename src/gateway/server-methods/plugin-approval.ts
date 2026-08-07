@@ -125,6 +125,7 @@ export function createPluginApprovalHandlers(
         timeoutMs,
         respond,
         context,
+        client,
       });
       if (!decisionPromise) {
         return;

@@ -121,6 +121,24 @@ function prepareExecutionIdentityContextAtAdmission(
 }
 
 describe("execution identity context storage", () => {
+  it("projects explicit principal-less invoker evidence as unknown", () => {
+    const database = databaseOptions();
+    const context = prepareExecutionIdentityContextAtAdmission(
+      facts("run-unknown", { invoker: { state: "unknown" } }),
+      {
+        ...database,
+        now: 100,
+        contextId: "context-unknown",
+        executionId: "execution-unknown",
+        runtimeInstanceId: "runtime-1",
+      },
+    );
+
+    expect(context.invoker).toEqual({ state: "unknown" });
+    expect(context.coverageState).toBe("unknown");
+    expect(context.missingEvidence).toContain("invoker.principal");
+  });
+
   it("replays one byte-identical canonical context idempotently across restart", () => {
     const database = databaseOptions();
     const envelope = captureExecutionIdentityAdmissionEnvelope(facts("run-1"), {

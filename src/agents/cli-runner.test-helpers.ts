@@ -120,6 +120,7 @@ export function buildDefaultTestCliBackend(
 }
 
 export type PreparedCliRunContextOverrides = {
+  attribution?: PreparedCliRunContext["params"]["attribution"];
   provider?: CliProvider;
   model?: string;
   runId?: string;
@@ -203,6 +204,7 @@ export function buildPreparedCliRunContext(
   const backend = { ...baseBackend, ...overrides.backend };
   return {
     params: {
+      attribution: overrides.attribution,
       sessionId: overrides.sessionId ?? "s1",
       sessionKey: overrides.sessionKey,
       sessionEntry: overrides.sessionEntry,

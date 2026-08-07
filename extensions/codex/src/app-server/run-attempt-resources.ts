@@ -191,6 +191,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   ) => {
     state.nativeHookRelay?.unregister();
     state.nativeHookRelay = createCodexNativeHookRelay({
+      approvalAuthority: options.approvalAuthority,
       options: options.nativeHookRelay,
       generation:
         decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,

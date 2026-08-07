@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 /** Bounded execution-identity facts captured at authoritative run admission. */
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -62,20 +63,23 @@ const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
     ]),
   }),
   invoker: Type.Optional(
-    closedObject({
-      kind: Type.Union([
-        Type.Literal("person"),
-        Type.Literal("agent"),
-        Type.Literal("service"),
-        Type.Literal("schedule"),
-        Type.Literal("webhook"),
-        Type.Literal("system"),
-        Type.Literal("local-account"),
-        Type.Literal("runtime"),
-      ]),
-      rawPrincipalRef: rawRef(),
-      displayLabel: Type.Optional(Type.String({ maxLength: 128 })),
-    }),
+    Type.Union([
+      closedObject({ state: Type.Literal("unknown") }),
+      closedObject({
+        kind: Type.Union([
+          Type.Literal("person"),
+          Type.Literal("agent"),
+          Type.Literal("service"),
+          Type.Literal("schedule"),
+          Type.Literal("webhook"),
+          Type.Literal("system"),
+          Type.Literal("local-account"),
+          Type.Literal("runtime"),
+        ]),
+        rawPrincipalRef: rawRef(),
+        displayLabel: Type.Optional(Type.String({ maxLength: 128 })),
+      }),
+    ]),
   ),
   applicableGrants: Type.Array(closedObject({ rawGrantRef: rawRef(), state: evidenceState() }), {
     maxItems: EXECUTION_IDENTITY_ADMISSION_MAX_ITEMS,
@@ -134,6 +138,10 @@ export type ExecutionIdentityAdmissionFacts = Omit<
   assurance?: ExecutionIdentityAdmissionEnvelope["assurance"];
 };
 export type ExecutionIdentityAdmissionToken = Static<typeof ExecutionIdentityAdmissionTokenSchema>;
+type ExecutionIdentityAdmissionScope = {
+  token: ExecutionIdentityAdmissionToken;
+  retryOnly: boolean;
+};
 export type ExecutionIdentityAdmissionWork =
   | { kind: "capture"; envelope: ExecutionIdentityAdmissionEnvelope }
   | { kind: "retry-reference"; token: ExecutionIdentityAdmissionToken };
@@ -141,6 +149,7 @@ type ExecutionIdentityAdmissionSink = (work: ExecutionIdentityAdmissionWork) => 
 
 let admissionSink: ExecutionIdentityAdmissionSink | undefined;
 let admissionFailureWarned = false;
+const admissionScopeStorage = new AsyncLocalStorage<ExecutionIdentityAdmissionScope | undefined>();
 
 function uniqueSorted<T>(values: readonly T[], key: (value: T) => string): T[] {
   return [...new Map(values.map((value) => [key(value), value])).values()].toSorted((a, b) => {
@@ -206,6 +215,47 @@ export function parseExecutionIdentityAdmissionToken(
   return freezeEnvelope({ ...value });
 }
 
+/** Returns the private identity owned by the current admitted outer turn. */
+export function getExecutionIdentityAdmissionScope(): ExecutionIdentityAdmissionScope | undefined {
+  return admissionScopeStorage.getStore();
+}
+
+/** Starts an independent admitted root without inheriting its caller's private identity. */
+export async function runWithoutExecutionIdentityAdmissionScope<T>(
+  run: () => Promise<T> | T,
+): Promise<T> {
+  if (!admissionScopeStorage.getStore()) {
+    return await run();
+  }
+  return await admissionScopeStorage.run(undefined, run);
+}
+
+/** Carries one validated token through trusted internal execution hot paths. */
+export async function runWithExecutionIdentityAdmissionScope<T>(
+  scope: ExecutionIdentityAdmissionScope,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const parsedScope = freezeEnvelope({
+    token: parseExecutionIdentityAdmissionToken(scope.token),
+    retryOnly: scope.retryOnly,
+  });
+  const active = admissionScopeStorage.getStore();
+  if (active) {
+    if (
+      active.retryOnly !== parsedScope.retryOnly ||
+      active.token.tokenVersion !== parsedScope.token.tokenVersion ||
+      active.token.contextId !== parsedScope.token.contextId ||
+      active.token.executionId !== parsedScope.token.executionId ||
+      active.token.runId !== parsedScope.token.runId ||
+      active.token.createdAt !== parsedScope.token.createdAt
+    ) {
+      throw new Error("execution identity admission scope cannot change inside an active run");
+    }
+    return await run();
+  }
+  return await admissionScopeStorage.run(parsedScope, run);
+}
+
 function redactDisplayLabel(value: string): string {
   // The shared redactor's secret-prefix pass becomes stable on its second pass.
   // Stabilizing here lets the worker reject any altered structured-clone payload.
@@ -257,12 +307,15 @@ function captureExecutionIdentityAdmissionEnvelope(
     runtime: { ...facts.runtime },
     ...(facts.invoker
       ? {
-          invoker: {
-            ...facts.invoker,
-            ...(facts.invoker.displayLabel !== undefined
-              ? { displayLabel: redactDisplayLabel(facts.invoker.displayLabel) }
-              : {}),
-          },
+          invoker:
+            "state" in facts.invoker
+              ? { ...facts.invoker }
+              : {
+                  ...facts.invoker,
+                  ...(facts.invoker.displayLabel !== undefined
+                    ? { displayLabel: redactDisplayLabel(facts.invoker.displayLabel) }
+                    : {}),
+                },
         }
       : {}),
     applicableGrants: uniqueSorted(
