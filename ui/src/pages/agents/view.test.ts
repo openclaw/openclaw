@@ -121,6 +121,46 @@ describe("renderAgents", () => {
     ).toBe("Fetched Beta");
   });
 
+  it("offers Remove for a stored non-previewable avatar", () => {
+    const onIdentityAvatarClear = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderAgents(
+        createProps({
+          agentsList: {
+            defaultId: "alpha",
+            mainKey: "main",
+            scope: "workspace",
+            agents: [
+              { id: "alpha", name: "Alpha" } as never,
+              {
+                id: "beta",
+                name: "Beta",
+                identity: { avatar: "https://example.com/avatar.png" },
+              } as never,
+            ],
+          },
+          agentIdentityById: {
+            beta: {
+              agentId: "beta",
+              name: "Beta",
+              avatar: "https://example.com/avatar.png",
+            },
+          },
+          onIdentityAvatarClear,
+        }),
+      ),
+      container,
+    );
+
+    const remove = container.querySelector<HTMLButtonElement>(
+      '[data-testid="agent-identity-avatar-remove"]',
+    );
+    expect(remove).not.toBeNull();
+    remove?.click();
+    expect(onIdentityAvatarClear).toHaveBeenCalledOnce();
+  });
+
   it("shows a model-catalog failure and lets the operator retry", () => {
     const container = document.createElement("div");
     const onModelCatalogRetry = vi.fn();

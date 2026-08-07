@@ -41,7 +41,6 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
 import {
-  createAgentIdentityConfig,
   mergeIdentityMarkdownContent,
   normalizeIdentityForFile,
   sanitizeAgentIdentityLine,

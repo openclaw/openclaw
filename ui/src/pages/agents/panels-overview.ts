@@ -24,6 +24,7 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -117,6 +118,15 @@ export function renderAgentOverview(params: {
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
     resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(identityName || agent.id) || "?");
+  // Previewable URLs may be empty while Gateway still stores a raw avatar
+  // (e.g. https://…). Gate Remove on stored/draft presence, not previewability.
+  const hasStoredAvatar = Boolean(
+    normalizeOptionalString(params.agentIdentity?.avatar) ||
+    normalizeOptionalString(agent.identity?.avatar) ||
+    normalizeOptionalString(agent.identity?.avatarUrl),
+  );
+  const canRemoveAvatar =
+    identityDraft.avatar === null ? hasStoredAvatar : Boolean(identityDraft.avatar.trim());
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
   // Blank emoji/avatar drafts are clear intents (null tombstone). Only blank
@@ -197,7 +207,7 @@ export function renderAgentOverview(params: {
             : nothing}
           <div class="agent-identity-editor__actions">
             <label class="btn btn--sm">
-              ${identityAvatarUrl
+              ${canRemoveAvatar || identityAvatarUrl
                 ? t("agents.identity.replaceImage")
                 : t("agents.identity.chooseImage")}
               <input
@@ -208,10 +218,11 @@ export function renderAgentOverview(params: {
                 @change=${handleAvatarFileSelect}
               />
             </label>
-            ${identityAvatarUrl
+            ${canRemoveAvatar
               ? html`<button
                   type="button"
                   class="btn btn--sm"
+                  data-testid="agent-identity-avatar-remove"
                   ?disabled=${identityBusy}
                   @click=${() => params.onIdentityAvatarClear()}
                 >
