@@ -1,7 +1,7 @@
 // Local skill loader reads skill definitions from local filesystem roots.
 import fs from "node:fs";
 import path from "node:path";
-import { openRootFileSync } from "../../infra/boundary-file-read.js";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
@@ -34,7 +34,17 @@ function readSkillFileSync(params: {
     return null;
   }
   try {
-    return fs.readFileSync(opened.fd, "utf8");
+    if (params.maxBytes === undefined) {
+      return fs.readFileSync(opened.fd, "utf8");
+    }
+    return readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf-8");
+  } catch (error) {
+    // A file that grew after the open-time size check is rejected the same way
+    // as one that was already oversized when opened.
+    if (error instanceof RangeError) {
+      return null;
+    }
+    throw error;
   } finally {
     fs.closeSync(opened.fd);
   }
