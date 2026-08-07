@@ -7,6 +7,7 @@ import {
   issueDeviceBootstrapToken,
 } from "openclaw/plugin-sdk/device-bootstrap";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveTelegramAccount } from "../accounts.js";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
 import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
@@ -23,8 +24,15 @@ const MAX_BODY_BYTES = 4096;
 const REPLAY_CACHE_LIMIT = 1000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
+const RATE_LIMIT_MAX_KEYS = 1024;
 const replayCache = new Map<string, number>();
-const rateLimit = new Map<string, { count: number; resetAtMs: number }>();
+// The SDK limiter owns expiry pruning, the max-key eviction cap, and recency refresh; the
+// telegram webhook ingress uses the same guard. Keep the miniapp auth policy per-IP.
+const authRateLimiter = createFixedWindowRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: RATE_LIMIT_MAX,
+  maxTrackedKeys: RATE_LIMIT_MAX_KEYS,
+});
 
 export function registerTelegramMiniAppRoutes(
   api: OpenClawPluginApi,
@@ -84,7 +92,7 @@ async function handleAuth(
     return;
   }
   const ip = req.socket.remoteAddress ?? "unknown";
-  if (!consumeRateLimit(ip)) {
+  if (authRateLimiter.isRateLimited(ip)) {
     sendText(res, 429, "Too many requests");
     return;
   }
@@ -183,17 +191,6 @@ async function readJsonBody(
   } catch {
     return null;
   }
-}
-
-function consumeRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const current = rateLimit.get(ip);
-  if (!current || current.resetAtMs <= now) {
-    rateLimit.set(ip, { count: 1, resetAtMs: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-  current.count += 1;
-  return current.count <= RATE_LIMIT_MAX;
 }
 
 function rememberReplay(hash: string, expiresAtMs: number): boolean {
