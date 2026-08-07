@@ -14,10 +14,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import {
-  resolveImageToolFactoryAvailable,
-  resolveOptionalMediaToolFactoryPlan,
-} from "./openclaw-tools.media-factory-plan.js";
+import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import { loadCapabilityMetadataSnapshot } from "./tools/manifest-capability-availability.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
@@ -279,16 +276,16 @@ describe("optional media tool factory planning", () => {
     };
 
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         ...base,
         preparedModelRuntime: {
           metadataSnapshot: snapshot,
           mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
         } as never,
-      }),
+      }).image,
     ).toBe(false);
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         ...base,
         preparedModelRuntime: {
           metadataSnapshot: snapshot,
@@ -296,7 +293,7 @@ describe("optional media tool factory planning", () => {
             mediaUnderstandingProviders: [{ id: "media-owner", capabilities: ["image"] }],
           },
         } as never,
-      }),
+      }).image,
     ).toBe(true);
   });
 
@@ -313,7 +310,7 @@ describe("optional media tool factory planning", () => {
     ]);
 
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         config,
         agentDir: "/agent",
         authStore: createAuthStore(["audio-auth"]),
@@ -326,7 +323,7 @@ describe("optional media tool factory planning", () => {
             ],
           },
         } as never,
-      }),
+      }).image,
     ).toBe(false);
   });
 
@@ -361,27 +358,27 @@ describe("optional media tool factory planning", () => {
     };
 
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         config,
         agentDir: "/agent",
         authStore: createAuthStore(["custom"]),
         preparedModelRuntime,
-      }),
+      }).image,
     ).toBe(true);
     expect(
-      resolveImageToolFactoryAvailable({
+      resolveOptionalMediaToolFactoryPlan({
         config,
         agentDir: "/agent",
         authStore: oauthStore,
         preparedModelRuntime,
-      }),
+      }).image,
     ).toBe(false);
     for (const [capabilities, expected] of [
       [["audio"], false],
       [["image"], true],
     ] as const) {
       expect(
-        resolveImageToolFactoryAvailable({
+        resolveOptionalMediaToolFactoryPlan({
           config,
           agentDir: "/agent",
           authStore: oauthStore,
@@ -391,7 +388,7 @@ describe("optional media tool factory planning", () => {
               mediaUnderstandingProviders: [{ id: "codex", capabilities }],
             },
           } as never,
-        }),
+        }).image,
       ).toBe(expected);
     }
   });
@@ -406,6 +403,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["github-copilot"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -462,6 +460,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -481,6 +480,7 @@ describe("optional media tool factory planning", () => {
         toolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -513,6 +513,7 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["video_generate", "pdf"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: false,
       musicGenerate: true,
@@ -531,6 +532,7 @@ describe("optional media tool factory planning", () => {
         toolAllowlist: ["image_generate"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: false,
       musicGenerate: false,
@@ -549,6 +551,7 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["image_generate", "pdf"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -585,6 +588,7 @@ describe("optional media tool factory planning", () => {
         toolDenylist: ["*_generate", "p*"],
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -603,6 +607,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["image-owner", "music-owner", "media-owner"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -690,6 +695,7 @@ describe("optional media tool factory planning", () => {
         ]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: true,
       videoGenerate: true,
       musicGenerate: true,
@@ -815,6 +821,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -869,6 +876,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -1080,6 +1088,7 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(["external-image"]),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
@@ -1097,9 +1106,66 @@ describe("optional media tool factory planning", () => {
         authStore: createAuthStore(),
       }),
     ).toEqual({
+      image: false,
       imageGenerate: false,
       videoGenerate: false,
       musicGenerate: false,
+      pdf: false,
+    });
+  });
+
+  it("keeps explicit generation models when the prepared provider family is empty", () => {
+    const config = createExplicitMediaModelConfig();
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        preparedModelRuntime: {
+          mediaCapabilityProviders: {
+            imageGenerationProviders: [],
+            videoGenerationProviders: [],
+            musicGenerationProviders: [],
+          },
+        } as never,
+      }),
+    ).toEqual({
+      image: false,
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
+      pdf: true,
+    });
+  });
+
+  it("uses prepared provider isConfigured for generation availability", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        preparedModelRuntime: {
+          mediaCapabilityProviders: {
+            imageGenerationProviders: [
+              { id: "local-image", defaultModel: "workflow", isConfigured: () => true },
+            ],
+            videoGenerationProviders: [
+              { id: "local-video", defaultModel: "clip", isConfigured: () => false },
+            ],
+            musicGenerationProviders: [
+              { id: "local-music", defaultModel: "song", isConfigured: () => true },
+            ],
+          },
+        } as never,
+      }),
+    ).toEqual({
+      image: false,
+      imageGenerate: true,
+      videoGenerate: false,
+      musicGenerate: true,
       pdf: false,
     });
   });
