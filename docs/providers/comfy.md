@@ -220,14 +220,20 @@ In `local` mode, loopback/private IP literals and single-label service names suc
 </Note>
 
 <Note>
-`workflowPath` reads are bounded only when the shared
-`plugins.entries.comfy.config.workflowFileMaxBytes` value is set in bytes; the
-limit then applies to image, video, and music workflows in local and cloud
-mode. When the setting is absent, existing `workflowPath` behavior is
-preserved. For local ComfyUI, also set `--max-upload-size` high enough for the
-final serialized request, including wrapper overhead. Comfy Cloud controls its
-own request limit and may still reject a larger workflow. OpenClaw rejects
-files above a configured local limit before sending a request.
+`workflowPath` reads are bounded only when `workflowFileMaxBytes` is set in
+your active Comfy configuration root:
+`plugins.entries.comfy.config` for plugin configurations, or
+`models.providers.comfy` for legacy provider configurations. The limit then
+applies to image, video, and music workflows in local and cloud mode. When the
+setting is absent, existing `workflowPath` behavior is preserved. If your
+workflow settings live under the legacy `models.providers.comfy` root, set the
+limit there as well; do not add a `plugins.entries.comfy.config` record only
+to set this limit, because a plugin record takes precedence and masks your
+existing legacy workflow settings. For local ComfyUI, also set
+`--max-upload-size` high enough for the final serialized request, including
+wrapper overhead. Comfy Cloud controls its own request limit and may still
+reject a larger workflow. OpenClaw rejects files above a configured local
+limit before sending a request.
 </Note>
 
 ### Per-capability keys
