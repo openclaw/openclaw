@@ -292,9 +292,20 @@ export function hasConcreteFailureDestination(
   );
 }
 
+/**
+ * Chat-route fields from stored delivery or an incoming patch.
+ * Patch clears use `null`, so the classifier must accept that shape.
+ */
+type ChatDeliveryTargetFields = {
+  channel?: CronDelivery["channel"] | null;
+  to?: CronDelivery["to"] | null;
+  threadId?: CronDelivery["threadId"] | null;
+  accountId?: CronDelivery["accountId"] | null;
+};
+
 /** True when delivery names a chat route (channel/to/thread/account), not just mode/bestEffort. */
 export function hasConcreteChatDeliveryTarget(
-  delivery: Pick<CronDelivery, "channel" | "to" | "threadId" | "accountId"> | undefined,
+  delivery: ChatDeliveryTargetFields | undefined,
 ): boolean {
   if (!delivery) {
     return false;

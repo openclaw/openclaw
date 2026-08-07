@@ -10,9 +10,7 @@ import {
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
-  testState,
 } from "../../gateway/test-helpers.js";
-import { testConfigRoot } from "../../gateway/test-helpers.runtime-state.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -64,15 +62,8 @@ describe("cron edit main delivery CLI→gateway", () => {
 
   beforeAll(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-delivery-proof-"));
-    process.env.OPENCLAW_SKIP_CRON = "0";
-    testState.cronEnabled = true;
-    const configPath = path.join(testConfigRoot.value, "openclaw.json");
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({ cron: { enabled: true } }, null, 2)}\n`,
-      "utf8",
-    );
+    // Keep the default SKIP_CRON / cronEnabled=false harness: this proof only
+    // validates cron.add/update/get RPC + CLI edit, not scheduler firing.
     started = await startServerWithClient(token);
     await connectOk(started.ws);
   }, 120_000);

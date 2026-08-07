@@ -398,6 +398,26 @@ describe("applyJobPatch delivery merge", () => {
     ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
   });
 
+  it("allows null-clear delivery patches on main without treating them as unsupported chat delivery", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    applyJobPatch(job, {
+      delivery: {
+        channel: null,
+        to: null,
+        threadId: null,
+        accountId: null,
+        completionDestination: null,
+      },
+    });
+
+    expect(job.delivery).toBeUndefined();
+  });
+
   it("clears inherited announce delivery when retargeting to main without a delivery patch", () => {
     const job = makeJob({
       sessionTarget: "isolated",
