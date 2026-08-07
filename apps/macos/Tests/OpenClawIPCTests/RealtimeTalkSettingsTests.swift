@@ -2,6 +2,35 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
+private enum RealtimeTalkSettingsLoadError: Error {
+    case unavailable
+}
+
+private func makeRealtimeTalkCatalog(
+    configured: Bool,
+    models: [String] = ["gpt-realtime-2.1", "gpt-live-1-codex"],
+    voices: [String] = ["marin", "cedar"]) -> TalkCatalogResult
+{
+    TalkCatalogResult(
+        modes: [],
+        transports: [],
+        brains: [],
+        speech: [:],
+        transcription: [:],
+        realtime: [
+            "providers": AnyCodable([
+                [
+                    "id": "openai",
+                    "configured": configured,
+                    "models": models,
+                    "voices": voices,
+                    "transports": ["gateway-relay"],
+                    "brains": ["agent-consult"],
+                ] as [String: Any],
+            ]),
+        ])
+}
+
 struct RealtimeTalkSettingsTests {
     @Test func `parses top level realtime selection`() {
         let root: [String: Any] = [
@@ -344,6 +373,67 @@ struct RealtimeTalkSettingsTests {
         #expect(!stayingOnTheEvaluatedModel)
         #expect(!beforeAnyCatalogAnswer)
         #expect(!gatewayUnavailable)
+    }
+
+    @Test @MainActor func `gateway recovery retries a failed catalog load`() async {
+        var loadCount = 0
+        let model = RealtimeTalkSettingsModel(
+            loadConfig: { [:] },
+            loadCatalog: {
+                loadCount += 1
+                if loadCount == 1 {
+                    throw RealtimeTalkSettingsLoadError.unavailable
+                }
+                return makeRealtimeTalkCatalog(configured: true)
+            })
+
+        await model.load()
+        #expect(model.availability != .ready)
+
+        for state in [
+            ControlChannel.ConnectionState.connecting,
+            .degraded("offline"),
+            .disconnected,
+        ] {
+            await model.handleControlChannelStateChange(state)
+        }
+        #expect(loadCount == 1)
+
+        await model.handleControlChannelStateChange(.connected)
+
+        #expect(loadCount == 2)
+        #expect(model.availability == .ready)
+        #expect(model.models == ["gpt-realtime-2.1", "gpt-live-1-codex"])
+        #expect(model.voices == ["marin", "cedar"])
+    }
+
+    @Test @MainActor func `newer catalog refresh wins over an older completion`() async {
+        var pendingLoads: [CheckedContinuation<TalkCatalogResult, any Error>] = []
+        let model = RealtimeTalkSettingsModel(
+            loadConfig: { [:] },
+            loadCatalog: {
+                try await withCheckedThrowingContinuation { continuation in
+                    pendingLoads.append(continuation)
+                }
+            })
+
+        let olderLoad = Task { await model.load() }
+        while pendingLoads.count < 1 {
+            await Task.yield()
+        }
+        let newerLoad = Task { await model.load() }
+        while pendingLoads.count < 2 {
+            await Task.yield()
+        }
+
+        pendingLoads.removeLast().resume(returning: makeRealtimeTalkCatalog(configured: true))
+        await newerLoad.value
+        #expect(model.availability == .ready)
+
+        pendingLoads.removeFirst().resume(returning: makeRealtimeTalkCatalog(configured: false))
+        await olderLoad.value
+
+        #expect(model.availability == .ready)
     }
 
     @Test func `enabling gpt-live clears forced consult routing but keeps it for GA models`() throws {

@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 import OpenClawKit
 import OpenClawProtocol
@@ -203,11 +204,26 @@ final class RealtimeTalkSettingsModel {
     var voices = ["marin", "cedar", "alloy"]
     var isSaving = false
     var saveMessage: String?
-    private var hasLoaded = false
+    private var loadGeneration = 0
+    private let loadConfig: () async -> [String: Any]
+    private let loadCatalog: () async throws -> TalkCatalogResult
     /// `talk.catalog` takes no parameters and resolves `configured` from the saved realtime
     /// model, so its verdict only describes this selection. Recording it lets the card tell
     /// "OpenAI is unusable" apart from "we have not asked about the model you just picked".
     private var readinessModel: String?
+
+    init() {
+        self.loadConfig = { await ConfigStore.load() }
+        self.loadCatalog = Self.defaultLoadCatalog
+    }
+
+    init(
+        loadConfig: @escaping () async -> [String: Any],
+        loadCatalog: @escaping () async throws -> TalkCatalogResult)
+    {
+        self.loadConfig = loadConfig
+        self.loadCatalog = loadCatalog
+    }
 
     var showsConfiguration: Bool {
         self.availability == .ready || self.draft.explicitlyUsesOpenAI
@@ -235,37 +251,43 @@ final class RealtimeTalkSettingsModel {
             readinessModel: self.readinessModel)
     }
 
-    func load(force: Bool = false) async {
-        guard force || !self.hasLoaded else { return }
+    func load() async {
+        self.loadGeneration &+= 1
+        let generation = self.loadGeneration
         self.availability = .loading
-        let root = await ConfigStore.load()
-        self.draft = RealtimeTalkSettingsConfig.parse(root)
+        let root = await self.loadConfig()
+        let draft = RealtimeTalkSettingsConfig.parse(root)
 
         do {
-            let data = try await GatewayConnection.shared.requestRaw(
-                method: "talk.catalog",
-                params: [:],
-                timeoutMs: 8000)
-            let catalog = try JSONDecoder().decode(TalkCatalogResult.self, from: data)
+            let catalog = try await self.loadCatalog()
+            guard self.loadGeneration == generation else { return }
+            self.draft = draft
             guard let provider = RealtimeTalkSettingsConfig.openAIProvider(in: catalog) else {
                 self.availability = .unavailable("This Gateway does not expose the OpenAI realtime provider.")
-                self.hasLoaded = true
+                self.readinessModel = nil
                 return
             }
-            self.models = Self.options(current: self.draft.model, catalog: provider.models)
-            self.voices = Self.options(current: self.draft.voice, catalog: provider.voices)
+            self.models = Self.options(current: draft.model, catalog: provider.models)
+            self.voices = Self.options(current: draft.voice, catalog: provider.voices)
             guard provider.supportsGatewayRelayAgentConsult else {
                 self.availability = .unavailable(
                     "This Gateway's OpenAI realtime provider does not support relayed Talk sessions.")
-                self.hasLoaded = true
+                self.readinessModel = nil
                 return
             }
-            self.readinessModel = self.draft.model
+            self.readinessModel = draft.model
             self.availability = provider.configured ? .ready : .needsOpenAIAccess
         } catch {
+            guard self.loadGeneration == generation else { return }
+            self.draft = draft
+            self.readinessModel = nil
             self.availability = .unavailable("Could not verify realtime access: \(error.localizedDescription)")
         }
-        self.hasLoaded = true
+    }
+
+    func handleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
+        guard state == .connected else { return }
+        await self.load()
     }
 
     func save() async {
@@ -279,11 +301,18 @@ final class RealtimeTalkSettingsModel {
             try await ConfigStore.save(RealtimeTalkSettingsConfig.applying(self.draft, to: root))
             self.draft.explicitlyUsesOpenAI = true
             self.saveMessage = self.draft.enabled ? "OpenAI realtime Talk enabled." : "Realtime Talk disabled."
-            self.hasLoaded = false
-            await self.load(force: true)
+            await self.load()
         } catch {
             self.saveMessage = error.localizedDescription
         }
+    }
+
+    private static func defaultLoadCatalog() async throws -> TalkCatalogResult {
+        let data = try await GatewayConnection.shared.requestRaw(
+            method: "talk.catalog",
+            params: [:],
+            timeoutMs: 8000)
+        return try JSONDecoder().decode(TalkCatalogResult.self, from: data)
     }
 
     private static func options(current: String, catalog: [String]) -> [String] {
@@ -361,7 +390,17 @@ struct RealtimeTalkSettingsSection: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openclawConfigDidChange)) { _ in
             guard self.isActive else { return }
-            Task { await self.model.load(force: true) }
+            Task { await self.model.load() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .controlChannelStateDidChange)) { _ in
+            guard self.isActive else { return }
+            Task {
+                await self.model.handleControlChannelStateChange(ControlChannel.shared.state)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            guard self.isActive else { return }
+            Task { await self.model.load() }
         }
     }
 
@@ -395,11 +434,15 @@ struct RealtimeTalkSettingsSection: View {
             ProgressView().controlSize(.small)
         case .ready:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .needsOpenAIAccess, .unavailable:
+        case .needsOpenAIAccess:
             Button("Open Talk Settings…") {
                 Task { @MainActor in
                     await DashboardManager.shared.show(atPath: DashboardRouteMap.talkSettingsPath)
                 }
+            }
+        case .unavailable:
+            Button("Retry") {
+                Task { await self.model.load() }
             }
         }
     }
