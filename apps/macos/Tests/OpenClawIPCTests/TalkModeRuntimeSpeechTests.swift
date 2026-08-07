@@ -10,7 +10,8 @@ private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
 
     func start(
         targetSampleRate: Double,
-        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
+        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void,
+        onFailure: @escaping @MainActor (String) -> Void) throws
     {}
 
     func stop() {}
@@ -94,7 +95,7 @@ struct TalkModeRuntimeSpeechTests {
         #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 3) == nil)
     }
 
-    @Test @MainActor func `ready then close clears relay owner and schedules bounded recovery`() async {
+    @Test @MainActor func `ready then audio failure clears relay owner and schedules bounded recovery`() async {
         let runtime = TalkModeRuntime()
         let session = RealtimeTalkRelaySession(
             transport: RealtimeTalkRelayTransport(
@@ -116,10 +117,10 @@ struct TalkModeRuntimeSpeechTests {
             "Listening (Realtime)",
             relayGeneration: relayGeneration)
         await runtime._test_handleRealtimeTermination(
-            .remoteClose(reason: "completed"),
+            .audioCaptureFailed(message: "microphone unavailable"),
             relayGeneration: relayGeneration)
 
-        #expect(!(await runtime._test_realtimeSessionIsActive()))
+        #expect(await !(runtime._test_realtimeSessionIsActive()))
         #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
         #expect(await runtime._test_hasPendingRealtimeRestart())
 

@@ -18,6 +18,7 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private var activeInputResolution: AudioInputDeviceResolution?
     private var targetSampleRate: Double?
     private var onAudio: (@Sendable (RealtimeTalkAudioFrame) -> Void)?
+    private var onFailure: (@MainActor (String) -> Void)?
     private var voiceProcessingEnabled = false
     private var tapInstalled = false
 
@@ -37,7 +38,8 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
 
     func start(
         targetSampleRate: Double,
-        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
+        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void,
+        onFailure: @escaping @MainActor (String) -> Void) throws
     {
         guard targetSampleRate.isFinite, targetSampleRate > 0 else {
             throw MacRealtimeTalkAudioCaptureError.invalidTargetSampleRate
@@ -46,6 +48,7 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.stop()
         self.targetSampleRate = targetSampleRate
         self.onAudio = onAudio
+        self.onFailure = onFailure
         do {
             try self.startCaptureEngine(targetSampleRate: targetSampleRate, onAudio: onAudio)
             self.startDeviceObserver()
@@ -64,6 +67,7 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.teardownEngine()
         self.targetSampleRate = nil
         self.onAudio = nil
+        self.onFailure = nil
     }
 
     private func startCaptureEngine(
@@ -203,13 +207,22 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         else { return }
 
         self.logger.warning("realtime active/default input changed; restarting capture")
+        self.restartCaptureAfterInputChange {
+            try self.startCaptureEngine(targetSampleRate: targetSampleRate, onAudio: onAudio)
+        }
+    }
+
+    private func restartCaptureAfterInputChange(_ restart: () throws -> Void) {
         self.deliveryGate.deactivate()
         self.teardownEngine()
         do {
-            try self.startCaptureEngine(targetSampleRate: targetSampleRate, onAudio: onAudio)
+            try restart()
         } catch {
             self.logger.error(
                 "realtime input restart failed: \(error.localizedDescription, privacy: .public)")
+            let onFailure = self.onFailure
+            self.stop()
+            onFailure?("Realtime microphone became unavailable: \(error.localizedDescription)")
         }
     }
 
@@ -224,6 +237,16 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.activeInputResolution = nil
         self.voiceProcessingEnabled = false
     }
+
+    #if DEBUG
+    func _test_setFailureHandler(_ onFailure: @escaping @MainActor (String) -> Void) {
+        self.onFailure = onFailure
+    }
+
+    func _test_failInputRestart(_ error: Error) {
+        self.restartCaptureAfterInputChange { throw error }
+    }
+    #endif
 }
 
 enum MacRealtimeTalkAudioCaptureError: LocalizedError {

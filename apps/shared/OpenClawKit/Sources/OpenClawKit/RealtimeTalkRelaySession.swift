@@ -55,7 +55,8 @@ public protocol RealtimeTalkAudioCapturing: AnyObject {
 
     func start(
         targetSampleRate: Double,
-        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
+        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void,
+        onFailure: @escaping @MainActor (String) -> Void) throws
 
     func stop()
 }
@@ -116,6 +117,7 @@ public struct RealtimeTalkTranscript: Equatable, Sendable {
 public enum RealtimeTalkRelayTermination: Equatable, Sendable {
     case remoteClose(reason: String?)
     case eventStreamEnded
+    case audioCaptureFailed(message: String)
 }
 
 private actor RealtimeAudioSender {
@@ -335,7 +337,6 @@ public final class RealtimeTalkRelaySession {
             case .ready:
                 return
             case let .failed(issue):
-                self.close(sendClose: true)
                 throw NSError(domain: "RealtimeTalkRelay", code: 6, userInfo: [
                     NSLocalizedDescriptionKey: issue.message,
                 ])
@@ -558,7 +559,6 @@ public final class RealtimeTalkRelaySession {
                 self.finishStartupWait(.failed(issue))
                 self.onStatus("Realtime failed before connecting")
             }
-            self.close(sendClose: false)
         default:
             return
         }
@@ -1078,16 +1078,46 @@ extension RealtimeTalkRelaySession {
         guard !self.isInputPaused else { return }
         self.audioCaptureGeneration &+= 1
         let audioCaptureGeneration = self.audioCaptureGeneration
-        try self.audioCapture.start(targetSampleRate: self.inputSampleRateHz) { [weak self] frame in
-            Task { @MainActor [weak self] in
-                _ = self?.enqueueMicrophoneFrame(
-                    frame.data,
-                    timestampMs: frame.timestampMs,
-                    rms: frame.rms,
+        try self.audioCapture.start(
+            targetSampleRate: self.inputSampleRateHz,
+            onAudio: { [weak self] frame in
+                Task { @MainActor [weak self] in
+                    _ = self?.enqueueMicrophoneFrame(
+                        frame.data,
+                        timestampMs: frame.timestampMs,
+                        rms: frame.rms,
+                        lifecycleGeneration: lifecycleGeneration,
+                        audioCaptureGeneration: audioCaptureGeneration)
+                }
+            },
+            onFailure: { [weak self] message in
+                self?.handleMicrophoneFailure(
+                    message,
                     lifecycleGeneration: lifecycleGeneration,
                     audioCaptureGeneration: audioCaptureGeneration)
-            }
-        }
+            })
+    }
+
+    private func handleMicrophoneFailure(
+        _ message: String,
+        lifecycleGeneration: UInt64,
+        audioCaptureGeneration: UInt64)
+    {
+        guard self.isCurrentLifecycleLocally(lifecycleGeneration),
+              self.audioCaptureGeneration == audioCaptureGeneration
+        else { return }
+        let issue = RealtimeTalkRelayIssue(
+            code: "audio_input_unavailable",
+            message: message,
+            provider: self.options.provider,
+            model: self.options.model,
+            transport: "gateway-relay",
+            phase: "audio-input")
+        self.logger.error("talk realtime microphone failed: \(Self.safeLogMessage(message), privacy: .public)")
+        self.onIssue(issue)
+        self.onStatus(message)
+        self.close(sendClose: true)
+        self.onTermination(.audioCaptureFailed(message: message))
     }
 
     @discardableResult
@@ -1231,6 +1261,10 @@ extension RealtimeTalkRelaySession {
             rms: 0.01,
             lifecycleGeneration: self.lifecycleGeneration,
             audioCaptureGeneration: self.audioCaptureGeneration)
+    }
+
+    func _test_startMicrophonePump() throws {
+        try self.startMicrophonePump(lifecycleGeneration: self.lifecycleGeneration)
     }
 }
 #endif

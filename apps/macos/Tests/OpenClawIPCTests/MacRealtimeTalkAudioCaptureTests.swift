@@ -99,9 +99,25 @@ struct MacRealtimeTalkAudioCaptureTests {
         let capture = MacRealtimeTalkAudioCapture(selectedInputUID: { nil })
 
         #expect(throws: MacRealtimeTalkAudioCaptureError.self) {
-            try capture.start(targetSampleRate: 0) { _ in }
+            try capture.start(
+                targetSampleRate: 0,
+                onAudio: { _ in },
+                onFailure: { _ in })
         }
         #expect(capture.suppressesInputDuringOutput)
+    }
+
+    @Test @MainActor func `input device restart failure stops capture and reports terminal failure`() {
+        let capture = MacRealtimeTalkAudioCapture(selectedInputUID: { nil })
+        var failures: [String] = []
+        capture._test_setFailureHandler { failures.append($0) }
+
+        capture._test_failInputRestart(MacRealtimeTalkAudioCaptureError.inputUnavailable)
+        capture._test_failInputRestart(MacRealtimeTalkAudioCaptureError.inputUnavailable)
+
+        #expect(failures == [
+            "Realtime microphone became unavailable: Selected input and system default are unavailable",
+        ])
     }
 
     @Test func `capture can be released away from the main actor`() async {

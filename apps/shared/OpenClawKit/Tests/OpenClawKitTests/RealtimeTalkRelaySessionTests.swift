@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClawKit
@@ -21,18 +20,26 @@ private final class TestRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private(set) var isStarted = false
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private var onFailure: (@MainActor (String) -> Void)?
 
     func start(
         targetSampleRate: Double,
-        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
+        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void,
+        onFailure: @escaping @MainActor (String) -> Void) throws
     {
         self.isStarted = true
         self.startCount += 1
+        self.onFailure = onFailure
     }
 
     func stop() {
         self.isStarted = false
         self.stopCount += 1
+        self.onFailure = nil
+    }
+
+    func fail(_ message: String) {
+        self.onFailure?(message)
     }
 }
 
@@ -196,7 +203,7 @@ struct RealtimeTalkRelaySessionTests {
 
         session._test_markOutputPlaybackFinished()
         for _ in 0..<10 {
-            if !(await requests.snapshot()).isEmpty { break }
+            if await !(requests.snapshot()).isEmpty { break }
             await Task.yield()
         }
 
@@ -249,6 +256,100 @@ struct RealtimeTalkRelaySessionTests {
 
         #expect(issues.map(\.code) == ["realtime_unavailable"])
         #expect(statuses == ["OpenAI API key rejected with 401"])
+    }
+
+    @Test func `pre-ready relay failure throws and closes created session`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        let result = TalkSessionCreateResult(
+            sessionid: "talk-session",
+            mode: AnyCodable("realtime"),
+            transport: AnyCodable("gateway-relay"),
+            brain: AnyCodable("agent-consult"),
+            relaysessionid: "relay-1")
+        let resultData = try JSONEncoder().encode(result)
+        let failureEvent = EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "error",
+                "message": "OpenAI API key rejected with 401",
+                "phase": "connect",
+            ]),
+            seq: nil,
+            stateversion: nil)
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in
+                AsyncStream { continuation in
+                    continuation.yield(failureEvent)
+                }
+            },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                if method == "talk.session.create" {
+                    return resultData
+                }
+                return Data("{\"ok\":true}".utf8)
+            })
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+
+        do {
+            try await session.start()
+            Issue.record("Expected the pre-ready relay failure to throw")
+        } catch {
+            #expect(error.localizedDescription == "OpenAI API key rejected with 401")
+        }
+
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.create", "talk.session.close"])
+        #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
+        #expect(!audioCapture.isStarted)
+    }
+
+    @Test func `microphone failure terminates relay and reports typed issue`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in AsyncStream { _ in } },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                return Data("{\"ok\":true}".utf8)
+            })
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        var issues: [RealtimeTalkRelayIssue] = []
+        var terminations: [RealtimeTalkRelayTermination] = []
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onIssue: { issues.append($0) },
+            onTermination: { terminations.append($0) },
+            onSpeakingChanged: { _ in })
+        session._test_setRelaySessionId("relay-1")
+        try session._test_startMicrophonePump()
+
+        audioCapture.fail("Realtime microphone became unavailable: no input")
+        for _ in 0..<10 {
+            if await !(requests.snapshot()).isEmpty { break }
+            await Task.yield()
+        }
+
+        #expect(issues.map(\.code) == ["audio_input_unavailable"])
+        #expect(issues.map(\.phase) == ["audio-input"])
+        #expect(terminations == [.audioCaptureFailed(
+            message: "Realtime microphone became unavailable: no input")])
+        #expect(!audioCapture.isStarted)
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.close"])
+        #expect(recorded.first?.params?["sessionId"]?.stringValue == "relay-1")
     }
 
     @Test func `ready then close publishes one typed termination and releases capture`() async {
