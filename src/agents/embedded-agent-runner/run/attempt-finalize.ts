@@ -2,6 +2,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
+  type AttemptTrajectoryTerminal,
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
@@ -15,6 +16,8 @@ type FinalizeEmbeddedAttemptParams = {
   emptyAssistantReplyIsSilent: boolean;
   hasTerminalOutput: boolean;
   silentExpected?: boolean;
+  /** Capture terminal classification for deferred session.ended after cleanup. */
+  onTrajectoryTerminal?: (terminal: AttemptTrajectoryTerminal) => void;
 };
 
 /** Classifies the completed attempt and records its terminal trajectory artifacts. */
@@ -101,18 +104,9 @@ export function finalizeEmbeddedAttempt(
       lastToolError: result.lastToolError,
     }),
   );
-  trajectoryRecorder?.recordEvent("session.ended", {
-    status: terminal.status,
-    aborted: terminalState.aborted,
-    externalAbort: terminalState.externalAbort,
-    timedOut: terminalState.timedOut,
-    idleTimedOut: terminalState.idleTimedOut,
-    timedOutDuringCompaction: terminalState.timedOutDuringCompaction,
-    timedOutDuringToolExecution: terminalState.timedOutDuringToolExecution,
-    timedOutByRunBudget: terminalState.timedOutByRunBudget,
-    promptError,
-    terminalError: terminal.terminalError,
-  });
+  // session.ended is recorded after attempt cleanup so its wall-clock timestamp
+  // reflects real session termination, not model.completed (#102014).
+  params.onTrajectoryTerminal?.(terminal);
 
   return result;
 }

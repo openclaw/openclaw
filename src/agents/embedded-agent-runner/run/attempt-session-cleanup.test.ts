@@ -57,6 +57,7 @@ function createInput(overrides: Record<string, unknown> = {}) {
     buildAbortSettlePromise: () => null,
     trajectoryRecorder,
     trajectoryEndRecorded: false,
+    trajectoryTerminalStatus: "success" as const,
     cleanupYieldAborted: false,
     emitDiagnosticRunCompleted,
     readState: () => state,
@@ -71,29 +72,50 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     hoisted.flushEmbeddedAttemptTrajectoryRecorder.mockResolvedValue(undefined);
   });
 
-  it("records the terminal event before lock-safe resource cleanup", async () => {
-    const input = createInput();
+  it("records session.ended after resource cleanup and preserves terminal status", async () => {
+    const order: string[] = [];
+    hoisted.flushEmbeddedAttemptTrajectoryRecorder.mockImplementation(async () => {
+      order.push("flush");
+    });
+    hoisted.cleanupEmbeddedAttemptResources.mockImplementation(async () => {
+      order.push("cleanup");
+    });
+    const input = createInput({
+      trajectoryRecorder: {
+        recordEvent: vi.fn((type: string) => {
+          order.push(type);
+        }),
+        describeFlushState: vi.fn(),
+        flush: vi.fn(),
+      },
+    });
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
 
+    expect(order).toEqual(["flush", "cleanup", "session.ended", "flush"]);
     expect(input.trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
       "session.ended",
-      expect.objectContaining({ status: "cleanup", aborted: false }),
-    );
-    expect(hoisted.flushEmbeddedAttemptTrajectoryRecorder).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-        trajectoryRecorder: input.trajectoryRecorder,
-      }),
+      expect.objectContaining({ status: "success", aborted: false }),
     );
     expect(hoisted.clearToolSearchCatalog).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run-1", sessionId: "session-1", agentId: "main" }),
     );
-    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
-      expect.objectContaining({ aborted: false, skipSessionFlush: false }),
-    );
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
+  });
+
+  it("derives session.ended status from cleanup failures", async () => {
+    hoisted.cleanupEmbeddedAttemptResources.mockRejectedValue(new Error("cleanup boom"));
+    const input = createInput({
+      trajectoryTerminalStatus: "success",
+    });
+
+    await expect(cleanupEmbeddedAttemptSessionPhase(input as never)).rejects.toThrow(
+      "cleanup boom",
+    );
+    expect(input.trajectoryRecorder.recordEvent).toHaveBeenCalledWith(
+      "session.ended",
+      expect.objectContaining({ status: "error" }),
+    );
   });
 
   it("re-reads abort state after trajectory flushing", async () => {

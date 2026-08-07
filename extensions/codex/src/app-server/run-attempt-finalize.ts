@@ -49,7 +49,7 @@ export async function finalizeCodexAttempt(
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
   activeTurn: CodexAttemptActiveTurn,
 ): Promise<EmbeddedRunAttemptResult> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder } = resources;
   const { context, systemPromptReport } = prompt;
   const { runtime, attemptTools, activeTranscriptTarget, hookContext } = context;
   const { hookContextWindowFields, hookRunner } = context;
@@ -440,19 +440,16 @@ export async function finalizeCodexAttempt(
     timedOut: effectiveTimedOut,
     yieldDetected: toolState.yieldDetected,
   });
-  trajectoryRecorder?.recordEvent("session.ended", {
-    status: finalPromptError
-      ? "error"
-      : finalAborted || effectiveTimedOut
-        ? "interrupted"
-        : "success",
-    threadId: resourceState.thread.threadId,
-    turnId: activeTurnId,
-    timedOut: effectiveTimedOut,
-    yieldDetected: toolState.yieldDetected,
-    promptError: normalizeCodexTrajectoryError(finalPromptError),
-  });
-  markTrajectoryEndRecorded();
+  // session.ended is recorded after attempt cleanup so its wall-clock timestamp
+  // reflects real session termination, not model.completed (#102014).
+  resourceState.trajectoryTerminalStatus = finalPromptError
+    ? "error"
+    : finalAborted || effectiveTimedOut
+      ? "interrupted"
+      : "success";
+  resourceState.trajectoryTerminalPromptError = normalizeCodexTrajectoryError(finalPromptError);
+  resourceState.trajectoryTerminalTimedOut = effectiveTimedOut;
+  resourceState.trajectoryTerminalYieldDetected = toolState.yieldDetected;
   const terminalAssistantText = collectTerminalAssistantText(result);
   if (
     terminalAssistantText &&
