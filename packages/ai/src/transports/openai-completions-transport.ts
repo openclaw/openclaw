@@ -36,6 +36,7 @@ import {
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
@@ -84,7 +85,11 @@ import {
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { failTransportStream, finalizeTransportStream } from "./transport-stream-shared.js";
+import {
+  failTransportStream,
+  finalizeTransportStream,
+  transportAbortError,
+} from "./transport-stream-shared.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
@@ -342,13 +347,38 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           options as OpenAICompletionsOptions | undefined,
         );
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-        const responseStream = (await client.chat.completions.create(
-          params as never,
-          buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
-            timeoutMs: options?.timeoutMs,
-            maxRetries: options?.maxRetries,
-          }),
-        )) as unknown as AsyncIterable<ChatCompletionChunk>;
+        const { data: responseStream, response } = await client.chat.completions
+          .create(
+            params as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+            buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+              timeoutMs: options?.timeoutMs,
+              maxRetries: options?.maxRetries,
+            }),
+          )
+          .withResponse();
+        throwIfModelStreamAborted(firstEventAbort.signal);
+        if (options?.onResponse) {
+          let onAbort!: () => void;
+          // Keep the unread SDK stream cancellable until its response hook settles.
+          await Promise.race([
+            Promise.resolve().then(() =>
+              options.onResponse?.(
+                { status: response.status, headers: headersToRecord(response.headers) },
+                model,
+              ),
+            ),
+            new Promise<never>((_resolve, reject) => {
+              onAbort = () => reject(transportAbortError(firstEventAbort.signal));
+              firstEventAbort.signal.addEventListener("abort", onAbort, { once: true });
+            }),
+          ])
+            .catch((error: unknown) => {
+              responseStream.controller.abort(firstEventAbort.signal.reason);
+              throw error;
+            })
+            .finally(() => firstEventAbort.signal.removeEventListener("abort", onAbort));
+        }
+        throwIfModelStreamAborted(firstEventAbort.signal);
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
