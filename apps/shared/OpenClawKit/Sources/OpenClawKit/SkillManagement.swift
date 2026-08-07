@@ -226,12 +226,24 @@ public struct ClawHubInstalledSkillLink: Codable, Sendable {
 
 public struct ClawHubSkillSummary: Codable, Identifiable, Hashable, Sendable {
     public let slug: String
+    public let ownerHandle: String?
+    public let installRef: String?
+    public let trustState: String?
     public let displayName: String
     public let summary: String?
     public let version: String?
 
     public var id: String {
-        self.slug
+        self.installReference
+    }
+
+    public var installReference: String {
+        if let installRef = self.installRef?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
+            return installRef
+        }
+        return SkillManagementContract.canonicalClawHubReference(
+            slug: self.slug,
+            ownerHandle: self.ownerHandle) ?? self.slug
     }
 }
 

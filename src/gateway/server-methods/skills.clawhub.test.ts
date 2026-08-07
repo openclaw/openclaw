@@ -419,12 +419,14 @@ describe("skills gateway handlers (clawhub)", () => {
     const { ok, response, error } = await callSkillsHandler("skills.install", {
       source: "clawhub",
       slug: "calendar",
+      ownerHandle: "alice",
       version: "1.2.3",
     });
 
     expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      ownerHandle: "alice",
       version: "1.2.3",
       force: false,
       logger: expect.objectContaining({ warn: expect.any(Function) }),
@@ -469,6 +471,32 @@ describe("skills gateway handlers (clawhub)", () => {
     const [firstResult, retryResult] = await Promise.all([first, reconnectRetry]);
     expect(firstResult.ok).toBe(true);
     expect(retryResult.ok).toBe(true);
+  });
+
+  it("does not deduplicate same-slug installs from different publishers", async () => {
+    installSkillFromClawHubMock.mockImplementation(async (params: { ownerHandle?: string }) => ({
+      ok: true,
+      slug: "weather",
+      version: params.ownerHandle === "alice" ? "1.0.0" : "2.0.0",
+      targetDir: "/tmp/workspace/skills/weather",
+    }));
+
+    const [alice, bob] = await Promise.all([
+      callSkillsHandler("skills.install", {
+        source: "clawhub",
+        slug: "weather",
+        ownerHandle: "alice",
+      }),
+      callSkillsHandler("skills.install", {
+        source: "clawhub",
+        slug: "weather",
+        ownerHandle: "bob",
+      }),
+    ]);
+
+    expect(alice.ok).toBe(true);
+    expect(bob.ok).toBe(true);
+    expect(installSkillFromClawHubMock).toHaveBeenCalledTimes(2);
   });
 
   it("returns ClawHub skill install trust warnings in Gateway error details", async () => {

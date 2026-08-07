@@ -20,7 +20,7 @@ class SkillManagementTest {
   fun searchResultsKeepOnlyIdentifiedSkills() {
     val results =
       parseClawHubSearchResults(
-        """{"results":[{"slug":" alpha ","displayName":"Alpha","summary":"Useful","version":"1.2.3"},{"slug":"missing-name"},{"displayName":"Missing slug"}]}""",
+        """{"results":[{"slug":" alpha ","ownerHandle":"alice","installRef":"@alice/alpha","displayName":"Alpha","summary":"Useful","version":"1.2.3"},{"slug":"missing-name"},{"displayName":"Missing slug"}]}""",
         json,
       )
 
@@ -31,10 +31,32 @@ class SkillManagementTest {
           displayName = "Alpha",
           summary = "Useful",
           version = "1.2.3",
+          ownerHandle = "alice",
+          installRef = "@alice/alpha",
         ),
       ),
       results,
     )
+  }
+
+  @Test
+  fun detailParamsKeepSelectedPublisherIdentity() {
+    val params =
+      json.parseToJsonElement(
+        clawHubDetailParams(
+          GatewayClawHubSkillSummary(
+            slug = "weather",
+            displayName = "Weather",
+            summary = null,
+            version = null,
+            ownerHandle = "alice",
+            installRef = "@alice/weather",
+          ),
+        ),
+      ).jsonObject
+
+    assertEquals("weather", params.getValue("slug").jsonPrimitive.content)
+    assertEquals("alice", params.getValue("ownerHandle").jsonPrimitive.content)
   }
 
   @Test

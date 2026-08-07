@@ -66,14 +66,15 @@ struct ClawHubSkillsBrowser: View {
                                 installed: skill.version.map {
                                     SkillManagementContract.installed(
                                         self.installedSkills,
-                                        slug: skill.slug,
+                                        slug: skill.installReference,
                                         version: $0)
                                 } ?? SkillManagementContract.installed(
                                     self.installedSkills,
-                                    slug: skill.slug),
-                                isBusy: self.model.reviewingSlug == skill.slug || self.model.installingSlug.map {
-                                    SkillManagementContract.sameClawHubSkill($0, skill.slug)
-                                } == true,
+                                    slug: skill.installReference),
+                                isBusy: self.model.reviewingSlug == skill.installReference ||
+                                    self.model.installingSlug.map {
+                                        SkillManagementContract.sameClawHubSkill($0, skill.installReference)
+                                    } == true,
                                 showsDivider: index != self.model.results.count - 1)
                             {
                                 Task { await self.model.review(skill) }
@@ -288,14 +289,14 @@ private final class ClawHubSkillsBrowserModel {
 
     func review(_ skill: ClawHubSkillSummary) async {
         guard self.reviewingSlug == nil else { return }
-        self.reviewingSlug = skill.slug
+        self.reviewingSlug = skill.installReference
         self.notice = nil
         defer { self.reviewingSlug = nil }
         do {
             guard let route = await GatewayConnection.shared.captureRoute() else {
                 throw ClawHubSkillsBrowserError.gatewayUnavailable
             }
-            let detail = try await GatewayConnection.shared.skillsDetail(slug: skill.slug, on: route)
+            let detail = try await GatewayConnection.shared.skillsDetail(skill, on: route)
             guard let review = ClawHubSkillInstallReview(detail: detail, fallback: skill) else {
                 throw ClawHubSkillsBrowserError.missingInstallVersion
             }

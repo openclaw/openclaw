@@ -13202,15 +13202,19 @@ public struct SkillsSearchResult: Codable, Sendable {
 
 public struct SkillsDetailParams: Codable, Sendable {
     public let slug: String
+    public let ownerhandle: String?
 
     public init(
-        slug: String)
+        slug: String,
+        ownerhandle: String? = nil)
     {
         self.slug = slug
+        self.ownerhandle = ownerhandle
     }
 
     private enum CodingKeys: String, CodingKey {
         case slug
+        case ownerhandle = "ownerHandle"
     }
 }
 

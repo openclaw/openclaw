@@ -73,11 +73,21 @@ describe("skills.search handler", () => {
     searchSkillsFromClawHubMock.mockResolvedValue([
       {
         score: 0.95,
-        slug: "github",
-        displayName: "GitHub",
-        summary: "GitHub integration",
+        slug: "weather",
+        ownerHandle: "alice",
+        installRef: "@alice/weather",
+        displayName: "Alice Weather",
+        summary: "Native ClawHub result",
         version: "1.0.0",
         updatedAt: 1700000000,
+      },
+      {
+        score: 0.9,
+        slug: "weather",
+        installRef: "skills-sh:bob/tools/weather",
+        trustState: "not-scanned-by-clawhub",
+        displayName: "Bob Weather",
+        summary: "External catalog result",
       },
     ]);
 
@@ -96,11 +106,21 @@ describe("skills.search handler", () => {
       results: [
         {
           score: 0.95,
-          slug: "github",
-          displayName: "GitHub",
-          summary: "GitHub integration",
+          slug: "weather",
+          ownerHandle: "alice",
+          installRef: "@alice/weather",
+          displayName: "Alice Weather",
+          summary: "Native ClawHub result",
           version: "1.0.0",
           updatedAt: 1700000000,
+        },
+        {
+          score: 0.9,
+          slug: "weather",
+          installRef: "skills-sh:bob/tools/weather",
+          trustState: "not-scanned-by-clawhub",
+          displayName: "Bob Weather",
+          summary: "External catalog result",
         },
       ],
     });
@@ -179,9 +199,13 @@ describe("skills.detail handler", () => {
 
     const { ok, response, error } = await callHandler("skills.detail", {
       slug: "github",
+      ownerHandle: "openclaw",
     });
 
-    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({ slug: "github" });
+    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+      slug: "github",
+      ownerHandle: "openclaw",
+    });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     expect(response).toEqual(detail);

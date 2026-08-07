@@ -77,7 +77,7 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     clawhubSearchLoading: false,
     clawhubSearchError: "old error",
     clawhubDetail: null,
-    clawhubDetailSlug: null,
+    clawhubDetailRef: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
@@ -698,32 +698,37 @@ describe("searchClawHub", () => {
 });
 
 describe("loadClawHubDetail", () => {
-  it("ignores stale detail responses after slug changes", async () => {
+  it("keeps same-slug publisher detail requests distinct", async () => {
     const { state, request } = createState();
     const queue = createDeferredRequestQueue(request);
 
-    const firstPending = loadClawHubDetail(state, "github");
-    const secondPending = loadClawHubDetail(state, "gitlab");
+    const firstPending = loadClawHubDetail(state, { slug: "weather", ownerHandle: "alice" });
+    const secondPending = loadClawHubDetail(state, { slug: "weather", ownerHandle: "bob" });
 
     queue.resolveNext({
-      skill: { slug: "github", displayName: "GitHub", createdAt: 1, updatedAt: 2 },
+      skill: { slug: "weather", displayName: "Alice Weather", createdAt: 1, updatedAt: 2 },
     });
     await firstPending;
+    expect(state.clawhubDetail).toBeNull();
 
     queue.resolveNext({
-      skill: { slug: "gitlab", displayName: "GitLab", createdAt: 3, updatedAt: 4 },
+      skill: { slug: "weather", displayName: "Bob Weather", createdAt: 3, updatedAt: 4 },
     });
     await secondPending;
 
+    expect(request.mock.calls.slice(0, 2)).toEqual([
+      ["skills.detail", { slug: "weather", ownerHandle: "alice" }],
+      ["skills.detail", { slug: "weather", ownerHandle: "bob" }],
+    ]);
     expect(state.clawhubDetailLoading).toBe(false);
-    expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
+    expect(state.clawhubDetail?.skill?.displayName).toBe("Bob Weather");
   });
 
   it("ignores a same-client detail response from an older connection epoch", async () => {
     const { state, request } = createState();
     const queue = createDeferredRequestQueue(request);
 
-    const pending = loadClawHubDetail(state, "github");
+    const pending = loadClawHubDetail(state, { slug: "github" });
     state.connected = false;
     state.skillsAgentRevision++;
     state.clawhubDetailLoading = false;
@@ -995,15 +1000,15 @@ describe("skill mutations", () => {
       name: "skill update blocks ClawHub install",
       firstMethod: "skills.update",
       start: (state: SkillsState) => updateSkillEnabled(state, "github", true),
-      blocked: (state: SkillsState) => installFromClawHub(state, "calendar"),
+      blocked: (state: SkillsState) => installFromClawHub(state, { slug: "calendar" }),
       expectedMutation: { kind: "skill", skillKey: "github" } as const,
     },
     {
       name: "ClawHub install blocks skill update",
       firstMethod: "skills.install",
-      start: (state: SkillsState) => installFromClawHub(state, "github"),
+      start: (state: SkillsState) => installFromClawHub(state, { slug: "github" }),
       blocked: (state: SkillsState) => updateSkillEnabled(state, "calendar", true),
-      expectedMutation: { kind: "clawhub", slug: "github" } as const,
+      expectedMutation: { kind: "clawhub", ref: "github" } as const,
     },
   ])("serializes $name and locks API key edits", async (fixture) => {
     const { state, request } = createState();
@@ -1051,7 +1056,7 @@ describe("skill mutations", () => {
     state.skillEdits.github = "submitted-value";
 
     await updateSkillEnabled(state, "github", true);
-    await installFromClawHub(state, "github");
+    await installFromClawHub(state, { slug: "github" });
     updateSkillEdit(state, "github", "late-value");
 
     expect(request).not.toHaveBeenCalled();
@@ -1209,7 +1214,7 @@ describe("skill mutations", () => {
     state.skillsAgentId = "research";
     request.mockResolvedValue({});
 
-    await installFromClawHub(state, "github");
+    await installFromClawHub(state, { slug: "github" });
 
     expect(request).toHaveBeenCalledWith("skills.install", {
       agentId: "research",
@@ -1219,6 +1224,35 @@ describe("skill mutations", () => {
     expect(state.clawhubInstallMessage).toEqual({
       kind: "success",
       text: "Installed github",
+    });
+  });
+
+  it("preserves qualified owner and external source install references", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValue({});
+
+    await installFromClawHub(state, {
+      slug: "weather",
+      ownerHandle: "alice",
+      installRef: "@alice/weather",
+    });
+
+    expect(request).toHaveBeenCalledWith("skills.install", {
+      source: "clawhub",
+      slug: "@alice/weather",
+      ownerHandle: "alice",
+    });
+
+    state.skillOperation = null;
+    await installFromClawHub(state, {
+      slug: "weather",
+      installRef: "skills-sh:bob/tools/weather",
+      trustState: "not-scanned-by-clawhub",
+    });
+
+    expect(request).toHaveBeenCalledWith("skills.install", {
+      source: "clawhub",
+      slug: "skills-sh:bob/tools/weather",
     });
   });
 
@@ -1234,7 +1268,7 @@ describe("skill mutations", () => {
       return {};
     });
 
-    await installFromClawHub(state, "github");
+    await installFromClawHub(state, { slug: "github" });
 
     expect(state.clawhubInstallMessage).toEqual({
       kind: "success",
@@ -1254,7 +1288,7 @@ describe("skill mutations", () => {
     };
     request.mockRejectedValue(error);
 
-    await installFromClawHub(state, "github");
+    await installFromClawHub(state, { slug: "github" });
 
     expect(state.clawhubInstallMessage).toEqual({
       kind: "error",
@@ -1288,21 +1322,21 @@ describe("skill mutations", () => {
       };
     });
 
-    await installFromClawHub(state, "github");
+    await installFromClawHub(state, { slug: "github" });
 
     expect(state.clawhubInstallMessage).toEqual({
       kind: "error",
       text:
         "Review the ClawHub warning before installing this skill.\n\n" +
         "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-      acknowledgeSlug: "github",
+      acknowledgeRef: { slug: "github" },
       acknowledgeVersion: "1.2.3",
       acknowledgeLabel: "Acknowledge risk and install",
     });
 
     await installFromClawHub(
       state,
-      "github",
+      { slug: "github" },
       true,
       state.clawhubInstallMessage!.acknowledgeVersion,
     );
@@ -1333,7 +1367,7 @@ describe("skill mutations", () => {
     },
     {
       name: "ClawHub install",
-      run: (state: SkillsState) => installFromClawHub(state, "github"),
+      run: (state: SkillsState) => installFromClawHub(state, { slug: "github" }),
       expectedRequest: {
         agentId: "alpha",
         source: "clawhub",
@@ -1380,7 +1414,7 @@ describe("reconcileSkillsAgentId", () => {
       managedSkillsDir: "/tmp/skills",
       skills: [],
     };
-    state.skillOperation = { kind: "clawhub", slug: "calendar" };
+    state.skillOperation = { kind: "clawhub", ref: "calendar" };
 
     reconcileSkillsAgentId(state, {
       defaultId: "main",
@@ -1392,7 +1426,7 @@ describe("reconcileSkillsAgentId", () => {
     expect(state.skillsAgentId).toBeNull();
     expect(state.skillsAgentRevision).toBe(1);
     expect(state.skillsReport).toBeNull();
-    expect(state.skillOperation).toEqual({ kind: "clawhub", slug: "calendar" });
+    expect(state.skillOperation).toEqual({ kind: "clawhub", ref: "calendar" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

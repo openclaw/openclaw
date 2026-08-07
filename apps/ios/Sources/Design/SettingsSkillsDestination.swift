@@ -387,10 +387,15 @@ struct SettingsSkillsDestination: View {
                 ClawHubSkillRow(
                     skill: skill,
                     installed: skill.version.map {
-                        SkillManagementContract.installed(self.installedSkills, slug: skill.slug, version: $0)
-                    } ?? SkillManagementContract.installed(self.installedSkills, slug: skill.slug),
-                    isBusy: self.reviewingSlug == skill.slug || self.installingSlug.map {
-                        SkillManagementContract.sameClawHubSkill($0, skill.slug)
+                        SkillManagementContract.installed(
+                            self.installedSkills,
+                            slug: skill.installReference,
+                            version: $0)
+                    } ?? SkillManagementContract.installed(
+                        self.installedSkills,
+                        slug: skill.installReference),
+                    isBusy: self.reviewingSlug == skill.installReference || self.installingSlug.map {
+                        SkillManagementContract.sameClawHubSkill($0, skill.installReference)
                     } == true,
                     onReview: { Task { await self.review(skill) } })
             }
@@ -523,7 +528,7 @@ struct SettingsSkillsDestination: View {
         let gatewayID = self.appModel.connectedGatewayID
         let operationID = UUID()
         self.reviewID = operationID
-        self.reviewingSlug = skill.slug
+        self.reviewingSlug = skill.installReference
         self.notice = nil
         defer {
             if self.reviewID == operationID {
@@ -535,7 +540,7 @@ struct SettingsSkillsDestination: View {
             let route = try await gatewayRoute()
             let data = try await request(
                 method: "skills.detail",
-                params: ClawHubDetailRequest(slug: skill.slug),
+                params: ClawHubDetailRequest(slug: skill.slug, ownerHandle: skill.ownerHandle),
                 timeoutSeconds: 20,
                 route: route)
             let detail = try JSONDecoder().decode(ClawHubSkillDetail.self, from: data)
@@ -912,7 +917,9 @@ private struct ClawHubSkillRow: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 6) {
-                    Text(self.skill.slug).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
+                    Text(self.skill.installReference)
+                        .font(OpenClawType.monoSmall)
+                        .foregroundStyle(.secondary)
                     if let version = self.skill.version {
                         Text(verbatim: version).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
                     }
@@ -1096,7 +1103,10 @@ private struct ClawHubSearchRequest: Encodable {
     let limit: Int
 }
 
-private struct ClawHubDetailRequest: Encodable { let slug: String }
+private struct ClawHubDetailRequest: Encodable {
+    let slug: String
+    let ownerHandle: String?
+}
 
 private struct ClawHubInstallRequest: Encodable {
     let source: String

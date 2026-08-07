@@ -285,6 +285,13 @@ export type ClawHubSkillSearchResult = {
   updatedAt?: number;
 };
 
+type ClawHubSkillSearchWireResult = ClawHubSkillSearchResult & {
+  source?: "clawhub" | "skills-sh";
+  install?: { reference?: string | null } | null;
+  publisher?: { handle?: string | null } | null;
+  owner?: { handle?: string | null } | null;
+};
+
 export type ClawHubSkillDetail = {
   skill: {
     slug: string;
@@ -1227,6 +1234,40 @@ export async function searchClawHubPackages(params: {
   return result.results ?? [];
 }
 
+function normalizeClawHubSkillSearchResult(
+  entry: ClawHubSkillSearchWireResult,
+  baseUrl?: string,
+): ClawHubSkillSearchResult {
+  const ownerHandle = normalizeOptionalString(
+    entry.ownerHandle ?? entry.publisher?.handle ?? entry.owner?.handle,
+  );
+  const wireRef = normalizeOptionalString(entry.install?.reference ?? entry.installRef);
+  const installRef =
+    entry.source === "skills-sh"
+      ? wireRef?.startsWith("skills-sh:")
+        ? wireRef
+        : undefined
+      : wireRef
+        ? wireRef.startsWith("@")
+          ? wireRef
+          : `@${wireRef}`
+        : ownerHandle
+          ? `@${ownerHandle}/${entry.slug}`
+          : undefined;
+  return {
+    score: entry.score,
+    slug: entry.slug,
+    ...(installRef ? { installRef } : {}),
+    ...(entry.source === "skills-sh" ? { trustState: CLAWHUB_SKILLS_SH_TRUST_STATE } : {}),
+    ...(ownerHandle ? { ownerHandle } : {}),
+    displayName: entry.displayName,
+    ...(entry.summary !== undefined ? { summary: entry.summary } : {}),
+    icon: resolveClawHubImageUrl(entry.icon, baseUrl),
+    ...(entry.version !== undefined ? { version: entry.version } : {}),
+    ...(entry.updatedAt !== undefined ? { updatedAt: entry.updatedAt } : {}),
+  };
+}
+
 export async function searchClawHubSkills(params: {
   query: string;
   baseUrl?: string;
@@ -1235,7 +1276,7 @@ export async function searchClawHubSkills(params: {
   fetchImpl?: FetchLike;
   limit?: number;
 }): Promise<ClawHubSkillSearchResult[]> {
-  const result = await fetchJson<{ results: ClawHubSkillSearchResult[] }>({
+  const result = await fetchJson<{ results: ClawHubSkillSearchWireResult[] }>({
     baseUrl: params.baseUrl,
     path: "/api/v1/search",
     token: params.token,
@@ -1246,11 +1287,9 @@ export async function searchClawHubSkills(params: {
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
-  const results = result.results ?? [];
-  for (const entry of results) {
-    entry.icon = resolveClawHubImageUrl(entry.icon, params.baseUrl);
-  }
-  return results;
+  return (result.results ?? []).map((entry) =>
+    normalizeClawHubSkillSearchResult(entry, params.baseUrl),
+  );
 }
 
 export async function fetchClawHubSkillDetail(params: {

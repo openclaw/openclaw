@@ -22,6 +22,16 @@ struct SkillManagementTests {
         #expect(review.author == "Molly")
     }
 
+    @Test func `search results keep qualified owner and source identities`() throws {
+        let data = Data(
+            #"{"results":[{"slug":"weather","ownerHandle":"alice","installRef":"@alice/weather","displayName":"Alice Weather"},{"slug":"weather","installRef":"skills-sh:bob/tools/weather","trustState":"not-scanned-by-clawhub","displayName":"Bob Weather"}]}"#.utf8)
+        let results = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data).results
+
+        #expect(results.map(\.id) == ["@alice/weather", "skills-sh:bob/tools/weather"])
+        #expect(results[0].ownerHandle == "alice")
+        #expect(results[1].trustState == "not-scanned-by-clawhub")
+    }
+
     @Test func `risk acknowledgement stays bound to reviewed version`() {
         let matching = GatewayResponseError(
             method: "skills.install",
