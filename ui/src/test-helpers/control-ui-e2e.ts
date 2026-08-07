@@ -151,6 +151,9 @@ const defaultControlUiFeatureMethods = [
   "chat.abort",
   "chat.metadata",
   "chat.startup",
+  "config.apply",
+  "config.patch",
+  "config.set",
   "session.members.add",
   "session.members.list",
   "session.members.remove",
@@ -208,11 +211,19 @@ export type ControlUiMockGatewayScenario = {
   deviceAuthMigrationPending?: boolean;
   deviceToken?: string;
   featureMethods?: string[];
+  /** Simulate a legacy Gateway that predates the advertised method catalog. */
+  omitFeatureMethods?: boolean;
   historyMessages?: unknown[];
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
   /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
-  inFlightRun?: { runId: string; text?: string; events?: unknown[]; plan?: unknown } | null;
+  inFlightRun?: {
+    runId: string;
+    text?: string;
+    startedAt?: number;
+    events?: unknown[];
+    plan?: unknown;
+  } | null;
   /** Online users included in the connect snapshot's presence list. The entry
    * flagged `self` adopts the connecting client's instanceId so presence
    * surfaces (footer facepile, who's-online roster) resolve "you". */
@@ -294,6 +305,7 @@ export type MockGatewayControls = {
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
+  setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
   setSessionSharingPolicy: (policy: {
@@ -625,6 +637,7 @@ function normalizeScenario(
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
     // mixed-version methods provide an explicit narrower catalog.
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
+    omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     inFlightRun: scenario.inFlightRun ?? null,
@@ -718,6 +731,7 @@ function installControlUiMockGateway(
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
     setOnline: (online: boolean) => void;
+    setOperatorScopes: (scopes: string[]) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     setMethodResponse: (method: string, payload: unknown) => void;
     setSessionSharingPolicy: (policy: {
@@ -1357,7 +1371,7 @@ function installControlUiMockGateway(
           features: {
             capabilities: scenario.featureCapabilities,
             events: [],
-            methods: scenario.featureMethods,
+            ...(scenario.omitFeatureMethods ? {} : { methods: scenario.featureMethods }),
           },
           controlUiTabs: scenario.controlUiTabs,
           controlUiWidgetKinds: scenario.controlUiWidgetKinds,
@@ -1813,6 +1827,9 @@ function installControlUiMockGateway(
       }
       MockWebSocket.latest?.openConnection();
     },
+    setOperatorScopes(scopes) {
+      scenario.operatorScopes = [...scopes];
+    },
     setMethodResponse(method, payload) {
       scenario.methodResponses[method] = payload;
       methodResponseSequenceIndexes.delete(method);
@@ -2048,6 +2065,21 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         }
         gateway.setOnline(nextOnline);
       }, online);
+    },
+    async setOperatorScopes(scopes) {
+      await page.evaluate((nextScopes) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setOperatorScopes: (scopes: string[]) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setOperatorScopes(nextScopes);
+      }, scopes);
     },
     async setHistoryMessages(messages) {
       await page.evaluate((nextMessages) => {

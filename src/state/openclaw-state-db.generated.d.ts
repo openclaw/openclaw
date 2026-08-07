@@ -110,6 +110,11 @@ export interface ApnsRegistrations {
   updated_at_ms: number;
 }
 
+export interface AuditEventSourceAdoptions {
+  adopted_source_id: string;
+  legacy_source_id: string;
+}
+
 export interface AuditEvents {
   account_ref: string | null;
   action: string;
@@ -638,6 +643,16 @@ export interface ExecApprovalsConfig {
   raw_json: string;
   socket_path: string | null;
   updated_at_ms: number;
+}
+
+export interface ExecutionIdentityContexts {
+  context_bytes: number;
+  context_id: string;
+  context_json: string;
+  coverage_state: string;
+  created_at: number;
+  execution_id: string;
+  run_id: string;
 }
 
 export interface FleetCells {
@@ -1554,6 +1569,7 @@ export interface DB {
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
+  audit_event_source_adoptions: AuditEventSourceAdoptions;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
   auth_profile_state: AuthProfileState;
@@ -1588,6 +1604,7 @@ export interface DB {
   diagnostic_events: DiagnosticEvents;
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
+  execution_identity_contexts: ExecutionIdentityContexts;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
