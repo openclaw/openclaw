@@ -70,6 +70,7 @@ export class OutputAccumulator {
   private readonly maxRollingBytes: number;
   private readonly tempFilePrefix: string;
   private readonly createTextDecoder: () => OutputTextDecoder;
+  private readonly spillDecodedByDefault: boolean;
   private readonly createTextTransform?: () => (text: string) => string;
   private readonly lanes = new Map<OutputStream | undefined, DecodeLane>();
 
@@ -94,6 +95,7 @@ export class OutputAccumulator {
     this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
     this.tempFilePrefix = options.tempFilePrefix ?? "openclaw-output";
     this.createTextDecoder = options.createTextDecoder ?? createUtf8TextDecoder;
+    this.spillDecodedByDefault = options.createTextDecoder !== undefined;
     this.createTextTransform = options.createTextTransform;
   }
 
@@ -103,9 +105,12 @@ export class OutputAccumulator {
       lane = {
         decoder: this.createTextDecoder(),
         transform: this.createTextTransform?.(),
-        // Tagged streams must spill decoded text because raw pipe bytes can
-        // interleave inside a UTF-8 character. Keep untagged raw spills stable.
-        spillDecoded: stream !== undefined || this.createTextTransform !== undefined,
+        // Tagged streams and custom decoders must spill decoded text so the
+        // full-output artifact matches the text shown to callers.
+        spillDecoded:
+          stream !== undefined ||
+          this.createTextTransform !== undefined ||
+          this.spillDecodedByDefault,
       };
       this.lanes.set(stream, lane);
     }

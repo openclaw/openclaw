@@ -91,4 +91,28 @@ describe("OutputAccumulator", () => {
     expect(await readFile(snapshot.fullOutputPath!, "utf8")).toBe("E日");
     await rm(snapshot.fullOutputPath!, { force: true });
   });
+
+  it("spills decoded text for truncated untagged custom-decoder output", async () => {
+    const accumulator = new OutputAccumulator({
+      maxBytes: 1,
+      maxLines: 10,
+      tempFilePrefix: "openclaw-output-test",
+      createTextDecoder: () =>
+        createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
+    });
+    const cp936Text = "\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer";
+    const cp936Bytes = Buffer.from([
+      199, 253, 182, 175, 198, 247, 32, 67, 32, 214, 208, 181, 196, 190, 237, 202, 199, 32, 65, 99,
+      101, 114,
+    ]);
+
+    accumulator.append(cp936Bytes);
+    accumulator.finish();
+    const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+    await accumulator.closeTempFile();
+
+    expect(snapshot.truncation.truncated).toBe(true);
+    expect(await readFile(snapshot.fullOutputPath!, "utf8")).toBe(cp936Text);
+    await rm(snapshot.fullOutputPath!, { force: true });
+  });
 });
