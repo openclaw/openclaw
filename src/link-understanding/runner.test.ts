@@ -200,3 +200,58 @@ describe("runLinkUnderstanding", () => {
     );
   });
 });
+
+describe("guarded fetch cleanup", () => {
+  it("cancels an unread error-page body before releasing the guard", async () => {
+    const events: string[] = [];
+    const stream = new ReadableStream({
+      cancel() {
+        events.push("cancel");
+      },
+    });
+    const release = vi.fn(async () => {
+      events.push("release");
+    });
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(stream, { status: 500 }),
+      finalUrl: "https://example.com/final",
+      release,
+    });
+
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    expect(result.outputs).toEqual([]);
+    expect(events).toEqual(["cancel", "release"]);
+  });
+
+  it("still releases the guard when body cancellation never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      const stream = new ReadableStream({ cancel: () => new Promise<void>(() => {}) });
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: new Response(stream, { status: 500 }),
+        finalUrl: "https://example.com/final",
+        release,
+      });
+
+      const run = runLinkUnderstanding({
+        cfg: cfg({ type: "cli", command: "summarize" }),
+        ctx: ctx("see https://example.com/page"),
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(release).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+      expect(release).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

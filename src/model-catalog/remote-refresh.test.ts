@@ -224,3 +224,50 @@ describe("remote model catalog refresh", () => {
     expect(readRemoteModelCatalog(databaseOptions)).toMatchObject(previous);
   });
 });
+
+describe("guarded fetch cleanup", () => {
+  it("cancels an unread error-page body before releasing the guard", async () => {
+    const events: string[] = [];
+    const stream = new ReadableStream({
+      cancel() {
+        events.push("cancel");
+      },
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(stream, { status: 500 }));
+    await expect(
+      refreshRemoteModelCatalog({
+        config: {},
+        fetchImpl,
+        databaseOptions: options(),
+        force: true,
+      }),
+    ).resolves.toMatchObject({ status: "error" });
+    expect(events).toContain("cancel");
+  });
+
+  it("still finishes when body cancellation never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = new ReadableStream({ cancel: () => new Promise<void>(() => {}) });
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(stream, { status: 500 }));
+      let settled = false;
+      const run = refreshRemoteModelCatalog({
+        config: {},
+        fetchImpl,
+        databaseOptions: options(),
+        force: true,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(run).resolves.toMatchObject({ status: "error" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
