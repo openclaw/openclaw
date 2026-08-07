@@ -796,9 +796,20 @@ export function deferGatewayRestartUntilIdle(opts: {
     try {
       current = opts.getPendingCount();
     } catch (err) {
-      stopPoll();
       opts.hooks?.onCheckError?.(err);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+      // Inspection failure means active-work state is unknown; fail closed by
+      // retrying on the next interval. But if the force timeout has elapsed,
+      // the configured bounded bypass must still fire (#104064).
+      const elapsedMs = Date.now() - startedAt;
+      if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
+        stopPoll();
+        opts.hooks?.onTimeout?.(0, elapsedMs);
+        attemptEmission({
+          intent: opts.timeoutIntent,
+          notifyReady: false,
+          skipIdleCheck: true,
+        });
+      }
       return;
     }
     if (current <= 0) {
@@ -820,22 +831,23 @@ export function deferGatewayRestartUntilIdle(opts: {
       });
     }
   };
-  let pending: number;
+  // Inspection failure means active-work state is unknown; fail closed by
+  // entering the deferred poll instead of emitting a restart (#104064).
+  let pending: number | undefined;
   try {
     pending = opts.getPendingCount();
   } catch (err) {
     opts.hooks?.onCheckError?.(err);
-    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+  }
+  if (pending !== undefined && pending <= 0) {
+    attemptEmission({ notifyReady: true });
     return handle;
   }
-  if (pending > 0) {
-    opts.hooks?.onDeferring?.(pending);
-  }
+  // When the initial inspection throws, we enter deferral with an unknown
+  // count so the poll retries on the next interval.
+  opts.hooks?.onDeferring?.(pending ?? 0);
   poll = setInterval(inspectPending, pollMs);
   activeDeferralPolls.add(poll);
-  if (pending <= 0) {
-    attemptEmission({ notifyReady: true });
-  }
   return handle;
 }
 
