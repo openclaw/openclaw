@@ -304,6 +304,10 @@ export function createGatewayHooksRequestHandler(params: {
       state: { nextRunAtMs: nowMs },
     };
     let hookEventSessionKey: string | undefined;
+    // Dispatch-time accepted agent, frozen before the queue so a default-agent
+    // reload between dispatch and queue execution cannot retarget global wakes
+    // at a different agent than the one the isolated run actually used.
+    let acceptedHookAgentId: string | undefined;
     const reportHookFailure = (err: unknown) => {
       logHooks.warn(`hook agent failed: ${String(err)}`);
       enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
@@ -321,7 +325,7 @@ export function createGatewayHooksRequestHandler(params: {
           failureAgentId && hookEventSessionKey
             ? failureAgentId
             : isUnscopedSessionKeySentinel(failureSessionKey)
-              ? (failureAgentId ?? resolveDefaultAgentId(getRuntimeConfig()))
+              ? (failureAgentId ?? acceptedHookAgentId ?? resolveDefaultAgentId(getRuntimeConfig()))
               : undefined;
         requestHeartbeat({
           source: "hook",
@@ -354,6 +358,10 @@ export function createGatewayHooksRequestHandler(params: {
       };
     }
     const agentId = acceptedValue.agentId ?? resolveDefaultAgentId(dispatchCfg);
+    // Freeze the accepted agent for failure/announce wake routing: the queue
+    // may run after a reload that changes the default agent, and a global
+    // wake must target the agent the isolated run actually used.
+    acceptedHookAgentId = agentId;
     const queueKey = resolveCronAgentSessionKey({
       sessionKey,
       agentId,
@@ -490,7 +498,9 @@ export function createGatewayHooksRequestHandler(params: {
             if (value.wakeMode === "now") {
               // Target the event's agent/session; unnamed non-global hooks rely on the
               // fresh session key so a default-agent reload cannot wake a stale agent.
-              // Global wakes carry the agent but omit the shared key to prevent coalescing.
+              // Global wakes carry the frozen accepted agent (not a freshly resolved
+              // default) so a reload between dispatch and queue execution cannot
+              // retarget the wake at a different agent than the run used.
               requestHeartbeat({
                 source: "hook",
                 intent: "immediate",
@@ -498,7 +508,7 @@ export function createGatewayHooksRequestHandler(params: {
                 ...(acceptedValue.agentId
                   ? { agentId: acceptedValue.agentId }
                   : isUnscopedSessionKeySentinel(eventSessionKey)
-                    ? { agentId: resolveDefaultAgentId(cfg) }
+                    ? { agentId: acceptedHookAgentId ?? resolveDefaultAgentId(cfg) }
                     : {}),
                 ...(!isUnscopedSessionKeySentinel(eventSessionKey)
                   ? { sessionKey: eventSessionKey }
