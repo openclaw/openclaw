@@ -1,10 +1,12 @@
 // Classification coverage for compaction failure and skip reason telemetry.
 import { describe, expect, it } from "vitest";
 import {
+  CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
   isBenignCompactionSkipResult,
   isBenignCompactionSkipReason,
+  isCodexOwnedAutomaticCompactionSkip,
   resolveCompactionFailureReason,
 } from "./compact-reasons.js";
 
@@ -96,6 +98,36 @@ describe("isBenignCompactionSkipReason", () => {
       expect(isBenignCompactionSkipResult({ ok: true, compacted: false, reason })).toBe(false);
     },
   );
+});
+
+describe("isCodexOwnedAutomaticCompactionSkip", () => {
+  it("matches only Codex's exact automatic-compaction ownership no-op", () => {
+    const reason = CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON;
+    expect(isCodexOwnedAutomaticCompactionSkip({ ok: true, compacted: false, reason })).toBe(true);
+    expect(isCodexOwnedAutomaticCompactionSkip({ ok: true, compacted: true, reason })).toBe(false);
+    expect(isCodexOwnedAutomaticCompactionSkip({ ok: false, compacted: false, reason })).toBe(
+      false,
+    );
+    expect(
+      isCodexOwnedAutomaticCompactionSkip({
+        ok: true,
+        compacted: false,
+        reason: "below threshold",
+      }),
+    ).toBe(false);
+  });
+
+  it("is not folded into the benign skip contract so forced callers can escalate", () => {
+    // Forced/preflight compaction must escalate rather than accept the deferral,
+    // so the ownership no-op must never read as a benign skip.
+    expect(
+      isBenignCompactionSkipResult({
+        ok: true,
+        compacted: false,
+        reason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("formatUnknownCompactionReasonDetail", () => {

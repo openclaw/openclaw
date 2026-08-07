@@ -446,6 +446,25 @@ async function compactCodexNativeThread(
   params: CompactEmbeddedAgentSessionParams,
   options: CodexAppServerCompactOptions,
 ): Promise<EmbeddedAgentCompactResult | undefined> {
+  const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    config: params.config,
+  });
+  const initialBinding = await options.bindingStore.read(bindingIdentity);
+  // Read the binding before deciding to defer. Automatic triggers hand context
+  // pressure to codex-rs's inline compaction, but that is only safe while the
+  // bound thread is live. A missing binding must surface for recovery instead of
+  // being swallowed as a benign no-op that trusts a thread that no longer exists
+  // (#119977). Manual and guarded (allowNonManual) requests fall through to the
+  // native request below, which surfaces "thread not found" for a dead thread.
+  if (!initialBinding?.threadId) {
+    return failedCodexThreadBindingCompactionResult(params, {
+      reason: "no codex app-server thread binding",
+      recovery: "missing_thread_binding",
+    });
+  }
   if (params.trigger !== "manual" && !options.allowNonManualNativeRequest) {
     embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
       sessionId: params.sessionId,
@@ -454,6 +473,8 @@ async function compactCodexNativeThread(
     });
     return codexNativeCompactionResult(params, {
       compacted: false,
+      // Cross-boundary contract: core compaction callers match this exact reason
+      // (see CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON in compact-reasons.ts).
       reason: "codex app-server owns automatic compaction",
       details: {
         backend: "codex-app-server",
@@ -471,19 +492,6 @@ async function compactCodexNativeThread(
   });
   if (nativeExecutionBlock) {
     return { ok: false, compacted: false, reason: nativeExecutionBlock };
-  }
-  const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    config: params.config,
-  });
-  const initialBinding = await options.bindingStore.read(bindingIdentity);
-  if (!initialBinding?.threadId) {
-    return failedCodexThreadBindingCompactionResult(params, {
-      reason: "no codex app-server thread binding",
-      recovery: "missing_thread_binding",
-    });
   }
   let binding = initialBinding;
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;

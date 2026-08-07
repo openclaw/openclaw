@@ -35,7 +35,10 @@ import {
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { SessionManager } from "../sessions/index.js";
-import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
+import {
+  DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+  isCodexOwnedAutomaticCompactionSkip,
+} from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -571,11 +574,22 @@ async function compactResolvedContextEngine(
     return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
-    if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
+    const recoverableBindingFailure = shouldFallbackAfterHarnessCompaction(harnessResult);
+    // A forced/preflight compaction has declared compaction mandatory, so Codex's
+    // "owns automatic compaction" deferral must not end the turn against a thread
+    // that may no longer exist. Escalate to the context engine (and its secondary
+    // native request) instead of trusting the deferral indefinitely (#119977,
+    // #119971). Ordinary budget triggers still defer to codex-rs inline compaction.
+    const escalateOwnershipSkip =
+      (params.forcePreflight === true || params.preflightRequired === true) &&
+      isCodexOwnedAutomaticCompactionSkip(harnessResult);
+    if (!recoverableBindingFailure && !escalateOwnershipSkip) {
       return harnessResult;
     }
     log.warn(
-      `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
+      recoverableBindingFailure
+        ? `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`
+        : `native harness deferred required compaction to codex-rs; escalating to context engine: ${harnessResult.reason ?? "unknown"}`,
     );
   }
   if (

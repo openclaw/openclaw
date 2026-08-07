@@ -3729,6 +3729,73 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("escalates a forced preflight past Codex's ownership deferral to the context engine", async () => {
+    // #119977 / #119971: a required preflight compaction must not accept Codex's
+    // "owns automatic compaction" deferral, which trusts a possibly-dead thread and
+    // would otherwise end the user's turn. It escalates to the context engine.
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    } as never);
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "codex app-server owns automatic compaction",
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.4",
+        agentHarnessId: "codex",
+        trigger: "budget",
+        force: true,
+        forcePreflight: true,
+        preflightRequired: true,
+        currentTokenCount: 333,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(result.result?.summary).toBe("engine-summary");
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+    // Only the initial native attempt ran; the deferral escalated to the engine.
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers an ordinary budget trigger to Codex without escalating to the context engine", async () => {
+    // Ordinary (non-forced) budget compaction still defers to codex-rs inline
+    // compaction while the binding is present; only forced/preflight escalates.
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    } as never);
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "codex app-server owns automatic compaction",
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.4",
+        agentHarnessId: "codex",
+        trigger: "budget",
+        currentTokenCount: 333,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("codex app-server owns automatic compaction");
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["missing_thread_binding", "no codex app-server thread binding"],
     ["stale_thread_binding", "thread not found"],

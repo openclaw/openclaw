@@ -9,6 +9,33 @@ const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
 
+/**
+ * Exact reason a Codex app-server session emits when it defers automatic
+ * compaction to codex-rs's inline compaction. Cross-boundary contract: the codex
+ * plugin produces this literal (extensions/codex/src/app-server/compact.ts) and
+ * core callers match it here.
+ */
+export const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON =
+  "codex app-server owns automatic compaction";
+
+/**
+ * Returns whether a result is Codex's intentional automatic-compaction ownership
+ * no-op. The deferral is only safe while the bound thread is live, so forced and
+ * preflight callers must escalate rather than accept it; it is intentionally kept
+ * out of isBenignCompactionSkipResult so those callers gate on it explicitly.
+ */
+export function isCodexOwnedAutomaticCompactionSkip(result: {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+}): boolean {
+  return (
+    result.ok &&
+    !result.compacted &&
+    result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON
+  );
+}
+
 function isGenericCompactionCancelledReason(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";

@@ -471,6 +471,33 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
   });
 
+  it("reports a missing binding on automatic triggers instead of deferring to codex-rs", async () => {
+    // #119977: the automatic ownership deferral reads the binding first, so a
+    // missing thread binding surfaces for recovery instead of being trusted
+    // indefinitely as a benign "codex owns automatic compaction" no-op.
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = path.join(tempDir, "missing-auto-binding.jsonl");
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+      }),
+    );
+
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("no codex app-server thread binding");
+    expect(result.failure?.reason).toBe("missing_thread_binding");
+    expect(result.result).toBeUndefined();
+  });
+
   it("starts native app-server compaction for post-context-engine budget requests", async () => {
     const fake = createFakeCodexClient({ retainedThreadId: null });
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -1571,6 +1598,48 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.closeAndWait).not.toHaveBeenCalled();
   });
 
+  it("surfaces a dead thread as a recoverable stale binding on guarded native requests", async () => {
+    // #119977: a guarded (allowNonManual) escalation for a retired thread must
+    // reach stale_thread_binding so the recovery path can rebind, not a benign
+    // no-op. The RPC rejection travels the guarded withLease route to recovery.
+    const fake = createFakeCodexClient();
+    fake.request.mockRejectedValueOnce(
+      new CodexAppServerRpcError(
+        { code: -32_600, message: "thread not found: thread-1" },
+        "thread/compact/start",
+      ),
+    );
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "budget",
+          currentTokenCount: 456,
+        },
+        { allowNonManualNativeRequest: true },
+      ),
+    );
+
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { timeoutMs: 60_000 },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("thread not found: thread-1");
+    expect(result.failure?.reason).toBe("stale_thread_binding");
+    expect(result.result).toBeUndefined();
+    // The stale binding is preserved for the recovery path to clear/rebind.
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({ threadId: "thread-1" });
+  });
+
   it("retires the client before releasing an unconfirmed compaction start", async () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(new Error("thread/compact/start timed out"));
@@ -1712,6 +1781,11 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("bounds ignored compaction override warnings through the compact entry point", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
+    const OVERRIDE_WARNING =
+      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction";
+    // These sessions intentionally have no binding, so each call also emits the
+    // missing-binding recovery warning; scope the count to the override warning.
+    const overrideWarns = () => warn.mock.calls.filter(([message]) => message === OVERRIDE_WARNING);
 
     async function runWithIgnoredOverrides(index: number): Promise<void> {
       const agentId = `cap-${index}`;
@@ -1741,26 +1815,26 @@ describe("maybeCompactCodexAppServerSession", () => {
     for (let index = 0; index < 4_096; index += 1) {
       await runWithIgnoredOverrides(index);
     }
-    expect(warn).toHaveBeenCalledTimes(4_096);
+    expect(overrideWarns()).toHaveLength(4_096);
 
     // At exactly 4,096 entries the oldest key is still retained, so a duplicate stays suppressed.
     await runWithIgnoredOverrides(0);
-    expect(warn).toHaveBeenCalledTimes(4_096);
+    expect(overrideWarns()).toHaveLength(4_096);
 
     // The 4,097th distinct key pushes past the cap and evicts the LRU entry. The duplicate
     // check on key 0 refreshed its recency, so the evicted key is 1.
     await runWithIgnoredOverrides(4_096);
-    expect(warn).toHaveBeenCalledTimes(4_097);
+    expect(overrideWarns()).toHaveLength(4_097);
 
     // The evicted key warns again on reappearance.
     await runWithIgnoredOverrides(1);
-    expect(warn).toHaveBeenCalledTimes(4_098);
+    expect(overrideWarns()).toHaveLength(4_098);
 
     // A recent duplicate stays suppressed.
     await runWithIgnoredOverrides(4_096);
-    expect(warn).toHaveBeenCalledTimes(4_098);
-    expect(warn.mock.calls.at(-1)).toEqual([
-      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+    expect(overrideWarns()).toHaveLength(4_098);
+    expect(overrideWarns().at(-1)).toEqual([
+      OVERRIDE_WARNING,
       {
         sessionId: "session-1",
         sessionKey: "agent:cap-1:session-1",
