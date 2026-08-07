@@ -1026,7 +1026,7 @@ export async function maybeScanExtraGatewayServices(
 
 /**
  * Resolves a `dueling` systemd install (both a user-scope and a system-scope
- * gateway unit present) by removing the redundant user-scope unit after
+ * gateway unit present) by archiving the redundant user-scope unit after
  * confirmation, keeping the root-installed system-scope unit as authoritative.
  *
  * This is the fix for issue #79375: on Linux the two units bind the same port
@@ -1097,7 +1097,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
   const shouldRemove = await confirmDoctorServiceRepair(
     prompter,
     {
-      message: "Remove the redundant user-scope gateway unit and keep the system-scope unit?",
+      message: "Archive the redundant user-scope gateway unit and keep the system-scope unit?",
       initialValue: true,
     },
     policy,
@@ -1115,21 +1115,26 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
       env: process.env,
       stdout: process.stdout,
     });
+    const { archivedPath } = result;
     note(
-      result.removed
-        ? `Removed user-scope unit ${result.unitPath}.`
+      archivedPath
+        ? [
+            `Moved user-scope unit ${result.unitPath} to:`,
+            `- ${archivedPath}`,
+            `Restore it with: cp ${archivedPath} ${result.unitPath}`,
+          ].join("\n")
         : `User-scope unit already absent at ${result.unitPath}.`,
-      "Redundant user gateway removed",
+      "Redundant user gateway archived",
     );
     // Only claim the conflict is resolved when systemd actually released the
     // unit; a file-only removal can leave the loaded unit running.
     runtime.log(
       result.disabled
-        ? "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager."
-        : `Removed the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
+        ? "Archived the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager."
+        : `Archived the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
     );
   } catch (err) {
-    runtime.error(`Failed to remove redundant user-scope gateway unit: ${String(err)}`);
+    runtime.error(`Failed to archive redundant user-scope gateway unit: ${String(err)}`);
     const hints = renderGatewayServiceCleanupHints();
     if (hints.length > 0) {
       note(hints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");

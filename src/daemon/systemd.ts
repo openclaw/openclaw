@@ -1861,7 +1861,8 @@ export async function uninstallLegacySystemdUnits({
 type UninstallUserSystemdGatewayUnitResult = {
   unitName: string;
   unitPath: string;
-  removed: boolean;
+  /** Archive destination, or undefined when there was no unit file to move. */
+  archivedPath: string | undefined;
   /**
    * False when systemctl could not disable/stop the unit. Deleting the unit
    * file alone does not evict an already-loaded unit, so callers must not
@@ -1870,11 +1871,40 @@ type UninstallUserSystemdGatewayUnitResult = {
   disabled: boolean;
 };
 
+/** Timestamped archive directory for units doctor moves out of the way. */
+function resolveSystemdUnitArchiveDir(env: GatewayServiceEnv): string {
+  const day = new Date().toISOString().slice(0, 10);
+  return path.join(resolveStateDir(env as NodeJS.ProcessEnv), "backups", "systemd-units", day);
+}
+
 /**
- * Removes the canonical *user-scope* gateway unit, leaving any system-scope
+ * Copies to `baseTarget`, or a numbered sibling if something is already there.
+ * The archive directory is keyed by day, not by run, so a second repair the
+ * same day (or any pre-existing file at that exact path) would otherwise let
+ * `copyFile` silently replace an earlier operator backup — the exact data
+ * loss this archive-instead-of-delete path exists to prevent (#116130).
+ */
+async function copyToUniqueArchiveTarget(sourcePath: string, baseTarget: string): Promise<string> {
+  for (let attempt = 0; ; attempt++) {
+    const target = attempt === 0 ? baseTarget : `${baseTarget}.${attempt}`;
+    try {
+      await fs.copyFile(sourcePath, target, fsSync.constants.COPYFILE_EXCL);
+      return target;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
+}
+
+/**
+ * Archives the canonical *user-scope* gateway unit, leaving any system-scope
  * unit untouched. Used by doctor to resolve a `dueling` installation by
- * dropping the redundant user-scope leftover (issue #79375). Removing a unit
- * under `$HOME` needs no root, unlike the system-scope unit.
+ * clearing the redundant user-scope leftover (issue #79375). The unit is moved,
+ * not unlinked, so operator edits (custom `ExecStart`, `Environment=`, limits)
+ * survive a wrong ownership guess and can be restored with `cp` (issue #116130).
+ * Touching a unit under `$HOME` needs no root, unlike the system-scope unit.
  */
 export async function uninstallUserSystemdGatewayUnit({
   env,
@@ -1891,11 +1921,16 @@ export async function uninstallUserSystemdGatewayUnit({
       `systemctl unavailable; removing unit file only: ${unitName}. A loaded unit keeps running until systemd reloads.\n`,
     );
   }
-  let removed = false;
+  const archiveTarget = path.join(resolveSystemdUnitArchiveDir(env), unitName);
+  let archivedPath: string | undefined;
   try {
+    // Archive dir first, so a missing destination cannot raise the ENOENT that
+    // means "no unit file here"; copy before unlink, so a cross-filesystem
+    // state dir or a failed write leaves the operator's unit in place.
+    await fs.mkdir(path.dirname(archiveTarget), { recursive: true, mode: 0o700 });
+    archivedPath = await copyToUniqueArchiveTarget(unitPath, archiveTarget);
     await fs.unlink(unitPath);
-    removed = true;
-    stdout.write(`${formatLine("Removed user-scope systemd service", unitPath)}\n`);
+    stdout.write(`${formatLine("Archived user-scope systemd service", archivedPath)}\n`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
@@ -1904,9 +1939,9 @@ export async function uninstallUserSystemdGatewayUnit({
   }
   // The manager keeps a deleted unit's definition loaded until it reloads, so
   // without this the unit stays startable while the detector reports it gone.
-  if (removed && disabled) {
+  if (archivedPath && disabled) {
     await reloadSystemdUserManager(env);
   }
-  return { unitName, unitPath, removed, disabled };
+  return { unitName, unitPath, archivedPath, disabled };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
