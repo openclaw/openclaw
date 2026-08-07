@@ -1928,6 +1928,14 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
       "openclaw-plugin-yuanbao@2.15.0",
     );
+
+    const weixin = expectCatalogEntry("openclaw-weixin");
+    expect(
+      getOfficialExternalPluginCatalogManifest(weixin)?.channelConfigs?.["openclaw-weixin"]?.reload,
+    ).toEqual({
+      configPrefixes: [],
+      accountIndexReloadPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+    });
   });
 
   it("keeps official launch package specs on the production package names", () => {

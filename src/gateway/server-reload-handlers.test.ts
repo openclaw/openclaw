@@ -30,7 +30,11 @@ import {
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -154,6 +158,33 @@ function createDefaultGatewayReloadState() {
   };
 }
 
+async function withWeixinAccountIndexReloadPath(run: () => Promise<void>) {
+  const registry = createTestRegistry([
+    {
+      pluginId: "openclaw-weixin",
+      plugin: {
+        ...createChannelTestPluginBase({ id: "openclaw-weixin" }),
+        reload: {
+          configPrefixes: [],
+          accountIndexReloadPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+        },
+      },
+      source: "test",
+    },
+  ]);
+  const previousRegistry = getActivePluginRegistry();
+  setActivePluginRegistry(registry);
+  try {
+    await run();
+  } finally {
+    if (previousRegistry) {
+      setActivePluginRegistry(previousRegistry);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
+  }
+}
+
 function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
   return startManagedGatewayConfigReloaderImpl({
     minimalTestGateway: false,
@@ -221,6 +252,8 @@ const hoisted = vi.hoisted(() => ({
   startGmailWatcherWithLogs: vi.fn<StartGmailWatcherWithLogs>(async () => {}),
   stopGmailWatcher: vi.fn<StopGmailWatcher>(async () => {}),
   activeTaskCount: { value: 0 },
+  totalPendingReplies: { value: 0 },
+  totalQueueSize: { value: 0 },
   activeTaskBlockers: [] as Array<{
     taskId: string;
     status: "queued" | "running";
@@ -306,6 +339,26 @@ vi.mock("../agents/embedded-agent-runner/run-state.js", () => ({
   listActiveEmbeddedRunSessionIds: () => hoisted.activeEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys: () => hoisted.activeEmbeddedRunSessionKeys,
 }));
+
+vi.mock("../auto-reply/reply/dispatcher-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../auto-reply/reply/dispatcher-registry.js")>(
+    "../auto-reply/reply/dispatcher-registry.js",
+  );
+  return {
+    ...actual,
+    getTotalPendingReplies: () => hoisted.totalPendingReplies.value,
+  };
+});
+
+vi.mock("../process/command-queue.js", async () => {
+  const actual = await vi.importActual<typeof import("../process/command-queue.js")>(
+    "../process/command-queue.js",
+  );
+  return {
+    ...actual,
+    getTotalQueueSize: () => hoisted.totalQueueSize.value,
+  };
+});
 
 vi.mock("../agents/main-session-restart-recovery.js", () => ({
   markRestartAbortedMainSessions: hoisted.markRestartAbortedMainSessions,
@@ -842,6 +895,9 @@ afterEach(() => {
   hoisted.startGmailWatcherWithLogs.mockClear();
   hoisted.stopGmailWatcher.mockClear();
   hoisted.activeTaskCount.value = 0;
+  hoisted.totalPendingReplies.value = 0;
+  hoisted.totalQueueSize.value = 0;
+  hoisted.activeEmbeddedRunCount.value = 0;
   hoisted.activeTaskBlockers.length = 0;
   hoisted.activeEmbeddedRunCount.value = 0;
   hoisted.activeEmbeddedRunSessionIds.length = 0;
@@ -1947,8 +2003,13 @@ describe("gateway hot reload superseded tail recovery", () => {
     releaseStop.resolve();
     await reloadA;
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+      preserveManualStop: true,
+    });
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
 
@@ -2761,13 +2822,18 @@ describe("gateway restart deferral preflight", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+      preserveManualStop: true,
+    });
     expect(runtimePublished).toBe(true);
     expect(setState).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the default channel reload deferral timeout when config omits deferralTimeoutMs", async () => {
+  it("uses the default channel reload deferral timeout", async () => {
     const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
     delete process.env.OPENCLAW_SKIP_CHANNELS;
@@ -2817,8 +2883,13 @@ describe("gateway restart deferral preflight", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("telegram");
+    expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
+      preserveManualStop: true,
+    });
     expect(logReload.warn).toHaveBeenCalledWith(
       expect.stringContaining("channel reload timeout after"),
     );
@@ -3033,6 +3104,9 @@ describe("gateway channel hot reload handlers", () => {
     expect(startRootCounts).toEqual([1]);
     expect(channels.stop).toHaveBeenCalledOnce();
     expect(channels.start).toHaveBeenCalledOnce();
+    expect(channels.start).toHaveBeenCalledWith("discord", "alpha", {
+      preserveManualStop: true,
+    });
   });
 
   it("continues targeted restarts after an account failure", async () => {
@@ -3064,6 +3138,9 @@ describe("gateway channel hot reload handlers", () => {
     });
 
     expect(events).toEqual(["stop:discord:alpha", "stop:discord:beta", "start:discord:beta"]);
+    expect(channels.start).toHaveBeenCalledWith("discord", "beta", {
+      preserveManualStop: true,
+    });
     expect(requestRecoveryRestart).toHaveBeenCalledOnce();
   });
 
@@ -3219,6 +3296,10 @@ describe("gateway channel hot reload handlers", () => {
     });
 
     expect(events).toEqual(["stop:discord:alpha"]);
+    expect(channels.stop).toHaveBeenCalledWith("discord", "alpha", {
+      manual: false,
+      restartPending: false,
+    });
   });
 
   it("rechecks agent work admitted after plugin reload leaves the channel running", async () => {
@@ -3293,7 +3374,10 @@ describe("gateway channel hot reload handlers", () => {
 
     await withChannelReloadsEnabled(() => applyHotReload(createChannelReloadPlan(["discord"]), {}));
 
-    expect(channels.stop).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(channels.stop).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
     expect(channels.start).not.toHaveBeenCalled();
     expect(logChannels.info).toHaveBeenCalledWith(
       "stopping discord channel before suppressed hot reload",
@@ -4948,8 +5032,13 @@ describe("gateway plugin hot reload handlers", () => {
 
     expect(runtimeEnv.env[envKey]).toBeUndefined();
     expect(targetEnv[envKey]).toBeUndefined();
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+      preserveManualStop: true,
+    });
   });
 
   it("skips channel work when the candidate env adds a skip flag", async () => {
@@ -5489,8 +5578,14 @@ describe("gateway plugin hot reload handlers", () => {
     expect(logChannels.error).toHaveBeenCalledWith(
       "failed to stop discord channel before plugin reload: stop failed",
     );
-    expect(startChannel).toHaveBeenCalledWith("telegram");
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith("telegram", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
+    expect(startChannel).toHaveBeenCalledWith("discord", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
     expect(startRootCounts).toEqual([1, 1]);
     expect(setState).not.toHaveBeenCalled();
   });
@@ -5567,7 +5662,11 @@ describe("gateway plugin hot reload handlers", () => {
       },
     });
     expect(reloadParamsRecord?.changedPaths).toEqual(["plugins.enabled"]);
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop", "registry:replace"]);
     expect(setState).toHaveBeenCalledTimes(1);
@@ -5643,13 +5742,650 @@ describe("gateway plugin hot reload handlers", () => {
       }
     }
 
-    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: false,
+    });
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop:discord", "registry:replace"]);
     expect(logChannels.info).toHaveBeenCalledWith(
       "channel restart during hot reload suppressed by crash-loop breaker for channels: discord",
     );
     expect(setState).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not union known accounts when a plugin channel becomes active after being inactive", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+    const heartbeatRunner = {
+      stop: vi.fn(),
+      updateConfig: vi.fn(),
+    };
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const reloadPlugins = vi.fn(
+      async (params: {
+        beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+      }): Promise<GatewayPluginReloadResult> => {
+        await params.beforeReplace(new Set());
+        return {
+          restartChannels: new Set(["openclaw-weixin"]),
+          activeChannels: new Set(["openclaw-weixin"]),
+        };
+      },
+    );
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: heartbeatRunner as never,
+        cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins,
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await applyHotReload(
+        {
+          changedPaths: ["plugins.entries.openclaw-weixin.enabled"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["plugins.entries.openclaw-weixin.enabled"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: true,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        { plugins: { entries: { "openclaw-weixin": { enabled: true } } } },
+      );
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
+    });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
+  });
+
+  it("keeps plugin reload handoffs manager-owned before restarting active channels", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+    const heartbeatRunner = {
+      stop: vi.fn(),
+      updateConfig: vi.fn(),
+    };
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const reloadPlugins = vi.fn(
+      async (params: {
+        beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+      }): Promise<GatewayPluginReloadResult> => {
+        await params.beforeReplace(new Set(["openclaw-weixin"]));
+        return {
+          restartChannels: new Set(["openclaw-weixin"]),
+          activeChannels: new Set(["openclaw-weixin"]),
+        };
+      },
+    );
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: heartbeatRunner as never,
+        cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins,
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await applyHotReload(
+        {
+          changedPaths: ["plugins.entries.openclaw-weixin.enabled"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["plugins.entries.openclaw-weixin.enabled"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: true,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        { plugins: { entries: { "openclaw-weixin": { enabled: true } } } },
+      );
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
+  });
+
+  it("does not union known accounts when plugin reload coalesces with account config changes", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+    const heartbeatRunner = {
+      stop: vi.fn(),
+      updateConfig: vi.fn(),
+    };
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const reloadPlugins = vi.fn(
+      async (params: {
+        beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+      }): Promise<GatewayPluginReloadResult> => {
+        await params.beforeReplace(new Set(["openclaw-weixin"]));
+        return {
+          restartChannels: new Set(["openclaw-weixin"]),
+          activeChannels: new Set(["openclaw-weixin"]),
+        };
+      },
+    );
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: heartbeatRunner as never,
+        cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins,
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await applyHotReload(
+        {
+          changedPaths: [
+            "plugins.entries.openclaw-weixin.enabled",
+            "channels.openclaw-weixin.accounts.primary.enabled",
+          ],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: [
+            "plugins.entries.openclaw-weixin.enabled",
+            "channels.openclaw-weixin.accounts.primary.enabled",
+          ],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: true,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        {
+          plugins: { entries: { "openclaw-weixin": { enabled: true } } },
+          channels: { "openclaw-weixin": { accounts: { primary: { enabled: false } } } },
+        },
+      );
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
+    });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
+  });
+
+  it("uses the known-account safety net for channel account-index reload markers", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await withWeixinAccountIndexReloadPath(async () => {
+        await applyHotReload(
+          {
+            changedPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+            restartGateway: false,
+            restartReasons: [],
+            hotReasons: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(["openclaw-weixin"]),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          { channels: { "openclaw-weixin": { channelConfigUpdatedAt: "2026-05-16T00:00:00Z" } } },
+        );
+      });
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
+  });
+
+  it("does not union known accounts when account-index reload coalesces with account config changes", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await withWeixinAccountIndexReloadPath(async () => {
+        await applyHotReload(
+          {
+            changedPaths: [
+              "channels.openclaw-weixin.channelConfigUpdatedAt",
+              "channels.openclaw-weixin.accounts.primary.enabled",
+            ],
+            restartGateway: false,
+            restartReasons: [],
+            hotReasons: [
+              "channels.openclaw-weixin.channelConfigUpdatedAt",
+              "channels.openclaw-weixin.accounts.primary.enabled",
+            ],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(["openclaw-weixin"]),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {
+            channels: {
+              "openclaw-weixin": {
+                channelConfigUpdatedAt: "2026-05-16T00:00:00Z",
+                accounts: { primary: { enabled: false } },
+              },
+            },
+          },
+        );
+      });
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
+    });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
+  });
+
+  it("does not union known accounts when account-index reload coalesces with root channel changes", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await withWeixinAccountIndexReloadPath(async () => {
+        await applyHotReload(
+          {
+            changedPaths: [
+              "channels.openclaw-weixin.channelConfigUpdatedAt",
+              "channels.openclaw-weixin.enabled",
+            ],
+            restartGateway: false,
+            restartReasons: [],
+            hotReasons: [
+              "channels.openclaw-weixin.channelConfigUpdatedAt",
+              "channels.openclaw-weixin.enabled",
+            ],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(["openclaw-weixin"]),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          { channels: { "openclaw-weixin": { channelConfigUpdatedAt: "2026-05-16T00:00:00Z" } } },
+        );
+      });
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
+    });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
+  });
+
+  it("restarts ordinary config hot-reloaded channels without the known-account safety net", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    const previousSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    try {
+      await withWeixinAccountIndexReloadPath(async () => {
+        await applyHotReload(
+          {
+            changedPaths: ["channels.openclaw-weixin.accounts.primary.enabled"],
+            restartGateway: false,
+            restartReasons: [],
+            hotReasons: ["channels.openclaw-weixin.accounts.primary.enabled"],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(["openclaw-weixin"]),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          { channels: { "openclaw-weixin": { accounts: { primary: { enabled: false } } } } },
+        );
+      });
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+      if (previousSkipProviders === undefined) {
+        delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      } else {
+        process.env.OPENCLAW_SKIP_PROVIDERS = previousSkipProviders;
+      }
+    }
+
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      manual: false,
+      restartPending: false,
+    });
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      preserveManualStop: true,
+    });
+    expect(startChannel).not.toHaveBeenCalledWith(
+      "openclaw-weixin",
+      undefined,
+      expect.objectContaining({ includeKnownAccounts: true }),
+    );
   });
 });
 
@@ -5658,6 +6394,11 @@ describe("deferred channel reload abort generation", () => {
     changedPaths: ["channels.whatsapp.enabled"],
     hotReasons: ["channels"],
     restartChannels: new Set(["whatsapp"]),
+  });
+
+  beforeEach(() => {
+    delete process.env.OPENCLAW_SKIP_CHANNELS;
+    delete process.env.OPENCLAW_SKIP_PROVIDERS;
   });
 
   afterEach(() => {
@@ -5739,8 +6480,81 @@ describe("deferred channel reload abort generation", () => {
       "config hot reload cancelled by config supersession or in-process restart",
     );
 
-    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
     expect(channels.start).not.toHaveBeenCalled();
+  });
+
+  it("preserves known accounts when plugin cancellation rollback coalesces with candidate account edits", async () => {
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const channels = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
+      await params.beforeReplace(new Set(["whatsapp"]));
+      return {
+        restartChannels: new Set(),
+        activeChannels: new Set(),
+        cancelled: true,
+      };
+    };
+    const { applyHotReload } = createTestHandlers(logChannels, channels, { reloadPlugins });
+    const plan = createPluginReloadPlan();
+    plan.changedPaths = ["plugins.enabled", "channels.whatsapp.accounts.primary.enabled"];
+    plan.hotReasons = plan.changedPaths;
+
+    await expect(applyHotReload(plan, {})).rejects.toThrow(
+      "config hot reload cancelled by config supersession or in-process restart",
+    );
+
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
+  });
+
+  it("preserves known accounts when plugin pre-stop rollback coalesces with candidate account edits", async () => {
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const channels = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {
+        throw new Error("stop failed during drain");
+      }),
+    };
+    const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
+      await params.beforeReplace(new Set(["whatsapp"]));
+      return {
+        restartChannels: new Set(),
+        activeChannels: new Set(),
+      };
+    };
+    const { applyHotReload } = createTestHandlers(logChannels, channels, { reloadPlugins });
+    const plan = createPluginReloadPlan();
+    plan.changedPaths = ["plugins.enabled", "channels.whatsapp.accounts.primary.enabled"];
+    plan.hotReasons = plan.changedPaths;
+
+    await expect(applyHotReload(plan, {})).rejects.toThrow(
+      "failed to stop channels before plugin reload: whatsapp",
+    );
+
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
+      includeKnownAccounts: true,
+      preserveManualStop: true,
+    });
   });
 
   it("does not roll back a failed plugin pre-stop after lifecycle restart aborts", async () => {
@@ -5770,7 +6584,11 @@ describe("deferred channel reload abort generation", () => {
       "config hot reload cancelled by config supersession or in-process restart",
     );
 
-    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+    expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
     expect(channels.start).not.toHaveBeenCalled();
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
@@ -5961,8 +6779,13 @@ describe("deferred channel reload abort generation", () => {
       await vi.advanceTimersByTimeAsync(500); // wake up, see active=0, drain complete
       await expect(reloadPromise).resolves.toBeUndefined();
 
-      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
-      expect(channels.start).toHaveBeenCalledWith("whatsapp");
+      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, {
+        manual: false,
+        restartPending: false,
+      });
+      expect(channels.start).toHaveBeenCalledWith("whatsapp", undefined, {
+        preserveManualStop: true,
+      });
     } finally {
       vi.useRealTimers();
       hoisted.activeTaskBlockers.length = 0;

@@ -1494,6 +1494,12 @@
             "schema": {
               "type": "object",
               "additionalProperties": true
+            },
+            "reload": {
+              "configPrefixes": [],
+              "accountIndexReloadPaths": [
+                "channels.openclaw-weixin.channelConfigUpdatedAt"
+              ]
             }
           }
         },
