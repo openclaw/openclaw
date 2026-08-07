@@ -326,7 +326,7 @@ export function enableCodexRealtimeConversation(
   providerConfig: Record<string, unknown> = {},
 ): CodexAppServerRuntimeOptions {
   if (appServer.start.transport !== "stdio") {
-    return appServer;
+    throw new Error("Codex realtime requires app-server.transport=stdio");
   }
   const openAiApiKey = readNonEmptyString(providerConfig.apiKey);
   if (!openAiApiKey) {

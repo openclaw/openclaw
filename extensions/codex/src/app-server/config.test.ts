@@ -123,9 +123,20 @@ describe("Codex app-server config", () => {
         },
       },
     });
-    expect(enableCodexRealtimeConversation(websocket, { version: "v2", apiKey: "unused" })).toBe(
-      websocket,
-    );
+    const unix = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "unix",
+          homeScope: "user",
+          url: "unix:///tmp/openclaw-codex.sock",
+        },
+      },
+    });
+    for (const remote of [websocket, unix]) {
+      expect(() =>
+        enableCodexRealtimeConversation(remote, { version: "v2", apiKey: "unused" }),
+      ).toThrow("Codex realtime requires app-server.transport=stdio");
+    }
   });
 
   it("only auto-approves app-server approvals for full yolo runtime policy", () => {

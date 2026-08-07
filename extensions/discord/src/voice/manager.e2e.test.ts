@@ -1358,6 +1358,10 @@ describe("DiscordVoiceManager", () => {
       { guildId: "g1", channelId: "1001" },
       { requester: { senderId: "u-owner", senderIsOwner: true } },
     );
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { requester: { senderId: "u-other-owner", senderIsOwner: true } },
+    );
     emitDecryptFailure(manager);
     emitDecryptFailure(manager);
     emitDecryptFailure(manager);

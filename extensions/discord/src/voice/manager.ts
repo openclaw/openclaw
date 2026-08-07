@@ -501,7 +501,7 @@ export class DiscordVoiceManager {
 
     const existing = this.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
-      if (options?.requester) {
+      if (!existing.requester && options?.requester) {
         existing.requester = options.requester;
       }
       if (options?.transcripts) {
