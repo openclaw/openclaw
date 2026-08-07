@@ -91,7 +91,9 @@ async function abandonPreAdoptionIngressClaim<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): Promise<void> {
   try {
-    await params.runDispatchLifecycle?.turnAdoptionLifecycle?.onAbandoned?.();
+    // The lifecycle contract types onAbandoned as possibly-sync, but drain
+    // implementations return a promise; adopt whichever shape is returned.
+    await Promise.resolve(params.runDispatchLifecycle?.turnAdoptionLifecycle?.onAbandoned?.());
   } catch {
     // Preserve the original turn failure; the drain's release path reports its
     // own write errors and keeps heartbeat ownership on failure.
