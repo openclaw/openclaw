@@ -11,7 +11,10 @@ import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-fi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
-import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
+import {
+  sourceDeliveryTargetsMatch,
+  type SourceDeliveryPlan,
+} from "../infra/outbound/source-delivery-plan.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery,
@@ -791,38 +794,81 @@ async function deliverCompletionDirect(params: {
   }
 }
 
-function hasMessagingToolDeliveryToSource(
-  result: NonNullable<ReturnType<typeof getGatewayAgentResult>> & {
-    didDeliverSourceReplyViaMessageTool?: unknown;
-    messagingToolSourceReplyPayloads?: unknown;
-  },
-  deliveryTarget: Parameters<typeof sourceDeliveryTargetsMatch>[1],
+type CompletionDeliveryTarget = SourceDeliveryPlan["target"];
+type CompletionEvidenceTarget = Parameters<typeof sourceDeliveryTargetsMatch>[0];
+const COMPLETION_PAYLOAD_VISIBILITY = {
+  includeErrorPayloads: false,
+  includeReasoningPayloads: false,
+} as const;
+
+function hasConcreteCompletionDeliveryTarget(target: CompletionDeliveryTarget): boolean {
+  return Boolean(target.channel?.trim() && target.to?.trim());
+}
+
+function normalizeCompletionEvidenceTarget(value: unknown): CompletionEvidenceTarget | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const provider =
+    normalizeOptionalLowercaseString(record.provider) ??
+    normalizeOptionalLowercaseString(record.channel);
+  return {
+    ...(record as CompletionEvidenceTarget),
+    ...(provider ? { provider } : {}),
+  };
+}
+
+function completionDeliveryTargetsMatch(
+  observed: CompletionEvidenceTarget,
+  expected: CompletionDeliveryTarget,
+): boolean {
+  if (!sourceDeliveryTargetsMatch(observed, expected)) {
+    return false;
+  }
+  const expectedAccountId = expected.accountId?.trim();
+  const observedAccountId = observed.accountId?.trim();
+  if (!expectedAccountId) {
+    return true;
+  }
+  return expected.threadId != null
+    ? observedAccountId === expectedAccountId
+    : !observedAccountId || observedAccountId === expectedAccountId;
+}
+
+function hasTargetedMessagingToolDeliveryEvidence(
+  response: unknown,
+  deliveryTarget: CompletionDeliveryTarget,
   options?: { requireFinalReply?: boolean },
 ): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result || !hasMessagingToolDeliveryEvidence(result)) {
+    return false;
+  }
+  const sourceReplyResult = result as typeof result & {
+    didDeliverSourceReplyViaMessageTool?: unknown;
+    messagingToolSourceReplyPayloads?: unknown;
+  };
   const targets = Array.isArray(result.messagingToolSentTargets)
     ? result.messagingToolSentTargets
     : [];
   const sourceTargets = targets.filter((target) => {
-    if (
-      !target ||
-      typeof target !== "object" ||
-      Array.isArray(target) ||
-      !deliveryTarget.channel ||
-      !deliveryTarget.to
-    ) {
+    const normalized = normalizeCompletionEvidenceTarget(target);
+    if (!normalized || !hasConcreteCompletionDeliveryTarget(deliveryTarget)) {
       return false;
     }
-    const record = target as Parameters<typeof sourceDeliveryTargetsMatch>[0];
     // Older source receipts omit `to`; explicit off-target sends must never satisfy it.
     const sourceTarget =
-      typeof record.to === "string" && record.to.trim()
-        ? record
-        : { ...record, to: deliveryTarget.to };
-    return sourceDeliveryTargetsMatch(sourceTarget, deliveryTarget);
+      typeof normalized.to === "string" && normalized.to.trim()
+        ? normalized
+        : deliveryTarget.threadId == null
+          ? { ...normalized, to: deliveryTarget.to }
+          : normalized;
+    return completionDeliveryTargetsMatch(sourceTarget, deliveryTarget);
   });
   if (options?.requireFinalReply) {
     const hasCommittedSourceDelivery =
-      hasCommittedSourceReplyDeliveryEvidence(result) ||
+      hasCommittedSourceReplyDeliveryEvidence(sourceReplyResult) ||
       (hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0);
     // Only current-source final markers count; another target's final cannot
     // turn a source progress update into the owed requester reply.
@@ -830,22 +876,70 @@ function hasMessagingToolDeliveryToSource(
       hasCommittedSourceDelivery &&
       resolveExplicitFinalSourceReplyDeliveryEvidence({
         messagingToolSentTargets: sourceTargets,
-        messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
+        messagingToolSourceReplyPayloads: sourceReplyResult.messagingToolSourceReplyPayloads,
       }) !== false
     );
   }
   if (
-    hasCommittedSourceReplyDeliveryEvidence(result) ||
+    hasCommittedSourceReplyDeliveryEvidence(sourceReplyResult) ||
     hasUnaccountedMessagingToolAggregateEvidence({ ...result, didSendViaMessagingTool: false })
   ) {
     return true;
   }
 
-  if (targets.length === 0 || !deliveryTarget.channel || !deliveryTarget.to) {
-    return hasMessagingToolDeliveryEvidence(result);
+  if (!hasConcreteCompletionDeliveryTarget(deliveryTarget)) {
+    return true;
   }
+  if (sourceTargets.length > 0) {
+    return true;
+  }
+  return targets.length === 0 && deliveryTarget.threadId == null;
+}
 
-  return hasMessagingToolDeliveryEvidence(result) && sourceTargets.length > 0;
+function hasTargetedAutomaticDeliveryEvidence(
+  response: unknown,
+  deliveryTarget: CompletionDeliveryTarget,
+): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result || !hasVisibleAgentPayload(result, COMPLETION_PAYLOAD_VISIBILITY)) {
+    return false;
+  }
+  if (!hasConcreteCompletionDeliveryTarget(deliveryTarget)) {
+    return true;
+  }
+  const deliveryStatus =
+    result.deliveryStatus && typeof result.deliveryStatus === "object"
+      ? (result.deliveryStatus as Record<string, unknown>)
+      : undefined;
+  const outcomes = Array.isArray(deliveryStatus?.payloadOutcomes)
+    ? deliveryStatus.payloadOutcomes
+    : [];
+  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  let hasConcreteSentTarget = false;
+  for (const outcome of outcomes) {
+    if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
+      continue;
+    }
+    const record = outcome as Record<string, unknown>;
+    if (normalizeOptionalLowercaseString(record.status) !== "sent") {
+      continue;
+    }
+    const target = normalizeCompletionEvidenceTarget(record.target ?? record.deliveryTarget);
+    if (!target) {
+      continue;
+    }
+    hasConcreteSentTarget = true;
+    const index = typeof record.index === "number" ? record.index : -1;
+    const payload = payloads[index];
+    if (
+      payload &&
+      hasVisibleAgentPayload({ payloads: [payload] }, COMPLETION_PAYLOAD_VISIBILITY) &&
+      completionDeliveryTargetsMatch(target, deliveryTarget)
+    ) {
+      return true;
+    }
+  }
+  return !hasConcreteSentTarget && deliveryTarget.threadId == null;
 }
 
 async function sendSubagentAnnounceDirectly(params: {
@@ -1167,18 +1261,13 @@ async function sendSubagentAnnounceDirectly(params: {
           : {}),
       };
     }
-    const hasMessagingToolDelivery = Boolean(
-      directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
+    const hasMessagingToolDelivery = hasTargetedMessagingToolDeliveryEvidence(
+      directAnnounceResponse,
+      deliveryTarget,
     );
-    const completionPayloadVisibility = {
-      includeErrorPayloads: false,
-      includeReasoningPayloads: false,
-    };
-    const hasVisibleGatewayPayload = Boolean(
-      directAnnounceResult &&
-      (hasVisibleAgentPayload(directAnnounceResult, completionPayloadVisibility) ||
-        hasMessagingToolDelivery),
+    const hasVisibleGatewayPayload = hasTargetedAutomaticDeliveryEvidence(
+      directAnnounceResponse,
+      deliveryTarget,
     );
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
@@ -1233,7 +1322,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const hasVisibleCompletionReply = Boolean(
       directAnnounceResult &&
       ((params.requireVisibleReply
-        ? hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
+        ? hasTargetedMessagingToolDeliveryEvidence(directAnnounceResult, deliveryTarget, {
             requireFinalReply: true,
           })
         : hasMessagingToolDelivery) ||
@@ -1254,10 +1343,11 @@ async function sendSubagentAnnounceDirectly(params: {
                   : [],
               }
             : directAnnounceResult,
-          { ...completionPayloadVisibility, includeSilentReplyPayloads: false },
+          { ...COMPLETION_PAYLOAD_VISIBILITY, includeSilentReplyPayloads: false },
         ) &&
           (!params.requireVisibleReply ||
-            directAnnounceResult.deliveryStatus?.status !== "suppressed"))),
+            (directAnnounceResult.deliveryStatus?.status !== "suppressed" &&
+              hasVisibleGatewayPayload)))),
     );
     const hasCompletionSideEffect = Boolean(
       directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
@@ -1529,6 +1619,8 @@ const testing = {
       : defaultSubagentAnnounceDeliveryDeps;
   },
   hasAnnounceSendEvidence,
+  hasTargetedAutomaticDeliveryEvidence,
+  hasTargetedMessagingToolDeliveryEvidence,
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,
 };
