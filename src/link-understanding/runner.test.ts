@@ -199,4 +199,47 @@ describe("runLinkUnderstanding", () => {
       }),
     );
   });
+
+  it("cancels the unread response body when the HTTP status indicates an error", async () => {
+    const failedResponse = new Response("server error", { status: 500 });
+    const cancelSpy = vi.spyOn(failedResponse.body!, "cancel");
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: failedResponse,
+      finalUrl: "https://example.com/final",
+      release,
+    });
+
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    expect(result.outputs).toEqual([]);
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("starts body cancellation before releasing the guard on error response", async () => {
+    const failedResponse = new Response("not found", { status: 404 });
+    const body = failedResponse.body!;
+    const cancelSpy = vi.spyOn(body, "cancel");
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: failedResponse,
+      finalUrl: "https://example.com/final",
+      release,
+    });
+
+    const result = await runLinkUnderstanding({
+      cfg: cfg({ type: "cli", command: "summarize" }),
+      ctx: ctx("see https://example.com/page"),
+    });
+
+    expect(result.outputs).toEqual([]);
+    // Cancel was called (fire-and-forget) before release.
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
 });

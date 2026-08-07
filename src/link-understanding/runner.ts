@@ -102,6 +102,9 @@ async function fetchLinkContent(params: {
   });
   try {
     if (!response.ok) {
+      // Cancel the unread body before releasing the guard so Undici can free the
+      // underlying socket without waiting for the full response stream.
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
     const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);
