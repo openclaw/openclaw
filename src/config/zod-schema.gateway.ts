@@ -60,9 +60,12 @@ export const GatewayConfigSchema = z
         allowTailscale: z.boolean().optional(),
         rateLimit: z
           .strictObject({
-            maxAttempts: z.number().optional(),
-            windowMs: z.number().optional(),
-            lockoutMs: z.number().optional(),
+            maxAttempts: z.number().int().positive().optional(),
+            // Runtime clamps both fields to a 1000ms floor (see auth-rate-limit.ts);
+            // a lower accepted minimum here would let a persisted sub-second value
+            // pass validation and then be silently lengthened at runtime.
+            windowMs: z.number().int().min(1_000).optional(),
+            lockoutMs: z.number().int().min(1_000).optional(),
             exemptLoopback: z.boolean().optional(),
           })
           .optional(),

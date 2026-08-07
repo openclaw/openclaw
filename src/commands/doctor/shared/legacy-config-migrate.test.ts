@@ -3375,6 +3375,181 @@ describe("gateway.port out-of-range repair migrate", () => {
   });
 });
 
+describe("gateway.auth.rateLimit out-of-range repair migrate", () => {
+  it("removes non-positive gateway.auth.rateLimit.maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (0). It must be a positive integer; the gateway will use the default of 10.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("removes negative gateway.auth.rateLimit.maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: -1 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (-1). It must be a positive integer; the gateway will use the default of 10.",
+    ]);
+  });
+
+  it("removes fractional gateway.auth.rateLimit.maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 2.5 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (2.5). It must be a positive integer; the gateway will use the default of 10.",
+    ]);
+  });
+
+  it("removes non-finite gateway.auth.rateLimit.maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: Number.NaN } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (NaN). It must be a positive integer; the gateway will use the default of 10.",
+    ]);
+  });
+
+  it("preserves other gateway.auth.rateLimit keys when removing maxAttempts", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0, windowMs: 60_000 } } },
+    });
+
+    expect(res.config?.gateway?.auth?.rateLimit).toStrictEqual({ windowMs: 60_000 });
+  });
+
+  it("preserves valid gateway.auth.rateLimit.maxAttempts values", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 5 } } },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("is idempotent for out-of-range values", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0 } } },
+    });
+    expect(first.changes.length).toBe(1);
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
+  });
+
+  it("removes non-positive gateway.auth.rateLimit.windowMs and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 0 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.windowMs (0). It must be an integer of at least 1000ms; the gateway will use the default of 60000.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("removes non-positive gateway.auth.rateLimit.lockoutMs and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { lockoutMs: -1 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.lockoutMs (-1). It must be an integer of at least 1000ms; the gateway will use the default of 300000.",
+    ]);
+  });
+
+  it("raises a positive windowMs/lockoutMs below the 1000ms floor instead of deleting it", () => {
+    // 500 is a positive integer the runtime would only clamp to 1000ms
+    // anyway -- normalize it in place rather than discarding the operator's
+    // shorter-duration intent for the much larger documented default.
+    const windowRes = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 500 } } },
+    });
+    expect(windowRes.changes).toStrictEqual([
+      "Raised gateway.auth.rateLimit.windowMs (500) to 1000. It must be an integer of at least 1000ms.",
+    ]);
+    expect(windowRes.config?.gateway?.auth?.rateLimit).toStrictEqual({ windowMs: 1_000 });
+
+    const lockoutRes = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { lockoutMs: 999 } } },
+    });
+    expect(lockoutRes.changes).toStrictEqual([
+      "Raised gateway.auth.rateLimit.lockoutMs (999) to 1000. It must be an integer of at least 1000ms.",
+    ]);
+    expect(lockoutRes.config?.gateway?.auth?.rateLimit).toStrictEqual({ lockoutMs: 1_000 });
+  });
+
+  it("still removes (not raises) a truly invalid windowMs/lockoutMs value", () => {
+    // Non-positive, fractional, or non-finite values have no sensible
+    // "raise to the floor" target -- these still delete+default.
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      const res = migrateLegacyConfigForTest({
+        gateway: { auth: { rateLimit: { windowMs: bad } } },
+      });
+      expect(res.changes).toStrictEqual([
+        `Removed invalid gateway.auth.rateLimit.windowMs (${String(bad)}). It must be an integer of at least 1000ms; the gateway will use the default of 60000.`,
+      ]);
+      expect(res.config).not.toHaveProperty("gateway");
+    }
+  });
+
+  it("is idempotent after raising windowMs/lockoutMs to the floor", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 500, lockoutMs: 999 } } },
+    });
+    expect(first.changes.length).toBe(2);
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
+  });
+
+  it("preserves gateway.auth.rateLimit.windowMs/lockoutMs values exactly at the 1000ms floor", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 1_000, lockoutMs: 1_000 } } },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("removes multiple invalid fields in one pass and records a change per field", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0, windowMs: 1.5, lockoutMs: Number.NaN } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (0). It must be a positive integer; the gateway will use the default of 10.",
+      "Removed invalid gateway.auth.rateLimit.windowMs (1.5). It must be an integer of at least 1000ms; the gateway will use the default of 60000.",
+      "Removed invalid gateway.auth.rateLimit.lockoutMs (NaN). It must be an integer of at least 1000ms; the gateway will use the default of 300000.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("preserves other auth keys when removing the whole rateLimit block", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { mode: "token", rateLimit: { windowMs: 0 } } },
+    });
+
+    expect(res.config?.gateway).toEqual({ auth: { mode: "token" } });
+  });
+
+  it("preserves valid gateway.auth.rateLimit.windowMs and lockoutMs values", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 30_000, lockoutMs: 120_000 } } },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+});
+
 describe("legacy model compat migrate", () => {
   it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
     const raw = {
