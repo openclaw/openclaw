@@ -647,4 +647,35 @@ struct RealtimeTalkRelaySessionTests {
 
         #expect(await requests.snapshot().isEmpty)
     }
+
+    @Test func `appended audio timestamps stay whole milliseconds`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                return Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        session._test_prepareAudioSender(relaySessionId: "relay-1")
+
+        // macOS taps stamp frames with `systemUptime * 1000`, so the raw value is fractional.
+        let send = try #require(
+            session._test_enqueueMicrophoneFrame(Data([0x01, 0x02]), timestampMs: 4823.617))
+        await send.value
+
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.appendAudio"])
+        // A decimal reaches the provider as a non-integer `audio_end_ms` and its
+        // `conversation.item.truncate` is rejected, ending the session on the first barge-in.
+        let timestamp = try #require(recorded.first?.params?["timestamp"]?.value as? Double)
+        #expect(timestamp == 4824)
+        #expect(timestamp == timestamp.rounded())
+    }
 }

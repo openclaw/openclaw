@@ -144,10 +144,13 @@ private actor RealtimeAudioSender {
         guard self.pendingSends < self.maxPendingSends else { return nil }
         self.pendingSends += 1
         defer { self.pendingSends -= 1 }
+        // The Gateway carries this straight into the provider's media timeline, and OpenAI rejects
+        // a `conversation.item.truncate` whose `audio_end_ms` is not an integer -- a fractional
+        // timestamp here kills the session on the first barge-in.
         let payload: [String: AnyCodable] = [
             "sessionId": AnyCodable(relaySessionId),
             "audioBase64": AnyCodable(data.base64EncodedString()),
-            "timestamp": AnyCodable(timestampMs),
+            "timestamp": AnyCodable(timestampMs.rounded()),
         ]
         do {
             try Task.checkCancellation()
@@ -1272,10 +1275,13 @@ extension RealtimeTalkRelaySession {
             request: self.transport.request)
     }
 
-    func _test_enqueueMicrophoneFrame(_ data: Data) -> Task<Void, Never>? {
+    func _test_enqueueMicrophoneFrame(
+        _ data: Data,
+        timestampMs: Double = 1) -> Task<Void, Never>?
+    {
         self.enqueueMicrophoneFrame(
             data,
-            timestampMs: 1,
+            timestampMs: timestampMs,
             rms: 0.01,
             lifecycleGeneration: self.lifecycleGeneration,
             audioCaptureGeneration: self.audioCaptureGeneration)
