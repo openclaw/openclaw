@@ -211,6 +211,8 @@ export async function finishUpdate(params: {
       pluginInstallRecords: params.preUpdatePluginInstallRecords,
       updateStartedAtMs: params.startedAt,
       nodeRunner: params.packageUpdateNodeRunner,
+      serviceEnv: params.preManagedServiceStop?.serviceEnv,
+      invocationCwd: params.invocationCwd,
       preUpdateConfig: params.configSnapshot.valid
         ? {
             sourceConfig: params.configSnapshot.sourceConfig,
@@ -290,6 +292,8 @@ export async function finishUpdate(params: {
           yes: params.opts.yes === true,
           json: params.opts.json === true,
           timeoutMs: params.updateStepTimeoutMs,
+          serviceEnv: params.preManagedServiceStop?.serviceEnv,
+          invocationCwd: params.invocationCwd,
           ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
         });
         postCorePluginUpdate = completedPluginUpdate.pluginUpdate;

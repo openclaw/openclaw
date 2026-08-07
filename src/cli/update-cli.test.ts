@@ -1602,6 +1602,90 @@ describe("update-cli", () => {
     expectNoSideEffects(updateNpmInstalledPlugins, runDaemonInstall, runDaemonRestart);
   });
 
+  it("keeps fresh post-core updates in the stopped managed service profile", async () => {
+    const { root, entrypoints } = setupUpdatedRootRefresh();
+    const managedState = "/tmp/openclaw-update-tests/managed-profile";
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    pathExists.mockImplementation(
+      async (candidate: string) =>
+        candidate === path.join(process.cwd(), "package.json") ||
+        candidate === path.join(root, "package.json") ||
+        candidate === entrypoints[0],
+    );
+    mockGitUpdateAfterMutation(
+      makeOkUpdateResult({
+        mode: "git",
+        root,
+        before: { sha: "old-managed-sha", version: "2026.4.26" },
+        after: { sha: "new-managed-sha", version: "2026.4.27" },
+      }),
+    );
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: managedState,
+        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+        OPENCLAW_GATEWAY_PORT: "19222",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "7777",
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-update-tests/personal-profile/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
+
+    const childEnv = spawnCall()?.[2]?.env;
+    expect(serviceStop).toHaveBeenCalledOnce();
+    expect(childEnv).toMatchObject({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_STATE_DIR: managedState,
+      OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+      OPENCLAW_GATEWAY_PORT: "19222",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    });
+    expect(childEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+    expect(childEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
+    expect(childEnv?.[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBeUndefined();
+  });
+
+  it("keeps the caller profile when no managed service is installed", async () => {
+    setupUpdatedRootRefresh();
+    serviceLoaded.mockResolvedValue(false);
+    serviceReadCommand.mockResolvedValue(null);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-update-tests/personal-profile/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    expect(spawnCall()?.[2]?.env).toMatchObject({
+      OPENCLAW_PROFILE: "personal",
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
+      OPENCLAW_CONFIG_PATH: "/tmp/openclaw-update-tests/personal-profile/openclaw.json",
+      OPENCLAW_GATEWAY_PORT: "19111",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    });
+    expect(serviceStop).not.toHaveBeenCalled();
+  });
+
   it("routes JSON post-core child output to stderr", async () => {
     const { entrypoints } = setupUpdatedRootRefresh();
     const stdoutPipe = vi.fn();
@@ -2153,6 +2237,89 @@ describe("update-cli", () => {
     await completeChangedPostCorePluginUpdate({ nodeRunner: "/opt/openclaw-service/bin/node" });
 
     expect(vi.mocked(runExec).mock.calls[0]?.[0]).toBe("/opt/openclaw-service/bin/node");
+  });
+
+  it("runs fresh plugin doctor and config validation in the managed service profile", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-update-tests/personal-profile/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      async () => {
+        await completeChangedPostCorePluginUpdate({
+          invocationCwd: "/srv/openclaw",
+          serviceEnv: {
+            OPENCLAW_PROFILE: "work",
+            OPENCLAW_STATE_DIR: "managed-state",
+            OPENCLAW_CONFIG_PATH: "managed-state/openclaw.json",
+            OPENCLAW_GATEWAY_PORT: "19222",
+            OPENCLAW_SERVICE_MARKER: "openclaw",
+            OPENCLAW_SERVICE_KIND: "gateway",
+            [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "7777",
+          },
+        });
+      },
+    );
+
+    expect(runExec).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runExec).mock.calls[0]?.[1]?.[1]).toBe("doctor");
+    expect(vi.mocked(runExec).mock.calls[1]?.[1]).toEqual([
+      "/tmp/openclaw-updated-entry.mjs",
+      "config",
+      "validate",
+      "--json",
+    ]);
+    for (const call of vi.mocked(runExec).mock.calls) {
+      const options = call[2];
+      const baseEnv = typeof options === "number" ? undefined : options?.baseEnv;
+      expect(baseEnv).toMatchObject({
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: "/srv/openclaw/managed-state",
+        OPENCLAW_CONFIG_PATH: "/srv/openclaw/managed-state/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19222",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+      });
+      expect(baseEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+      expect(baseEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
+      expect(baseEnv?.[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBeUndefined();
+    }
+  });
+
+  it("keeps fresh plugin doctor and config validation in the unmanaged caller profile", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-update-tests/personal-profile/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      async () => {
+        await completeChangedPostCorePluginUpdate();
+      },
+    );
+
+    expect(runExec).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(runExec).mock.calls) {
+      const options = call[2];
+      const baseEnv = typeof options === "number" ? undefined : options?.baseEnv;
+      expect(baseEnv).toMatchObject({
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/personal-profile",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-update-tests/personal-profile/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+      });
+    }
   });
 
   it("runs the fresh plugin doctor when the migration owner changed even if config is valid", async () => {

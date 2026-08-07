@@ -16,7 +16,7 @@ import {
   POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
 } from "./update-command-post-plugin-validation.js";
 import {
-  disableUpdatedPackageCompileCacheEnv,
+  resolvePostInstallDoctorEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service.js";
 
@@ -97,6 +97,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   timeoutMs: number;
   nodeRunner?: string;
   entryPath?: string;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
 }): Promise<void> {
   const entryPath = params.entryPath ?? (await resolveGatewayInstallEntrypoint(params.root));
   if (!entryPath) {
@@ -115,7 +117,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     timeoutMs: params.timeoutMs,
     maxBuffer: 4 * 1024 * 1024,
     logOutput: false,
-    baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+    baseEnv: stripGatewayServiceMarkerEnv(
+      resolvePostInstallDoctorEnv({
+        baseEnv: process.env,
+        serviceEnv: params.serviceEnv,
+        invocationCwd: params.invocationCwd,
+      }),
+    ),
     env: {
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
@@ -138,6 +146,8 @@ async function validatePostPluginConfigInFreshProcess(params: {
   timeoutMs: number;
   entryPath: string;
   nodeRunner?: string;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
 }): Promise<boolean> {
   try {
     await runExec(
@@ -148,7 +158,13 @@ async function validatePostPluginConfigInFreshProcess(params: {
         timeoutMs: params.timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
         logOutput: false,
-        baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+        baseEnv: stripGatewayServiceMarkerEnv(
+          resolvePostInstallDoctorEnv({
+            baseEnv: process.env,
+            serviceEnv: params.serviceEnv,
+            invocationCwd: params.invocationCwd,
+          }),
+        ),
         env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" },
       },
     );
@@ -165,6 +181,8 @@ async function applyFreshPostPluginDoctor(params: {
   json: boolean;
   timeoutMs: number;
   nodeRunner?: string;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
 }): Promise<{ pluginUpdate: PostCorePluginUpdateResult; configValid: boolean }> {
   let entryPath: string | undefined;
   try {
@@ -202,6 +220,8 @@ export async function completePostCorePluginUpdate(params: {
   json: boolean;
   timeoutMs: number;
   nodeRunner?: string;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
 }): Promise<{
   pluginUpdate: PostCorePluginUpdateResult;
   configSnapshot: ConfigFileSnapshot;
@@ -217,6 +237,8 @@ export async function completePostCorePluginUpdate(params: {
       yes: params.yes,
       json: params.json,
       timeoutMs: params.timeoutMs,
+      serviceEnv: params.serviceEnv,
+      invocationCwd: params.invocationCwd,
       ...(params.nodeRunner ? { nodeRunner: params.nodeRunner } : {}),
     });
     pluginUpdate = freshResult.pluginUpdate;

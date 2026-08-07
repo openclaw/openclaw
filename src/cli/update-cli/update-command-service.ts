@@ -77,6 +77,7 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
 const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   ...SERVICE_REFRESH_PATH_ENV_KEYS,
   "OPENCLAW_PROFILE",
+  "OPENCLAW_GATEWAY_PORT",
 ] as const;
 const JSON_MODE_SERVICE_STDOUT = new Writable({
   write(_chunk, _encoding, callback) {
