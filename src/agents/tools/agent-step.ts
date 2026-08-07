@@ -8,6 +8,10 @@ import { callGateway } from "../../gateway/call.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../internal-runtime-context.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
 
@@ -59,7 +63,7 @@ function extractAgentCommandReply(result: unknown): string | undefined {
 export async function runAgentStep(params: {
   sessionKey: string;
   message: string;
-  extraSystemPrompt: string;
+  extraSystemPrompt?: string;
   timeoutMs: number;
   channel?: string;
   lane?: string;
@@ -76,7 +80,10 @@ export async function runAgentStep(params: {
     sourceTool: params.sourceTool ?? "sessions_send",
   };
   // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
-  const message = annotateInterSessionPromptText(params.message, inputProvenance);
+  const baseMessage = annotateInterSessionPromptText(params.message, inputProvenance);
+  const message = params.extraSystemPrompt
+    ? `${baseMessage}\n\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${params.extraSystemPrompt}\n${INTERNAL_RUNTIME_CONTEXT_END}`
+    : baseMessage;
   const lane = params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey);
   const channel = params.channel ?? INTERNAL_MESSAGE_CHANNEL;
   if (params.transcriptMessage !== undefined) {
@@ -90,7 +97,6 @@ export async function runAgentStep(params: {
       channel,
       lane,
       runId: stepIdem,
-      extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
       allowModelOverride: false,
     });
@@ -110,7 +116,6 @@ export async function runAgentStep(params: {
       sourceReplyDeliveryMode: "message_tool_only",
       channel,
       lane,
-      extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
     },
     timeoutMs: 10_000,
