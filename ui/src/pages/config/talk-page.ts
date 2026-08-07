@@ -8,7 +8,11 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
+import {
+  isTalkGptLiveModel,
+  resolveTalkRealtimeSelection,
+  talkProviderRejectsTransport,
+} from "./talk-schema.ts";
 import {
   renderTalk,
   selectedTalkProviderOption,
@@ -196,11 +200,12 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
-      // GPT-Live is WebRTC-only; a configured relay or provider-websocket
-      // transport would make the just-picked model fail at session create, so
-      // clearing it lets the default client-owned WebRTC path apply.
+      // GPT-Live once required client-owned WebRTC, but the OpenAI provider now also
+      // advertises gateway-relay, which the native macOS relay path depends on. Clear
+      // only a transport the catalog says the selected provider cannot serve, so this
+      // picker stops deleting a selector another client still needs.
       const transport = this.liveSelection().transport;
-      if (isTalkGptLiveModel(model) && transport && transport !== "webrtc") {
+      if (isTalkGptLiveModel(model) && transport && this.providerRejectsTransport(transport)) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
       }
       return;
@@ -239,6 +244,15 @@ class TalkSettingsPage extends OpenClawLightDomElement {
    * the form updates immutably and the prop only refreshes on the next render,
    * so a same-tick read through the prop sees pre-write values.
    */
+  private providerRejectsTransport(transport: string) {
+    if (this.catalog.kind !== "ready") {
+      return false;
+    }
+    const providerId = this.liveSelection().provider;
+    const option = this.catalog.providers.find((provider) => provider.id === providerId);
+    return talkProviderRejectsTransport(option?.transports, transport);
+  }
+
   private liveSelection() {
     const form = this.context.runtimeConfig.state.configForm;
     const configObject =
