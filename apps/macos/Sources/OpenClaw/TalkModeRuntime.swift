@@ -79,6 +79,13 @@ actor TalkModeRuntime {
     private var defaultOutputFormat: String?
     private var interruptOnSpeech: Bool = true
     private var activeTalkProvider = TalkModeRuntime.defaultTalkProvider
+    private var realtimeProvider: String?
+    private var realtimeModelId: String?
+    private var realtimeSpeakerVoice: String?
+    private var realtimeMode: String?
+    private var realtimeTransport: String?
+    private var realtimeBrain: String?
+    private var realtimeSession: RealtimeTalkRelaySession?
     private var speechLocaleID: String?
     private var lastInterruptedAtSeconds: Double?
     private var voiceAliases: [String: String] = [:]
@@ -117,6 +124,22 @@ actor TalkModeRuntime {
 
         guard self.isEnabled else { return }
 
+        if let realtimeSession {
+            do {
+                try await MainActor.run {
+                    try realtimeSession.setInputPaused(paused)
+                }
+                if !paused {
+                    self.phase = .listening
+                    await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+                }
+            } catch {
+                self.logger.error(
+                    "talk realtime pause transition failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
+
         if paused {
             self.lastTranscript = ""
             self.lastHeard = nil
@@ -146,7 +169,6 @@ actor TalkModeRuntime {
             self.logger.error("talk runtime not starting: permissions missing")
             return
         }
-        self.startAudioInputObserver()
         await reloadConfig()
         guard self.isCurrent(gen) else { return }
         if self.isPaused {
@@ -157,6 +179,21 @@ actor TalkModeRuntime {
             }
             return
         }
+        if self.shouldAttemptRealtimeRelay() {
+            do {
+                try await self.startRealtimeRelay(generation: gen)
+                return
+            } catch {
+                self.logger.error(
+                    "talk realtime unavailable; using native fallback: " +
+                        "\(error.localizedDescription, privacy: .public)")
+                await MainActor.run {
+                    TalkModeController.shared.updatePartialTranscript(
+                        "Realtime unavailable — using native speech")
+                }
+            }
+        }
+        self.startAudioInputObserver()
         await self.startRecognition()
         guard self.isCurrent(gen) else { return }
         self.phase = .listening
@@ -165,6 +202,10 @@ actor TalkModeRuntime {
     }
 
     private func stop() async {
+        if let realtimeSession {
+            await MainActor.run { realtimeSession.stop() }
+            self.realtimeSession = nil
+        }
         self.audioInputObserver?.stop()
         self.audioInputObserver = nil
         self.captureTask?.cancel()
@@ -188,6 +229,19 @@ actor TalkModeRuntime {
     }
 
     func inputDeviceSelectionDidChange() async {
+        if let realtimeSession {
+            guard self.isEnabled, !self.isPaused else { return }
+            do {
+                try await MainActor.run {
+                    try realtimeSession.setInputPaused(true)
+                    try realtimeSession.setInputPaused(false)
+                }
+            } catch {
+                self.logger.error(
+                    "talk realtime input restart failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
         guard self.isEnabled, !self.isPaused, self.phase == .listening else { return }
         self.logger.info("talk input selection changed; restarting capture")
         await self.startRecognition()
@@ -216,6 +270,133 @@ actor TalkModeRuntime {
 
         self.logger.warning("talk active/default input changed; restarting capture")
         await self.startRecognition()
+    }
+
+    private func shouldAttemptRealtimeRelay() -> Bool {
+        guard self.realtimeMode == "realtime" else { return false }
+        guard self.realtimeTransport == nil || self.realtimeTransport == "gateway-relay" else {
+            self.logger.warning(
+                "talk macOS realtime transport unsupported: " +
+                    "\(self.realtimeTransport ?? "unknown", privacy: .public); using native fallback")
+            return false
+        }
+        guard self.realtimeBrain == nil || self.realtimeBrain == "agent-consult" else {
+            self.logger.warning(
+                "talk macOS realtime brain unsupported: " +
+                    "\(self.realtimeBrain ?? "unknown", privacy: .public); using native fallback")
+            return false
+        }
+        return true
+    }
+
+    private func startRealtimeRelay(generation: Int) async throws {
+        let transport = try await GatewayConnection.shared.acquireRealtimeTalkTransport()
+        guard self.isCurrent(generation), !self.isPaused else { throw CancellationError() }
+        let activeSessionKey = await MainActor.run {
+            WebChatManager.shared.activeSessionKey
+        }
+        let sessionKey: String = if let activeSessionKey {
+            activeSessionKey
+        } else {
+            await GatewayConnection.shared.mainSessionKey()
+        }
+        let options = RealtimeTalkRelaySession.Options(
+            sessionKey: sessionKey,
+            provider: self.realtimeProvider,
+            model: self.realtimeModelId,
+            voice: self.realtimeSpeakerVoice)
+        let session = await MainActor.run {
+            RealtimeTalkRelaySession(
+                transport: transport,
+                options: options,
+                audioCapture: MacRealtimeTalkAudioCapture(),
+                pcmPlayer: PCMStreamingAudioPlayer.shared,
+                onStatus: { status in
+                    Task { await TalkModeRuntime.shared.handleRealtimeStatus(status) }
+                },
+                onIssue: { issue in
+                    Task { await TalkModeRuntime.shared.handleRealtimeIssue(issue) }
+                },
+                onSpeakingChanged: { speaking in
+                    Task { await TalkModeRuntime.shared.handleRealtimeSpeakingChanged(speaking) }
+                },
+                onInputLevel: { level in
+                    TalkModeController.shared.updateLevel(level)
+                },
+                onOutputLevel: { level in
+                    TalkModeController.shared.updateSpeakingLevel(level)
+                },
+                onTranscript: { transcript in
+                    Task { await TalkModeRuntime.shared.handleRealtimeTranscript(transcript) }
+                })
+        }
+        self.realtimeSession = session
+        do {
+            try await session.start()
+        } catch {
+            await MainActor.run { session.stop() }
+            if self.realtimeSession === session {
+                self.realtimeSession = nil
+            }
+            throw error
+        }
+        guard self.isCurrent(generation), !self.isPaused else {
+            await MainActor.run { session.stop() }
+            if self.realtimeSession === session {
+                self.realtimeSession = nil
+            }
+            throw CancellationError()
+        }
+        self.phase = .listening
+        await MainActor.run {
+            TalkModeController.shared.updatePartialTranscript("")
+            TalkModeController.shared.updatePhase(.listening)
+        }
+        self.logger.info(
+            "talk realtime ready provider=\(self.realtimeProvider ?? "default", privacy: .public) " +
+                "model=\(self.realtimeModelId ?? "default", privacy: .public)")
+    }
+
+    private func handleRealtimeStatus(_ status: String) {
+        guard self.realtimeSession != nil else { return }
+        self.logger.debug("talk realtime status=\(status, privacy: .public)")
+    }
+
+    private func handleRealtimeIssue(_ issue: RealtimeTalkRelayIssue) async {
+        guard self.realtimeSession != nil else { return }
+        self.logger.error(
+            "talk realtime issue code=\(issue.code, privacy: .public) " +
+                "message=\(issue.message, privacy: .public)")
+        await MainActor.run {
+            TalkModeController.shared.updatePartialTranscript(issue.message)
+        }
+    }
+
+    private func handleRealtimeSpeakingChanged(_ speaking: Bool) async {
+        guard self.realtimeSession != nil, self.isEnabled else { return }
+        if speaking {
+            self.phase = .speaking
+            await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+        } else if !self.isPaused {
+            self.phase = .listening
+            await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+        }
+    }
+
+    private func handleRealtimeTranscript(_ transcript: RealtimeTalkTranscript) async {
+        guard self.realtimeSession != nil, self.isEnabled else { return }
+        let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard transcript.role == "user" else { return }
+        if transcript.isFinal {
+            self.phase = .thinking
+            await MainActor.run {
+                TalkModeController.shared.commitTranscript(text)
+                TalkModeController.shared.updatePhase(.thinking)
+            }
+        } else {
+            await MainActor.run { TalkModeController.shared.updatePartialTranscript(text) }
+        }
     }
 
     // MARK: - Speech recognition
@@ -1171,6 +1352,21 @@ extension TalkModeRuntime {
     }
 
     func stopSpeaking(reason: TalkStopReason) async {
+        if let realtimeSession {
+            let relayReason = switch reason {
+            case .userTap: "user"
+            case .speech: "barge-in"
+            case .manual: "shutdown"
+            }
+            await MainActor.run {
+                realtimeSession.cancelOutput(reason: relayReason)
+            }
+            if reason != .manual, !self.isPaused {
+                self.phase = .listening
+                await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+            }
+            return
+        }
         let usePCM = self.lastPlaybackWasPCM
         let remoteInterruptedAt = usePCM ? await stopPCM() : await stopMP3()
         _ = usePCM ? await stopMP3() : await stopPCM()
@@ -1324,6 +1520,12 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.activeTalkProvider = cfg.activeProvider
+        self.realtimeProvider = cfg.realtimeProvider
+        self.realtimeModelId = cfg.realtimeModelId
+        self.realtimeSpeakerVoice = cfg.realtimeSpeakerVoice
+        self.realtimeMode = cfg.realtimeMode
+        self.realtimeTransport = cfg.realtimeTransport
+        self.realtimeBrain = cfg.realtimeBrain
         let configuredSilenceMs = cfg.silenceTimeoutMs
         let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
         let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
@@ -1351,7 +1553,10 @@ extension TalkModeRuntime {
                     "apiKey=\(hasApiKey, privacy: .public) " +
                     "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
                     "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public) " +
-                    "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public)")
+                    "speechLocale=\(cfg.speechLocaleID ?? "device", privacy: .public) " +
+                    "realtimeMode=\(cfg.realtimeMode ?? "off", privacy: .public) " +
+                    "realtimeTransport=\(cfg.realtimeTransport ?? "default", privacy: .public) " +
+                    "realtimeBrain=\(cfg.realtimeBrain ?? "default", privacy: .public)")
     }
 
     static func selectTalkProviderConfig(
