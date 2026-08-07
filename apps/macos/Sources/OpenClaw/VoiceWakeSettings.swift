@@ -158,6 +158,8 @@ struct VoiceWakeSettings: View {
 
                 self.voiceSummaryPanel
 
+                RealtimeTalkSettingsSection(isActive: self.isActive)
+
                 if voiceWakeSupported {
                     SettingsCardGroup("Activation") {
                         SettingsCardToggleRow(

@@ -163,6 +163,11 @@ struct MenuContent: View {
             }
             .disabled(!voiceWakeSupported)
             .opacity(voiceWakeSupported ? 1 : 0.5)
+            Button {
+                self.open(tab: .voiceWake)
+            } label: {
+                Label("Voice & Talk Settings…", systemImage: "slider.horizontal.3")
+            }
             Divider()
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])

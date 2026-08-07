@@ -6,6 +6,7 @@ public enum DashboardRouteMap {
     public static let cronJobsPagePath = "/cron"
     public static let sessionsPagePath = "/sessions"
     public static let devicesSettingsPath = "/settings/devices"
+    public static let talkSettingsPath = "/settings/talk"
     public static let custodianPagePath = "/custodian"
     /// Control UI query that renders /custodian with onboarding chrome.
     public static let custodianOnboardingSearch = "?onboarding=1"
