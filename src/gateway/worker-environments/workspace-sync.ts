@@ -44,6 +44,7 @@ import {
   verifyRemoteWorkspaceManifest,
   waitForQuiescenceRenewal,
   workerWorkspaceCommandSucceeded as success,
+  workspaceQuiescenceError,
   workerWorkspaceRsyncRemoteCommand,
   workerWorkspaceSshArgv,
   workspaceSyncError,
@@ -142,7 +143,7 @@ export function createWorkerWorkspaceActions(
       ],
     });
     if (!success(result)) {
-      throw workspaceSyncError(result);
+      throw workspaceQuiescenceError(result);
     }
     const acknowledgement = /^quiesced ([a-f0-9]{32})$/u.exec(result.stdout.trim());
     if (!acknowledgement) {
@@ -169,7 +170,7 @@ export function createWorkerWorkspaceActions(
           ],
         });
         if (!success(renewedResult)) {
-          throw workspaceSyncError(renewedResult);
+          throw workspaceQuiescenceError(renewedResult);
         }
         if (renewedResult.stdout.trim() !== `renewed ${nonce}`) {
           throw new Error(
@@ -221,7 +222,7 @@ export function createWorkerWorkspaceActions(
           argv: ["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce],
         });
         if (!success(resumedResult)) {
-          throw workspaceSyncError(resumedResult);
+          throw workspaceQuiescenceError(resumedResult);
         }
         resumed = true;
       },

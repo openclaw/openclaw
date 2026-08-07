@@ -15,6 +15,7 @@ import {
   type WorkerSshRunner,
 } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import { WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE } from "./workspace-quiescence-scripts.js";
 import type {
   WorkerWorkspaceReconciliationJournal,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -298,7 +299,7 @@ describe("worker tunnel manager", () => {
       if (remoteCommand.includes("async function resume()")) {
         return {
           ...success(),
-          code: 1,
+          code: WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE,
           stderr: "workspace quiescence recovery timed out; lease retained for operator recovery\n",
         };
       }
@@ -321,6 +322,44 @@ describe("worker tunnel manager", () => {
       await expect(quiescence.resume()).rejects.toBeInstanceOf(
         WorkerWorkspaceOperatorRecoveryError,
       );
+    } finally {
+      await handle.stop();
+    }
+  });
+
+  it("keeps matching command prose retryable without the quiescence outcome code", async () => {
+    const nonce = "a".repeat(32);
+    const fake = fakeRunner((argv) => {
+      const remoteCommand = argv.at(-1) ?? "";
+      if (remoteCommand.includes('process.stdout.write("quiesced "')) {
+        return success(`quiesced ${nonce}\n`);
+      }
+      if (remoteCommand.includes("async function resume()")) {
+        return {
+          ...success(),
+          code: 1,
+          stderr: "workspace quiescence recovery timed out; lease retained for operator recovery\n",
+        };
+      }
+      return undefined;
+    });
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const starting = manager.start({
+      environmentId: "worker:quiescence-retryable-prose",
+      ownerEpoch: 3,
+      ssh: SSH,
+      gateway: { host: "127.0.0.1", port: 18789 },
+      resolveIdentity,
+    });
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    const handle = await starting;
+
+    try {
+      const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
+      const error = await quiescence.resume().catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WorkerWorkspaceOperatorRecoveryError);
     } finally {
       await handle.stop();
     }

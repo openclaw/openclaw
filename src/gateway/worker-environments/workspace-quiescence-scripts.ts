@@ -1,8 +1,8 @@
 const REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS = 1_000;
-// This wall-clock ceiling covers the whole recovery pass, not each process.
-// Exhaustion is expected to be rare and leaves an operator-visible terminal lease.
+// Covers the whole pass; exhaustion leaves an operator-visible terminal lease.
 const REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS = 5_000;
 const REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY = 8;
+export const WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE = 75;
 
 const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
@@ -147,7 +147,8 @@ function quiescenceCandidates(rows, expectedUid, excludedPids, frozen) {
   );
 }`;
 
-const REMOTE_QUIESCENCE_LEASE_JS = String.raw`function validProcessReference(value) {
+const REMOTE_QUIESCENCE_LEASE_JS = String.raw`class WorkspaceOperatorRecoveryError extends Error {}
+function validProcessReference(value) {
   return value && Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.start === "string" && value.start.length > 0 && value.start.length <= 128;
 }
 function validRecovery(value) {
@@ -257,7 +258,7 @@ async function recoverOrphanLeases(orphanNames) {
       }
     });
   }
-  if (retained) throw new Error("workspace quiescence orphan recovery " + (failed ? "failed" : "timed out") + "; lease retained for operator recovery");
+  if (retained) throw new WorkspaceOperatorRecoveryError("workspace quiescence orphan recovery " + (failed ? "failed" : "timed out") + "; lease retained for operator recovery");
 }
 async function quiesce() {
 const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
@@ -391,7 +392,7 @@ try {
     },
   });
   const failure = recovery.failed ? "failed" : "timed out";
-  throw new Error(
+  throw new WorkspaceOperatorRecoveryError(
     "workspace quiescence recovery " + failure + "; lease retained for operator recovery",
     { cause: error },
   );
@@ -453,7 +454,9 @@ process.stdout.write("quiesced " + nonce + "\n");
 }
 void quiesce().catch((error) => {
   console.error(error);
-  process.exitCode = 1;
+  process.exitCode = error instanceof WorkspaceOperatorRecoveryError
+    ? ${WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE}
+    : 1;
 });
 `;
 
@@ -480,7 +483,7 @@ const input = parseLease(fs.readFileSync(leasePath, "utf8"), nonce, {
 });
 if (input.recovery !== undefined) {
   const failure = input.recovery.state === "recovery-failed" ? "failed" : "timed out";
-  throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
+  throw new WorkspaceOperatorRecoveryError("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
 }
 const existingReferences = input.processes.map((entry) => ({ ...entry, signal: 0 }));
 const existingValidationDeadlineMs = existingReferences.length === 0 ? Date.now() : processEnrollmentDeadlineMs(existingReferences.length);
@@ -625,7 +628,9 @@ process.stdout.write("renewed " + nonce + "\n");
 }
 void renew().catch((error) => {
   console.error(error);
-  process.exitCode = 1;
+  process.exitCode = error instanceof WorkspaceOperatorRecoveryError
+    ? ${WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE}
+    : 1;
 });
 `;
 
@@ -689,11 +694,11 @@ async function resume() {
       },
     );
     const failure = recovery.failed ? "failed" : "timed out";
-    throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
+    throw new WorkspaceOperatorRecoveryError("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
   }
   fs.unlinkSync(leasePath);
 }
 void resume().catch((error) => {
-  console.error(error); process.exitCode = 1;
+  console.error(error); process.exitCode = error instanceof WorkspaceOperatorRecoveryError ? ${WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE} : 1;
 });
 `;

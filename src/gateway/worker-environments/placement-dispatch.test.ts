@@ -133,6 +133,9 @@ describe("worker placement dispatch", () => {
     });
     expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
     expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
+
+    await restartedHarness.service.forceDestroyEnvironment(active.environmentId);
+    expect(restartedStore.listPendingWorkspaceResults()).toEqual([]);
   });
 
   it("recovers a draining turn result using the admitted claim generation", async () => {
@@ -204,6 +207,15 @@ describe("worker placement dispatch", () => {
     });
     expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      turnClaim: { claimId: claim.claimId },
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
   it("records terminal quiescence recovery while retaining the pending result", async () => {
@@ -239,6 +251,28 @@ describe("worker placement dispatch", () => {
     });
     expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: terminalMessage,
+      turnClaim: null,
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restartedHarness = createHarness(restartedStore);
+    await restartedHarness.service.reconcile();
+
+    expect(restartedHarness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: terminalMessage,
+      turnClaim: null,
+    });
+    expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
   });
 
   it("fails a pending result with diagnostics when its worker is proven lost", async () => {

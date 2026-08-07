@@ -10,6 +10,7 @@ import {
   REMOTE_WORKSPACE_QUIESCE_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   REMOTE_WORKSPACE_RESUME_JS,
+  WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE,
 } from "./workspace-quiescence-scripts.js";
 
 const roots: string[] = [];
@@ -1025,7 +1026,7 @@ ${REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS}`;
           [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
           { timeoutMs: 10_000, baseEnv: input.env },
         );
-        expect(recoveryResult.code).not.toBe(0);
+        expect(recoveryResult.code).toBe(WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
         expect(recoveryResult.stderr).toContain(message);
         await Promise.all(
           healthyPids.map(async (pid) => await expectProcessState(pid, false, 8_000)),
@@ -1059,14 +1060,14 @@ ${REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS}`;
           ],
           { timeoutMs: 10_000, baseEnv: input.env },
         );
-        expect(renewResult.code).not.toBe(0);
+        expect(renewResult.code).toBe(WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
         expect(renewResult.stderr).toContain(message);
 
         const failedResume = await runCommandWithTimeout(
           [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
           { timeoutMs: 8_000, baseEnv: input.env },
         );
-        expect(failedResume.code).not.toBe(0);
+        expect(failedResume.code).toBe(WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
         expect(failedResume.stderr).toContain(message);
         await expect(fs.access(leaseFile)).resolves.toBeUndefined();
 
