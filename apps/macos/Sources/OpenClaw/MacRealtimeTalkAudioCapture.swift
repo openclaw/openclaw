@@ -31,10 +31,8 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
         self.selectedInputUID = selectedInputUID
     }
 
-    deinit {
-        MainActor.assumeIsolated {
-            self.stop()
-        }
+    @MainActor deinit {
+        self.stop()
     }
 
     func start(

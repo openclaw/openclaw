@@ -104,6 +104,17 @@ struct MacRealtimeTalkAudioCaptureTests {
         #expect(capture.suppressesInputDuringOutput)
     }
 
+    @Test func `capture can be released away from the main actor`() async {
+        let holder = await MainActor.run {
+            OffMainActorCaptureHolder(MacRealtimeTalkAudioCapture(selectedInputUID: { nil }))
+        }
+
+        await Task.detached {
+            holder.releaseCapture()
+        }.value
+        await MainActor.run {}
+    }
+
     private func makeFloatBuffer(
         sampleRate: Double,
         channels: [[Float]]) throws -> AVAudioPCMBuffer
@@ -149,5 +160,17 @@ private final class RealtimeTalkFrameSink: @unchecked Sendable {
         self.lock.lock()
         self.frames.append(frame)
         self.lock.unlock()
+    }
+}
+
+private final class OffMainActorCaptureHolder: @unchecked Sendable {
+    private var capture: MacRealtimeTalkAudioCapture?
+
+    init(_ capture: MacRealtimeTalkAudioCapture) {
+        self.capture = capture
+    }
+
+    func releaseCapture() {
+        self.capture = nil
     }
 }
