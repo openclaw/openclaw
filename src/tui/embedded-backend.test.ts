@@ -1068,7 +1068,6 @@ describe("EmbeddedTuiBackend", () => {
     expect(getSessionGoalMock).toHaveBeenCalledWith({
       sessionKey: "global",
       storePath: "/tmp/openclaw-work-sessions.json",
-      persist: false,
     });
   });
 
