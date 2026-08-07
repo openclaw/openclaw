@@ -91,7 +91,9 @@ export async function bridgeCodexAppServerStartOptions(params: {
     const scopedStartOptions = await scopeStartOptions();
     return withClearedEnvironmentVariables(
       scopedStartOptions,
-      CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS,
+      params.startOptions.requiresRealtimeOpenAiApiKeyEnv && params.preparedAuth.kind === "profile"
+        ? [CODEX_API_KEY_ENV_VAR, CODEX_ACCESS_TOKEN_ENV_VAR]
+        : CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS,
     );
   }
   if (params.authProfileId === null) {
@@ -118,7 +120,12 @@ export async function bridgeCodexAppServerStartOptions(params: {
     authProfileId,
   });
   return shouldClearInheritedOpenAiApiKey
-    ? withClearedEnvironmentVariables(scopedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
+    ? withClearedEnvironmentVariables(
+        scopedStartOptions,
+        params.startOptions.requiresRealtimeOpenAiApiKeyEnv
+          ? [CODEX_API_KEY_ENV_VAR]
+          : CODEX_APP_SERVER_API_KEY_ENV_VARS,
+      )
     : scopedStartOptions;
 }
 

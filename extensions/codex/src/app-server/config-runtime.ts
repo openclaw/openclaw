@@ -330,13 +330,19 @@ export function enableCodexRealtimeConversation(
   const args = appServer.start.args;
   for (let index = 0; index < args.length - 1; index += 1) {
     if (args[index] === "--enable" && args[index + 1] === "realtime_conversation") {
-      return appServer;
+      return appServer.start.requiresRealtimeOpenAiApiKeyEnv
+        ? appServer
+        : {
+            ...appServer,
+            start: { ...appServer.start, requiresRealtimeOpenAiApiKeyEnv: true },
+          };
     }
   }
   return {
     ...appServer,
     start: {
       ...appServer.start,
+      requiresRealtimeOpenAiApiKeyEnv: true,
       args: [...args, "--enable", "realtime_conversation"],
     },
   };

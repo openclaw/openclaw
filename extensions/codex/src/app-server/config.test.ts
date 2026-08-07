@@ -84,6 +84,7 @@ describe("Codex app-server config", () => {
       "--enable",
       "realtime_conversation",
     ]);
+    expect(enabled.start.requiresRealtimeOpenAiApiKeyEnv).toBe(true);
     expect(enableCodexRealtimeConversation(enabled)).toBe(enabled);
 
     const websocket = resolveRuntimeForTest({

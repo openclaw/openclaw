@@ -543,6 +543,44 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("keeps only the OpenAI realtime fallback key under subscription auth", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({
+      requiresRealtimeOpenAiApiKeyEnv: true,
+      clearEnv: ["FOO"],
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:default",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-123",
+        },
+      });
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+        },
+        clearEnv: ["FOO", "CODEX_API_KEY"],
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears an inherited OpenAI API key for an explicit Codex OAuth profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({ clearEnv: ["FOO"] });
@@ -660,6 +698,41 @@ describe("bridgeCodexAppServerStartOptions", () => {
       }
     },
   );
+
+  it("keeps the OpenAI realtime fallback key for prepared subscription auth", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({
+      requiresRealtimeOpenAiApiKeyEnv: true,
+      clearEnv: ["FOO"],
+    });
+    try {
+      const bridged = await bridgeCodexAppServerStartOptions({
+        startOptions,
+        agentDir,
+        authProfileId: "openai:prepared",
+        preparedAuth: {
+          kind: "profile",
+          profileId: "openai:prepared",
+          store: { version: 1, profiles: {} },
+        },
+      });
+      expect(bridged).toEqual({
+        ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
+        env: { CODEX_HOME: resolveCodexAppServerHomeDir(agentDir) },
+        clearEnv: ["FOO", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+      });
+      expect(
+        resolveCodexAppServerSpawnEnv(bridged, {
+          CODEX_API_KEY: "ambient-codex-key",
+          OPENAI_API_KEY: "ambient-openai-key",
+          CODEX_ACCESS_TOKEN: "ambient-access-token",
+        }),
+      ).toMatchObject({ OPENAI_API_KEY: "ambient-openai-key" });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
 
   it("maps a prepared API-key route to one closed auth handoff", async () => {
     await expect(
