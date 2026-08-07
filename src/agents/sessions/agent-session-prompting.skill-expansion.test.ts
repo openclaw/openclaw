@@ -13,12 +13,41 @@ import { createSyntheticSourceInfo } from "./source-info.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 class TestPrompting extends AgentSessionPrompting {
+  // Stubs for abstract members declared in AgentSessionBase.
+  protected isRetryableError(): boolean {
+    return false;
+  }
+
+  protected async prepareRetry(): Promise<boolean> {
+    return false;
+  }
+
+  protected async checkCompaction(): Promise<boolean> {
+    return false;
+  }
+
+  abortRetry(): void {}
+
+  abortCompaction(): void {}
+
+  abortBranchSummary(): void {}
+
+  abortBash(): void {}
+
+  protected flushPendingBashMessages(): void {}
+
   public expand(text: string): string {
-    return this.expandSkillCommand(text);
+    // expandSkillCommand is private to AgentSessionPrompting; bypass via any
+    // so this focused test can exercise the expansion path without wiring a
+    // full Agent runtime.
+    return (this as unknown as { expandSkillCommand(text: string): string }).expandSkillCommand(
+      text,
+    );
   }
 
   public setExtensionRunnerForTest(runner: ExtensionRunner): void {
-    this.currentExtensionRunner = runner;
+    (this as unknown as { currentExtensionRunner: ExtensionRunner }).currentExtensionRunner =
+      runner;
   }
 }
 
@@ -104,9 +133,9 @@ describe("AgentSessionPrompting /skill: expansion limit", () => {
     const expanded = prompting.expand("/skill:test extra args");
 
     expect(expanded).toBe("/skill:test extra args");
-    const runner = prompting.currentExtensionRunner as unknown as {
-      emitError: ReturnType<typeof vi.fn>;
-    };
+    const runner = (
+      prompting as unknown as { currentExtensionRunner: { emitError: ReturnType<typeof vi.fn> } }
+    ).currentExtensionRunner;
     expect(runner.emitError).toHaveBeenCalledWith(
       expect.objectContaining({
         extensionPath: skillFile,
