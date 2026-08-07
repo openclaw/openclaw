@@ -669,11 +669,12 @@ describe("action label/data surrogate-safe truncation", () => {
       actions: [{ type: "uri", label: "Open", uri: `https://e.example/?q=${"u".repeat(1200)}` }],
     });
 
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected a buttons template");
+    }
     const uriTemplateAction = expectDefined(
-      buttonsTemplate.actions[0],
+      message.template.actions[0],
       "buttons template uri action",
     );
     expect(uriTemplateAction).toEqual({
@@ -689,11 +690,12 @@ describe("action label/data surrogate-safe truncation", () => {
       text: "Pick",
       actions: [{ type: "postback", label: "Open", data: `action=open&token=${"x".repeat(300)}` }],
     });
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected a buttons template");
+    }
 
-    expect(buttonsTemplate.actions[0]).toEqual({
+    expect(message.template.actions[0]).toEqual({
       type: "message",
       label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",

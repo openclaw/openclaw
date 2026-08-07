@@ -187,8 +187,11 @@ describe("parseLineDirectives", () => {
       >[0];
       const message = buildTemplateMessageFromPayload(payload);
 
-      expect(message?.altText).toBe(question);
-      expect((message?.template as { text?: string } | undefined)?.text).toHaveLength(240);
+      if (message?.type !== "template" || message.template.type !== "confirm") {
+        throw new Error("expected a confirm template");
+      }
+      expect(message.altText).toBe(question);
+      expect(message.template.text).toHaveLength(240);
     });
   });
 
@@ -265,8 +268,11 @@ describe("parseLineDirectives", () => {
       >[0];
       const message = buildTemplateMessageFromPayload(payload);
 
-      expect(message?.altText).toBe(`Menu: ${text}`);
-      expect((message?.template as { text?: string } | undefined)?.text).toHaveLength(60);
+      if (message?.type !== "template" || message.template.type !== "buttons") {
+        throw new Error("expected a buttons template");
+      }
+      expect(message.altText).toBe(`Menu: ${text}`);
+      expect(message.template.text).toHaveLength(60);
     });
   });
 
