@@ -33,7 +33,6 @@ import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
-  resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
@@ -269,6 +268,8 @@ export function createOpenClawTools(
       : undefined;
   const optionalMediaTools = resolveOptionalMediaToolFactoryPlan({
     config: availabilityConfig ?? resolvedConfig,
+    agentDir: options?.agentDir,
+    modelHasVision: options?.modelHasVision,
     workspaceDir,
     authStore: options?.authProfileStore,
     toolAllowlist: options?.pluginToolAllowlist,
@@ -299,15 +300,7 @@ export function createOpenClawTools(
   const requesterSessionKey = trimmedRunSessionKey || options?.agentSessionKey;
   const requesterTurnRunId = options?.runId;
   const imageTool =
-    options?.agentDir &&
-    resolveImageToolFactoryAvailable({
-      config: availabilityConfig ?? resolvedConfig,
-      agentDir: options.agentDir,
-      workspaceDir,
-      modelHasVision: options?.modelHasVision,
-      authStore: options?.authProfileStore,
-      preparedModelRuntime: options?.preparedModelRuntime,
-    })
+    optionalMediaTools.image && options?.agentDir
       ? createImageTool({
           config: availabilityConfig ?? options?.config,
           agentId: sessionAgentId,
