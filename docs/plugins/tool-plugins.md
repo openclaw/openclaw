@@ -155,6 +155,14 @@ tool({
 });
 ```
 
+A factory returns a core `AgentTool`, so its `execute` uses the runtime
+signature `execute(toolCallId, params, signal, onUpdate)` with the tool call ID
+first. That is the opposite argument order from the declarative
+`execute(params, config, context)` shown above, and it matches the
+`api.registerTool` examples in [Building Plugins](/plugins/building-plugins).
+Reading `params` from the first argument of a factory tool returns the tool
+call ID string instead.
+
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools
 with hooks, services, providers, or commands.
