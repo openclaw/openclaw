@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isMessagingToolTargetEvidenceAction } from "../embedded-agent-messaging.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import {
@@ -39,6 +43,56 @@ export function extractCliMessagingTarget(
     currentThreadId: context.params.currentThreadTs,
     currentMessageId: context.params.currentMessageId,
   });
+}
+
+/**
+ * Whether a CLI/loopback `message` send resolves to the current source
+ * conversation, and so is a source reply rather than an unrelated outbound
+ * side effect.
+ *
+ * The embedded runner learns this from the gateway's trusted
+ * `sourceReplyRoute: "current-source"` result tag, which is only applied when a
+ * signed message-action turn capability accompanies the call. That capability
+ * is deliberately not threaded into the CLI subprocess MCP server, so
+ * loopback sends never carry the tag — and an explicit-route send (channel/to)
+ * is then rejected by `isDeliveredMessageToolOnlySourceReplyResult` even when
+ * it delivered to the current source, wrongly tripping the stranded-reply
+ * recovery retry (openclaw-kg9).
+ *
+ * The CLI runner is itself an in-process trusted caller, so it verifies the
+ * route directly: it resolves the send's destination through the same
+ * `extractCliMessagingTarget` path used for delivery evidence, and compares it
+ * to the destination an implicit (routeless) current-source send would resolve
+ * to. Identical normalization on both sides avoids provider-target drift. When
+ * they match, the runner may pass `allowExplicitSourceRoute` so the delivered
+ * send counts as source-reply evidence.
+ */
+export function cliSendResolvesToCurrentSource(
+  context: PreparedCliRunContext,
+  toolName: string,
+  args: Record<string, unknown>,
+): boolean {
+  if (normalizeCliMessagingToolName(toolName) !== "message") {
+    return false;
+  }
+  const target = extractCliMessagingTarget(context, toolName, args);
+  const targetTo = normalizeOptionalString(target?.to);
+  if (!targetTo) {
+    return false;
+  }
+  // The same action with no explicit route resolves to the current source.
+  const reference = extractCliMessagingTarget(context, toolName, {
+    action: normalizeOptionalString(args.action) ?? "send",
+  });
+  const referenceTo = normalizeOptionalString(reference?.to);
+  if (!referenceTo) {
+    return false;
+  }
+  return (
+    targetTo === referenceTo &&
+    normalizeOptionalLowercaseString(target?.provider) ===
+      normalizeOptionalLowercaseString(reference?.provider)
+  );
 }
 
 export function buildMessagingToolSendEvidenceKey(send: MessagingToolSend): string {

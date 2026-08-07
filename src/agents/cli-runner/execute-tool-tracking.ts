@@ -30,6 +30,7 @@ import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
   appendUniqueCliMessagingEvidence,
   buildMessagingToolSendEvidenceKey,
+  cliSendResolvesToCurrentSource,
   CLI_MESSAGING_EVIDENCE_MAX_CALLS,
   extractCliMessagingContent,
   extractCliMessagingTarget,
@@ -244,6 +245,17 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           args: params.args,
           result: params.result,
           isError: params.isError,
+          // Loopback sends never carry the gateway's trusted current-source
+          // route tag (the turn capability that mints it is not threaded
+          // into the CLI subprocess MCP server). The runner verifies the
+          // route itself so an explicit-route reply to the current source
+          // still counts as delivered and does not trip stranded-reply
+          // recovery (openclaw-kg9).
+          allowExplicitSourceRoute: cliSendResolvesToCurrentSource(
+            context,
+            params.toolName,
+            toolArgs,
+          ),
         })
       ) {
         didDeliverSourceReplyViaMessageTool = true;

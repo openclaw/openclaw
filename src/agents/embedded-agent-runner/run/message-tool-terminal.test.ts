@@ -11,6 +11,8 @@ async function recordsDeliveredSourceReply(params: {
   >[0]["sourceReplyDeliveryMode"];
   context: AfterToolCallContext;
   hookResult?: Awaited<ReturnType<NonNullable<Agent["afterToolCall"]>>>;
+  messageChannel?: string;
+  currentChannelId?: string;
 }): Promise<boolean> {
   const agent = (params.hookResult
     ? { afterToolCall: vi.fn(async () => params.hookResult) }
@@ -20,6 +22,8 @@ async function recordsDeliveredSourceReply(params: {
     agent,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     onDeliveredSourceReply,
+    messageChannel: params.messageChannel,
+    currentChannelId: params.currentChannelId,
   });
   await agent.afterToolCall?.(params.context);
   return onDeliveredSourceReply.mock.calls.length > 0;
@@ -180,6 +184,49 @@ describe("message-tool-only source replies", () => {
       ).resolves.toBe(expected);
     },
   );
+
+  it("records an explicit-route send that resolves to the current source (openclaw-p3j)", async () => {
+    // This hook runs in-process, so it never receives the gateway's signed
+    // current-source route tag. Route context lets it verify the explicit
+    // route resolves to the same destination an implicit send would, so a
+    // deliberate channel/target reply to the current conversation still
+    // counts as source-reply evidence.
+    await expect(
+      recordsDeliveredSourceReply({
+        sourceReplyDeliveryMode: "message_tool_only",
+        context: createAfterToolCallContext({
+          toolName: "message",
+          args: {
+            action: "send",
+            channel: "discord",
+            target: "channel:source",
+            message: "explicit-route echo",
+          },
+        }),
+        messageChannel: "discord",
+        currentChannelId: "channel:source",
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("does not record an explicit-route send to a different conversation (openclaw-p3j)", async () => {
+    await expect(
+      recordsDeliveredSourceReply({
+        sourceReplyDeliveryMode: "message_tool_only",
+        context: createAfterToolCallContext({
+          toolName: "message",
+          args: {
+            action: "send",
+            channel: "discord",
+            target: "channel:other",
+            message: "cross-channel",
+          },
+        }),
+        messageChannel: "discord",
+        currentChannelId: "channel:source",
+      }),
+    ).resolves.toBe(false);
+  });
 
   it("preserves existing after-tool-call output while recording delivered source replies", async () => {
     const previousAfterToolCall = vi.fn(async () => ({

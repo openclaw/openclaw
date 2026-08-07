@@ -1138,6 +1138,62 @@ export function extractMessagingToolSend(
     : undefined;
 }
 
+/**
+ * Whether a `message` tool send with an explicit route (channel/to/target)
+ * resolves to the same destination an implicit (routeless) send would
+ * resolve to right now, and so is a source reply rather than an unrelated
+ * outbound side effect.
+ *
+ * Embedded-runner callers are in-process, but the gateway's trusted
+ * `sourceReplyRoute: "current-source"` result tag is only applied when a
+ * signed message-action turn capability accompanies the call, which not
+ * every embedded call site threads through. Where that capability is
+ * missing, the caller can verify the route itself by comparing the explicit
+ * target's resolved destination against the destination the same action
+ * would resolve to with no explicit route, using identical extraction
+ * options on both sides (openclaw-kg9, openclaw-p3j).
+ *
+ * `currentProvider` is the current conversation's provider (e.g. the
+ * session's active channel). Args with no explicit provider/channel of
+ * their own resolve against it on both sides of the comparison — mirroring
+ * `extractCliMessagingTarget`'s injection so an implicit send and its
+ * current-source reference agree on provider identity.
+ */
+export function messagingToolSendResolvesToCurrentSource(
+  toolName: string,
+  args: Record<string, unknown>,
+  currentProvider: string | undefined,
+  options: Parameters<typeof extractMessagingToolSend>[2],
+): boolean {
+  const hasExplicitProvider =
+    Boolean(normalizeOptionalString(args.provider)) ||
+    Boolean(normalizeOptionalString(args.channel));
+  const targetArgs =
+    !hasExplicitProvider && currentProvider ? { ...args, provider: currentProvider } : args;
+  const target = extractMessagingToolSend(toolName, targetArgs, options);
+  const targetTo = normalizeOptionalString(target?.to);
+  if (!targetTo) {
+    return false;
+  }
+  // The same action with no explicit route resolves to the current source.
+  const referenceArgs: Record<string, unknown> = {
+    action: normalizeOptionalString(args.action) ?? "send",
+  };
+  if (currentProvider) {
+    referenceArgs.provider = currentProvider;
+  }
+  const reference = extractMessagingToolSend(toolName, referenceArgs, options);
+  const referenceTo = normalizeOptionalString(reference?.to);
+  if (!referenceTo) {
+    return false;
+  }
+  return (
+    targetTo === referenceTo &&
+    normalizeOptionalLowercaseString(target?.provider) ===
+      normalizeOptionalLowercaseString(reference?.provider)
+  );
+}
+
 /** Reconciles pending send evidence with the provider's successful action result. */
 export function extractMessagingToolSendResult(
   pending: MessagingToolSend,
