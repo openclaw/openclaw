@@ -249,7 +249,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const { requestId } = params as { requestId: string };
+    // Match gateway.suspend.prepare / deviceId trimming: pasted requestIds often
+    // carry surrounding whitespace and must still hit the pending-pairing key.
+    const requestId = (params as { requestId: string }).requestId.trim();
     const authz = resolveDeviceSessionAuthz(client);
     let migrationApprovalScopes: string[] | undefined;
     if (!authz.isAdminCaller) {
@@ -402,7 +404,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateDevicePairRejectParams, "device.pair.reject", respond)) {
       return;
     }
-    const { requestId } = params as { requestId: string };
+    const requestId = (params as { requestId: string }).requestId.trim();
     const authz = resolveDeviceSessionAuthz(client);
     if (authz.isDeviceAuthMigrationSession && !authz.isDeviceAuthMigrationCaller) {
       respond(
