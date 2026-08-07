@@ -28,6 +28,7 @@ import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewaySuspendedHandshakeAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
@@ -371,6 +372,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authRateLimiter,
           clientLabel,
           clientMeta,
+          allowStartupPendingConnect: isRestoredAdmissionOperatorConnect(data),
           markHandshakeFailure,
           sendHandshakeErrorResponse,
           sendFrame,
@@ -402,6 +404,33 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
+  const isRestoredAdmissionOperatorConnect = (data: RawData): boolean => {
+    if (isClosed() || rawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
+      return false;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawDataToString(data));
+    } catch {
+      return false;
+    }
+    if (
+      !validateRequestFrame(parsed) ||
+      parsed.method !== "connect" ||
+      !validateConnectParams(parsed.params)
+    ) {
+      return false;
+    }
+    return (
+      isLocalClient &&
+      (parsed.params.role ?? "operator") === "operator" &&
+      parsed.params.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+      parsed.params.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+      !parsed.params.device &&
+      buildRequestContext().getRestoredAdmissionStatus().status === "held"
+    );
+  };
+
   const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
     if (isClosed() || rawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
       return false;
@@ -419,7 +448,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     ) {
       return false;
     }
-
     const restartDraining = isGatewayRestartDraining();
     const reason = restartDraining ? "gateway-restarting" : "gateway-suspending";
     const operation = restartDraining ? "restart" : "suspension";
@@ -457,6 +485,17 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const admission = tryBeginGatewayRootWorkAdmission();
     if (!admission) {
+      const suspendedControlAdmission = isRestoredAdmissionOperatorConnect(data)
+        ? tryBeginGatewaySuspendedHandshakeAdmission()
+        : null;
+      if (suspendedControlAdmission) {
+        try {
+          await suspendedControlAdmission.run(() => handleMessage(data));
+        } finally {
+          suspendedControlAdmission.release();
+        }
+        return;
+      }
       if (await rejectConnectForClosedAdmission(data)) {
         return;
       }

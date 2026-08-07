@@ -2,6 +2,7 @@ import { isNixMode } from "../config/paths.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { RestoredAdmissionStartup } from "./restored-admission.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -108,6 +109,22 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  const restoredStartup = await prepareRestoredAdmissionStartup(
+    opts.restoredAdmissionDescriptorPath,
+  );
+  try {
+    return await startGatewayServerRuntime(port, opts, restoredStartup);
+  } catch (error) {
+    restoredStartup?.release();
+    throw error;
+  }
+}
+
+async function startGatewayServerRuntime(
+  port: number,
+  opts: GatewayServerOptions,
+  restoredStartup: RestoredAdmissionStartup | null,
+): Promise<GatewayServer> {
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
@@ -132,6 +149,7 @@ export async function startGatewayServer(
     resolveChannelRuntime: getChannelRuntime,
     loadWorkerEnvironmentStartupModule,
     loadWorkerPlacementStartupModule,
+    restoredStartup,
   });
   const lifecycleRuntime = await prepareGatewayLifecycle({
     runtime,
@@ -186,6 +204,7 @@ export async function startGatewayServer(
     await closeOnStartupFailure();
     throw err;
   }
+
   // The public server is fully initialized now. Leave a short I/O window before
   // background prewarms and cleanup imports compete for the startup CPU.
   const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
@@ -215,4 +234,43 @@ export async function startGatewayServer(
       }
     },
   };
+}
+
+async function prepareRestoredAdmissionStartup(
+  descriptorPath: string | undefined,
+): Promise<RestoredAdmissionStartup | null> {
+  if (descriptorPath === undefined) {
+    return null;
+  }
+  const { tryBeginGatewaySuspendAdmission } = await import("../process/gateway-work-admission.js");
+  const admission = tryBeginGatewaySuspendAdmission(() => {});
+  if (!admission || !admission.commit()) {
+    admission?.rollback();
+    throw new Error("restored Gateway startup could not close work admission");
+  }
+  let released = false;
+  const release = () => {
+    if (released) {
+      return true;
+    }
+    released = admission.release();
+    return released;
+  };
+  try {
+    const restoredAdmissionModule = await import("./restored-admission.js");
+    const descriptor = await restoredAdmissionModule.prepareRestoredAdmission(
+      descriptorPath,
+      process.env,
+    );
+    const status = restoredAdmissionModule.createRestoredAdmissionStatus(descriptor);
+    return {
+      descriptor,
+      release,
+      complete: restoredAdmissionModule.completeRestoredAdmission,
+      status,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }

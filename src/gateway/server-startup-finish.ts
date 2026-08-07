@@ -22,15 +22,12 @@ import {
 } from "./server-lifetime-sidecars.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
+import { createRestoredAdmissionBeforeReady } from "./server-restored-admission-startup.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
 } from "./server-shared-auth-generation.js";
-import {
-  getHealthCache,
-  getHealthVersion,
-  incrementPresenceVersion,
-} from "./server/health-state.js";
+import * as healthState from "./server/health-state.js";
 
 type GatewayCoreRuntime = Awaited<ReturnType<typeof startGatewayCoreRuntime>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -68,6 +65,7 @@ export async function finishGatewayStartup(params: {
   } = params;
   const {
     minimalTestGateway,
+    restoredStartup,
     deps,
     runtimeState,
     sessionCompanion,
@@ -204,6 +202,8 @@ export async function finishGatewayStartup(params: {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     return createGatewayRequestContext({
       deps,
+      getRestoredAdmissionStatus:
+        restoredStartup?.status.get ?? (() => ({ status: "not-restored" as const })),
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
@@ -224,12 +224,12 @@ export async function finishGatewayStartup(params: {
       readPreparedGatewayModelCatalog,
       readChatMetadata: chatMetadataLifecycle.read,
       readChatStartupProjection: chatMetadataLifecycle.readStartup,
-      getHealthCache,
+      getHealthCache: healthState.getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
       logHealth,
       logGateway: log,
-      incrementPresenceVersion,
-      getHealthVersion,
+      incrementPresenceVersion: healthState.incrementPresenceVersion,
+      getHealthVersion: healthState.getHealthVersion,
       broadcast,
       broadcastToConnIds,
       nodeSendToSession,
@@ -496,6 +496,7 @@ export async function finishGatewayStartup(params: {
               stopAfterCloseStarted: stopPostReadySidecarsAfterCloseStarted,
             });
           },
+          ...createRestoredAdmissionBeforeReady({ runtime, log }),
           ...(workerPlacementRuntime
             ? {
                 startWorkerEnvironmentRuntime: async () => {

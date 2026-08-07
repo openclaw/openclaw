@@ -58,6 +58,7 @@ const CURRENT_TRAIN_METHODS = [
   "migrations.memory.plan",
   "openclaw.chat.history",
   "migrations.memory.apply",
+  "gateway.restore.status",
   "gateway.suspend.prepare",
   "gateway.suspend.status",
   "gateway.suspend.resume",

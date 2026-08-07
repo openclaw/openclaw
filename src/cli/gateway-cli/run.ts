@@ -1206,6 +1206,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           tailscale: tailscaleOverride,
           startupStartedAt,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
+          ...(typeof opts.restoreAdmissionDescriptor === "string" &&
+          opts.restoreAdmissionDescriptor.trim()
+            ? { restoredAdmissionDescriptorPath: opts.restoreAdmissionDescriptor }
+            : {}),
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),

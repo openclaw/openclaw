@@ -141,6 +141,7 @@ const WINDOWS_TRUSTED_ACCESS_SIDS = new Set([
 // Windows descriptors can approach 64 KiB each; batched JSON and base64 need
 // bounded aggregate headroom across every ancestor.
 const WINDOWS_ACL_METADATA_MAX_BUFFER = 16 * 1024 * 1024;
+const WINDOWS_ACL_METADATA_TIMEOUT_MS = 30_000;
 const WINDOWS_SID_PATTERN = /^S-\d+-\d+(?:-\d+)+$/iu;
 const WINDOWS_SID_SCHEMA = z
   .string()
@@ -1452,8 +1453,10 @@ async function assertTrustedWindowsStagingPath(rootPath: string): Promise<void> 
   let security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>;
   try {
     security = await inspectWindowsPathSecurity(paths);
-  } catch {
-    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
+  } catch (error) {
+    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`, {
+      cause: error,
+    });
   }
   if (security.paths.length !== paths.length) {
     throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
@@ -1573,7 +1576,7 @@ async function runEncodedWindowsPowerShell(command: string, maxBuffer: number): 
     powershell,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
     {
-      timeoutMs: 10_000,
+      timeoutMs: WINDOWS_ACL_METADATA_TIMEOUT_MS,
       maxBuffer,
     },
   );
