@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import type { ModelProvidersData } from "./model-providers/load.ts";
 import type { SessionsRouteData } from "./sessions/sessions-page.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import type { UsageRefreshPolicy } from "./usage/refresh-policy.ts";
@@ -13,6 +14,7 @@ import type { UsageRouteData } from "./usage/usage-page.ts";
 import "./cron/cron-page.ts";
 import "./debug/debug-page.ts";
 import "./logs/logs-page.ts";
+import "./model-providers/model-providers-page.ts";
 import "./sessions/sessions-page.ts";
 import "./skills/skills-page.ts";
 import "./tasks/tasks-page.ts";
@@ -101,7 +103,15 @@ function contextWithClient(
       subscribe,
     },
     channels: { subscribe },
-    runtimeConfig: { state: { configSnapshot: null }, subscribe },
+    runtimeConfig: {
+      state: { configSnapshot: {}, configLoading: false },
+      ensureLoaded: vi.fn(async () => undefined),
+      subscribe,
+    },
+    overlays: {
+      snapshot: { updateRunning: false, updateReconciliationPending: false },
+      subscribe,
+    },
     sessions: {
       state: { result: null, loading: false },
       list: vi.fn(async () => null),
@@ -436,6 +446,51 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(12));
     await waitForFast(() => expect(page.usageLoading).toBe(false));
   });
+
+  it("discards Model Providers work from a replaced source that reuses its client", async () => {
+    const staleAuth = deferred<unknown>();
+    let authCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "models.authStatus") {
+        authCalls += 1;
+        return authCalls === 1 ? staleAuth.promise : { ts: 2, providers: [] };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "config.get") {
+        return { config: {}, hash: "hash" };
+      }
+      if (method === "usage.status") {
+        return { updatedAt: 2, providers: [] };
+      }
+      if (method === "sessions.usage") {
+        return { aggregates: { byProvider: [] } };
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const agentsList = { defaultId: "main", agents: [{ id: "main" }] };
+    const page = createPage(
+      "openclaw-model-providers-page",
+      contextWithClient(client, { connected: true, agentsList }),
+    ) as TestPage & {
+      data: ModelProvidersData | null;
+    };
+    document.body.append(page);
+    await waitForFast(() => expect(authCalls).toBe(1));
+
+    await replaceContext(page, client, { connected: true, agentsList });
+    await waitForFast(() => expect(authCalls).toBe(2));
+    await waitForFast(() => expect(page.data?.authStatus?.ts).toBe(2));
+
+    staleAuth.resolve({ ts: 1, providers: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.data?.authStatus?.ts).toBe(2);
+  });
+
   it("preserves matching skills route data on the first bind", async () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
