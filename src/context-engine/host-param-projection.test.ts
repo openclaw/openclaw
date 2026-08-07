@@ -404,27 +404,25 @@ describe("context-engine host parameter projection", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("deduplicates the warning across repeated resolves of the same engine instance", async () => {
+  it("does not warn for undeclared engines before the warning window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T23:59:59Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [] });
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates the warning across repeated resolves of fresh factory instances", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const assemble = vi.fn<ContextEngine["assemble"]>(async (params) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-    }));
-    class SingletonProbeEngine implements ContextEngine {
-      readonly info = { id: "singleton-probe", name: "Singleton Probe" };
-      async ingest() {
-        return { ingested: true };
-      }
-      assemble = assemble;
-      async compact() {
-        return { ok: true, compacted: false };
-      }
-    }
-    const engineId = `singleton-probe-${++engineCounter}`;
-    const sharedEngine = new SingletonProbeEngine();
-    registerContextEngineForOwner(engineId, () => sharedEngine, `test:${engineId}`);
+    // Each resolve invokes the plugin factory again, producing a fresh engine
+    // instance. Dedup must key on the stable registration identity, not the
+    // factory-returned object.
+    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [] });
 
     await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
     await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });

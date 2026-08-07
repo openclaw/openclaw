@@ -58,22 +58,32 @@ const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineM
 const legacyHostParamDefaultRecord = getPluginCompatRecord(
   "context-engine-legacy-host-param-default",
 );
+const legacyHostParamDefaultWarningStarts = legacyHostParamDefaultRecord.warningStarts;
 const legacyHostParamDefaultRemoveAfter = legacyHostParamDefaultRecord.removeAfter;
 
-// Process-deduplicated warning set: resolveContextEngine is called per embedded run
-// (run-loop.ts) and per compaction, so without dedup an undeclared engine would log on every
-// resolve. WeakSet lets the entry disappear with the engine; resolveGlobalSingleton shares one
-// set across duplicated dist chunks. Reset on process restart is acceptable — one warning per
-// engine per process matches the "once per engine at resolve time" contract.
-const LEGACY_HOST_PARAM_DEFAULT_WARNED = resolveGlobalSingleton<WeakSet<ContextEngine>>(
+// Process-deduplicated warning set keyed by stable registration identity
+// (owner + engineId). resolveContextEngine is called per embedded run (run-loop.ts)
+// and per compaction, and each resolve may invoke the plugin factory again, so the
+// factory-returned engine object is not a stable dedup key — a fresh instance would
+// warn on every resolve. resolveGlobalSingleton shares one set across duplicated dist
+// chunks. Reset on process restart is acceptable — one warning per engine per process
+// matches the "once per engine at resolve time" contract.
+const LEGACY_HOST_PARAM_DEFAULT_WARNED = resolveGlobalSingleton<Set<string>>(
   Symbol.for("openclaw.contextEngineLegacyHostParamDefaultWarned"),
-  () => new WeakSet(),
+  () => new Set(),
 );
 
 function isLegacyHostParamDefaultWindowOpen(): boolean {
+  const today = new Date().toISOString().slice(0, 10);
+  if (
+    legacyHostParamDefaultWarningStarts !== undefined &&
+    today < legacyHostParamDefaultWarningStarts
+  ) {
+    return false;
+  }
   return (
     legacyHostParamDefaultRemoveAfter !== undefined &&
-    new Date().toISOString().slice(0, 10) <= legacyHostParamDefaultRemoveAfter
+    today <= legacyHostParamDefaultRemoveAfter
   );
 }
 
@@ -104,10 +114,11 @@ function warnUndeclaredHostParamsOnce(
   if (!isLegacyHostParamDefaultWindowOpen()) {
     return;
   }
-  if (LEGACY_HOST_PARAM_DEFAULT_WARNED.has(engine)) {
+  const identityKey = `${metadata.owner}\u0000${metadata.engineId}`;
+  if (LEGACY_HOST_PARAM_DEFAULT_WARNED.has(identityKey)) {
     return;
   }
-  LEGACY_HOST_PARAM_DEFAULT_WARNED.add(engine);
+  LEGACY_HOST_PARAM_DEFAULT_WARNED.add(identityKey);
   console.warn(formatLegacyHostParamDefaultDiagnostic(metadata));
 }
 
