@@ -1404,6 +1404,9 @@ vi.mock("./doctor-config-preflight.js", async () => {
             path: configPath,
             parsed,
             agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+            ...(injected?.includeProvenance
+              ? { includeProvenance: injected.includeProvenance }
+              : {}),
             sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
@@ -1428,6 +1431,9 @@ vi.mock("./doctor-config-preflight.js", async () => {
             path: configPath,
             parsed,
             agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+            ...(injected?.includeProvenance
+              ? { includeProvenance: injected.includeProvenance }
+              : {}),
             sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
@@ -1453,6 +1459,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
           path: configPath,
           parsed,
           agentRosterIncludeOwned: injected?.agentRosterIncludeOwned === true,
+          ...(injected?.includeProvenance ? { includeProvenance: injected.includeProvenance } : {}),
           sourceConfigBeforeMigrations,
           config: effectiveConfig,
           sourceConfig: effectiveConfig,
@@ -1688,6 +1695,42 @@ describe("doctor config flow", () => {
       ops: { default: true, workspace: "/srv/ops" },
     });
     expect(result.cfg.agents).not.toHaveProperty("list");
+  });
+
+  it("skips root wizard metadata when an include boundary owns the repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] } },
+      parsedConfig: { agents: { $include: "./agents.json5" } },
+      includeProvenance: [
+        {
+          path: ["agents"],
+          kind: "single",
+          hasSiblingOverrides: false,
+          hasArrayAncestor: false,
+          targetPath: "/virtual/.openclaw/agents.json5",
+        },
+      ],
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.skipWizardMetadataForIncludeWrite).toBe(true);
+  });
+
+  it("keeps root wizard metadata when no include boundary owns the repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] } },
+      parsedConfig: {
+        agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] },
+      },
+      includeProvenance: [],
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.skipWizardMetadataForIncludeWrite).toBeUndefined();
   });
 
   it("materializes ambient roles for a multi-agent configured default", async () => {

@@ -1,9 +1,6 @@
-import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { INCLUDE_KEY } from "../../../config/includes.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isPathInside } from "../../../infra/path-safety.js";
-import { isRecord } from "../../../utils.js";
+import { resolveIncludeWriteBoundary } from "../../../config/include-write-boundary.js";
+import { INCLUDE_KEY, isInternalIncludeWriteTarget } from "../../../config/includes.js";
+import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
 
 export function containsAuthoredInclude(value: unknown): boolean {
   if (!value || typeof value !== "object") {
@@ -18,7 +15,7 @@ export function containsAuthoredInclude(value: unknown): boolean {
 
 type ConfigPathMigrationOwnership =
   | { kind: "direct" }
-  | { kind: "single-top-level-include"; targetPath: string }
+  | { kind: "single-include"; targetPath: string }
   | { kind: "manual"; targetPaths: string[] };
 
 /** Classify whether Doctor can safely persist a migration at one resolved config path. */
@@ -40,43 +37,21 @@ export function classifyConfigPathMigrationOwnership(params: {
       owners.flatMap((owner) => owner.targetPaths ?? (owner.targetPath ? [owner.targetPath] : [])),
     ),
   ].toSorted();
-  const owner = owners[0];
-  const configDir = path.dirname(path.resolve(params.snapshot.path));
+  const boundary = resolveIncludeWriteBoundary({
+    provenance: params.snapshot.includeProvenance,
+    changed: { paths: [params.configPath], rootChanged: false },
+  });
+  // Canonical containment, not lexical: a symlink beneath the config directory
+  // can target an external file the guarded writer rejects; that is manual.
   if (
-    owners.length === 1 &&
-    owner?.path.length === 1 &&
-    owner.path[0] === params.configPath[0] &&
-    owner.kind === "single" &&
-    !owner.hasSiblingOverrides &&
-    owner.targetPath &&
-    isPathInside(configDir, path.resolve(owner.targetPath))
+    boundary &&
+    isInternalIncludeWriteTarget({
+      configPath: params.snapshot.path,
+      includePath: boundary.includePath,
+    })
   ) {
-    return { kind: "single-top-level-include", targetPath: owner.targetPath };
+    return { kind: "single-include", targetPath: boundary.includePath };
   }
 
   return { kind: "manual", targetPaths };
-}
-
-export function isSingleTopLevelIncludeMigration(params: {
-  parsed: unknown;
-  sourceConfig: OpenClawConfig;
-  candidate: OpenClawConfig;
-}): boolean {
-  if (!isRecord(params.parsed)) {
-    return false;
-  }
-  const keys = new Set([...Object.keys(params.sourceConfig), ...Object.keys(params.candidate)]);
-  const sourceConfig = params.sourceConfig as Record<string, unknown>;
-  const candidate = params.candidate as Record<string, unknown>;
-  const changed = [...keys].filter((key) => !isDeepStrictEqual(sourceConfig[key], candidate[key]));
-  const changedKey = changed.length === 1 ? changed[0] : undefined;
-  if (changedKey === undefined) {
-    return false;
-  }
-  const authoredSection = params.parsed[changedKey];
-  return (
-    isRecord(authoredSection) &&
-    Object.keys(authoredSection).length === 1 &&
-    typeof authoredSection[INCLUDE_KEY] === "string"
-  );
 }
