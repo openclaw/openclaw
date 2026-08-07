@@ -1522,6 +1522,741 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it("routes parent-targeted completions to requester session without channel delivery", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "NO_REPLY" }] },
+    });
+    const sendMessage = createSendMessageMock();
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      terminal: true,
+      disposition: "intentional_non_delivery",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      bestEffortDeliver: true,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("wakes an active parent-only requester with message-tool-only delivery", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "must not be sent automatically" }] },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const sendMessage = createSendMessageMock();
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({ sessionId: "requester-session-local", isActive: true }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome,
+      sendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-active",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, { delivered: true, path: "steered" });
+    expectRecordFields(mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2), {
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not downgrade an active parent-only requester wake on mode mismatch", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "must not be sent automatically" }] },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "source_reply_delivery_mode_mismatch",
+    ]);
+    const sendMessage = createSendMessageMock();
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({ sessionId: "requester-session-local", isActive: true }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome,
+      sendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-active-mismatch",
+      sourceTool: "subagent_announce",
+    });
+
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    for (const callIndex of [0, 1]) {
+      expectRecordFields(mockCallArg(queueEmbeddedAgentMessageWithOutcome, callIndex, 2), {
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+    }
+    expect(dispatchGatewayMethodInProcess).toHaveBeenCalledOnce();
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+  });
+
+  it("skips the durable generated-media handoff for external parent-only completions", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "must not be sent automatically" }] },
+    });
+    const sendMessage = createSendMessageMock();
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-generated-media",
+      sourceTool: "image_generate",
+      internalEvents: imageCompletionEvents(),
+      sourceRunId: "run-generated-media",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+    });
+    expect(sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery).not.toHaveBeenCalled();
+    expect(sessionDeliveryQueueMocks.releaseSessionDeliveryClaim).not.toHaveBeenCalled();
+    expect(sessionDeliveryQueueMocks.scheduleSessionDelivery).not.toHaveBeenCalled();
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a normal final that parent-only routing cannot publish", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "The child finished." }] },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-normal-final",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "parent-only completion must publish via the message tool or reply NO_REPLY",
+    });
+  });
+
+  it.each(["accepted", "started", "in_flight"])(
+    "does not credit a parent-only completion that is still %s",
+    async (status) => {
+      const dispatchGatewayMethodInProcess = createInProcessGatewayMock({ status });
+      testing.setDepsForTest({
+        dispatchGatewayMethodInProcess,
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session-local",
+          isActive: false,
+        }),
+        getRuntimeConfig: () => ({}) as never,
+      });
+
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+        targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+        triggerMessage: "child done",
+        steerMessage: "child done",
+        requesterOrigin: slackThreadOrigin,
+        requesterSessionOrigin: slackThreadOrigin,
+        completionDirectOrigin: slackThreadOrigin,
+        directOrigin: slackThreadOrigin,
+        requesterIsSubagent: false,
+        announceTarget: "parent",
+        expectsCompletionMessage: true,
+        bestEffortDeliver: true,
+        directIdempotencyKey: `announce-parent-only-${status}`,
+        sourceTool: "subagent_announce",
+      });
+
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        terminal: true,
+        disposition: "ambiguous",
+        reason: "visible_reply_missing",
+        error: "parent-only completion is still in flight; delivery is not yet verified",
+      });
+      // `ambiguous` is terminal to the dispatch contract, preventing a
+      // fallback/restart retry from creating a second completion turn.
+      expect(result.phases).toHaveLength(1);
+      expect(dispatchGatewayMethodInProcess).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("accepts an explicit source-matched message-tool publish for parent-only routing", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadId: "171.222",
+            text: "The reviewed child result is ready.",
+          },
+        ],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-message-tool",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+  });
+
+  it("credits a source-matched publish even when the agent final is NO_REPLY", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadId: "171.222",
+            text: "The reviewed child result is ready.",
+          },
+        ],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-message-tool-no-reply",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+  });
+
+  it("treats an off-target publish plus NO_REPLY as ambiguous", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:OTHER",
+            text: "Sent somewhere else.",
+          },
+        ],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-off-target-no-reply",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      terminal: true,
+      disposition: "ambiguous",
+    });
+    expect(result.phases).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "a source receipt plus an off-target receipt",
+      deliveryEvidence: {
+        messagingToolSentTargets: [
+          {
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadId: "171.222",
+            text: "Published to the requester.",
+          },
+          {
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:OTHER",
+            text: "Also published elsewhere.",
+          },
+        ],
+      },
+    },
+    {
+      name: "a source receipt plus unaccounted aggregate evidence",
+      deliveryEvidence: {
+        messagingToolSentTargets: [
+          {
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadId: "171.222",
+            text: "Published to the requester.",
+          },
+        ],
+        messagingToolSentTexts: ["Published to the requester.", "Also published somewhere."],
+      },
+    },
+  ])("treats $name plus NO_REPLY as ambiguous", async ({ deliveryEvidence }) => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        didSendViaMessagingTool: true,
+        ...deliveryEvidence,
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-mixed-side-effects",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      terminal: true,
+      disposition: "ambiguous",
+    });
+    expect(result.phases).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "no target receipt",
+      deliveryEvidence: { didSendViaMessagingTool: true },
+    },
+    {
+      name: "target receipt without to",
+      deliveryEvidence: {
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [{ provider: "slack", accountId: "acct-1", threadId: "171.222" }],
+      },
+    },
+    {
+      name: "aggregate evidence plus an off-target receipt",
+      deliveryEvidence: {
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Published somewhere."],
+        messagingToolSentTargets: [{ provider: "slack", accountId: "acct-1", to: "channel:OTHER" }],
+      },
+    },
+    {
+      name: "source mirror without a target receipt",
+      deliveryEvidence: { didDeliverSourceReplyViaMessageTool: true },
+    },
+    {
+      name: "wrong account",
+      deliveryEvidence: {
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            provider: "slack",
+            accountId: "acct-2",
+            to: "channel:C123",
+            threadId: "171.222",
+          },
+        ],
+      },
+    },
+    {
+      name: "missing account on a multi-account source receipt",
+      deliveryEvidence: {
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C123",
+            threadId: "171.222",
+          },
+        ],
+      },
+    },
+    {
+      name: "wrong thread",
+      deliveryEvidence: {
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            threadId: "different-thread",
+          },
+        ],
+      },
+    },
+  ])("rejects $name for external parent-only routing", async ({ deliveryEvidence }) => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [], ...deliveryEvidence },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-unverified-target",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error:
+        "parent-only completion committed an outbound side effect without a source-matched receipt",
+      terminal: true,
+      disposition: "ambiguous",
+    });
+    expect(result.phases).toHaveLength(1);
+  });
+
+  it("rejects an off-target message-tool publish for parent-only routing", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:OTHER",
+            text: "Sent somewhere else.",
+          },
+        ],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-parent-only-off-target",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error:
+        "parent-only completion committed an outbound side effect without a source-matched receipt",
+      terminal: true,
+      disposition: "ambiguous",
+    });
+    expect(result.phases).toHaveLength(1);
+  });
+
+  it("accepts a normal internal final for a dormant nested parent-only requester", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "Concise internal orchestration update." }] },
+    });
+    const internalEvents = taskCompletionEvents({
+      childSessionKey: "agent:worker:subagent:child",
+      childSessionId: "child-session-local",
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-subagent-session",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:worker:subagent:parent",
+      targetRequesterSessionKey: "agent:worker:subagent:parent",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: true,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-nested-parent-only",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: "agent:worker:subagent:child",
+      internalEvents,
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    const agentParams = expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      internalEvents,
+    });
+    const dispatchedEvents = agentParams.internalEvents as AgentInternalEvent[];
+    expect(dispatchedEvents[0]?.replyInstruction).toBe(internalEvents[0]?.replyInstruction);
+    expect(dispatchedEvents[0]?.replyInstruction).not.toContain(
+      "publish it explicitly with the message tool",
+    );
+  });
+
+  it("keeps an active nested parent-only requester internal", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "internal" }] },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-subagent-session",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      queueEmbeddedAgentMessageWithOutcome,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:worker:subagent:parent",
+      targetRequesterSessionKey: "agent:worker:subagent:parent",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: true,
+      announceTarget: "parent",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-nested-parent-only-active",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, { delivered: true, path: "steered" });
+    expect(
+      (
+        mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2) as {
+          sourceReplyDeliveryMode?: unknown;
+        }
+      ).sourceReplyDeliveryMode,
+    ).toBeUndefined();
+    expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
@@ -2991,9 +3726,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       fallsBack: false,
     },
     {
-      name: "accepts legacy targetless delivery on the requester provider",
+      // A fully targetless generic message-tool receipt (no `to`, no accountId)
+      // cannot prove it reached the requester's account-scoped destination on a
+      // multi-account setup, so completion delivery repairs to the resolved
+      // source target rather than crediting the ambiguous send.
+      name: "repairs a fully targetless completion on the requester provider",
       target: { provider: "message" },
-      fallsBack: false,
+      fallsBack: true,
     },
     {
       name: "repairs a completion sent to another recipient",

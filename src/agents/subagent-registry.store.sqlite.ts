@@ -13,6 +13,7 @@ import {
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { readSubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -121,6 +122,12 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
   if (payload.expectsCompletionMessage === false) {
     payload.delivery.status = "not_required";
   }
+  const announceTarget = readSubagentAnnounceTarget(row.announce_target);
+  if (announceTarget) {
+    payload.announceTarget = announceTarget;
+  } else {
+    delete payload.announceTarget;
+  }
   const record = normalizeSubagentRunState(payload);
   return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
 }
@@ -161,6 +168,7 @@ export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRu
     cleanup_handled: boolToSqlite(normalized.cleanupHandled),
     suppress_announce_reason: normalized.suppressAnnounceReason ?? null,
     expects_completion_message: boolToSqlite(normalized.expectsCompletionMessage),
+    announce_target: normalized.announceTarget ?? null,
     announce_retry_count: delivery?.attemptCount ?? null,
     last_announce_retry_at: delivery?.lastAttemptAt ?? null,
     last_announce_delivery_error: delivery?.lastError ?? null,

@@ -76,7 +76,7 @@ export function createSubagentRegistryLifecycleCleanup(
   const finalizeAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
-    reason: "expiry" | "permanent_failure";
+    reason: "expiry" | "ambiguous" | "permanent_failure";
     cleanup?: "delete" | "keep";
     cleanupGeneration?: number;
     retryCount?: number;
@@ -248,10 +248,12 @@ export function createSubagentRegistryLifecycleCleanup(
     }
     if (didAnnounce) {
       const delivery = ensureDeliveryState(entry);
+      const intentionalNonDelivery = delivery.disposition === "intentional_non_delivery";
       const shouldCreditDelivery =
-        !options?.skipAnnounce ||
-        delivery.status === "delivered" ||
-        typeof delivery.announcedAt === "number";
+        !intentionalNonDelivery &&
+        (!options?.skipAnnounce ||
+          delivery.status === "delivered" ||
+          typeof delivery.announcedAt === "number");
       if (shouldCreditDelivery) {
         const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
         delivery.status = "delivered";
@@ -264,7 +266,12 @@ export function createSubagentRegistryLifecycleCleanup(
       }
       clearPendingFinalDelivery(entry);
       const finalDelivery = ensureDeliveryState(entry);
-      if (shouldCreditDelivery) {
+      if (intentionalNonDelivery) {
+        finalDelivery.status = "discarded";
+        finalDelivery.disposition = "intentional_non_delivery";
+        finalDelivery.deliveredAt = undefined;
+        finalDelivery.announcedAt = undefined;
+      } else if (shouldCreditDelivery) {
         finalDelivery.status = "delivered";
         finalDelivery.suspendedAt = undefined;
         finalDelivery.suspendedReason = undefined;
@@ -375,6 +382,44 @@ export function createSubagentRegistryLifecycleCleanup(
       // Restores and unrelated cleanup retries must not publish a provisional
       // kill. The sweeper re-enters here after durable reconciliation.
       return false;
+    }
+    if (entry.delivery?.disposition === "intentional_non_delivery") {
+      if (!beginSubagentCleanup(runId)) {
+        return false;
+      }
+      const cleanupGeneration = cleanupGenerations.get(entry)!;
+      runDetachedCleanupAttempt({
+        runId,
+        entry,
+        cleanupGeneration,
+        run: async () => {
+          await finalizeSubagentCleanup(runId, entry.cleanup, true, cleanupGeneration);
+        },
+      });
+      return true;
+    }
+    const terminalDeliveryDisposition =
+      entry.delivery?.disposition === "ambiguous" ||
+      entry.delivery?.disposition === "permanent_failure"
+        ? entry.delivery.disposition
+        : undefined;
+    if (terminalDeliveryDisposition) {
+      if (!beginSubagentCleanup(runId)) {
+        return false;
+      }
+      runDetachedCleanupAttempt({
+        runId,
+        entry,
+        cleanupGeneration: cleanupGenerations.get(entry)!,
+        run: async () => {
+          await finalizeAnnounceGiveUp({
+            runId,
+            entry,
+            reason: terminalDeliveryDisposition,
+          });
+        },
+      });
+      return true;
     }
     const cleanup = entry.cleanup;
     let suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
@@ -499,7 +544,9 @@ export function createSubagentRegistryLifecycleCleanup(
         return;
       }
       const shouldCreditPriorDelivery =
-        !didAnnounce && (await hasPriorRequesterDeliveryMirror(entry));
+        !didAnnounce &&
+        pendingPayload.announceTarget !== "parent" &&
+        (await hasPriorRequesterDeliveryMirror(entry));
       if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
         await retireSupersededCleanupIfNeeded(runId, entry, cleanupGeneration);
         return;
@@ -537,6 +584,7 @@ export function createSubagentRegistryLifecycleCleanup(
       outcome: pendingPayload.outcome,
       spawnMode: pendingPayload.spawnMode,
       expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
+      announceTarget: pendingPayload.announceTarget,
       wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
       suppressChildSessionEffects: suppressSessionEffects,
       isChildSessionEffectsAllowed: childSessionEffectsAllowed,

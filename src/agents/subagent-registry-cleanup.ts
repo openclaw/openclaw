@@ -17,7 +17,7 @@ type DeferredCleanupDecision =
     }
   | {
       kind: "give-up";
-      reason: "expiry" | "permanent_failure";
+      reason: "expiry" | "ambiguous" | "permanent_failure";
       retryCount?: number;
     }
   | {
@@ -51,6 +51,18 @@ export function resolveDeferredCleanupDecision(params: {
   const isCompletionMessageFlow = params.entry.expectsCompletionMessage === true;
   const completionHardExpiryExceeded =
     isCompletionMessageFlow && endedAgo > params.announceCompletionHardExpiryMs;
+  const terminalDisposition =
+    params.entry.delivery?.disposition === "ambiguous" ||
+    params.entry.delivery?.disposition === "permanent_failure"
+      ? params.entry.delivery.disposition
+      : undefined;
+  if (terminalDisposition) {
+    return {
+      kind: "give-up",
+      reason: terminalDisposition,
+      retryCount: getDeliveryAttemptCount(params.entry) + 1,
+    };
+  }
   if (isCompletionMessageFlow && params.activeDescendantRuns > 0) {
     if (completionHardExpiryExceeded) {
       return { kind: "give-up", reason: "expiry" };
@@ -62,11 +74,10 @@ export function resolveDeferredCleanupDecision(params: {
   const expiryExceeded = isCompletionMessageFlow
     ? completionHardExpiryExceeded
     : endedAgo > params.announceExpiryMs;
-  if (params.entry.delivery?.disposition === "permanent_failure" || expiryExceeded) {
+  if (expiryExceeded) {
     return {
       kind: "give-up",
-      reason:
-        params.entry.delivery?.disposition === "permanent_failure" ? "permanent_failure" : "expiry",
+      reason: "expiry",
       retryCount,
     };
   }

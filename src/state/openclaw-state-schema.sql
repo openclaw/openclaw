@@ -1580,7 +1580,8 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   swarm_structured_json TEXT,
   swarm_schema_error TEXT,
   swarm_usage_json TEXT,
-  payload_json TEXT NOT NULL DEFAULT '{}'
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  announce_target TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_subagent_runs_child_session_key

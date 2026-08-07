@@ -31,6 +31,7 @@ import { removeInternalSessionEffectsSession } from "./internal-session-effects.
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -238,6 +239,7 @@ export type RegisterSubagentRunParams = {
   workspaceDir?: string;
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   spawnMode?: "run" | "session";
   attachmentsDir?: string;
   attachmentsRootDir?: string;
@@ -1186,6 +1188,7 @@ export function createSubagentRunManager(params: {
       taskName: registerParams.taskName,
       cleanup: registerParams.cleanup,
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
+      announceTarget: registerParams.announceTarget,
       spawnMode,
       label: registerParams.label,
       model: registerParams.model,

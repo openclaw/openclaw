@@ -145,7 +145,9 @@ export function sourceDeliveryTargetsMatch(
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
-  if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
+  // A configured account scopes the expected destination. A receipt without
+  // that account cannot prove which account sent it on multi-account setups.
+  if (delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on

@@ -129,7 +129,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
   const suspendPendingFinalDelivery = (args: {
     runId: string;
     entry: SubagentRunRecord;
-    reason: "expiry" | "permanent_failure";
+    reason: "expiry" | "ambiguous" | "permanent_failure";
     error?: string;
   }) => {
     const previousEntry = structuredClone(args.entry);

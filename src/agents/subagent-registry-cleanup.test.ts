@@ -97,4 +97,28 @@ describe("resolveDeferredCleanupDecision", () => {
 
     expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
   });
+
+  it("does not retry an ambiguous delivery with a committed side effect", () => {
+    const decision = resolveDecision({
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        delivery: { status: "pending", attemptCount: 1, disposition: "ambiguous" },
+      }),
+      activeDescendantRuns: 0,
+    });
+
+    expect(decision).toEqual({ kind: "give-up", reason: "ambiguous", retryCount: 2 });
+  });
+
+  it("does not defer an ambiguous delivery behind active descendants", () => {
+    const decision = resolveDecision({
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        delivery: { status: "pending", disposition: "ambiguous" },
+      }),
+      activeDescendantRuns: 2,
+    });
+
+    expect(decision).toEqual({ kind: "give-up", reason: "ambiguous", retryCount: 1 });
+  });
 });

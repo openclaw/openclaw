@@ -129,6 +129,26 @@ describe("source delivery plan", () => {
     expect(outcome.visibleDeliveries[0]?.verifiedTarget).toBe(false);
   });
 
+  it.each([
+    { name: "omits the account", accountId: undefined },
+    { name: "uses a different account", accountId: "bot-b" },
+  ])(
+    "does not verify a receipt that $name for an account-scoped source target",
+    ({ accountId }) => {
+      expect(
+        isVerifiedSourceDeliveryTarget(
+          {
+            tool: "message",
+            provider: "slack",
+            ...(accountId ? { accountId } : {}),
+            to: "channel:C1",
+          },
+          { channel: "slack", to: "channel:C1", accountId: "bot-a" },
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("keeps verified message-tool delivery separate from source fallback satisfaction", () => {
     const contract = createSourceDeliveryPlan({
       owner: "none",
@@ -352,10 +372,14 @@ describe("source delivery plan", () => {
       false,
     ],
     [
+      // A generic message-tool receipt without an accountId cannot prove which
+      // account sent it against an account-scoped destination on a multi-account
+      // setup, so source delivery stays unverified (ambiguous) rather than
+      // falsely crediting the send.
       "inferred message-tool account",
       { provider: "message", to: "123456" },
       { channel: "telegram", to: "123456", accountId: "bot-a" },
-      true,
+      false,
     ],
     [
       "matching account owners",
