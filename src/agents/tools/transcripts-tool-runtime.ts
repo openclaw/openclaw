@@ -10,6 +10,13 @@ import type {
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
+import { truncateUtf16Safe } from "../../utils.js";
+
+const ACCOUNT_ID_OUTPUT_MAX_CHARS = 64;
+
+function formatAccountIdForToolText(accountId: string): string {
+  return JSON.stringify(truncateUtf16Safe(accountId, ACCOUNT_ID_OUTPUT_MAX_CHARS));
+}
 
 export type TranscriptsLogger = {
   warn: (message: string) => void;
@@ -17,6 +24,8 @@ export type TranscriptsLogger = {
 
 export type TranscriptsRuntimeContext = {
   agentId?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
@@ -109,6 +118,64 @@ export function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntim
     : getTranscriptSourceProvider(providerId, ctx.config);
 }
 
+function bindSourceToTurnAccount(params: {
+  ctx: TranscriptsRuntimeContext;
+  provider: TranscriptSourceProvider;
+  source: TranscriptSourceLocator;
+}): {
+  source: TranscriptSourceLocator;
+  owner?: { ownerChannel: string; ownerAccountId: string };
+} {
+  const channel = params.ctx.agentChannel?.trim().toLowerCase();
+  const accountId = params.ctx.agentAccountId?.trim();
+  const providerChannels = (params.provider.accountBindingChannels ?? [])
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (providerChannels.length === 0) {
+    return { source: params.source };
+  }
+  if (!channel || !providerChannels.includes(channel)) {
+    return { source: params.source };
+  }
+  if (!accountId) {
+    throw new Error(
+      `transcripts provider ${params.provider.id} requires trusted account context from ${channel}`,
+    );
+  }
+  // Same-channel capture stays on the trusted inbound account; model input
+  // cannot redirect or later control another configured channel account.
+  return {
+    source: { ...params.source, accountId },
+    owner: { ownerChannel: channel, ownerAccountId: accountId },
+  };
+}
+
+function resolveConfiguredLifecycleOwner(params: {
+  accountBindingChannels: string[];
+  accountId: string | undefined;
+  configuredLifecycle: boolean | undefined;
+  providerId: string;
+}): { ownerChannel: string; ownerAccountId: string } | undefined {
+  if (!params.configuredLifecycle || params.accountBindingChannels.length === 0) {
+    return undefined;
+  }
+  if (!params.accountId) {
+    throw new Error(
+      `transcripts provider ${params.providerId} could not resolve an account for configured auto-start`,
+    );
+  }
+  const [ownerChannel] = params.accountBindingChannels;
+  if (!ownerChannel || params.accountBindingChannels.length !== 1) {
+    throw new Error(
+      `transcripts provider ${params.providerId} must declare exactly one account binding channel for configured auto-start`,
+    );
+  }
+  return {
+    ownerChannel,
+    ownerAccountId: params.accountId,
+  };
+}
+
 export function toolText(text: string, details?: Record<string, unknown>) {
   return {
     content: [{ type: "text" as const, text }],
@@ -144,24 +211,69 @@ export async function startTranscripts(params: {
   rawParams: Record<string, unknown>;
   abortSignal?: AbortSignal;
   startupWaitMs?: number;
+  configuredLifecycle?: true;
 }) {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
   }
-  const providerSource = {
+  const requestedSource = {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(providerSource.providerId, params.ctx);
+  const provider = resolveSourceProvider(requestedSource.providerId, params.ctx);
   if (!provider?.start) {
-    throw new Error(`transcripts provider ${providerSource.providerId} cannot start live capture`);
+    throw new Error(`transcripts provider ${requestedSource.providerId} cannot start live capture`);
   }
+  const boundSource = bindSourceToTurnAccount({
+    ctx: params.ctx,
+    provider,
+    source: requestedSource,
+  });
+  const accountBindingChannels = (provider.accountBindingChannels ?? [])
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const trustedAccountId = boundSource.owner?.ownerAccountId;
+  const sourceForResolution = trustedAccountId
+    ? { ...boundSource.source, accountId: trustedAccountId }
+    : boundSource.source;
+  const accountResolution = provider.resolveAccountId?.({
+    cfg: params.ctx.config,
+    source: sourceForResolution,
+  });
+  if (accountResolution && !accountResolution.ok) {
+    throw new Error(accountResolution.error);
+  }
+  const resolvedAccountId = accountResolution
+    ? accountResolution.value?.trim()
+    : sourceForResolution.accountId?.trim();
+  if (trustedAccountId && resolvedAccountId !== trustedAccountId) {
+    throw new Error(
+      `transcripts provider ${provider.id} could not use trusted account ${formatAccountIdForToolText(trustedAccountId)}`,
+    );
+  }
+  const providerSource = provider.resolveAccountId
+    ? { ...sourceForResolution, accountId: resolvedAccountId }
+    : sourceForResolution;
+  const configuredOwner = resolveConfiguredLifecycleOwner({
+    accountBindingChannels,
+    accountId: providerSource.accountId?.trim(),
+    configuredLifecycle: params.configuredLifecycle,
+    providerId: provider.id,
+  });
+  const owner = boundSource.owner ?? configuredOwner;
   const session: TranscriptSessionDescriptor = {
     sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
     title: readStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
-    ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
+    ...(params.ctx.agentId || owner
+      ? {
+          metadata: {
+            ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+            ...owner,
+          },
+        }
+      : {}),
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);
@@ -213,10 +325,16 @@ export async function startTranscripts(params: {
     }
     startupPending = false;
     activeSessions.set(session.sessionId, { session, providerId: provider.id });
-    return toolText(`Transcripts started: ${session.sessionId}`, {
-      sessionId: session.sessionId,
-      providerId: provider.id,
-    });
+    const effectiveAccount = session.source.accountId;
+    return toolText(
+      `Transcripts started: ${session.sessionId}${effectiveAccount ? `\nAccount: ${formatAccountIdForToolText(effectiveAccount)}` : ""}`,
+      {
+        sessionId: session.sessionId,
+        startedAt: session.startedAt,
+        providerId: provider.id,
+        ...(effectiveAccount ? { accountId: effectiveAccount } : {}),
+      },
+    );
   } finally {
     startingSessionIds.delete(session.sessionId);
   }

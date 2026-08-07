@@ -1755,6 +1755,7 @@ export class DiscordVoiceManager {
     );
     const turn = await runDiscordVoiceAgentTurn({
       entry,
+      accountId: this.params.accountId,
       userId,
       message,
       cfg: this.params.cfg,
@@ -1791,6 +1792,7 @@ export class DiscordVoiceManager {
   }) {
     await processDiscordVoiceSegment({
       ...params,
+      accountId: this.params.accountId,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       admissionAllowFrom: this.admissionAllowFrom,

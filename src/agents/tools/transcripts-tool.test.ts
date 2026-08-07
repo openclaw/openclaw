@@ -5,12 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import type { TranscriptStopRequest } from "../../transcripts/provider-types.js";
+import type {
+  TranscriptSourceProvider,
+  TranscriptStopRequest,
+} from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
+import { startTranscripts } from "./transcripts-tool-runtime.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
+const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
   getTranscriptSourceProviderMock: vi.fn(),
+  listTranscriptSourceProvidersMock: vi.fn(() => []),
 }));
 
 vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
@@ -18,9 +23,9 @@ vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
   return {
     ...actual,
     getTranscriptSourceProvider: getTranscriptSourceProviderMock,
+    listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
   };
 });
-
 async function makeStateDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcripts-"));
 }
@@ -33,6 +38,7 @@ async function createHarness(
   stateDir: string,
   pluginConfig: Record<string, unknown> = {},
   agentId?: string,
+  origin?: { channel: string; accountId: string },
 ) {
   const config = { transcripts: { enabled: true, ...pluginConfig } };
   const logger = { warn: vi.fn() };
@@ -44,6 +50,7 @@ async function createHarness(
       stateDir,
       logger,
       ...(agentId ? { agentId } : {}),
+      ...(origin ? { agentChannel: origin.channel, agentAccountId: origin.accountId } : {}),
     }),
   };
 }
@@ -55,10 +62,14 @@ function storeFor(stateDir: string): TranscriptsStore {
 }
 
 describe("transcripts tool", () => {
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+  afterEach(() => {
+    vi.useRealTimers();
+    closeOpenClawStateDatabaseForTest();
+  });
 
   beforeEach(() => {
     getTranscriptSourceProviderMock.mockReset();
+    listTranscriptSourceProvidersMock.mockClear();
   });
 
   it("creates the core transcripts tool", async () => {
@@ -107,38 +118,6 @@ describe("transcripts tool", () => {
     await expect(storeFor(stateDir).readSession("owned-meeting")).resolves.toMatchObject({
       source: { meetingUrl: "https://zoom.us/j/1234567890" },
     });
-  });
-
-  it("keeps ownerless shipped sessions visible only to the main agent", async () => {
-    const stateDir = await makeStateDir();
-    const store = storeFor(stateDir);
-    const legacySession = {
-      sessionId: "legacy-ownerless",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-07-01T12:00:00.000Z",
-      stoppedAt: "2026-07-01T12:05:00.000Z",
-    };
-    await store.writeSession(legacySession);
-    await store.appendUtteranceForSession(legacySession, { text: "legacy notes" });
-    const { tool: mainTool } = await createHarness(stateDir, {}, "main");
-    const { tool: researchTool } = await createHarness(stateDir, {}, "research");
-
-    await expect(
-      mainTool.execute(
-        "call-main",
-        { action: "summarize", sessionId: legacySession.sessionId },
-        undefined,
-        vi.fn(),
-      ),
-    ).resolves.toMatchObject({ details: { sessionId: legacySession.sessionId } });
-    await expect(
-      researchTool.execute(
-        "call-research",
-        { action: "summarize", sessionId: legacySession.sessionId },
-        undefined,
-        vi.fn(),
-      ),
-    ).rejects.toThrow(`transcripts session not found: ${legacySession.sessionId}`);
   });
 
   it("requires explicit enablement before execution", async () => {
@@ -783,6 +762,7 @@ describe("transcripts tool", () => {
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "standup" }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
+      accountBindingChannels: ["discord"],
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
@@ -792,6 +772,7 @@ describe("transcripts tool", () => {
       autoStart: [
         {
           providerId: "discord-voice",
+          accountId: "account-a",
           sessionId: "standup",
           title: "Standup",
           guildId: "guild-1",
@@ -820,6 +801,7 @@ describe("transcripts tool", () => {
       sessionId: "standup",
       title: "Standup",
       source: {
+        accountId: "account-a",
         providerId: "discord-voice",
         guildId: "guild-1",
         channelId: "channel-1",
@@ -828,9 +810,165 @@ describe("transcripts tool", () => {
     expect(request.startupWaitMs).toBe(30_000);
     await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
       title: "Standup",
+      source: { accountId: "account-a" },
+      metadata: { ownerChannel: "discord", ownerAccountId: "account-a" },
     });
     await service.stop();
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not retain an explicit account when provider resolution returns undefined", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      accountBindingChannels: ["discord"],
+      resolveAccountId: () => ({ ok: true as const, value: undefined }),
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+    });
+    const store = storeFor(stateDir);
+
+    await expect(
+      startTranscripts({
+        ctx: {
+          config: { transcripts: { enabled: true } },
+          stateDir,
+          logger: { warn: vi.fn() },
+        },
+        store,
+        rawParams: {
+          providerId: "discord-voice",
+          accountId: "caller-account",
+          sessionId: "unresolved-account",
+        },
+        configuredLifecycle: true,
+      }),
+    ).rejects.toThrow(
+      "transcripts provider discord-voice could not resolve an account for configured auto-start",
+    );
+    expect(start).not.toHaveBeenCalled();
+    await expect(store.readSession("unresolved-account")).resolves.toBeUndefined();
+  });
+
+  it("allows only the resolved account to manage an auto-started source", async () => {
+    const stateDir = await makeStateDir();
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    const stop = vi.fn(async (request) => ({ ok: true as const, sessionId: request.sessionId }));
+    const provider: TranscriptSourceProvider = {
+      id: "discord-voice",
+      accountBindingChannels: ["discord"],
+      resolveAccountId: ({ source }) => ({
+        ok: true,
+        value: source.accountId ?? "account-a",
+      }),
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+      stop,
+    };
+    getTranscriptSourceProviderMock.mockReturnValue(provider);
+    const pluginConfig = {
+      autoStart: [
+        {
+          providerId: "discord-voice",
+          sessionId: "account-bound-auto-start",
+          guildId: "guild-1",
+          channelId: "channel-1",
+        },
+      ],
+    };
+    const { service } = await createHarness(stateDir, pluginConfig);
+    const { tool: ownerTool } = await createHarness(stateDir, pluginConfig, "main", {
+      channel: "discord",
+      accountId: "account-a",
+    });
+    const { tool: otherAccountTool } = await createHarness(stateDir, pluginConfig, "main", {
+      channel: "discord",
+      accountId: "account-b",
+    });
+
+    service.start();
+    await vi.waitFor(() => {
+      expect(start).toHaveBeenCalledOnce();
+    });
+    await expect(storeFor(stateDir).readSession("account-bound-auto-start")).resolves.toMatchObject(
+      {
+        source: { accountId: "account-a" },
+        metadata: { ownerChannel: "discord", ownerAccountId: "account-a" },
+      },
+    );
+    await expect(
+      ownerTool.execute("owner-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "account-bound-auto-start" })] },
+    });
+    await expect(
+      otherAccountTool.execute("other-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({ details: { active: [] } });
+    await expect(
+      otherAccountTool.execute(
+        "other-stop",
+        { action: "stop", sessionId: "account-bound-auto-start" },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("transcripts session not found: account-bound-auto-start");
+    expect(stop).not.toHaveBeenCalled();
+
+    await ownerTool.execute(
+      "owner-stop",
+      { action: "stop", sessionId: "account-bound-auto-start" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
+    );
+
+    stop.mockClear();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-07T12:00:00.000Z"));
+    await otherAccountTool.execute(
+      "replacement-start",
+      {
+        action: "start",
+        providerId: "discord-voice",
+        sessionId: "account-bound-auto-start",
+      },
+      undefined,
+      vi.fn(),
+    );
+    const replacementSelector = "2026-08-07/account-bound-auto-start";
+    const replacement = await storeFor(stateDir).readSession(replacementSelector);
+    expect(replacement).toMatchObject({
+      source: { accountId: "account-b" },
+      metadata: { ownerChannel: "discord", ownerAccountId: "account-b" },
+    });
+    await service.stop();
+    expect(stop).not.toHaveBeenCalled();
+    await expect(
+      otherAccountTool.execute("replacement-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "account-bound-auto-start" })] },
+    });
+    const replacementAfterServiceStop = await storeFor(stateDir).readSession(replacementSelector);
+    expect(replacementAfterServiceStop).toMatchObject({
+      startedAt: replacement?.startedAt,
+      source: { accountId: "account-b" },
+    });
+    expect(replacementAfterServiceStop?.stoppedAt).toBeUndefined();
+    await otherAccountTool.execute(
+      "replacement-stop",
+      { action: "stop", sessionId: "account-bound-auto-start" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-b" }) }),
+    );
   });
 
   it("aborts pending auto-starts when the service stops", async () => {

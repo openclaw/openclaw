@@ -117,6 +117,20 @@ and external URLs. Registering another provider replaces the current provider.
 | `api.registerWebSearchProvider(...)`             | Web search                                                                                                                                |
 | `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                                                                                   |
 
+Transcript source providers that share an account namespace with an inbound
+channel declare that channel id in `accountBindingChannels`. OpenClaw then
+ignores model-selected account ids for same-channel capture, binds the trusted
+inbound account, and records it as the session owner for later lifecycle
+actions. Providers that support an omitted account implement `resolveAccountId`
+so OpenClaw records the canonical account before starting or persisting live
+capture. The resolver validates an already-bound trusted account without
+redirecting it and returns an actionable typed error when no unique capable
+account exists. For configured auto-start, an account-bound provider must declare
+exactly one binding channel and supply a nonempty source account or resolve one
+with this hook. OpenClaw rejects ambiguous or unresolved ownership before it
+persists the start or invokes the provider. Provider aliases are lookup names
+only and must not be used for this declaration.
+
 Worker providers must also declare their id in `contracts.workerProviders`.
 Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats.
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.

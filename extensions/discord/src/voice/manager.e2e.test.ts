@@ -5481,6 +5481,7 @@ describe("DiscordVoiceManager", () => {
     ).speakerContext;
 
     await segmentModule.processDiscordVoiceSegment({
+      accountId: "default",
       entry: {
         guildId: "g1",
         channelId: "1001",
@@ -5564,9 +5565,10 @@ describe("DiscordVoiceManager", () => {
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = lastAgentCommandArgs() as
-      | { message?: string; messageChannel?: string; messageProvider?: string }
+      | { accountId?: string; message?: string; messageChannel?: string; messageProvider?: string }
       | undefined;
 
+    expect(commandArgs?.accountId).toBe("default");
     expect(commandArgs?.messageChannel).toBe("discord");
     expect(commandArgs?.messageProvider).toBe("discord-voice");
     expect(commandArgs?.message).toContain("Do not call the tts tool");

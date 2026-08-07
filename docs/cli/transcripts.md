@@ -112,6 +112,20 @@ Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
 
+Sessions created before account ownership was recorded retain their stored
+agent ownership. For an account-bound source, a row with no stored account
+cannot be safely claimed from a channel: recover an agent-owned row with a local
+turn for that agent. An account-bound row with no agent attribution requires a
+local main-agent turn. Sources without account binding retain main-agent access
+across their normal surfaces. If a legacy row's provider is unavailable,
+binding provenance cannot be verified; use the same local recovery path until
+the provider is available again.
+
+```bash
+openclaw agent --agent <owning-agent-or-main> --local --message \
+  "Use transcripts summarize for session <session>."
+```
+
 ## Upgrading the legacy file store
 
 OpenClaw releases that predate the SQLite store wrote canonical runtime state

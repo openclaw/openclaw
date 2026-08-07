@@ -36,9 +36,11 @@ const AUTO_START_RETRY_MS = 5_000;
 const AUTO_START_STOP_TIMEOUT_MS = 5_000;
 const AUTO_START_PROVIDER_READY_TIMEOUT_MS = 30_000;
 
+type TranscriptSessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
+
 function sameSessionIdentity(
-  left: TranscriptSessionDescriptor,
-  right: TranscriptSessionDescriptor,
+  left: TranscriptSessionIdentity,
+  right: TranscriptSessionIdentity,
 ): boolean {
   return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
 }
@@ -47,16 +49,66 @@ function ownsTranscriptSession(
   ctx: TranscriptsRuntimeContext,
   session: TranscriptSessionDescriptor,
 ): boolean {
+  const channel = ctx.agentChannel?.trim().toLowerCase();
+  const isLocalMainOperator = ctx.agentId === "main" && !channel;
+  const provider = resolveSourceProvider(session.source.providerId, ctx);
+  const accountBindingChannels = (provider?.accountBindingChannels ?? [])
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const providerUsesAccountOwnership = accountBindingChannels.length > 0;
+  const ownerAgentId = session.metadata?.agentId;
+  const ownerChannel = session.metadata?.ownerChannel;
+  const ownerAccountId = session.metadata?.ownerAccountId;
+  const hasOwnerChannel = typeof ownerChannel === "string";
+  const hasOwnerAccount = typeof ownerAccountId === "string";
+  if (hasOwnerChannel || hasOwnerAccount) {
+    if (typeof ownerAgentId === "string" && ownerAgentId !== ctx.agentId) {
+      return false;
+    }
+    if (hasOwnerChannel && hasOwnerAccount) {
+      if (channel === ownerChannel) {
+        return ctx.agentAccountId?.trim() === ownerAccountId;
+      }
+      if (channel && (!provider || accountBindingChannels.includes(channel))) {
+        return false;
+      }
+      return typeof ownerAgentId === "string" || isLocalMainOperator;
+    }
+    // Persisted ingress ownership remains authoritative if provider discovery
+    // later changes; only the channel-less local main agent may recover it.
+    return isLocalMainOperator;
+  }
+  const sourceAccountId = session.source.accountId?.trim();
+  if (!provider) {
+    // Without provider metadata, core cannot prove whether a legacy row
+    // belonged to a binding namespace. Keep recovery on the recorded agent's
+    // local surface, or local main for ownerless rows, instead of guessing.
+    return typeof ownerAgentId === "string"
+      ? ownerAgentId === ctx.agentId && !channel
+      : isLocalMainOperator;
+  }
   if (!ctx.agentId) {
+    return !providerUsesAccountOwnership;
+  }
+  if (typeof ownerAgentId === "string") {
+    if (ownerAgentId !== ctx.agentId) {
+      return false;
+    }
+    if (providerUsesAccountOwnership && !sourceAccountId) {
+      // An account-bound legacy row without an account has no channel claim to verify.
+      // Keep recovery local to its recorded agent instead of trusting another surface.
+      return !channel;
+    }
+    if (channel && accountBindingChannels.includes(channel)) {
+      // Shipped rows can still prove same-channel ownership from their persisted
+      // source account while other surfaces retain the existing agent boundary.
+      return Boolean(sourceAccountId && ctx.agentAccountId?.trim() === sourceAccountId);
+    }
     return true;
   }
-  const ownerAgentId = session.metadata?.agentId;
-  if (typeof ownerAgentId === "string") {
-    return ownerAgentId === ctx.agentId;
-  }
   // Shipped rows predate agent attribution. Treat them as operator-owned legacy
-  // state: main can curate them, but isolated agents cannot claim them.
-  return ctx.agentId === "main";
+  // state: main can curate them off-channel, but no channel account can claim them.
+  return ctx.agentId === "main" && (!providerUsesAccountOwnership || isLocalMainOperator);
 }
 
 function asParamsRecord(params: unknown): Record<string, unknown> {
@@ -135,12 +187,22 @@ async function stopTranscripts(params: {
   ctx: TranscriptsRuntimeContext;
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
+  lifecycleSession?: TranscriptSessionIdentity;
 }) {
   const sessionSelector = readStringParam(params.rawParams, "sessionId", {
     required: true,
     trim: true,
   });
   const directActive = activeSessions.get(sessionSelector);
+  if (
+    params.lifecycleSession &&
+    (!directActive || !sameSessionIdentity(directActive.session, params.lifecycleSession))
+  ) {
+    return toolText(`Transcripts session no longer active: ${sessionSelector}`, {
+      sessionId: sessionSelector,
+      skipped: true,
+    });
+  }
   const resolvedEntry: TranscriptsSessionEntry | undefined = directActive
     ? undefined
     : await params.store.readSessionEntry(sessionSelector);
@@ -153,7 +215,7 @@ async function stopTranscripts(params: {
     sameSessionIdentity(activeCandidate.session, resolvedSession);
   const selectedActive = directActive ?? (activeMatchesResolved ? activeCandidate : undefined);
   const session = selectedActive?.session ?? resolvedSession;
-  if (!session || !ownsTranscriptSession(params.ctx, session)) {
+  if (!session || (!params.lifecycleSession && !ownsTranscriptSession(params.ctx, session))) {
     throw new Error(`transcripts session not found: ${sessionSelector}`);
   }
   const sessionId = session.sessionId;
@@ -335,6 +397,8 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
 /** Create the agent-facing transcripts tool. */
 export function createTranscriptsTool(options?: {
   agentId?: string;
+  agentChannel?: string;
+  agentAccountId?: string;
   config?: OpenClawConfig;
   stateDir?: string;
   logger?: TranscriptsLogger;
@@ -344,6 +408,8 @@ export function createTranscriptsTool(options?: {
     stateDir: options?.stateDir ?? resolveStateDir(),
     logger: options?.logger ?? console,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
+    ...(options?.agentChannel ? { agentChannel: options.agentChannel } : {}),
+    ...(options?.agentAccountId ? { agentAccountId: options.agentAccountId } : {}),
   };
   return {
     name: "transcripts",
@@ -384,7 +450,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
 } {
   let stopped = false;
   const timers = new Set<ReturnType<typeof setTimeout>>();
-  const startedSessionIds = new Set<string>();
+  const startedSessions = new Map<string, TranscriptSessionIdentity>();
   const pendingStartControllers = new Set<AbortController>();
   const pendingStarts = new Set<Promise<void>>();
 
@@ -403,7 +469,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
     attempt: number,
     store: TranscriptsStore,
   ) => {
-    if (stopped || startedSessionIds.has(entry.sessionId ?? "")) {
+    if (stopped || startedSessions.has(entry.sessionId ?? "")) {
       return;
     }
     const abortController = new AbortController();
@@ -413,6 +479,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       store,
       abortSignal: abortController.signal,
       startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
+      configuredLifecycle: true,
       rawParams: {
         action: "start",
         ...entry,
@@ -421,8 +488,9 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
     })
       .then((result) => {
         const sessionId = result.details?.sessionId;
-        if (typeof sessionId === "string") {
-          startedSessionIds.add(sessionId);
+        const startedAt = result.details?.startedAt;
+        if (typeof sessionId === "string" && typeof startedAt === "string") {
+          startedSessions.set(sessionId, { sessionId, startedAt });
         }
       })
       .catch((err: unknown) => {
@@ -482,20 +550,23 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
         );
       }
       const store = createStore(ctx);
-      for (const sessionId of startedSessionIds) {
+      for (const startedSession of startedSessions.values()) {
         await stopTranscripts({
           ctx,
           store,
-          rawParams: { action: "stop", sessionId },
+          rawParams: { action: "stop", sessionId: startedSession.sessionId },
+          // Bypass authorization only while the exact capture created by this
+          // service is still active; a reused id may belong to another owner.
+          lifecycleSession: startedSession,
         }).catch((err: unknown) =>
           ctx.logger.warn(
-            `transcripts autoStart stop failed session=${sessionId}: ${
+            `transcripts autoStart stop failed session=${startedSession.sessionId}: ${
               err instanceof Error ? err.message : String(err)
             }`,
           ),
         );
       }
-      startedSessionIds.clear();
+      startedSessions.clear();
     },
   };
 }
