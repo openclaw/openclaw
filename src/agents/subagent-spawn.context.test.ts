@@ -18,6 +18,7 @@ describe("sessions_spawn context modes", () => {
   const forkSessionFromParentMock = vi.fn();
   const ensureContextEnginesInitializedMock = vi.fn();
   const resolveContextEngineMock = vi.fn();
+  const recordSessionCreatedMock = vi.fn();
   let spawnSubagentDirect: Awaited<
     ReturnType<typeof loadSubagentSpawnModuleForTest>
   >["spawnSubagentDirect"];
@@ -31,6 +32,7 @@ describe("sessions_spawn context modes", () => {
       forkSessionFromParentMock,
       ensureContextEnginesInitializedMock,
       resolveContextEngineMock,
+      recordSessionCreatedMock,
       sessionStorePath: storePath,
     }));
   });
@@ -43,6 +45,7 @@ describe("sessions_spawn context modes", () => {
     forkSessionFromParentMock.mockReset();
     ensureContextEnginesInitializedMock.mockReset();
     resolveContextEngineMock.mockReset();
+    recordSessionCreatedMock.mockReset();
     setupAcceptedSubagentGatewayMock(callGatewayMock);
     resolveContextEngineMock.mockResolvedValue({});
   });
@@ -222,6 +225,14 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.parentSessionId).toBe("parent-session-id");
     expect(prepareContext.childSessionId).toBe("forked-session-id");
     expect(prepareContext.childSessionFile).toBe("/tmp/forked-session.jsonl");
+    expect(accepted.sessionId).toBe("forked-session-id");
+    expect(accepted.sessionId).toBe(childEntry.sessionId);
+    expect(recordSessionCreatedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        entry: expect.objectContaining({ sessionId: "forked-session-id" }),
+      }),
+    );
   });
 
   it("keeps the default spawn context isolated", async () => {
@@ -384,7 +395,53 @@ describe("sessions_spawn context modes", () => {
     expect(cleanupRequest.params?.key).toBe(result.childSessionKey);
     expect(cleanupRequest.params?.deleteTranscript).toBe(true);
     expect(cleanupRequest.params?.emitLifecycleHooks).toBe(false);
+    expect(cleanupRequest.params?.expectedSessionId).toBe("forked-session-id");
+    expect(typeof cleanupRequest.params?.expectedLifecycleRevision).toBe("string");
     expect(prepareSubagentSpawn).not.toHaveBeenCalled();
+  });
+
+  it("cleans up fork-then-failure with the forked session identity", async () => {
+    const store: SessionStore = {
+      main: {
+        sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
+        updatedAt: 1,
+        totalTokens: 1200,
+      },
+    };
+    usePersistentStoreMock(store);
+    forkSessionFromParentMock.mockImplementation(async () => ({
+      sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
+    }));
+    const rollback = vi.fn(async () => undefined);
+    callGatewayMock.mockImplementation(async (requestUnknown: unknown) => {
+      const request = requestUnknown as GatewayRequest;
+      if (request.method === "agent") {
+        throw new Error("agent start failed after fork");
+      }
+      return { ok: true };
+    });
+    resolveContextEngineMock.mockResolvedValue({
+      prepareSubagentSpawn: vi.fn(async () => ({ rollback })),
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "inspect the current thread", context: "fork" },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("agent start failed after fork");
+    expect(rollback).toHaveBeenCalledTimes(1);
+    const childSessionKey = requireChildSessionKey(result);
+    const childEntry = requireStoreEntry(store, childSessionKey);
+    expect(childEntry.sessionId).toBe("forked-session-id");
+    const cleanupRequest = requireGatewayRequest("sessions.delete");
+    expect(cleanupRequest.params?.key).toBe(childSessionKey);
+    expect(cleanupRequest.params?.expectedSessionId).toBe("forked-session-id");
+    expect(cleanupRequest.params?.expectedLifecycleRevision).toBe(childEntry.lifecycleRevision);
+    expect(cleanupRequest.params?.expectedLifecycleRevision).not.toBe("forked-session-id");
   });
 
   it("initializes built-in context engines before resolving spawn preparation", async () => {

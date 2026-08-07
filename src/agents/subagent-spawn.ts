@@ -198,6 +198,9 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
+    // Frozen before context prep so early failures still delete the provisional
+    // child. Fork rewrites sessionId afterward; update expectedSessionId so
+    // later guarded cleanup can still match the spawn-owned lifecycle row.
     const provisionalSessionIdentity = {
       expectedSessionId: initialSession.entry?.sessionId,
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
@@ -223,6 +226,12 @@ export async function spawnSubagentDirect(
         error: preparedSpawnContext.error,
         childSessionKey,
       };
+    }
+    if (preparedSpawnContext.mode === "fork") {
+      const forkedSessionId = preparedSpawnContext.forked.sessionId.trim();
+      if (forkedSessionId) {
+        provisionalSessionIdentity.expectedSessionId = forkedSessionId;
+      }
     }
     if (resolvedModel) {
       const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
@@ -355,11 +364,31 @@ export async function spawnSubagentDirect(
         swarmSchedulerGroupKey,
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
-    if (initialSession.entry) {
+    // Prefer the post-context persisted child entry so fork paths record and
+    // return the same durable UUID (fork.transcript.sessionId), not the
+    // provisional pre-fork entry identity.
+    const persistedChildEntry =
+      preparedSpawnContext.status === "ok" && preparedSpawnContext.childEntry
+        ? preparedSpawnContext.childEntry
+        : initialSession.entry;
+    const acceptedChildEntry =
+      preparedSpawnContext.status === "ok" && preparedSpawnContext.mode === "fork"
+        ? {
+            ...(persistedChildEntry ?? {
+              sessionId: preparedSpawnContext.forked.sessionId,
+              updatedAt: Date.now(),
+            }),
+            sessionId: preparedSpawnContext.forked.sessionId,
+            ...(preparedSpawnContext.forked.sessionFile
+              ? { sessionFile: preparedSpawnContext.forked.sessionFile }
+              : {}),
+          }
+        : persistedChildEntry;
+    if (acceptedChildEntry) {
       recordSessionCreated({
         sessionKey: childSessionKey,
         agentId: targetAgentId,
-        entry: initialSession.entry,
+        entry: acceptedChildEntry,
       });
     }
     recordSubagentSpawned({
@@ -368,6 +397,12 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       agentId: targetAgentId,
     });
+
+    const resolveAcceptedChildSessionId = (): string | undefined =>
+      typeof acceptedChildEntry?.sessionId === "string" && acceptedChildEntry.sessionId.trim()
+        ? acceptedChildEntry.sessionId.trim()
+        : undefined;
+
     const launchChildRun = async () =>
       await callSubagentGateway(
         {
@@ -621,6 +656,9 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      sessionId: resolveAcceptedChildSessionId(),
+      // sessionKey remains collector-launch only; ordinary spawns expose durable
+      // identity via sessionId + childSessionKey without redefining sessionKey.
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,

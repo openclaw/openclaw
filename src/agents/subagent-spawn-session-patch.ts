@@ -73,6 +73,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (patch.swarmOutputSchema && typeof patch.swarmOutputSchema === "object") {
     entry.swarmOutputSchema = patch.swarmOutputSchema as Record<string, unknown>;
   }
+  if (typeof patch.sessionId === "string" && patch.sessionId.trim()) {
+    entry.sessionId = patch.sessionId.trim();
+  }
   if (typeof patch.model === "string" && patch.model.trim()) {
     const { provider, model } = splitModelRef(patch.model.trim());
     if (model) {
