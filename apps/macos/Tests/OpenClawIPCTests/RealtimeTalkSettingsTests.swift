@@ -74,6 +74,34 @@ struct RealtimeTalkSettingsTests {
         #expect(realtime["brain"] as? String == "agent-consult")
     }
 
+    @Test func `enabling adds canonical openai entry to an existing provider map`() throws {
+        let root: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "providers": [
+                        "google": ["model": "gemini-live"],
+                    ],
+                ],
+            ],
+        ]
+        let draft = RealtimeTalkSettingsDraft(
+            enabled: true,
+            model: "gpt-live-1-codex",
+            voice: "cedar",
+            explicitlyUsesOpenAI: false)
+
+        let updated = RealtimeTalkSettingsConfig.applying(draft, to: root)
+        let talk = try #require(updated["talk"] as? [String: Any])
+        let realtime = try #require(talk["realtime"] as? [String: Any])
+        let providers = try #require(realtime["providers"] as? [String: Any])
+        let google = try #require(providers["google"] as? [String: Any])
+        let openAI = try #require(providers["openai"] as? [String: Any])
+        #expect(realtime["provider"] as? String == "openai")
+        #expect(google["model"] as? String == "gemini-live")
+        #expect(openAI["model"] as? String == "gpt-live-1-codex")
+        #expect(openAI["speakerVoice"] as? String == "cedar")
+    }
+
     @Test func `disabling removes only managed runtime selectors`() throws {
         let root: [String: Any] = [
             "talk": [
@@ -90,6 +118,8 @@ struct RealtimeTalkSettingsTests {
         ]
         var draft = RealtimeTalkSettingsConfig.parse(root)
         draft.enabled = false
+        draft.model = "gpt-realtime-2.1"
+        draft.voice = "marin"
 
         let updated = RealtimeTalkSettingsConfig.applying(draft, to: root)
         let talk = try #require(updated["talk"] as? [String: Any])
@@ -98,8 +128,13 @@ struct RealtimeTalkSettingsTests {
         #expect(realtime["transport"] == nil)
         #expect(realtime["brain"] == nil)
         #expect(realtime["provider"] as? String == "openai")
-        #expect(realtime["model"] as? String == "gpt-live-1-codex")
+        #expect(realtime["model"] as? String == "gpt-realtime-2.1")
+        #expect(realtime["speakerVoice"] as? String == "marin")
         #expect(realtime["instructions"] as? String == "Be concise")
+        let providers = try #require(realtime["providers"] as? [String: Any])
+        let openAI = try #require(providers["openai"] as? [String: Any])
+        #expect(openAI["model"] as? String == "gpt-realtime-2.1")
+        #expect(openAI["speakerVoice"] as? String == "marin")
     }
 
     @Test func `disabling inferred openai provider removes managed selectors`() throws {
@@ -124,6 +159,41 @@ struct RealtimeTalkSettingsTests {
         #expect(realtime["transport"] == nil)
         #expect(realtime["brain"] == nil)
         #expect(realtime["providers"] != nil)
+    }
+
+    @Test func `storing disabled openai options preserves another selected provider`() throws {
+        let root: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "google",
+                    "model": "gemini-live",
+                    "speakerVoice": "Kore",
+                    "mode": "realtime",
+                    "transport": "gateway-relay",
+                    "providers": [
+                        "google": ["model": "gemini-live"],
+                        "openai": ["model": "gpt-realtime-2.1"],
+                    ],
+                ],
+            ],
+        ]
+        var draft = RealtimeTalkSettingsConfig.parse(root)
+        #expect(!draft.enabled)
+        draft.model = "gpt-live-1-codex"
+        draft.voice = "cedar"
+
+        let updated = RealtimeTalkSettingsConfig.applying(draft, to: root)
+        let talk = try #require(updated["talk"] as? [String: Any])
+        let realtime = try #require(talk["realtime"] as? [String: Any])
+        let providers = try #require(realtime["providers"] as? [String: Any])
+        let openAI = try #require(providers["openai"] as? [String: Any])
+        #expect(realtime["provider"] as? String == "google")
+        #expect(realtime["model"] as? String == "gemini-live")
+        #expect(realtime["speakerVoice"] as? String == "Kore")
+        #expect(realtime["mode"] as? String == "realtime")
+        #expect(realtime["transport"] as? String == "gateway-relay")
+        #expect(openAI["model"] as? String == "gpt-live-1-codex")
+        #expect(openAI["speakerVoice"] as? String == "cedar")
     }
 
     @Test func `catalog parser exposes only openai readiness and options`() throws {

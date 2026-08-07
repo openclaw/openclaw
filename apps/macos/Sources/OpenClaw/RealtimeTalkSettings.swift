@@ -29,16 +29,18 @@ enum RealtimeTalkSettingsConfig {
         let providers = realtime?["providers"] as? [String: Any]
         let openAI = Self.dictionary(in: providers, matching: "openai")
         let provider = Self.string(realtime?["provider"])
-        let model = Self.string(realtime?["model"])
+        let selectedProvider = provider ?? Self.onlyProviderKey(in: providers)
+        let selectsOpenAI = selectedProvider?.caseInsensitiveCompare("openai") == .orderedSame
+        let model = (selectsOpenAI ? Self.string(realtime?["model"]) : nil)
             ?? Self.string(openAI?["model"])
             ?? RealtimeTalkSettingsDraft.defaults.model
-        let voice = Self.string(realtime?["speakerVoice"])
-            ?? Self.string(realtime?["voice"])
+        let voice = (selectsOpenAI ? Self.string(realtime?["speakerVoice"]) : nil)
+            ?? (selectsOpenAI ? Self.string(realtime?["voice"]) : nil)
             ?? Self.string(openAI?["speakerVoice"])
             ?? Self.string(openAI?["voice"])
             ?? RealtimeTalkSettingsDraft.defaults.voice
-        let explicitlyUsesOpenAI = provider?.caseInsensitiveCompare("openai") == .orderedSame || openAI != nil
-        let enabled = explicitlyUsesOpenAI &&
+        let explicitlyUsesOpenAI = selectsOpenAI || openAI != nil
+        let enabled = selectsOpenAI &&
             Self.string(realtime?["mode"])?.caseInsensitiveCompare("realtime") == .orderedSame &&
             Self.string(realtime?["transport"])?.caseInsensitiveCompare("gateway-relay") == .orderedSame
 
@@ -53,6 +55,11 @@ enum RealtimeTalkSettingsConfig {
         var result = root
         var talk = result["talk"] as? [String: Any] ?? [:]
         var realtime = talk["realtime"] as? [String: Any] ?? [:]
+        let explicitProvider = Self.string(realtime["provider"])
+        let selectedProvider = explicitProvider ?? Self.onlyProviderKey(in: realtime["providers"] as? [String: Any])
+        let selectsOpenAI = selectedProvider?.caseInsensitiveCompare("openai") == .orderedSame
+
+        Self.persistOpenAIOptions(draft, in: &realtime)
 
         if draft.enabled {
             realtime["provider"] = "openai"
@@ -61,7 +68,10 @@ enum RealtimeTalkSettingsConfig {
             realtime["mode"] = "realtime"
             realtime["transport"] = "gateway-relay"
             realtime["brain"] = "agent-consult"
-        } else if draft.explicitlyUsesOpenAI {
+        } else if selectsOpenAI {
+            realtime["provider"] = "openai"
+            realtime["model"] = draft.model
+            realtime["speakerVoice"] = draft.voice
             realtime.removeValue(forKey: "mode")
             if Self.string(realtime["transport"])?.caseInsensitiveCompare("gateway-relay") == .orderedSame {
                 realtime.removeValue(forKey: "transport")
@@ -69,6 +79,10 @@ enum RealtimeTalkSettingsConfig {
             if Self.string(realtime["brain"])?.caseInsensitiveCompare("agent-consult") == .orderedSame {
                 realtime.removeValue(forKey: "brain")
             }
+        } else if explicitProvider == nil, let selectedProvider {
+            // Adding the OpenAI entry turns an inferred single-provider map into a multi-provider
+            // map. Preserve the previously inferred selection explicitly so the schema stays valid.
+            realtime["provider"] = selectedProvider
         }
 
         talk["realtime"] = realtime
@@ -100,6 +114,29 @@ enum RealtimeTalkSettingsConfig {
         let string = value as? String
         let trimmed = string?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func onlyProviderKey(in providers: [String: Any]?) -> String? {
+        guard let providers, providers.count == 1 else { return nil }
+        return providers.keys.first
+    }
+
+    private static func persistOpenAIOptions(
+        _ draft: RealtimeTalkSettingsDraft,
+        in realtime: inout [String: Any])
+    {
+        var providers = realtime["providers"] as? [String: Any] ?? [:]
+        let existingKey = providers.keys.first {
+            $0.caseInsensitiveCompare("openai") == .orderedSame
+        }
+        var openAI = existingKey.flatMap { providers[$0] as? [String: Any] } ?? [:]
+        openAI["model"] = draft.model
+        openAI["speakerVoice"] = draft.voice
+        if let existingKey, existingKey != "openai" {
+            providers.removeValue(forKey: existingKey)
+        }
+        providers["openai"] = openAI
+        realtime["providers"] = providers
     }
 
     private static func dictionary(in values: [String: Any]?, matching expected: String) -> [String: Any]? {
@@ -205,13 +242,15 @@ struct RealtimeTalkSettingsSection: View {
             if self.model.showsConfiguration {
                 SettingsCardToggleRow(
                     title: "Use realtime conversation",
-                    subtitle: "Stream speech continuously while OpenClaw keeps agent tools and computer actions available.",
+                    subtitle: "Stream speech continuously while OpenClaw keeps agent tools " +
+                        "and computer actions available.",
                     binding: self.$model.draft.enabled)
                     .disabled(!self.model.canEnable)
 
                 SettingsCardRow(
                     title: "Voice model",
-                    subtitle: "GPT-Live uses ChatGPT/Codex OAuth when available; GA realtime models may require Platform API access.")
+                    subtitle: "GPT-Live uses ChatGPT/Codex OAuth when available; " +
+                        "GA realtime models may require Platform API access.")
                 {
                     Picker("Voice model", selection: self.$model.draft.model) {
                         ForEach(self.model.models, id: \.self) { model in
@@ -270,7 +309,8 @@ struct RealtimeTalkSettingsSection: View {
         case .ready:
             "The Gateway reports that OpenAI realtime access is ready for this configuration."
         case .needsOpenAIAccess:
-            "Use an OpenClaw OpenAI login or Platform API key. An existing Codex CLI login is not imported automatically."
+            "Use an OpenClaw OpenAI login or Platform API key. " +
+                "An existing Codex CLI login is not imported automatically."
         case let .unavailable(message):
             message
         }
