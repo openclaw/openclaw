@@ -815,7 +815,9 @@ describe("runPreparedReply media-only handling", () => {
         ],
       },
     });
-    const fact = (persisted as any)?.["__openclaw"]?.media?.[0];
+    const fact = (persisted as { __openclaw?: { media?: unknown[] } })?.__openclaw?.media?.[0] as
+      | Record<string, unknown>
+      | undefined;
     expect(fact).not.toHaveProperty("originalPath");
     expect(fact).not.toHaveProperty("workspaceDir");
   });
