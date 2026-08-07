@@ -1,5 +1,4 @@
 // Comfy plugin module implements workflow runtime behavior.
-import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
@@ -36,6 +35,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readComfyWorkflowFile } from "./workflow-file.js";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -131,6 +131,13 @@ function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | 
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
   const value = config[key];
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function resolveComfyWorkflowFileMaxBytes(config: ComfyProviderConfig): number | undefined {
+  const configured = config.workflowFileMaxBytes;
+  return typeof configured === "number" && Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : undefined;
 }
 
 function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
@@ -244,7 +251,8 @@ async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWork
   }
 
   const resolvedPath = resolveUserPath(source.workflowPath);
-  const raw = await fs.readFile(resolvedPath, "utf8");
+  const maxBytes = resolveComfyWorkflowFileMaxBytes(config);
+  const raw = await readComfyWorkflowFile(resolvedPath, maxBytes);
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) {
     throw new Error(`Comfy workflow at ${resolvedPath} must be a JSON object`);
