@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // Validates docs i18n glossary terms against configured usage rules.
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const ROOT = process.cwd();
 const GLOSSARY_PATH = path.join(ROOT, "docs", ".i18n", "glossary.zh-CN.json");
@@ -12,6 +12,7 @@ const LIST_ITEM_LINK_RE = /^\s*(?:[-*]|\d+\.)\s+\[([^\]]+)\]\((\/[^)]+)\)/;
 const MAX_TITLE_WORDS = 8;
 const MAX_LABEL_WORDS = 6;
 const MAX_TERM_LENGTH = 80;
+const GIT_TIMEOUT_MS = 60_000;
 
 /**
  * @typedef {{
@@ -47,15 +48,93 @@ export function parseArgs(argv) {
   return args;
 }
 
-function runGit(args) {
-  return execFileSync("git", args, {
-    cwd: ROOT,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-  }).trim();
+function formatGitArgs(args) {
+  return args.join(" ");
 }
 
-function resolveBase(explicitBase) {
+function createGitError(args, error, timeoutMs) {
+  const timedOut =
+    error?.code === "ETIMEDOUT" ||
+    error?.signal === "SIGTERM" ||
+    /timed out|timeout/i.test(String(error?.message ?? ""));
+  const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : "";
+  let message;
+  if (timedOut) {
+    message = `docs:check-i18n-glossary: git ${formatGitArgs(args)} timed out after ${timeoutMs}ms.`;
+  } else if (stderr) {
+    message = `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed: ${stderr}`;
+  } else {
+    // Raw spawn and process-tree cleanup failures can reject without stderr;
+    // keep the runner's cause so a missing git executable or failed cleanup
+    // stays actionable instead of degrading to a generic command failure.
+    const cause = String(error?.message ?? "").trim();
+    message = `docs:check-i18n-glossary: git ${formatGitArgs(args)} failed${cause ? `: ${cause}` : "."}`;
+  }
+  const wrapped = new Error(message, { cause: error });
+  wrapped.timedOut = timedOut;
+  return wrapped;
+}
+
+/**
+ * Test code can inject a short timeout and isolated PATH without adding a
+ * production environment/config surface.
+ *
+ * @param {{
+ *   timeoutMs?: number;
+ *   cwd?: string;
+ *   env?: NodeJS.ProcessEnv;
+ * }} [options]
+ */
+export function createGitRunner(options = {}) {
+  const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
+  const cwd = options.cwd ?? ROOT;
+  const env = options.env ?? process.env;
+  return async (args) => {
+    let stdout = "";
+    let stderr = "";
+    let status;
+    try {
+      status = await runManagedCommand({
+        bin: "git",
+        args,
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        // Git takes its refs and paths as direct argv; cmd.exe wrapping would
+        // reject legal Windows documentation pathnames such as `docs/a&b.md`.
+        shell: false,
+        timeoutMs,
+        onReady: (child) => {
+          child.stdout?.setEncoding("utf8");
+          child.stdout?.on("data", (chunk) => {
+            stdout += chunk;
+          });
+          child.stderr?.setEncoding("utf8");
+          child.stderr?.on("data", (chunk) => {
+            stderr += chunk;
+          });
+        },
+      });
+    } catch (error) {
+      throw createGitError(args, error, timeoutMs);
+    }
+    if (status !== 0) {
+      throw createGitError(
+        args,
+        Object.assign(new Error(`git exited with code ${status}`), {
+          code: status,
+          stderr,
+        }),
+        timeoutMs,
+      );
+    }
+    return stdout.trim();
+  };
+}
+
+const runGit = createGitRunner();
+
+async function resolveBase(explicitBase) {
   if (explicitBase) {
     return explicitBase;
   }
@@ -67,8 +146,11 @@ function resolveBase(explicitBase) {
 
   for (const candidate of ["origin/main", "fork/main", "main"]) {
     try {
-      return runGit(["merge-base", candidate, "HEAD"]);
-    } catch {
+      return await runGit(["merge-base", candidate, "HEAD"]);
+    } catch (error) {
+      if (error?.timedOut) {
+        throw error;
+      }
       // Try the next candidate.
     }
   }
@@ -76,14 +158,14 @@ function resolveBase(explicitBase) {
   return "";
 }
 
-function listChangedDocs(base, head) {
+async function listChangedDocs(base, head) {
   const args = ["diff", "--name-only", "--diff-filter=ACMR", base];
   if (head) {
     args.push(head);
   }
   args.push("--", "docs");
 
-  return runGit(args)
+  return (await runGit(args))
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => DOC_FILE_RE.test(line));
@@ -130,12 +212,31 @@ function isGlossaryCandidate(term, maxWords) {
   return wordCount(term) <= maxWords;
 }
 
-function readGitFile(base, relPath) {
-  try {
-    return runGit(["show", `${base}:${relPath}`]);
-  } catch {
+/**
+ * Reads a file from the merge-base revision.
+ *
+ * Absence is decided by a machine-readable `git ls-tree` result: an empty
+ * listing means the base revision has no such file (for example a newly added
+ * doc), so the empty-string fallback applies without parsing human-localized
+ * `git show` diagnostics. The literal pathspec keeps filenames with glob
+ * characters exact. Every other git failure, most importantly the runner's
+ * tagged timeouts, must propagate so a stalled lookup stays an actionable
+ * timeout instead of degrading into a glossary comparison against an empty
+ * baseline.
+ *
+ * Test code can inject a short-timeout runner through the optional `git`
+ * parameter without adding a production environment/config surface.
+ *
+ * @param {string} base
+ * @param {string} relPath
+ * @param {(args: string[]) => Promise<string>} [git]
+ */
+export async function readGitFile(base, relPath, git = runGit) {
+  const listing = await git(["ls-tree", base, "--", `:(literal)${relPath}`]);
+  if (listing === "") {
     return "";
   }
+  return git(["show", `${base}:${relPath}`]);
 }
 
 /**
@@ -187,9 +288,9 @@ function extractTerms(file, text) {
   return terms;
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const base = resolveBase(args.base);
+  const base = await resolveBase(args.base);
 
   if (!base) {
     console.warn(
@@ -198,7 +299,7 @@ function main() {
     process.exit(0);
   }
 
-  const changedDocs = listChangedDocs(base, args.head);
+  const changedDocs = await listChangedDocs(base, args.head);
   if (changedDocs.length === 0) {
     process.exit(0);
   }
@@ -214,7 +315,7 @@ function main() {
     }
 
     const currentTerms = extractTerms(relPath, fs.readFileSync(absPath, "utf8"));
-    const baseTerms = extractTerms(relPath, readGitFile(base, relPath));
+    const baseTerms = extractTerms(relPath, await readGitFile(base, relPath));
 
     for (const [term, match] of currentTerms) {
       if (baseTerms.has(term)) {
@@ -244,5 +345,10 @@ function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
-  main();
+  try {
+    await main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
