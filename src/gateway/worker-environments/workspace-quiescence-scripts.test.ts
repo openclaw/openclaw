@@ -165,12 +165,12 @@ async function terminate(child: ReturnType<typeof spawn>) {
   }
 }
 
-async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
+async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string, expectedCode = 0) {
   const result = await runCommandWithTimeout(
     [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
     { timeoutMs: 10_000, baseEnv: input.env },
   );
-  expect(result.code).toBe(0);
+  expect(result.code, result.stderr).toBe(expectedCode);
 }
 
 async function renew(
@@ -316,8 +316,8 @@ describe("remote workspace quiescence scripts", () => {
       expect(retained.recovery?.state).toBe("recovery-failed");
 
       await fs.rm(input.failedProcessProbeTargetPath, { force: true });
-      await resume(input, failedNonce);
-      await expectProcessState(failedPid, false);
+      await resume(input, failedNonce, WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
+      await expectProcessState(failedPid, true);
     } finally {
       await fs.rm(input.failedProcessProbeTargetPath, { force: true });
       if (failedNonce) {
@@ -390,8 +390,8 @@ describe("remote workspace quiescence scripts", () => {
       expect(terminal.recovery?.state).toBe("probe-timeout");
 
       await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
-      await resume(input, nonce);
-      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, false)));
+      await resume(input, nonce, WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
+      await Promise.all(childPids.map(async (pid) => await expectProcessState(pid, true)));
     } finally {
       await fs.rm(input.extraProcessPath, { force: true });
       await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
@@ -441,10 +441,9 @@ describe("remote workspace quiescence scripts", () => {
       await expectProcessState(childPid, true);
       const retry = await runQuiesce(input);
       expect(retry.code).toBe(WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
+      await resume(input, nonce, WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
       await expectProcessState(childPid, true);
       await expect(fs.access(terminalLeasePath)).resolves.toBeUndefined();
-      await resume(input, nonce);
-      await expectProcessState(childPid, false);
     } finally {
       await fs.rm(input.extraProcessPath, { force: true });
       await fs.rm(input.failedProcessProbeTargetPath, { force: true });
@@ -919,8 +918,8 @@ ${REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS}`;
       expect(terminal.recovery?.state).toBe("probe-timeout");
 
       await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
-      await resume(input, nonce);
-      await expect(fs.access(leaseFile)).rejects.toThrow();
+      await resume(input, nonce, WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
+      process.kill(lease.watchdog.pid, "SIGKILL");
     } finally {
       await fs.rm(input.extraProcessPath, { force: true });
       await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
@@ -1073,9 +1072,9 @@ ${REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS}`;
         await expect(fs.access(leaseFile)).resolves.toBeUndefined();
 
         await fs.rm(targetPath, { force: true });
-        await resume(input, nonce);
-        await expectProcessState(stalledPid, false);
-        await expect(fs.access(leaseFile)).rejects.toThrow();
+        await resume(input, nonce, WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
+        await expectProcessState(stalledPid, true);
+        await expect(fs.access(leaseFile)).resolves.toBeUndefined();
       } finally {
         await fs.rm(targetPath, { force: true });
         try {

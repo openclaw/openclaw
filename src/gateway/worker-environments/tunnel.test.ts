@@ -299,7 +299,10 @@ describe("worker tunnel manager", () => {
       if (remoteCommand.includes('process.stdout.write("quiesced "')) {
         return success(`quiesced ${nonce}\n`);
       }
-      if (remoteCommand.includes('process.stdout.write("renewed "')) {
+      if (
+        remoteCommand.includes('process.stdout.write("renewed "') ||
+        remoteCommand.includes("async function resume()")
+      ) {
         return {
           ...success(),
           code: WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE,
@@ -328,7 +331,10 @@ describe("worker tunnel manager", () => {
       expect(findWorkerWorkspaceOperatorRecoveryError(error)).toBeInstanceOf(
         WorkerWorkspaceOperatorRecoveryError,
       );
-      await quiescence.resume();
+      const resumeError = await quiescence.resume().catch((cause: unknown) => cause);
+      expect(findWorkerWorkspaceOperatorRecoveryError(resumeError)).toBeInstanceOf(
+        WorkerWorkspaceOperatorRecoveryError,
+      );
     } finally {
       vi.useRealTimers();
       await handle.stop();

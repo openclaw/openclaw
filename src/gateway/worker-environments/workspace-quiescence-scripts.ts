@@ -655,7 +655,7 @@ async function resume() {
     if (error && error.code === "ENOENT") return;
     throw error;
   }
-  const input = parseLease(raw, nonce);
+  const input = parseLease(raw, nonce); if (input.recovery !== undefined) throw new WorkspaceOperatorRecoveryError("workspace quiescence recovery " + (input.recovery.state === "recovery-failed" ? "failed" : "timed out") + "; lease retained for operator recovery");
   const recoveryDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
   const references = [
     ...(input.watchdog === null ? [] : [{ ...input.watchdog, signal: "SIGTERM" }]),
