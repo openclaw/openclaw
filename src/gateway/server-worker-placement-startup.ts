@@ -17,7 +17,6 @@ import {
   createWorkerPlacementDispatchService,
   type WorkerPlacementDispatchService,
 } from "./worker-environments/placement-dispatch.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
@@ -477,10 +476,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     workspaceOperations,
   });
   const recoverPendingWorkspaceReconciliations = async (): Promise<void> => {
-    const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations({
-      retainFailedOwner: (recoveryError) =>
-        recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
-    });
+    const orphanedJournals = params.placements.pruneOrphanedWorkspaceReconciliations();
     for (const owner of orphanedJournals) {
       workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
     }

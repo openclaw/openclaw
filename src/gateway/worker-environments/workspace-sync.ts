@@ -44,6 +44,7 @@ import {
   verifyRemoteWorkspaceManifest,
   waitForQuiescenceRenewal,
   workerWorkspaceCommandSucceeded as success,
+  workspaceQuiescenceError,
   workerWorkspaceRsyncRemoteCommand,
   workerWorkspaceSshArgv,
   workspaceSyncError,
@@ -65,7 +66,7 @@ import {
 const REMOTE_SETUP_TIMEOUT_MS = 20_000;
 const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
 const WORKSPACE_QUIESCENCE_TIMEOUT_MS = 12 * 60_000;
-const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 4 * 60_000;
+const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 3 * 60_000;
 // Relative to the $HOME/.openclaw-worker root owned by REMOTE_WORKSPACE_SETUP_SCRIPT;
 // rsync targets must use the returned absolute directory, never this relative path.
 const REMOTE_WORKSPACE_ROOT = "workspaces";
@@ -142,7 +143,7 @@ export function createWorkerWorkspaceActions(
       ],
     });
     if (!success(result)) {
-      throw workspaceSyncError(result);
+      throw workspaceQuiescenceError(result);
     }
     const acknowledgement = /^quiesced ([a-f0-9]{32})$/u.exec(result.stdout.trim());
     if (!acknowledgement) {
@@ -169,7 +170,7 @@ export function createWorkerWorkspaceActions(
           ],
         });
         if (!success(renewedResult)) {
-          throw workspaceSyncError(renewedResult);
+          throw workspaceQuiescenceError(renewedResult);
         }
         if (renewedResult.stdout.trim() !== `renewed ${nonce}`) {
           throw new Error(
@@ -221,7 +222,7 @@ export function createWorkerWorkspaceActions(
           argv: ["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce],
         });
         if (!success(resumedResult)) {
-          throw workspaceSyncError(resumedResult);
+          throw workspaceQuiescenceError(resumedResult);
         }
         resumed = true;
       },

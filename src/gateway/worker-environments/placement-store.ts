@@ -38,6 +38,7 @@ import {
 } from "./placement-workspace-journal.js";
 import {
   createPlacementWorkspaceResultOps,
+  hasMatchingRetainedFailedWorkspaceResultOwner,
   hasWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
 import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
@@ -119,7 +120,9 @@ export function createWorkerSessionPlacementStore(
 
   return {
     ...createPlacementTurnClaimOps(runtime),
-    ...createPlacementWorkspaceJournalOps(runtime),
+    ...createPlacementWorkspaceJournalOps(runtime, {
+      hasMatchingRetainedFailedResultOwner: hasMatchingRetainedFailedWorkspaceResultOwner,
+    }),
     ...createPlacementWorkspaceResultOps(runtime),
 
     get(sessionId: string): WorkerSessionPlacementRecord | undefined {
@@ -471,6 +474,46 @@ export function createWorkerSessionPlacementStore(
         );
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker session placement ${sessionId} changed during failure`);
+        }
+        return {
+          record: getRequired(db, sessionId),
+          releasedClaim: current.turnClaim?.owner === "worker",
+        };
+      });
+      if (outcome.releasedClaim) {
+        signalTurnClaimRelease(path, sessionId);
+      }
+      return outcome.record;
+    },
+
+    failPendingWorkspaceResult(input: {
+      sessionId: string;
+      recoveryError: string;
+      expectedGeneration: number;
+    }): WorkerSessionPlacementRecord {
+      const sessionId = required(input.sessionId, "session id");
+      const recoveryError = required(input.recoveryError, "recovery error");
+      const outcome = write((db) => {
+        const current = getRequired(db, sessionId);
+        if (
+          (current.state !== "active" && current.state !== "draining") ||
+          current.generation !== input.expectedGeneration ||
+          !hasWorkerWorkspacePendingResult(db, sessionId)
+        ) {
+          throw new Error(`Cannot fail stale pending worker result for session ${sessionId}`);
+        }
+        const values = transitionValues(current, "failed", { recoveryError }, now());
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_session_placements")
+            .set(values)
+            .where("session_id", "=", sessionId)
+            .where("state", "=", current.state)
+            .where("transition_generation", "=", current.generation),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Pending worker result owner changed during failure for ${sessionId}`);
         }
         return {
           record: getRequired(db, sessionId),

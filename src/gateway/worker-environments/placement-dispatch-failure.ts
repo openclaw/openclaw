@@ -33,11 +33,15 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimReclaimWorkspaceResult"
   | "claimTurn"
   | "fail"
+  | "failPendingWorkspaceResult"
+  | "forceAbandonPendingWorkspaceResult"
   | "finishReclaim"
   | "get"
   | "loadWorkspaceReconciliation"
   | "beginWorkspaceReconciliation"
   | "abortWorkspaceReconciliation"
+  | "isWorkspaceReconciliationRetainedForForcedAbandonment"
+  | "retainWorkspaceReconciliationForForcedAbandonment"
   | "listWorkspaceReconciliationOwners"
   | "list"
   | "listPendingWorkspaceResults"
@@ -172,6 +176,17 @@ export function createPlacementFailureActions(deps: {
     }
   };
 
+  const recordRetainedResultFailure = (
+    placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
+    error: unknown,
+  ): void => {
+    placements.failPendingWorkspaceResult({
+      sessionId: placement.sessionId,
+      expectedGeneration: placement.generation,
+      recoveryError: boundedError(error),
+    });
+  };
+
   const startDrain = (
     placement: WorkerActiveDispatchPlacement,
   ): WorkerDrainingDispatchPlacement => {
@@ -283,6 +298,7 @@ export function createPlacementFailureActions(deps: {
   return {
     failActive,
     failDraining,
+    recordRetainedResultFailure,
     reclaimActive,
     retryFailedTeardown,
     teardownEnvironment,

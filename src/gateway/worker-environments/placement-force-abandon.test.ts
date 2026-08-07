@@ -3,18 +3,31 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createGatewayWorkerPlacementRuntime } from "../server-worker-placement-startup.js";
 import {
   createDispatchEnvironmentFixtures,
   REQUEST,
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
-import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { createHarness } from "./placement-dispatch-test-harness.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  forceAbandonWorkerEnvironment,
+} from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import type { WorkerEnvironmentService } from "./service.js";
+import {
+  cleanupWorkerWorkspaceResultRef,
+  hasWorkerWorkspaceResultRef,
+  preparedWorkerWorkspaceResultRef,
+  workerWorkspaceResultRef,
+} from "./workspace-result-staging.js";
 
 describe("forced worker environment abandonment", () => {
   let root: string;
@@ -90,6 +103,170 @@ describe("forced worker environment abandonment", () => {
       state: "failed",
       turnClaim: null,
       recoveryError: "Cloud worker result abandoned by forced operator teardown",
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+  });
+
+  it("cleans a retained terminal result and journal after restart", async () => {
+    let store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const { environmentId } = createDispatchEnvironmentFixtures();
+    const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = store.claimTurn({
+      ...REQUEST,
+      claimId: "retained-terminal-claim",
+      runId: "retained-terminal-run",
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
+    store.markWorkspaceResultPending(claim);
+    const finalRef = workerWorkspaceResultRef(claim.claimId);
+    const preparedRef = preparedWorkerWorkspaceResultRef(finalRef);
+    const cleanupRef = cleanupWorkerWorkspaceResultRef(finalRef);
+    store.recordStagedWorkspaceResult(claim, finalRef);
+
+    const workspacePath = path.join(root, "retained-terminal-workspace");
+    await fs.mkdir(workspacePath);
+    const initialized = await runCommandWithTimeout(
+      ["git", "-C", workspacePath, "init", "--quiet"],
+      { timeoutMs: 10_000 },
+    );
+    expect(initialized.code).toBe(0);
+    const artifactPath = path.join(workspacePath, "artifact");
+    await fs.writeFile(artifactPath, "retained terminal result\n");
+    const hashed = await runCommandWithTimeout(
+      ["git", "-C", workspacePath, "hash-object", "-w", artifactPath],
+      { timeoutMs: 10_000 },
+    );
+    expect(hashed.code).toBe(0);
+    for (const ref of [finalRef, preparedRef, cleanupRef]) {
+      const updated = await runCommandWithTimeout(
+        ["git", "-C", workspacePath, "update-ref", ref, hashed.stdout.trim()],
+        { timeoutMs: 10_000 },
+      );
+      expect(updated.code).toBe(0);
+    }
+
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    const appliedManifestRef = `sha256:${"d".repeat(64)}`;
+    store.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "e".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: appliedManifestRef,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+    store.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
+    const terminalMessage = "Worker workspace sync failed: lease retained for operator recovery";
+    store.failPendingWorkspaceResult({
+      sessionId: active.sessionId,
+      expectedGeneration: active.generation,
+      recoveryError: terminalMessage,
+    });
+
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restartedHarness = createHarness(store, { workspacePath });
+    const environments = {
+      ...restartedHarness.environments,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+    } as unknown as WorkerEnvironmentService;
+    const runtime = createGatewayWorkerPlacementRuntime({
+      placements: store,
+      environments,
+      admitNewPlacements: false,
+      revokeSessionAuthority: vi.fn(),
+      warn: vi.fn(),
+    });
+    const sidecar = await runtime.startRuntime({
+      isClosePreludeStarted: () => false,
+      registerSidecar: vi.fn(),
+    });
+    expect(store.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: terminalMessage,
+      turnClaim: null,
+    });
+    expect(store.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    await sidecar?.stop();
+
+    await forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId,
+      resolveWorkspacePath: async () => workspacePath,
+    });
+
+    expect(store.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      turnClaim: null,
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
+    for (const ref of [finalRef, preparedRef, cleanupRef]) {
+      await expect(
+        hasWorkerWorkspaceResultRef({ root: workspacePath, stagedResultRef: ref }),
+      ).resolves.toBe(false);
+    }
+  });
+
+  it("atomically rolls back forced terminal abandonment when the pending identity changed", () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const { environmentId } = createDispatchEnvironmentFixtures();
+    const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = store.claimTurn({
+      ...REQUEST,
+      claimId: "atomic-terminal-claim",
+      runId: "atomic-terminal-run",
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
+    store.markWorkspaceResultPending(claim);
+    const terminalMessage = "Worker workspace sync failed: lease retained for operator recovery";
+    store.failPendingWorkspaceResult({
+      sessionId: active.sessionId,
+      expectedGeneration: active.generation,
+      recoveryError: terminalMessage,
+    });
+    const pending = store.listPendingWorkspaceResults()[0]!;
+
+    expect(() =>
+      store.forceAbandonPendingWorkspaceResult({
+        pending: { ...pending, claimId: "changed-claim" },
+        recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      }),
+    ).toThrow(`Worker workspace result changed for ${active.sessionId}`);
+
+    expect(store.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: terminalMessage,
+      turnClaim: null,
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([pending]);
+
+    store.forceAbandonPendingWorkspaceResult({
+      pending,
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+    expect(store.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      turnClaim: null,
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });

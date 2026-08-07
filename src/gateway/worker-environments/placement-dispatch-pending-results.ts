@@ -6,7 +6,9 @@ import type {
   WorkerDispatchPlacementStore,
   WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import { isRetainedFailedWorkspaceResultOwner } from "./placement-workspace-result.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { findWorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -74,10 +76,10 @@ export async function recoverPendingWorkspaceResults(
   cleanupOrphans: boolean,
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
-  const stagedResultOwners = new Set<string>();
+  const retainedResultOwners = new Set<string>();
   for (const pending of placements.listPendingWorkspaceResults()) {
     if (pending.stagedResultRef) {
-      stagedResultOwners.add(pending.sessionId);
+      retainedResultOwners.add(pending.sessionId);
     }
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
@@ -85,6 +87,12 @@ export async function recoverPendingWorkspaceResults(
       continue;
     }
     const placement = placements.get(pending.sessionId);
+    if (isRetainedFailedWorkspaceResultOwner(placement, pending)) {
+      // A failed placement plus its matching pending row is the durable
+      // operator-recovery owner. Only explicit forced abandonment may clear it.
+      retainedResultOwners.add(pending.sessionId);
+      continue;
+    }
     try {
       const claim = placement?.turnClaim;
       if (
@@ -164,7 +172,7 @@ export async function recoverPendingWorkspaceResults(
       ) {
         placements.recordStagedWorkspaceResult(turnClaim, canonicalStagedResultRef);
         stagedResultRef = canonicalStagedResultRef;
-        stagedResultOwners.add(pending.sessionId);
+        retainedResultOwners.add(pending.sessionId);
       }
       if (stagedResultRef && pending.workspaceAcceptedAtMs !== null) {
         const canonicalExists = await hasWorkerWorkspaceResultRef({
@@ -461,7 +469,11 @@ export async function recoverPendingWorkspaceResults(
           }
         }
       });
-    } catch {
+    } catch (error) {
+      const operatorRecoveryError = findWorkerWorkspaceOperatorRecoveryError(error);
+      if (operatorRecoveryError) {
+        failure.recordRetainedResultFailure(placement, operatorRecoveryError);
+      }
       // Keep the result, claim, and environment fenced. The next sweep retries.
     }
   }
@@ -490,7 +502,7 @@ export async function recoverPendingWorkspaceResults(
     }
   }
   return new Set([
-    ...stagedResultOwners,
+    ...retainedResultOwners,
     ...placements.listPendingWorkspaceResults().map((pending) => pending.sessionId),
   ]);
 }

@@ -381,6 +381,7 @@ describe("worker environment service", () => {
   ) {
     const identity = seedAttachedIdentity(environmentId, sessionId);
     const placementStore = {
+      isEnvironmentRetainedForOperatorRecovery: vi.fn(() => false),
       validateWorkerTurn: vi.fn(() => true),
       updateAckCursors: vi.fn(),
     };
@@ -1583,6 +1584,43 @@ describe("worker environment service", () => {
       leaseId: `lease:${environmentId}`,
       attachedSessionIds: [],
       lastError: null,
+    });
+  });
+
+  it("keeps a stale attached worker fenced for terminal operator recovery", async () => {
+    const environmentId = "worker-attached-terminal-recovery";
+    seedBootstrapping(environmentId);
+    const ready = store.transition({
+      environmentId,
+      from: "bootstrapping",
+      to: "ready",
+      patch: readyPatch(environmentId, {
+        ...BOOTSTRAP_RECEIPT,
+        bundleHash: "b".repeat(64),
+      }),
+    });
+    store.transition({
+      environmentId,
+      from: ready.state,
+      to: "attached",
+      patch: attachedPatch(environmentId, "session-1"),
+    });
+    const destroy = vi.fn(async () => {});
+    const placementStore = {
+      validateWorkerTurn: vi.fn(() => false),
+      updateAckCursors: vi.fn(),
+      isEnvironmentRetainedForOperatorRecovery: vi.fn(() => true),
+    };
+
+    await createService(createProvider({ destroy }), { placementStore }).reconcileOnce();
+
+    expect(placementStore.isEnvironmentRetainedForOperatorRecovery).toHaveBeenCalledWith(
+      environmentId,
+    );
+    expect(destroy).not.toHaveBeenCalled();
+    expect(store.get(environmentId)).toMatchObject({
+      state: "attached",
+      attachedSessionIds: ["session-1"],
     });
   });
 

@@ -3081,7 +3081,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(credentialTable?.name).toBe("worker_environment_credentials");
   });
 
-  it("adds staged worker-result refs during the v5 state migration", () => {
+  it("adds worker workspace recovery columns during the v5 state migration", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -3090,6 +3090,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const legacyDb = new DatabaseSync(databasePath);
     legacyDb.exec(`
       ALTER TABLE worker_workspace_pending_results DROP COLUMN staged_result_ref;
+      ALTER TABLE worker_workspace_reconciliations DROP COLUMN forced_abandonment_retained;
       PRAGMA user_version = 4;
       UPDATE schema_meta SET schema_version = 4 WHERE meta_key = 'primary';
     `);
@@ -3100,12 +3101,37 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       .prepare("PRAGMA table_info(worker_workspace_pending_results)")
       .all() as Array<{ name?: string }>;
     expect(columns.map((column) => column.name)).toContain("staged_result_ref");
+    const reconciliationColumns = reopened.db
+      .prepare("PRAGMA table_info(worker_workspace_reconciliations)")
+      .all() as Array<{ name?: string }>;
+    expect(reconciliationColumns.map((column) => column.name)).toContain(
+      "forced_abandonment_retained",
+    );
     expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
       reopened.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
         .get(),
     ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+  });
+
+  it("adds forced-abandon journal ownership to current state databases", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedDb = new DatabaseSync(databasePath);
+    shippedDb.exec(
+      "ALTER TABLE worker_workspace_reconciliations DROP COLUMN forced_abandonment_retained",
+    );
+    shippedDb.close();
+
+    const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(worker_workspace_reconciliations)")
+      .all() as Array<{ name?: string }>;
+    expect(columns.map((column) => column.name)).toContain("forced_abandonment_retained");
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   });
 
   it("adds worker transcript commit tables to existing state databases", () => {

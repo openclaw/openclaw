@@ -37,8 +37,10 @@ export function createHarness(
     verifyFailureCall?: number;
     leaseFails?: boolean;
     leaseFailureCount?: number;
+    leaseError?: Error;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
+    resumeError?: Error;
     workspacePath?: string;
     priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
     reconcileConflictPaths?: string[];
@@ -68,6 +70,10 @@ export function createHarness(
       placementStore.beginWorkspaceReconciliation(owner, journal),
     abortWorkspaceReconciliation: (owner, abortOptions) =>
       placementStore.abortWorkspaceReconciliation(owner, abortOptions),
+    isWorkspaceReconciliationRetainedForForcedAbandonment: (owner) =>
+      placementStore.isWorkspaceReconciliationRetainedForForcedAbandonment(owner),
+    retainWorkspaceReconciliationForForcedAbandonment: (owner) =>
+      placementStore.retainWorkspaceReconciliationForForcedAbandonment(owner),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
@@ -92,6 +98,8 @@ export function createHarness(
       return completed;
     },
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
+    forceAbandonPendingWorkspaceResult: (params) =>
+      placementStore.forceAbandonPendingWorkspaceResult(params),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
     acceptIdleWorkspaceReconciliation: (params) =>
@@ -107,6 +115,10 @@ export function createHarness(
     fail: (params) => {
       log.push("placement:failed");
       return placementStore.fail(params);
+    },
+    failPendingWorkspaceResult: (params) => {
+      log.push("placement:failed");
+      return placementStore.failPendingWorkspaceResult(params);
     },
     finishReclaim: (params) => {
       log.push("placement:reclaimed");
@@ -167,6 +179,9 @@ export function createHarness(
       return {
         assertActive: vi.fn(async () => {
           log.push("workspace:lease");
+          if (options.leaseError) {
+            throw options.leaseError;
+          }
           if (options.leaseFails || remainingLeaseFailures > 0) {
             remainingLeaseFailures -= 1;
             throw new Error("workspace quiescence expired");
@@ -174,6 +189,9 @@ export function createHarness(
         }),
         resume: vi.fn(async () => {
           log.push("workspace:resume");
+          if (options.resumeError) {
+            throw options.resumeError;
+          }
           if (options.resumeFails) {
             throw new Error("workspace resume failed");
           }
