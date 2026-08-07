@@ -343,11 +343,11 @@ describe("tailscale helpers", () => {
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(false);
   });
 
-  it("hasTailscaleFunnelRouteForPort preserves malformed status parse failures", async () => {
+  it("hasTailscaleFunnelRouteForPort returns false on malformed status parse failures", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout: "warning: stale state\n{not json}\n",
     });
 
-    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toThrow(SyntaxError);
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(false);
   });
 });
