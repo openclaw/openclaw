@@ -74,6 +74,13 @@ export function signalProcessTree(
   }
 
   if (process.platform === "win32") {
+    if (signal === "SIGINT") {
+      // Windows console propagation already delivers Ctrl+C to every process
+      // sharing this console. taskkill /T does not interrupt Node console
+      // children, so routing SIGINT through it would delay normal shutdown.
+      opts?.onComplete?.();
+      return;
+    }
     void signalProcessTreeWindowsAndWait(pid, signal).then(opts?.onComplete);
     return;
   }

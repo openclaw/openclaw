@@ -291,11 +291,10 @@ describe("openclaw attach (action)", () => {
     }
   });
 
-  it("disarms the escalation timer at the child terminal event before async revocation", async () => {
-    // Simulate a stalled revoke: the gateway never responds, so
-    // revokeOnce() hangs.  The timer must still be cleared when the
-    // child exits — a stale timer firing on an exited or reused PID
-    // is a merge risk.
+  it("keeps escalation armed after the child exits so descendants can still be force-killed", async () => {
+    // A detached wrapper may exit while an inherited-group descendant ignores
+    // SIGINT. The escalation timer must stay armed so the whole tree still
+    // receives SIGKILL after the grace period.
     vi.useFakeTimers();
     try {
       await runAttach("--session", "agent:main:spawn");
@@ -304,11 +303,9 @@ describe("openclaw attach (action)", () => {
       handler();
       // Process tree exits *during* the grace period (before SIGKILL fires)
       spawnedChild.emit("exit", 0, null);
-      // Advance past the timer deadline — timer was already disarmed.
-      vi.advanceTimersByTime(10_000);
-      // SIGKILL must NOT have been called (timer disarmed at exit).
-      expect(signalChildProcessTreeMock).not.toHaveBeenCalledWith(spawnedChild, "SIGKILL");
       await vi.runAllTimersAsync();
+      // Timer should still fire and escalate to SIGKILL.
+      expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGKILL");
     } finally {
       vi.useRealTimers();
     }
