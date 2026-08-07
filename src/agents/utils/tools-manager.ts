@@ -21,6 +21,7 @@ import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { APP_NAME, getBinDir } from "../config.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
@@ -34,12 +35,6 @@ const MAX_ARCHIVE_ENTRIES = 1_000;
 const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
 const CONTENT_LENGTH_RE = /^\d+$/;
 const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
 
 function isOfflineModeEnabled(): boolean {
   const value = process.env.OPENCLAW_OFFLINE;
