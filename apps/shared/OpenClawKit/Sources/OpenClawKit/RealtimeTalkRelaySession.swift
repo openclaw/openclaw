@@ -1218,19 +1218,24 @@ extension RealtimeTalkRelaySession {
     }
 }
 
+#if DEBUG
 extension RealtimeTalkRelaySession {
+    // periphery:ignore - package tests drive a relay session without a live gateway handshake.
     func _test_setRelaySessionId(_ relaySessionId: String) {
         self.relaySessionId = relaySessionId
     }
 
+    // periphery:ignore - package tests inject gateway events without a live socket.
     func _test_handleGatewayEvent(_ event: EventFrame) async {
         await self.handleGatewayEvent(event, lifecycleGeneration: self.lifecycleGeneration)
     }
 
+    // periphery:ignore - package tests end the event stream deterministically.
     func _test_handleEventStreamEnded() async {
         await self.handleEventStreamEnded(lifecycleGeneration: self.lifecycleGeneration)
     }
 
+    // periphery:ignore - package tests observe startup cancellation without waiting out the timeout.
     func _test_waitForStartupCancelled(timeoutSeconds: Int) async -> Bool {
         if case .cancelled = await self.waitForStartupResult(
             timeoutSeconds: timeoutSeconds,
@@ -1241,6 +1246,7 @@ extension RealtimeTalkRelaySession {
         return false
     }
 
+    // periphery:ignore - package tests await in-flight tool calls before asserting.
     func _test_waitForToolCalls() async {
         let tasks = self.toolCallTasks.values
         for task in tasks {
@@ -1248,26 +1254,32 @@ extension RealtimeTalkRelaySession {
         }
     }
 
+    // periphery:ignore - package tests assert the startup budget without duplicating the constant.
     func _test_startupReadyTimeoutSeconds() -> Int {
         Self.startupReadyTimeoutSeconds
     }
 
+    // periphery:ignore - package tests start output playback without decoding real audio.
     func _test_markOutputAudioStarted(nowMs: Double) {
         self.markOutputAudioStarted(byteCount: 4800, nowMs: nowMs)
     }
 
+    // periphery:ignore - package tests finish playback without a real player callback.
     func _test_markOutputPlaybackFinished() {
         self.markOutputPlaybackFinished()
     }
 
+    // periphery:ignore - package tests observe barge-in timing state.
     func _test_outputStartedAtMs() -> Double? {
         self.outputStartedAtMs
     }
 
+    // periphery:ignore - package tests observe playback state without exposing it publicly.
     func _test_isOutputPlaying() -> Bool {
         self.isOutputPlaying
     }
 
+    // periphery:ignore - package tests exercise the audio sender without a started session.
     func _test_prepareAudioSender(relaySessionId: String) {
         self.isClosed = false
         self.audioSender = RealtimeAudioSender(
@@ -1275,6 +1287,7 @@ extension RealtimeTalkRelaySession {
             request: self.transport.request)
     }
 
+    // periphery:ignore - package tests enqueue frames without a live capture device.
     func _test_enqueueMicrophoneFrame(
         _ data: Data,
         timestampMs: Double = 1) -> Task<Void, Never>?
@@ -1287,8 +1300,10 @@ extension RealtimeTalkRelaySession {
             audioCaptureGeneration: self.audioCaptureGeneration)
     }
 
+    // periphery:ignore - package tests start the pump to observe capture failure handling.
     func _test_startMicrophonePump() throws {
         try self.startMicrophonePump(lifecycleGeneration: self.lifecycleGeneration)
     }
 }
+#endif
 #endif
