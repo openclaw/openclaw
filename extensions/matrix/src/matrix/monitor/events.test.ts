@@ -124,7 +124,7 @@ function createHarness(params?: {
       await Promise.all(Array.from(pendingTasks));
     }
   };
-  const onRoomMessage = vi.fn(async () => {});
+  const onRoomMessage = vi.fn(async (_roomId: string, _event: MatrixRawEvent) => {});
   const listVerifications = vi.fn(async () => params?.verifications ?? []);
   const ensureVerificationDmTracked = vi.fn(
     params?.ensureVerificationDmTracked ?? (async () => null),
@@ -213,7 +213,11 @@ function createHarness(params?: {
       params?.getHealthySyncSinceMs ??
       (typeof params?.startupMs === "number" ? () => params.startupMs : undefined),
     formatNativeDependencyHint,
-    onRoomMessage,
+    ingress: {
+      accept: async (roomId: string, event: MatrixRawEvent) => {
+        await onRoomMessage(roomId, event);
+      },
+    },
     runDetachedTask,
     sasNoticeRetryDelayMs: params?.sasNoticeRetryDelayMs ?? 0,
   });
@@ -1888,3 +1892,142 @@ describe("registerMatrixMonitorEvents verification routing", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("registerMatrixMonitorEvents ingress dispatchability filter", () => {
+  function buildMessageEvent(overrides: Partial<MatrixRawEvent> = {}): MatrixRawEvent {
+    return {
+      event_id: "$msg1",
+      sender: "@alice:example.org",
+      type: EventType.RoomMessage,
+      origin_server_ts: Date.now(),
+      content: { msgtype: "m.text", body: "hello" },
+      ...overrides,
+    } as MatrixRawEvent;
+  }
+
+  it("journals a plain room message from the generic bridge signal", async () => {
+    const { onRoomMessage, roomMessageListener, flushTasks } = createHarness();
+    if (!roomMessageListener) {
+      throw new Error("room.message listener was not registered");
+    }
+
+    roomMessageListener("!room:example.org", buildMessageEvent());
+
+    await flushTasks();
+    expect(onRoomMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not journal undeliverable state events from the generic bridge signal", async () => {
+    const { onRoomMessage, roomMessageListener, flushTasks } = createHarness();
+
+    roomMessageListener?.("!room:example.org", {
+      event_id: "$member-state",
+      sender: "@alice:example.org",
+      state_key: "@alice:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: { membership: "join", displayname: "Alice" },
+    } as MatrixRawEvent);
+    roomMessageListener?.("!room:example.org", {
+      event_id: "$topic-state",
+      sender: "@alice:example.org",
+      state_key: "",
+      type: "m.room.topic",
+      origin_server_ts: Date.now(),
+      content: { topic: "news" },
+    } as MatrixRawEvent);
+
+    await flushTasks();
+    expect(onRoomMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not journal redacted or sender-less dispatchable-type events", async () => {
+    const { onRoomMessage, roomMessageListener, flushTasks } = createHarness();
+
+    roomMessageListener?.(
+      "!room:example.org",
+      buildMessageEvent({
+        event_id: "$redacted",
+        unsigned: { redacted_because: { reason: "spam" } },
+      } as Partial<MatrixRawEvent>),
+    );
+    roomMessageListener?.(
+      "!room:example.org",
+      buildMessageEvent({ event_id: "$no-sender", sender: undefined }),
+    );
+
+    await flushTasks();
+    expect(onRoomMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not journal a redacted reaction room event", async () => {
+    const { onRoomMessage, roomEventListener, flushTasks } = createHarness();
+
+    roomEventListener("!room:example.org", {
+      event_id: "$reaction-redacted",
+      sender: "@alice:example.org",
+      type: EventType.Reaction,
+      origin_server_ts: Date.now(),
+      content: {
+        "m.relates_to": { rel_type: "m.annotation", event_id: "$msg1", key: "👍" },
+      },
+      unsigned: { redacted_because: { reason: "spam" } },
+    } as unknown as MatrixRawEvent);
+
+    await flushTasks();
+    expect(onRoomMessage).not.toHaveBeenCalled();
+  });
+
+  it("journals a plain decrypted room message", async () => {
+    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
+    if (!roomDecryptedEventListener) {
+      throw new Error("room.decrypted_event listener was not registered");
+    }
+
+    roomDecryptedEventListener("!room:example.org", buildMessageEvent({ event_id: "$dec-ok" }));
+
+    await flushTasks();
+    expect(onRoomMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not journal redacted or sender-less decrypted room messages", async () => {
+    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
+    if (!roomDecryptedEventListener) {
+      throw new Error("room.decrypted_event listener was not registered");
+    }
+
+    roomDecryptedEventListener(
+      "!room:example.org",
+      buildMessageEvent({
+        event_id: "$dec-redacted",
+        unsigned: { redacted_because: { reason: "spam" } },
+      } as Partial<MatrixRawEvent>),
+    );
+    roomDecryptedEventListener(
+      "!room:example.org",
+      buildMessageEvent({ event_id: "$dec-no-sender", sender: undefined }),
+    );
+
+    await flushTasks();
+    expect(onRoomMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not journal non-dispatchable decrypted events", async () => {
+    const { onRoomMessage, roomDecryptedEventListener, flushTasks } = createHarness();
+    if (!roomDecryptedEventListener) {
+      throw new Error("room.decrypted_event listener was not registered");
+    }
+
+    roomDecryptedEventListener("!room:example.org", {
+      event_id: "$dec-member",
+      sender: "@alice:example.org",
+      state_key: "@alice:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: { membership: "join", displayname: "Alice" },
+    } as MatrixRawEvent);
+
+    await flushTasks();
+    expect(onRoomMessage).not.toHaveBeenCalled();
+  });
+});

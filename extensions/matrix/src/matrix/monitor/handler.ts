@@ -3,6 +3,7 @@ import {
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
@@ -10,12 +11,12 @@ import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isPollEventType } from "../poll-types.js";
-import type { LocationMessageEventContent } from "../sdk.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { resolveMatrixMonitorLiveUserAllowlist } from "./config.js";
 import { resolveMatrixInboundContext } from "./handler-context.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
+  isMatrixDispatchableRoomEvent,
   markTrackedRoomIfFirst,
   shouldDeferMatrixAudioPreflightForRoomIngress,
 } from "./handler-helpers.js";
@@ -26,6 +27,7 @@ import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import { loadMatrixSendModule, redactMatrixDraftEvent } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
+import type { MatrixIngressLifecycle } from "./ingress.js";
 import type { MatrixLocationPayload } from "./location.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker, type ReservedHistorySlot } from "./room-history.js";
@@ -114,7 +116,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     return await roomIngressQueue.enqueue(roomId, task);
   };
 
-  return async (roomId: string, event: MatrixRawEvent) => {
+  return async (
+    roomId: string,
+    event: MatrixRawEvent,
+    ingressLifecycle?: MatrixIngressLifecycle,
+  ) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let inboundReplayClaim:
       | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
@@ -122,31 +128,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
     try {
       const eventType = event.type;
-      if (eventType === EventType.RoomMessageEncrypted) {
-        // Encrypted payloads are emitted separately after decryption.
+      if (!isMatrixDispatchableRoomEvent(event)) {
         return;
       }
-
       const isPollEvent = isPollEventType(eventType);
       const isReactionEvent = eventType === EventType.Reaction;
-      const locationContent = event.content as LocationMessageEventContent;
-      const isLocationEvent =
-        eventType === EventType.Location ||
-        (eventType === EventType.RoomMessage && locationContent.msgtype === EventType.Location);
-      if (
-        eventType !== EventType.RoomMessage &&
-        !isPollEvent &&
-        !isLocationEvent &&
-        !isReactionEvent
-      ) {
-        return;
-      }
       logVerboseMessage(
         `matrix: inbound event room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
       );
-      if (event.unsigned?.redacted_because) {
-        return;
-      }
       const senderId = event.sender;
       if (!senderId) {
         return;
@@ -165,6 +154,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           client,
           senderId,
           dropPreStartupMessages,
+          // Only rows journaled before this monitor started are crash-recovered
+          // replays that may bypass the pre-startup drop. Fresh admissions from
+          // the initial sync carry a lifecycle too; treating them as replays
+          // would process historical room history on a no-cursor cold start.
+          isJournaledReplay:
+            ingressLifecycle !== undefined && ingressLifecycle.receivedAt < startupMs,
           eventTs: eventTs ?? undefined,
           eventAge: eventAge ?? undefined,
           startupMs,
@@ -452,6 +447,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: _route.accountId,
         raw: event,
+        // Durable ingress: adoption tombstones the journaled claim once the
+        // turn's recovery state is durable; before that a crash replays it.
+        ...(ingressLifecycle ? bindIngressLifecycleToReplyOptions(ingressLifecycle) : {}),
         adapter: {
           ingest: () => ({
             id: messageId,
@@ -610,6 +608,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       await commitInboundEventIfClaimed();
     } catch (err) {
       runtime.error?.(`matrix handler failed: ${String(err)}`);
+      if (ingressLifecycle) {
+        // Journaled dispatch must surface failures so the drain's retry /
+        // dead-letter policy owns them instead of silently tombstoning.
+        throw err;
+      }
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the
       // model run throws or times out mid-stream.
