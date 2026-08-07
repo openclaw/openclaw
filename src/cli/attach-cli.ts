@@ -10,7 +10,10 @@ import {
 import { getRuntimeConfig } from "../config/io.js";
 import { callGateway } from "../gateway/call.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { signalProcessTree } from "../process/kill-tree.js";
+import {
+  shouldDetachChildForProcessTree,
+  signalChildProcessTree,
+} from "../process/child-process-tree.js";
 import { defaultRuntime } from "../runtime.js";
 
 type AttachGrant = {
@@ -136,6 +139,7 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
       const child = spawn(opts.bin, claudeArgs, {
         stdio: "inherit",
         env: { ...process.env, ...grant.env },
+        detached: shouldDetachChildForProcessTree(),
       });
 
       let forceKillTimer: NodeJS.Timeout | undefined;
@@ -146,9 +150,7 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
         }
       };
       const killTree = (signal: NodeJS.Signals) => {
-        if (child.pid != null) {
-          signalProcessTree(child.pid, signal);
-        }
+        signalChildProcessTree(child, signal);
       };
       const onSigint = () => {
         // Guard against repeated Ctrl+C: clear any previous escalation

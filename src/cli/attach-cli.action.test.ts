@@ -2,10 +2,13 @@ import { EventEmitter } from "node:events";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { signalProcessTreeMock } = vi.hoisted(() => ({
-  signalProcessTreeMock: vi.fn(),
+const { signalChildProcessTreeMock } = vi.hoisted(() => ({
+  signalChildProcessTreeMock: vi.fn(),
 }));
-vi.mock("../process/kill-tree.js", () => ({ signalProcessTree: signalProcessTreeMock }));
+vi.mock("../process/child-process-tree.js", () => ({
+  signalChildProcessTree: signalChildProcessTreeMock,
+  shouldDetachChildForProcessTree: () => true,
+}));
 
 const spawnedChild = Object.assign(new EventEmitter(), { kill: vi.fn(), pid: 12345 });
 vi.mock("node:child_process", () => ({ spawn: vi.fn(() => spawnedChild) }));
@@ -89,7 +92,7 @@ describe("openclaw attach (action)", () => {
     exitCode = undefined;
     spawnedChild.removeAllListeners();
     spawnedChild.kill.mockClear();
-    signalProcessTreeMock.mockClear();
+    signalChildProcessTreeMock.mockClear();
   });
 
   it("--print-config: mints + writes config + prints launch, does NOT revoke or name a nonexistent command", async () => {
@@ -147,7 +150,7 @@ describe("openclaw attach (action)", () => {
     expect(exitCode).toBe(1);
   });
 
-  it("spawns Claude Code and revokes the grant when the child exits", async () => {
+  it("spawns Claude Code detached so the process tree can be signaled and revokes the grant when the child exits", async () => {
     await runAttach("--session", "agent:main:spawn");
     expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeTruthy();
     const { spawn } = await import("node:child_process");
@@ -156,6 +159,10 @@ describe("openclaw attach (action)", () => {
       "--mcp-config",
       expect.stringContaining(".mcp.json"),
     ]);
+    expect(vi.mocked(spawn).mock.calls[0]?.[2]).toMatchObject({
+      stdio: "inherit",
+      detached: true,
+    });
     spawnedChild.emit("exit", 0, null);
     await tick();
     await tick();
@@ -225,8 +232,19 @@ describe("openclaw attach (action)", () => {
     const sigintListeners = process.listeners("SIGINT");
     const handler = sigintListeners[sigintListeners.length - 1] as () => void;
     handler();
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(12345, "SIGINT");
+    expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGINT");
     // Cleanup: a healthy child would exit on SIGINT
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
+  });
+
+  it("forwards SIGTERM to the launched process tree", async () => {
+    await runAttach("--session", "agent:main:spawn");
+    const sigtermListeners = process.listeners("SIGTERM");
+    const handler = sigtermListeners[sigtermListeners.length - 1] as () => void;
+    handler();
+    expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGTERM");
     spawnedChild.emit("exit", 0, null);
     await tick();
     await tick();
@@ -239,10 +257,10 @@ describe("openclaw attach (action)", () => {
       const sigintListeners = process.listeners("SIGINT");
       const handler = sigintListeners[sigintListeners.length - 1] as () => void;
       handler();
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(12345, "SIGINT");
+      expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGINT");
       // Process tree survives SIGINT — timer should escalate to SIGKILL
       vi.advanceTimersByTime(5_000);
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(12345, "SIGKILL");
+      expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGKILL");
       // The SIGKILL triggers child exit → revoke + finish
       spawnedChild.emit("exit", null, "SIGKILL");
       await vi.runAllTimersAsync();
@@ -259,13 +277,13 @@ describe("openclaw attach (action)", () => {
       const handler = sigintListeners[sigintListeners.length - 1] as () => void;
       // First Ctrl+C
       handler();
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(12345, "SIGINT");
+      expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGINT");
       // Second Ctrl+C before escalation fires: must clear the first timer
       handler();
       // Advance well past the first timer's deadline; only the second
       // timer should still be alive.
       vi.advanceTimersByTime(5_000);
-      expect(signalProcessTreeMock).toHaveBeenCalledTimes(3); // SIGINT ×2 + SIGKILL
+      expect(signalChildProcessTreeMock).toHaveBeenCalledTimes(3); // SIGINT ×2 + SIGKILL
       spawnedChild.emit("exit", null, "SIGKILL");
       await vi.runAllTimersAsync();
     } finally {
@@ -289,7 +307,7 @@ describe("openclaw attach (action)", () => {
       // Advance past the timer deadline — timer was already disarmed.
       vi.advanceTimersByTime(10_000);
       // SIGKILL must NOT have been called (timer disarmed at exit).
-      expect(signalProcessTreeMock).not.toHaveBeenCalledWith(12345, "SIGKILL");
+      expect(signalChildProcessTreeMock).not.toHaveBeenCalledWith(spawnedChild, "SIGKILL");
       await vi.runAllTimersAsync();
     } finally {
       vi.useRealTimers();
