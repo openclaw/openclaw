@@ -22,13 +22,22 @@ Use the `prtags` skill from the `prtags` repo at `skills/prtags/SKILL.md` when i
 
 ### Install the CLIs
 
-Install `prtags` from its latest GitHub release.
+Install `prtags` from a pinned GitHub release with checksum verification.
 Do not rely on an old local build unless the maintainer explicitly wants to test unreleased behavior.
 
 `prtags` CLI install path:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dutifuldev/prtags/main/scripts/install-prtags.sh | bash -s -- --bin-dir "$HOME/.local/bin"
+# Choose and record a pinned prtags release before installing.
+# Fill EXPECTED_SHA256 from the release checksum published by the maintainer.
+set -euo pipefail
+PRTAGS_VERSION="<pinned-version>"
+EXPECTED_SHA256="<expected-sha256>"
+mkdir -p "$HOME/.local/bin" "$HOME/.cache/prtags"
+curl -fL --proto =https --tlsv1.2 -o "$HOME/.cache/prtags/prtags" "https://github.com/dutifuldev/prtags/releases/download/${PRTAGS_VERSION}/prtags-linux-x86_64"
+printf "%s  %s\n" "$EXPECTED_SHA256" "$HOME/.cache/prtags/prtags" | sha256sum -c -
+install -m 0755 "$HOME/.cache/prtags/prtags" "$HOME/.local/bin/prtags"
+"$HOME/.local/bin/prtags" --version
 ```
 
 ### Authenticate prtags
@@ -54,7 +63,16 @@ Do not continue in a partial write mode after that point.
 If `prtags` is missing, ask the user to run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dutifuldev/prtags/main/scripts/install-prtags.sh | bash -s -- --bin-dir "$HOME/.local/bin"
+# Choose and record a pinned prtags release before installing.
+# Fill EXPECTED_SHA256 from the release checksum published by the maintainer.
+set -euo pipefail
+PRTAGS_VERSION="<pinned-version>"
+EXPECTED_SHA256="<expected-sha256>"
+mkdir -p "$HOME/.local/bin" "$HOME/.cache/prtags"
+curl -fL --proto =https --tlsv1.2 -o "$HOME/.cache/prtags/prtags" "https://github.com/dutifuldev/prtags/releases/download/${PRTAGS_VERSION}/prtags-linux-x86_64"
+printf "%s  %s\n" "$EXPECTED_SHA256" "$HOME/.cache/prtags/prtags" | sha256sum -c -
+install -m 0755 "$HOME/.cache/prtags/prtags" "$HOME/.local/bin/prtags"
+"$HOME/.local/bin/prtags" --version
 ```
 
 If `prtags auth status` shows that the user is not logged in, ask the user to run:
