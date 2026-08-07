@@ -518,7 +518,7 @@ describe("stuck session diagnostics threshold", () => {
     vi.setSystemTime(120_001);
     vi.advanceTimersByTime(30_000);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    expectLoggerMessageContaining(warnSpy, "liveness heartbeat overdue");
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(30_000);
@@ -558,7 +558,7 @@ describe("stuck session diagnostics threshold", () => {
     vi.setSystemTime(35_000);
     vi.advanceTimersByTime(30_000);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    expectLoggerMessageContaining(warnSpy, "liveness heartbeat overdue");
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(30_000);
@@ -598,7 +598,7 @@ describe("stuck session diagnostics threshold", () => {
     vi.setSystemTime(30_999);
     vi.advanceTimersByTime(30_000);
 
-    expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
+    expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat overdue");
     expect(recoverStuckSession).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(30_000);
