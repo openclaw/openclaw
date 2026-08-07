@@ -1,7 +1,34 @@
+import Foundation
 import OpenClawKit
 import Speech
 import Testing
 @testable import OpenClaw
+
+@MainActor
+private final class RuntimeTestAudioCapture: RealtimeTalkAudioCapturing {
+    let suppressesInputDuringOutput = false
+
+    func start(
+        targetSampleRate: Double,
+        onAudio: @escaping @Sendable (RealtimeTalkAudioFrame) -> Void) throws
+    {}
+
+    func stop() {}
+}
+
+@MainActor
+private final class RuntimeTestPCMPlayer: PCMStreamingAudioPlaying {
+    func play(
+        stream: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double) async -> StreamingPlaybackResult
+    {
+        fatalError("Playback is not used by this test")
+    }
+
+    func stop() -> Double? {
+        nil
+    }
+}
 
 struct TalkModeRuntimeSpeechTests {
     @Test func `speech request uses dictation defaults`() {
@@ -53,6 +80,51 @@ struct TalkModeRuntimeSpeechTests {
             TalkMLXSpeechSynthesizer.SynthesizeError.audioGenerationFailed) == .fallback)
         #expect(TalkModeRuntime.mlxFailureDisposition(
             TalkMLXSpeechSynthesizer.SynthesizeError.modelLoadFailed("missing")) == .fallback)
+    }
+
+    @Test func `realtime recovery uses the iOS retry budget`() {
+        #expect(TalkModeRuntime.realtimeRestartAttempt(
+            previousRapidRestarts: 1,
+            activeDuration: 5) == 2)
+        #expect(TalkModeRuntime.realtimeRestartAttempt(
+            previousRapidRestarts: 2,
+            activeDuration: 31) == 1)
+        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 1) == 500_000_000)
+        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 2) == 2_000_000_000)
+        #expect(TalkModeRuntime.realtimeRestartDelayNanoseconds(attempt: 3) == nil)
+    }
+
+    @Test @MainActor func `ready then close clears relay owner and schedules bounded recovery`() async {
+        let runtime = TalkModeRuntime()
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in throw CancellationError() }),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: RuntimeTestAudioCapture(),
+            pcmPlayer: RuntimeTestPCMPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+
+        await runtime._test_handleRealtimeTermination(
+            .remoteClose(reason: "stale"),
+            relayGeneration: relayGeneration &- 1)
+        #expect(await runtime._test_realtimeSessionIsActive())
+
+        await runtime._test_handleRealtimeStatus(
+            "Listening (Realtime)",
+            relayGeneration: relayGeneration)
+        await runtime._test_handleRealtimeTermination(
+            .remoteClose(reason: "completed"),
+            relayGeneration: relayGeneration)
+
+        #expect(!(await runtime._test_realtimeSessionIsActive()))
+        #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
+        #expect(await runtime._test_hasPendingRealtimeRestart())
+
+        await runtime._test_cancelRealtimeRecovery()
+        session.stop()
     }
 
     @Test func `talk speak params carry resolved voice and directive overrides`() {

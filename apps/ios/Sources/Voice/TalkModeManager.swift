@@ -2373,6 +2373,10 @@ final class TalkModeManager: NSObject {
                 self.gatewayTalkActiveModeTitle = String(localized: "Realtime unavailable")
                 self.gatewayTalkActiveModeSubtitle = issue.displayMessage
             },
+            onTermination: { [weak self] termination in
+                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                self.handleRealtimeRelayTermination(termination)
+            },
             onSpeakingChanged: { [weak self] speaking in
                 guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
                 self.isSpeaking = speaking
@@ -4159,17 +4163,13 @@ extension TalkModeManager {
         let phase = Self.phase(forRealtimeStatus: status)
         if status == "Listening (Realtime)" {
             // Ready can be followed by a buffered close before start() resumes. Commit continuous
-            // state here so the close still enters bounded recovery.
+            // state here so the typed terminal callback still enters bounded recovery.
             self.markRealtimeSessionReady()
         } else {
             self.setStatus(
                 Self.presentationText(forRealtimeStatus: status),
                 phase: phase,
                 watchPresentation: Self.watchPresentation(forRealtimeStatus: status))
-            if status == "Ready" {
-                self.realtimeRelaySession = nil
-                self.handleRealtimeSessionFinish()
-            }
         }
         self.isListening = phase == .listening
         if phase == .thinking || phase == .connecting {
@@ -4177,6 +4177,13 @@ extension TalkModeManager {
             self.isSpeaking = false
             self.isUserSpeechDetected = false
         }
+    }
+
+    private func handleRealtimeRelayTermination(_ termination: RealtimeTalkRelayTermination) {
+        guard self.captureMode != .pushToTalk else { return }
+        GatewayDiagnostics.log("talk realtime relay terminated reason=\(String(describing: termination))")
+        self.realtimeRelaySession = nil
+        self.handleRealtimeSessionFinish()
     }
 
     private func prepareRealtimeRelayStart() {
@@ -5095,6 +5102,12 @@ extension TalkModeManager {
 
     func _test_handleRealtimeRelayStatus(_ status: String) {
         self.handleRealtimeRelayStatus(status)
+    }
+
+    func _test_handleRealtimeRelayTermination(
+        _ termination: RealtimeTalkRelayTermination = .remoteClose(reason: "completed"))
+    {
+        self.handleRealtimeRelayTermination(termination)
     }
 
     func _test_prepareEnabledRealtimeSessionForClose() {

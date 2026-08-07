@@ -22,7 +22,7 @@ actor TalkModeRuntime {
         case fallback
     }
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
+    let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
@@ -60,10 +60,10 @@ actor TalkModeRuntime {
 
     private var captureTask: Task<Void, Never>?
     private var silenceTask: Task<Void, Never>?
-    private var phase: TalkModePhase = .idle
-    private var isEnabled = false
-    private var isPaused = false
-    private var lifecycleGeneration: Int = 0
+    var phase: TalkModePhase = .idle
+    var isEnabled = false
+    var isPaused = false
+    var lifecycleGeneration: Int = 0
 
     private var lastHeard: Date?
     private var noiseFloorRMS: Double = 1e-4
@@ -79,14 +79,21 @@ actor TalkModeRuntime {
     private var defaultOutputFormat: String?
     private var interruptOnSpeech: Bool = true
     private var activeTalkProvider = TalkModeRuntime.defaultTalkProvider
-    private var realtimeProvider: String?
-    private var realtimeModelId: String?
-    private var realtimeSpeakerVoice: String?
+    var realtimeProvider: String?
+    var realtimeModelId: String?
+    var realtimeSpeakerVoice: String?
     private var realtimeMode: String?
     private var realtimeTransport: String?
     private var realtimeBrain: String?
     private var realtimeRelayEnabled = false
-    private var realtimeSession: RealtimeTalkRelaySession?
+    var realtimeSession: RealtimeTalkRelaySession?
+    var realtimeSessionReadyAt: Date?
+    var rapidRealtimeRestartCount = 0
+    var bypassRealtimeOnNextStart = false
+    var realtimeRelayGeneration: UInt64 = 0
+    var realtimeRelayStartGeneration: UInt64?
+    var realtimeRestartGeneration: UInt64 = 0
+    var realtimeRestartTask: Task<Void, Never>?
     private var speechLocaleID: String?
     private var lastInterruptedAtSeconds: Double?
     private var voiceAliases: [String: String] = [:]
@@ -111,6 +118,7 @@ actor TalkModeRuntime {
         guard enabled != self.isEnabled else { return }
         self.isEnabled = enabled
         self.lifecycleGeneration &+= 1
+        self.resetRealtimeRecoveryState()
         if enabled {
             await self.start()
         } else {
@@ -125,6 +133,10 @@ actor TalkModeRuntime {
 
         guard self.isEnabled else { return }
 
+        if paused, self.realtimeSession == nil {
+            self.cancelScheduledRealtimeRecovery()
+        }
+
         if let realtimeSession {
             do {
                 try await MainActor.run {
@@ -138,6 +150,11 @@ actor TalkModeRuntime {
                 self.logger.error(
                     "talk realtime pause transition failed: \(error.localizedDescription, privacy: .public)")
             }
+            return
+        }
+
+        if !paused, self.shouldAttemptRealtimeRelay() {
+            await self.start()
             return
         }
 
@@ -158,11 +175,11 @@ actor TalkModeRuntime {
         }
     }
 
-    private func isCurrent(_ generation: Int) -> Bool {
+    func isCurrent(_ generation: Int) -> Bool {
         generation == self.lifecycleGeneration && self.isEnabled
     }
 
-    private func start() async {
+    func start() async {
         let gen = self.lifecycleGeneration
         guard voiceWakeSupported else { return }
 
@@ -180,9 +197,13 @@ actor TalkModeRuntime {
             }
             return
         }
-        if self.shouldAttemptRealtimeRelay() {
+        let bypassRealtime = self.bypassRealtimeOnNextStart
+        self.bypassRealtimeOnNextStart = false
+        if self.shouldAttemptRealtimeRelay(), !bypassRealtime {
             do {
                 try await self.startRealtimeRelay(generation: gen)
+                return
+            } catch is CancellationError {
                 return
             } catch {
                 self.logger.error(
@@ -194,18 +215,17 @@ actor TalkModeRuntime {
                 }
             }
         }
-        self.startAudioInputObserver()
-        await self.startRecognition()
-        guard self.isCurrent(gen) else { return }
-        self.phase = .listening
-        await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
-        self.startSilenceMonitor()
+        await self.startNativeFallback(generation: gen)
     }
 
     private func stop() async {
+        self.resetRealtimeRecoveryState()
+        self.realtimeRelayGeneration &+= 1
+        self.realtimeRelayStartGeneration = nil
+        let realtimeSession = self.realtimeSession
+        self.realtimeSession = nil
         if let realtimeSession {
             await MainActor.run { realtimeSession.stop() }
-            self.realtimeSession = nil
         }
         self.audioInputObserver?.stop()
         self.audioInputObserver = nil
@@ -227,6 +247,15 @@ actor TalkModeRuntime {
             TalkModeController.shared.updatePartialTranscript("")
             TalkModeController.shared.updatePhase(.idle)
         }
+    }
+
+    private func startNativeFallback(generation: Int) async {
+        self.startAudioInputObserver()
+        await self.startRecognition()
+        guard self.isCurrent(generation), !self.isPaused else { return }
+        self.phase = .listening
+        await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
+        self.startSilenceMonitor()
     }
 
     func inputDeviceSelectionDidChange() async {
@@ -283,116 +312,6 @@ actor TalkModeRuntime {
             return false
         }
         return true
-    }
-
-    private func startRealtimeRelay(generation: Int) async throws {
-        let transport = try await GatewayConnection.shared.acquireRealtimeTalkTransport()
-        guard self.isCurrent(generation), !self.isPaused else { throw CancellationError() }
-        let activeSessionKey = await MainActor.run {
-            WebChatManager.shared.activeSessionKey
-        }
-        let sessionKey: String = if let activeSessionKey {
-            activeSessionKey
-        } else {
-            await GatewayConnection.shared.mainSessionKey()
-        }
-        let options = RealtimeTalkRelaySession.Options(
-            sessionKey: sessionKey,
-            provider: self.realtimeProvider,
-            model: self.realtimeModelId,
-            voice: self.realtimeSpeakerVoice)
-        let session = await MainActor.run {
-            RealtimeTalkRelaySession(
-                transport: transport,
-                options: options,
-                audioCapture: MacRealtimeTalkAudioCapture(),
-                pcmPlayer: PCMStreamingAudioPlayer.shared,
-                onStatus: { status in
-                    Task { await TalkModeRuntime.shared.handleRealtimeStatus(status) }
-                },
-                onIssue: { issue in
-                    Task { await TalkModeRuntime.shared.handleRealtimeIssue(issue) }
-                },
-                onSpeakingChanged: { speaking in
-                    Task { await TalkModeRuntime.shared.handleRealtimeSpeakingChanged(speaking) }
-                },
-                onInputLevel: { level in
-                    TalkModeController.shared.updateLevel(level)
-                },
-                onOutputLevel: { level in
-                    TalkModeController.shared.updateSpeakingLevel(level)
-                },
-                onTranscript: { transcript in
-                    Task { await TalkModeRuntime.shared.handleRealtimeTranscript(transcript) }
-                })
-        }
-        self.realtimeSession = session
-        do {
-            try await session.start()
-        } catch {
-            await MainActor.run { session.stop() }
-            if self.realtimeSession === session {
-                self.realtimeSession = nil
-            }
-            throw error
-        }
-        guard self.isCurrent(generation), !self.isPaused else {
-            await MainActor.run { session.stop() }
-            if self.realtimeSession === session {
-                self.realtimeSession = nil
-            }
-            throw CancellationError()
-        }
-        self.phase = .listening
-        await MainActor.run {
-            TalkModeController.shared.updatePartialTranscript("")
-            TalkModeController.shared.updatePhase(.listening)
-        }
-        self.logger.info(
-            "talk realtime ready provider=\(self.realtimeProvider ?? "default", privacy: .public) " +
-                "model=\(self.realtimeModelId ?? "default", privacy: .public)")
-    }
-
-    private func handleRealtimeStatus(_ status: String) {
-        guard self.realtimeSession != nil else { return }
-        self.logger.debug("talk realtime status=\(status, privacy: .public)")
-    }
-
-    private func handleRealtimeIssue(_ issue: RealtimeTalkRelayIssue) async {
-        guard self.realtimeSession != nil else { return }
-        self.logger.error(
-            "talk realtime issue code=\(issue.code, privacy: .public) " +
-                "message=\(issue.message, privacy: .public)")
-        await MainActor.run {
-            TalkModeController.shared.updatePartialTranscript(issue.message)
-        }
-    }
-
-    private func handleRealtimeSpeakingChanged(_ speaking: Bool) async {
-        guard self.realtimeSession != nil, self.isEnabled else { return }
-        if speaking {
-            self.phase = .speaking
-            await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-        } else if !self.isPaused {
-            self.phase = .listening
-            await MainActor.run { TalkModeController.shared.updatePhase(.listening) }
-        }
-    }
-
-    private func handleRealtimeTranscript(_ transcript: RealtimeTalkTranscript) async {
-        guard self.realtimeSession != nil, self.isEnabled else { return }
-        let text = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        guard transcript.role == "user" else { return }
-        if transcript.isFinal {
-            self.phase = .thinking
-            await MainActor.run {
-                TalkModeController.shared.commitTranscript(text)
-                TalkModeController.shared.updatePhase(.thinking)
-            }
-        } else {
-            await MainActor.run { TalkModeController.shared.updatePartialTranscript(text) }
-        }
     }
 
     // MARK: - Speech recognition

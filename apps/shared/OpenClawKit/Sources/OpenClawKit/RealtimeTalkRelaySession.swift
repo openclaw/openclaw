@@ -113,6 +113,11 @@ public struct RealtimeTalkTranscript: Equatable, Sendable {
     }
 }
 
+public enum RealtimeTalkRelayTermination: Equatable, Sendable {
+    case remoteClose(reason: String?)
+    case eventStreamEnded
+}
+
 private actor RealtimeAudioSender {
     private let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
     private var relaySessionId: String?
@@ -209,6 +214,7 @@ public final class RealtimeTalkRelaySession {
     private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "RealtimeTalkRelay")
     private let onStatus: (String) -> Void
     private let onIssue: (RealtimeTalkRelayIssue) -> Void
+    private let onTermination: (RealtimeTalkRelayTermination) -> Void
     private let onSpeakingChanged: (Bool) -> Void
     private let onInputLevel: (Double) -> Void
     private let onOutputLevel: (Double?) -> Void
@@ -262,6 +268,7 @@ public final class RealtimeTalkRelaySession {
         pcmPlayer: PCMStreamingAudioPlaying,
         onStatus: @escaping (String) -> Void,
         onIssue: @escaping (RealtimeTalkRelayIssue) -> Void = { _ in },
+        onTermination: @escaping (RealtimeTalkRelayTermination) -> Void = { _ in },
         onSpeakingChanged: @escaping (Bool) -> Void,
         onInputLevel: @escaping (Double) -> Void = { _ in },
         onOutputLevel: @escaping (Double?) -> Void = { _ in },
@@ -273,6 +280,7 @@ public final class RealtimeTalkRelaySession {
         self.pcmPlayer = pcmPlayer
         self.onStatus = onStatus
         self.onIssue = onIssue
+        self.onTermination = onTermination
         self.onSpeakingChanged = onSpeakingChanged
         self.onInputLevel = onInputLevel
         self.onOutputLevel = onOutputLevel
@@ -457,7 +465,17 @@ public final class RealtimeTalkRelaySession {
                 if Task.isCancelled { return }
                 await self?.handleGatewayEvent(event, lifecycleGeneration: lifecycleGeneration)
             }
+            guard !Task.isCancelled else { return }
+            await self?.handleEventStreamEnded(lifecycleGeneration: lifecycleGeneration)
         }
+    }
+
+    private func handleEventStreamEnded(lifecycleGeneration: UInt64) async {
+        guard self.isCurrentLifecycleLocally(lifecycleGeneration), self.hasReceivedReady else { return }
+        self.logger.debug("talk realtime: event stream ended")
+        self.onStatus("Ready")
+        self.close(sendClose: false)
+        self.onTermination(.eventStreamEnded)
     }
 
     private func handleGatewayEvent(_ event: EventFrame, lifecycleGeneration: UInt64) async {
@@ -524,6 +542,10 @@ public final class RealtimeTalkRelaySession {
             self.logger.debug("talk realtime: close")
             if self.hasReceivedReady {
                 self.onStatus("Ready")
+                let reason = self.nonEmpty(payload["reason"]?.stringValue)
+                self.close(sendClose: false)
+                self.onTermination(.remoteClose(reason: reason))
+                return
             } else if !self.hasReceivedFailure {
                 let issue = RealtimeTalkRelayIssue(
                     message: "Realtime closed before it became ready.",
@@ -1152,6 +1174,10 @@ extension RealtimeTalkRelaySession {
 
     func _test_handleGatewayEvent(_ event: EventFrame) async {
         await self.handleGatewayEvent(event, lifecycleGeneration: self.lifecycleGeneration)
+    }
+
+    func _test_handleEventStreamEnded() async {
+        await self.handleEventStreamEnded(lifecycleGeneration: self.lifecycleGeneration)
     }
 
     func _test_waitForStartupCancelled(timeoutSeconds: Int) async -> Bool {

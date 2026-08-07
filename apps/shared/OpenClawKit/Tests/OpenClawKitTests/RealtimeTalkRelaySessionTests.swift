@@ -251,6 +251,76 @@ struct RealtimeTalkRelaySessionTests {
         #expect(statuses == ["OpenAI API key rejected with 401"])
     }
 
+    @Test func `ready then close publishes one typed termination and releases capture`() async {
+        var statuses: [String] = []
+        var terminations: [RealtimeTalkRelayTermination] = []
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        let session = RealtimeTalkRelaySession(
+            transport: unusedRealtimeRelayTransport(),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { statuses.append($0) },
+            onTermination: { terminations.append($0) },
+            onSpeakingChanged: { _ in })
+        session._test_setRelaySessionId("relay-1")
+
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "ready",
+            ]),
+            seq: nil,
+            stateversion: nil))
+        let closeEvent = EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "close",
+                "reason": "completed",
+            ]),
+            seq: nil,
+            stateversion: nil)
+        await session._test_handleGatewayEvent(closeEvent)
+        await session._test_handleGatewayEvent(closeEvent)
+
+        #expect(statuses == ["Listening (Realtime)", "Ready"])
+        #expect(terminations == [.remoteClose(reason: "completed")])
+        #expect(audioCapture.stopCount == 1)
+    }
+
+    @Test func `ready then event stream end publishes typed termination`() async {
+        var terminations: [RealtimeTalkRelayTermination] = []
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        let session = RealtimeTalkRelaySession(
+            transport: unusedRealtimeRelayTransport(),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onTermination: { terminations.append($0) },
+            onSpeakingChanged: { _ in })
+        session._test_setRelaySessionId("relay-1")
+
+        await session._test_handleGatewayEvent(EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "ready",
+            ]),
+            seq: nil,
+            stateversion: nil))
+        await session._test_handleEventStreamEnded()
+        await session._test_handleEventStreamEnded()
+
+        #expect(terminations == [.eventStreamEnded])
+        #expect(audioCapture.stopCount == 1)
+    }
+
     @Test func `closed relay does not wait for startup ready`() async {
         let session = RealtimeTalkRelaySession(
             transport: unusedRealtimeRelayTransport(),
