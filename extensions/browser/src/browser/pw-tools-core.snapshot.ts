@@ -34,6 +34,7 @@ import {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  readPageTargetId,
   gotoPageWithNavigationGuard,
   isDownloadStartingNavigationError,
   isPolicyDenyNavigationError,
@@ -480,7 +481,7 @@ export async function navigateViaPlaywright(opts: {
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-}): Promise<{ url: string; download?: BrowserDownloadResult }> {
+}): Promise<{ url: string; targetId?: string; download?: BrowserDownloadResult }> {
   const isRetryableNavigateError = (err: unknown): boolean => {
     const msg =
       typeof err === "string"
@@ -604,8 +605,10 @@ export async function navigateViaPlaywright(opts: {
     throw err;
   }
   const finalUrl = navigationResult.download?.url || page.url();
+  const targetId = (await readPageTargetId(page).catch(() => null)) ?? opts.targetId;
   return {
     url: finalUrl,
+    ...(targetId ? { targetId } : {}),
     ...(navigationResult.download ? { download: navigationResult.download } : {}),
   };
 }
