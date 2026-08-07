@@ -98,6 +98,7 @@ const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
   ["reported-issues", UPGRADE_SURVIVOR_SCENARIOS],
   ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
 ]);
+const UPGRADE_SURVIVOR_LOCKSTEP_PLUGIN_PACKAGES = ["@openclaw/codex"];
 
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
@@ -674,16 +675,18 @@ function configuredChannelIdsForLane(poolLane, scenario) {
 
 export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
   const configuredChannelIds = new Set();
+  let requiresUpgradeSurvivorCompanions = false;
   for (const poolLane of poolLanes) {
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
     if (!scenario) {
       continue;
     }
+    requiresUpgradeSurvivorCompanions = true;
     for (const channelId of configuredChannelIdsForLane(poolLane, scenario)) {
       configuredChannelIds.add(channelId);
     }
   }
-  return (officialExternalChannelCatalog.entries ?? [])
+  const channelPackages = (officialExternalChannelCatalog.entries ?? [])
     .filter((entry) => {
       const channelId = entry.openclaw?.channel?.id;
       const install = entry.openclaw?.install;
@@ -694,8 +697,11 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes) {
         install?.npmSpec === entry.name
       );
     })
-    .map((entry) => entry.name)
-    .toSorted((a, b) => a.localeCompare(b));
+    .map((entry) => entry.name);
+  return unique([
+    ...(requiresUpgradeSurvivorCompanions ? UPGRADE_SURVIVOR_LOCKSTEP_PLUGIN_PACKAGES : []),
+    ...channelPackages,
+  ]).toSorted((a, b) => a.localeCompare(b));
 }
 
 function buildPlanJson(params) {
