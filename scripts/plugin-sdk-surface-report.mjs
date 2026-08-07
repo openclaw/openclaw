@@ -217,7 +217,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
       // +1: canonical webhook route identity for plugin-owned target registries.
-      4826,
+      // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
+      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
+      // +1: auth-profile preservation decision for native model pickers.
+      4831,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -262,7 +265,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: forwarding-routed approver-restricted native approval capability factory.
       // +1: shared inbound-event delivery correlation factory for channel plugins.
       // +1: canonical webhook route identity for plugin-owned target registries.
-      2903,
+      // +3: canonical ready, blocked, and stopped channel lifecycle patch factories.
+      // +1: bounded external-content sanitizer for plugin-owned untrusted projections.
+      // +1: auth-profile preservation decision for native model pickers.
+      2908,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
