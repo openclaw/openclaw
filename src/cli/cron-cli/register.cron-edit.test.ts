@@ -915,6 +915,40 @@ describe("cron edit command", () => {
     }
   });
 
+  it("keeps the main-job guard for blank --thread-id plus --clear-thread-id", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "tick" },
+        };
+      }
+      return { ok: true };
+    });
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(
+        ["edit", "job-1", "--thread-id", "", "--clear-thread-id"],
+        { from: "user" },
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+        ),
+      );
+      expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
+        false,
+      );
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it("keeps the main-job guard when an unrelated delivery clear flag is present", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {
