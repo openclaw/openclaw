@@ -3008,6 +3008,25 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
   });
 
+  it("adds forced-abandon journal ownership to current state databases", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const shippedDb = new DatabaseSync(databasePath);
+    shippedDb.exec(
+      "ALTER TABLE worker_workspace_reconciliations DROP COLUMN forced_abandonment_retained",
+    );
+    shippedDb.close();
+
+    const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(worker_workspace_reconciliations)")
+      .all() as Array<{ name?: string }>;
+    expect(columns.map((column) => column.name)).toContain("forced_abandonment_retained");
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+  });
+
   it("adds worker transcript commit tables to existing state databases", () => {
     const stateDir = createTempStateDir();
     const databasePath = materializeCurrentStateDatabase(stateDir);
