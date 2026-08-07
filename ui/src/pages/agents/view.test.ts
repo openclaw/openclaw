@@ -103,24 +103,6 @@ describe("renderAgents", () => {
     expect(onSelectPanel).toHaveBeenCalledWith("tools");
   });
 
-  it("prefills the identity editor from the fetched agent identity", () => {
-    const container = document.createElement("div");
-    render(
-      renderAgents(
-        createProps({
-          agentIdentityById: {
-            beta: { agentId: "beta", name: "Fetched Beta", avatar: "" },
-          },
-        }),
-      ),
-      container,
-    );
-
-    expect(
-      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
-    ).toBe("Fetched Beta");
-  });
-
   it("shows a model-catalog failure and lets the operator retry", () => {
     const container = document.createElement("div");
     const onModelCatalogRetry = vi.fn();

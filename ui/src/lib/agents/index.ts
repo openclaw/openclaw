@@ -206,8 +206,10 @@ export async function setDefaultAgent(
 type AgentIdentityUpdate = {
   agentId: string;
   name?: string;
-  emoji?: string;
-  avatar?: string;
+  /** Set a value, or pass `null` to clear the override. */
+  emoji?: string | null;
+  /** Set a value, or pass `null` to clear the override. */
+  avatar?: string | null;
 };
 
 /** Persist identity fields through the gateway; the handler also rewrites the
@@ -219,8 +221,8 @@ export async function updateAgentIdentity(
   await client.request("agents.update", {
     agentId: update.agentId,
     ...(update.name ? { name: update.name } : {}),
-    ...(update.emoji ? { emoji: update.emoji } : {}),
-    ...(update.avatar ? { avatar: update.avatar } : {}),
+    ...(update.emoji !== undefined ? { emoji: update.emoji } : {}),
+    ...(update.avatar !== undefined ? { avatar: update.avatar } : {}),
   });
 }
 

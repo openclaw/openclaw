@@ -115,6 +115,7 @@ export function createAgentViewTestProps(
     onSetDefault: () => undefined,
     onIdentityFieldChange: () => undefined,
     onIdentityAvatarSelect: () => undefined,
+    onIdentityAvatarClear: () => undefined,
     onIdentitySave: () => undefined,
     onTogglePinnedAgent: () => undefined,
     onOpenAgentDefaults: () => undefined,

@@ -41,7 +41,6 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
 import {
-  createAgentIdentityConfig,
   mergeIdentityMarkdownContent,
   normalizeIdentityForFile,
   sanitizeAgentIdentityLine,
@@ -827,6 +826,7 @@ async function readWorkspaceFileContent(
 async function buildIdentityMarkdownForWrite(params: {
   workspaceDir: string;
   identity: IdentityConfig;
+  clearFields?: Array<"name" | "theme" | "emoji" | "avatar">;
   fallbackWorkspaceDir?: string;
   preferFallbackWorkspaceContent?: boolean;
 }): Promise<string> {
@@ -850,13 +850,16 @@ async function buildIdentityMarkdownForWrite(params: {
     }
   }
 
-  return mergeIdentityMarkdownContent(baseContent, params.identity);
+  return mergeIdentityMarkdownContent(baseContent, params.identity, {
+    clearFields: params.clearFields,
+  });
 }
 
 async function buildIdentityMarkdownOrRespondUnsafe(params: {
   respond: RespondFn;
   workspaceDir: string;
   identity: IdentityConfig;
+  clearFields?: Array<"name" | "theme" | "emoji" | "avatar">;
   fallbackWorkspaceDir?: string;
   preferFallbackWorkspaceContent?: boolean;
 }): Promise<string | null> {
@@ -939,19 +942,51 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? sanitizeAgentIdentityLine(params.name.trim())
         : undefined;
 
-    const identity = createAgentIdentityConfig({
-      name: safeName,
-      emoji: params.emoji,
-      avatar: params.avatar,
-    });
-    const hasIdentityFields = Boolean(identity);
+    // Identity fields are tri-state like model: omit preserves, null/"" clears,
+    // non-empty sets. createAgentIdentityConfig compacting empties would omit the
+    // patch entirely and silently keep the previous emoji/avatar.
+    const identityPatch: {
+      name?: string;
+      emoji?: string | null;
+      avatar?: string | null;
+    } = {};
+    const clearedIdentityFields: Array<"emoji" | "avatar"> = [];
+    if (safeName) {
+      identityPatch.name = safeName;
+    }
+    if ("emoji" in params) {
+      // Clear contract: null or literal "" tombstones. Whitespace-only must not
+      // destroy stored identity (resolveOptionalStringParam would otherwise
+      // treat it as absent and fall into the clear branch).
+      if (params.emoji === null || params.emoji === "") {
+        identityPatch.emoji = null;
+        clearedIdentityFields.push("emoji");
+      } else if (typeof params.emoji === "string") {
+        const emoji = resolveOptionalStringParam(params.emoji);
+        if (emoji) {
+          identityPatch.emoji = sanitizeAgentIdentityLine(emoji);
+        }
+      }
+    }
+    if ("avatar" in params) {
+      if (params.avatar === null || params.avatar === "") {
+        identityPatch.avatar = null;
+        clearedIdentityFields.push("avatar");
+      } else if (typeof params.avatar === "string") {
+        const avatar = resolveOptionalStringParam(params.avatar);
+        if (avatar) {
+          identityPatch.avatar = sanitizeAgentIdentityLine(avatar);
+        }
+      }
+    }
+    const hasIdentityFields = Object.keys(identityPatch).length > 0;
 
     const agentConfigUpdate: Parameters<typeof updateAgentConfigEntry>[0] = {
       agentId,
       ...(safeName ? { name: safeName } : {}),
       ...(workspaceDir ? { workspace: workspaceDir } : {}),
       ...(model !== undefined ? { model } : {}),
-      ...(identity ? { identity } : {}),
+      ...(hasIdentityFields ? { identity: identityPatch } : {}),
     };
     const nextConfig = applyAgentConfig(cfg, agentConfigUpdate);
 
@@ -966,7 +1001,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const persistedIdentity = normalizeIdentityForFile(resolveAgentIdentity(nextConfig, agentId));
-    if (persistedIdentity && (workspaceDir || hasIdentityFields)) {
+    if (workspaceDir || hasIdentityFields) {
       const identityWorkspaceDir = resolveAgentWorkspaceDir(nextConfig, agentId);
       const previousWorkspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const fallbackWorkspaceDir =
@@ -976,7 +1011,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
       const identityContent = await buildIdentityMarkdownOrRespondUnsafe({
         respond,
         workspaceDir: identityWorkspaceDir,
-        identity: persistedIdentity,
+        identity: persistedIdentity ?? {},
+        clearFields: clearedIdentityFields,
         fallbackWorkspaceDir,
         preferFallbackWorkspaceContent:
           Boolean(fallbackWorkspaceDir) && ensuredWorkspace?.identityPathCreated === true,

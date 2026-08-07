@@ -24,6 +24,7 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
@@ -54,6 +55,7 @@ export function renderAgentOverview(params: {
   onConfigSave: () => void;
   onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
   onIdentityAvatarSelect: (file: File) => void;
+  onIdentityAvatarClear: () => void;
   onIdentitySave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
@@ -116,11 +118,20 @@ export function renderAgentOverview(params: {
     identityDraft.avatar ?? resolveAgentAvatarUrl(agent, params.agentIdentity);
   const identityAvatarText =
     resolveAgentTextAvatar(agent) ?? (deriveAvatarInitial(identityName || agent.id) || "?");
+  // Previewable URLs may be empty while Gateway still stores a raw avatar
+  // (e.g. https://…). Gate Remove on stored/draft presence, not previewability.
+  const hasStoredAvatar = Boolean(
+    normalizeOptionalString(params.agentIdentity?.avatar) ||
+    normalizeOptionalString(agent.identity?.avatar) ||
+    normalizeOptionalString(agent.identity?.avatarUrl),
+  );
+  const canRemoveAvatar =
+    identityDraft.avatar === null ? hasStoredAvatar : Boolean(identityDraft.avatar.trim());
   const identityDirty =
     identityDraft.name !== null || identityDraft.emoji !== null || identityDraft.avatar !== null;
-  const identityInvalid =
-    (identityDraft.name !== null && !identityDraft.name.trim()) ||
-    (identityDraft.emoji !== null && !identityDraft.emoji.trim());
+  // Literal-empty emoji/avatar drafts are clear intents (null tombstone).
+  // Whitespace-only drafts omit on save. Only blank name edits stay invalid.
+  const identityInvalid = identityDraft.name !== null && !identityDraft.name.trim();
   const identityBusy = params.identitySaving || !params.canUpdateIdentity;
 
   const handleAvatarFileSelect = (e: Event) => {
@@ -196,7 +207,7 @@ export function renderAgentOverview(params: {
             : nothing}
           <div class="agent-identity-editor__actions">
             <label class="btn btn--sm">
-              ${identityAvatarUrl
+              ${canRemoveAvatar || identityAvatarUrl
                 ? t("agents.identity.replaceImage")
                 : t("agents.identity.chooseImage")}
               <input
@@ -207,6 +218,17 @@ export function renderAgentOverview(params: {
                 @change=${handleAvatarFileSelect}
               />
             </label>
+            ${canRemoveAvatar
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm"
+                  data-testid="agent-identity-avatar-remove"
+                  ?disabled=${identityBusy}
+                  @click=${() => params.onIdentityAvatarClear()}
+                >
+                  ${t("common.remove")}
+                </button>`
+              : nothing}
             <button
               type="button"
               class="btn btn--sm primary"

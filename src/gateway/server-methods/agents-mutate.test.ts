@@ -582,10 +582,24 @@ function mergeAgentConfig(cfg: unknown, opts: unknown): MockConfig {
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.model ? { model: params.model } : {}),
-    ...(params.identity ? { identity: { ...base.identity, ...params.identity } } : {}),
   };
   if (params.model === null) {
     delete nextEntry.model;
+  }
+  if (params.identity !== undefined) {
+    const nextIdentity: MockIdentity = { ...base.identity };
+    for (const [key, value] of Object.entries(params.identity)) {
+      if (value === null || value === undefined || value === "") {
+        delete nextIdentity[key as keyof MockIdentity];
+      } else {
+        nextIdentity[key as keyof MockIdentity] = value as string;
+      }
+    }
+    if (Object.keys(nextIdentity).length > 0) {
+      nextEntry.identity = nextIdentity;
+    } else {
+      delete nextEntry.identity;
+    }
   }
   if (index >= 0) {
     list[index] = nextEntry;
@@ -953,6 +967,131 @@ describe("agents.update", () => {
     const agents = expectRecordFields(persisted.agents, {});
     const [agent] = agents.list as MockAgentEntry[];
     expect(agent).not.toHaveProperty("model");
+  });
+
+  it.each([
+    { label: "empty string", emoji: "" },
+    { label: "null", emoji: null },
+  ])("clears an existing emoji with $label instead of silently keeping it", async ({ emoji }) => {
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji,
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
+      identity: { emoji: null },
+    });
+    const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
+    const agents = expectRecordFields(persisted.agents, {});
+    const agent = expectDefined(
+      (agents.list as MockAgentEntry[])[0],
+      "persisted agent after emoji clear",
+    );
+    expect(agent.identity).toEqual({ name: "Current Agent", theme: "steady" });
+    expect(agent.identity).not.toHaveProperty("emoji");
+  });
+
+  it("preserves an existing emoji when agents.update receives whitespace-only input", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [
+          {
+            id: "test-agent",
+            workspace: "/workspace/test-agent",
+            identity: { name: "Current Agent", theme: "steady", emoji: "🦞" },
+          },
+        ],
+      },
+    };
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: "   ",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    const update = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
+    expect(update).not.toHaveProperty("identity");
+    if (mocks.writeConfigFile.mock.calls.length > 0) {
+      const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
+      const agents = expectRecordFields(persisted.agents, {});
+      const agent = expectDefined(
+        (agents.list as MockAgentEntry[])[0],
+        "persisted agent after whitespace emoji",
+      );
+      expect(agent.identity).toMatchObject({ emoji: "🦞" });
+    }
+  });
+
+  it("clears an existing avatar with null", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [
+          {
+            id: "test-agent",
+            workspace: "/workspace/test-agent",
+            identity: {
+              name: "Current Agent",
+              emoji: "🐢",
+              avatar: "https://example.com/avatar.png",
+            },
+          },
+        ],
+      },
+    };
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      avatar: null,
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
+    const agents = expectRecordFields(persisted.agents, {});
+    const agent = expectDefined(
+      (agents.list as MockAgentEntry[])[0],
+      "persisted agent after avatar clear",
+    );
+    expect(agent.identity).toEqual({ name: "Current Agent", emoji: "🐢" });
+    expect(agent.identity).not.toHaveProperty("avatar");
+  });
+
+  it("clears parser-accepted unbulleted emoji/avatar lines from IDENTITY.md", async () => {
+    const identityMarkdown = [
+      "# IDENTITY.md - Agent Identity",
+      "",
+      "Name: Current Agent",
+      "Emoji: 🐢",
+      "Avatar: https://example.com/avatar.png",
+      "Creature: Familiar",
+      "",
+    ].join("\n");
+    mocks.rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from(identityMarkdown),
+      realPath: "/workspace/test-agent/IDENTITY.md",
+      stat: { size: identityMarkdown.length, mtimeMs: 1 },
+    });
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: null,
+      avatar: null,
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    const write = expectRecordFields(mockCallArg(mocks.rootWrite), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "IDENTITY.md",
+    });
+    expect(String(write.data)).toContain("Name: Current Agent");
+    expect(String(write.data)).toContain("Creature: Familiar");
+    expect(String(write.data)).not.toMatch(/Emoji\s*:/);
+    expect(String(write.data)).not.toMatch(/Avatar\s*:/);
   });
 
   it("ensures workspace when workspace changes", async () => {
