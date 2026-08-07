@@ -237,9 +237,19 @@ function resolveProviderCandidate<
     rawConfig: rawProviderConfig,
   });
 
-  if (
-    !params.isProviderConfigured({ provider: params.provider, cfg: params.cfg, providerConfig })
-  ) {
+  let isConfigured: boolean;
+  try {
+    isConfigured = params.isProviderConfigured({
+      provider: params.provider,
+      cfg: params.cfg,
+      providerConfig,
+    });
+  } catch {
+    // A malformed provider config must not hide other usable providers
+    // (e.g. a provider whose isConfigured throws on an invalid baseUrl).
+    isConfigured = false;
+  }
+  if (!isConfigured) {
     return {
       ok: false,
       code: "provider-not-configured",
