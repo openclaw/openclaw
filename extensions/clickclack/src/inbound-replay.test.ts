@@ -1,5 +1,4 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "./accounts.js";
 import type { ClickClackInboundAccess } from "./access.js";
