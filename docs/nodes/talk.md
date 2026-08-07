@@ -52,11 +52,22 @@ of these together:
 | `transport` | `gateway-relay` |
 | `brain`     | `agent-consult` |
 
-Any other combination — including a partially set one — keeps the native path.
+Any other combination — including a partially set one — keeps the native path. The **Voice & Talk**
+settings page writes all three when you turn on **Use realtime conversation**, so hand-editing is
+only needed for configurations the card does not offer.
 
 The Gateway must also advertise `gateway-relay` and `agent-consult` for the selected provider in
-`talk.catalog`. Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the
-Talk runtime returns before startup and the native path is the only one available.
+`talk.catalog`, or the card reports realtime as unsupported instead of saving a session that
+cannot start. GPT-Live models additionally reject `consultRouting: force-agent-consult`, because
+GPT-Live delegates to the agent natively; selecting a GPT-Live model clears that key.
+
+Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the controls are
+hidden and the Talk runtime returns before startup.
+
+The Gateway reports readiness for the model already saved in `talk.realtime`, so the status row
+describes that selection rather than one you are switching to. Picking a different model in the
+picker therefore re-enables the toggle even while the saved selection reads as unconfigured —
+useful when a login covers GPT-Live but not the GA realtime models.
 
 ### When realtime cannot start
 

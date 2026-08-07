@@ -37587,7 +37587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 246,
+      "line": 269,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "OpenAI realtime Talk enabled.",
       "surface": "apple",
@@ -37595,7 +37595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 246,
+      "line": 269,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Realtime Talk disabled.",
       "surface": "apple",
@@ -37603,7 +37603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 268,
+      "line": 291,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "OpenAI Realtime / GPT-Live",
       "surface": "apple",
@@ -37611,7 +37611,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 279,
+      "line": 302,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Use realtime conversation",
       "surface": "apple",
@@ -37619,7 +37619,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 287,
+      "line": 310,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Voice model",
       "surface": "apple",
@@ -37627,7 +37627,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 301,
+      "line": 324,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Assistant voice",
       "surface": "apple",
@@ -37635,7 +37635,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 301,
+      "line": 324,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Marin and Cedar are recommended.",
       "surface": "apple",
@@ -37643,7 +37643,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 312,
+      "line": 335,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Apply realtime settings",
       "surface": "apple",
@@ -37651,7 +37651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 316,
+      "line": 339,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Apply",
       "surface": "apple",
@@ -37659,7 +37659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 316,
+      "line": 339,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Saving…",
       "surface": "apple",
@@ -37667,7 +37667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 335,
+      "line": 358,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Checking Gateway…",
       "surface": "apple",
@@ -37675,7 +37675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 336,
+      "line": 359,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "OpenAI realtime is available",
       "surface": "apple",
@@ -37683,7 +37683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 337,
+      "line": 360,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Connect OpenAI to enable realtime",
       "surface": "apple",
@@ -37691,7 +37691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 338,
+      "line": 361,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Realtime availability is unverified",
       "surface": "apple",
@@ -37699,7 +37699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 345,
+      "line": 368,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Reading the Gateway Talk catalog.",
       "surface": "apple",
@@ -37707,7 +37707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 347,
+      "line": 370,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "The Gateway reports that OpenAI realtime access is ready for this configuration.",
       "surface": "apple",
@@ -37715,7 +37715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 349,
+      "line": 372,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Use an OpenClaw OpenAI login or Platform API key. An existing Codex CLI login is not imported automatically.",
       "surface": "apple",
@@ -37723,7 +37723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 364,
+      "line": 387,
       "path": "apps/macos/Sources/OpenClaw/RealtimeTalkSettings.swift",
       "source": "Open Talk Settings…",
       "surface": "apple",

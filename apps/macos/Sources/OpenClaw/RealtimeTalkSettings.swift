@@ -192,13 +192,35 @@ final class RealtimeTalkSettingsModel {
     var isSaving = false
     var saveMessage: String?
     private var hasLoaded = false
+    /// `talk.catalog` takes no parameters and resolves `configured` from the saved realtime
+    /// model, so its verdict only describes this selection. Recording it lets the card tell
+    /// "OpenAI is unusable" apart from "we have not asked about the model you just picked".
+    private var readinessModel: String?
 
     var showsConfiguration: Bool {
         self.availability == .ready || self.draft.explicitlyUsesOpenAI
     }
 
+    nonisolated static func canEnable(
+        availability: Availability,
+        draftModel: String,
+        draftEnabled: Bool,
+        readinessModel: String?) -> Bool
+    {
+        if availability == .ready || draftEnabled { return true }
+        // An OAuth-only GPT-Live user whose saved selection is a GA model gets configured=false,
+        // and blocking on that stopped them from ever switching to the model that would work.
+        // The Gateway still rejects an unusable session at talk.session.create.
+        guard availability == .needsOpenAIAccess, let readinessModel else { return false }
+        return readinessModel != draftModel
+    }
+
     var canEnable: Bool {
-        self.availability == .ready || self.draft.enabled
+        Self.canEnable(
+            availability: self.availability,
+            draftModel: self.draft.model,
+            draftEnabled: self.draft.enabled,
+            readinessModel: self.readinessModel)
     }
 
     func load(force: Bool = false) async {
@@ -226,6 +248,7 @@ final class RealtimeTalkSettingsModel {
                 self.hasLoaded = true
                 return
             }
+            self.readinessModel = self.draft.model
             self.availability = provider.configured ? .ready : .needsOpenAIAccess
         } catch {
             self.availability = .unavailable("Could not verify realtime access: \(error.localizedDescription)")

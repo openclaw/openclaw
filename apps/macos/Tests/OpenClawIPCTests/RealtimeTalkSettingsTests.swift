@@ -291,6 +291,37 @@ struct RealtimeTalkSettingsTests {
         #expect(provider.supportsGatewayRelayAgentConsult == expected)
     }
 
+    @Test func `catalog readiness only gates the model it was evaluated for`() {
+        // talk.catalog takes no parameters and resolves `configured` from the saved realtime
+        // model, so an OAuth-only GPT-Live user with a saved GA selection is reported
+        // unconfigured. Blocking on that verdict kept them from switching to GPT-Live at all.
+        let switchingToGptLive = RealtimeTalkSettingsModel.canEnable(
+            availability: .needsOpenAIAccess,
+            draftModel: "gpt-live-1-codex",
+            draftEnabled: false,
+            readinessModel: "gpt-realtime-2.1")
+        let stayingOnTheEvaluatedModel = RealtimeTalkSettingsModel.canEnable(
+            availability: .needsOpenAIAccess,
+            draftModel: "gpt-realtime-2.1",
+            draftEnabled: false,
+            readinessModel: "gpt-realtime-2.1")
+        let beforeAnyCatalogAnswer = RealtimeTalkSettingsModel.canEnable(
+            availability: .needsOpenAIAccess,
+            draftModel: "gpt-live-1-codex",
+            draftEnabled: false,
+            readinessModel: nil)
+        let gatewayUnavailable = RealtimeTalkSettingsModel.canEnable(
+            availability: .unavailable("no route"),
+            draftModel: "gpt-live-1-codex",
+            draftEnabled: false,
+            readinessModel: "gpt-realtime-2.1")
+
+        #expect(switchingToGptLive)
+        #expect(!stayingOnTheEvaluatedModel)
+        #expect(!beforeAnyCatalogAnswer)
+        #expect(!gatewayUnavailable)
+    }
+
     @Test func `enabling gpt-live clears forced consult routing but keeps it for GA models`() throws {
         let root: [String: Any] = [
             "talk": ["realtime": ["consultRouting": "force-agent-consult"]],
