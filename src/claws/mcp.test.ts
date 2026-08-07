@@ -4,7 +4,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { deleteClawMcpServerRef, installClawMcpServers, planClawMcpServerRemoval } from "./mcp.js";
+import {
+  deleteClawMcpServerRef,
+  installClawMcpServers,
+  planClawMcpServerRemoval,
+  portableMcpServerToConfig,
+} from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
@@ -53,6 +58,25 @@ async function fixture(agentId = "worker", root?: string) {
 function listedMcpServers(mcpServers: Record<string, Record<string, unknown>> = {}) {
   return { ok: true as const, path: "config", config: {}, mcpServers };
 }
+
+describe("portableMcpServerToConfig", () => {
+  it("converts fractional seconds to exact milliseconds", () => {
+    expect(
+      portableMcpServerToConfig({ command: "uvx", timeout: 1.5, connectTimeout: 0.25 }),
+    ).toEqual({ command: "uvx", requestTimeoutMs: 1500, connectionTimeoutMs: 250 });
+  });
+
+  it("leaves non-positive or overflowing seconds for schema validation to reject", () => {
+    expect(portableMcpServerToConfig({ command: "uvx", timeout: 0 })).toEqual({
+      command: "uvx",
+      timeout: 0,
+    });
+    expect(portableMcpServerToConfig({ command: "uvx", timeout: Number.MAX_VALUE })).toEqual({
+      command: "uvx",
+      timeout: Number.MAX_VALUE,
+    });
+  });
+});
 
 describe("installClawMcpServers", () => {
   it("uses create-only config writes and stores digest-only ownership", async () => {
@@ -108,6 +132,96 @@ describe("installClawMcpServers", () => {
       },
     ]);
     expect(JSON.stringify(refs)).not.toContain("DOCS_TOKEN");
+  });
+
+  it("converts portable second-based timeouts to canonical millisecond config fields", async () => {
+    const root = tempDirs.make("openclaw-claw-mcp-timeout-");
+    const parsed = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "worker" },
+      mcpServers: {
+        docs: { command: "uvx", args: ["docs-mcp"], timeout: 30, connectTimeout: 5 },
+      },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const source: ClawSourceIdentity = {
+      kind: "package",
+      name: "@acme/worker",
+      version: "1.0.0",
+      packageRoot: root,
+      manifestPath: join(root, "openclaw.claw.json"),
+      integrityKind: "artifact",
+      integrity: "sha256:manifest",
+      byteLength: 100,
+    };
+    const plan = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source,
+      context: { workspace: join(root, "workspace") },
+    });
+    const setMcpServer = vi
+      .fn()
+      .mockResolvedValue({ ok: true, path: "config", config: {}, mcpServers: {} });
+
+    await installClawMcpServers(plan, {
+      env: { OPENCLAW_STATE_DIR: join(root, "state") },
+      setMcpServer,
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
+      nowMs: 42,
+    });
+
+    expect(setMcpServer).toHaveBeenCalledWith({
+      name: "docs",
+      server: {
+        command: "uvx",
+        args: ["docs-mcp"],
+        requestTimeoutMs: 30_000,
+        connectionTimeoutMs: 5_000,
+      },
+      createOnly: true,
+      recordIndependentOwner: false,
+    });
+  });
+
+  it("treats a seconds manifest timeout as exact against the equivalent millisecond config", async () => {
+    const root = tempDirs.make("openclaw-claw-mcp-exact-");
+    const parsed = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "worker" },
+      mcpServers: { docs: { command: "uvx", args: ["docs-mcp"], timeout: 30 } },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const source: ClawSourceIdentity = {
+      kind: "package",
+      name: "@acme/worker",
+      version: "1.0.0",
+      packageRoot: root,
+      manifestPath: join(root, "openclaw.claw.json"),
+      integrityKind: "artifact",
+      integrity: "sha256:manifest",
+      byteLength: 100,
+    };
+    const plan = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source,
+      context: {
+        workspace: join(root, "workspace"),
+        existingMcpServers: {
+          docs: { command: "uvx", args: ["docs-mcp"], requestTimeoutMs: 30_000 },
+        },
+      },
+    });
+
+    const action = plan.actions.find((entry) => entry.kind === "mcpServer" && entry.id === "docs");
+    expect(action?.blocked).toBe(false);
+    expect(action?.details).toMatchObject({ expectedState: "present-exact" });
+    expect(plan.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "mcp_server_collision" }),
+    );
   });
 
   it("rejects a conflicting existing server without claiming ownership", async () => {

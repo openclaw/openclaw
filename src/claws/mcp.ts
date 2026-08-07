@@ -56,6 +56,36 @@ function mcpServerFromActionDetails(details: Record<string, unknown>): ClawMcpSe
   return "command" in server || "url" in server ? (server as ClawMcpServer) : undefined;
 }
 
+/**
+ * Project a portable Claw-manifest MCP server onto the canonical config shape.
+ * The manifest carries timeouts in seconds (see claws/schema.ts) while config
+ * stores milliseconds, so plan collision/digest checks and config writes must
+ * compare like-for-like. Applied at the manifest boundary (plan build) so every
+ * downstream digest and write sees millisecond fields. Invalid seconds are left
+ * in place for schema validation to reject deterministically.
+ */
+export function portableMcpServerToConfig(
+  server: Record<string, unknown>,
+): Record<string, unknown> {
+  const next = { ...server };
+  for (const [seconds, milliseconds] of [
+    ["timeout", "requestTimeoutMs"],
+    ["connectTimeout", "connectionTimeoutMs"],
+  ] as const) {
+    const value = next[seconds];
+    if (
+      typeof value === "number" &&
+      next[milliseconds] === undefined &&
+      value > 0 &&
+      Number.isFinite(value * 1000)
+    ) {
+      next[milliseconds] = value * 1000;
+      delete next[seconds];
+    }
+  }
+  return next;
+}
+
 function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
   return {
     schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
@@ -73,7 +103,10 @@ function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
 }
 
 export function digestClawMcpServer(server: Record<string, unknown>): string {
-  const canonical = canonicalizeConfiguredMcpServer(server);
+  // Digest in canonical config shape so a portable manifest (timeouts in
+  // seconds) and its installed config equivalent (milliseconds) hash alike;
+  // otherwise plan collision/update-drift checks fire on an exact match.
+  const canonical = canonicalizeConfiguredMcpServer(portableMcpServerToConfig(server));
   return `sha256:${createHash("sha256").update(stableStringify(canonical)).digest("hex")}`;
 }
 

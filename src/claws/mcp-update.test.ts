@@ -180,6 +180,60 @@ describe("applyClawMcpUpdate", () => {
     expect(deleteRef).toHaveBeenCalledTimes(2);
   });
 
+  it("writes an updated MCP server in canonical config units", async () => {
+    // The manifest carries timeouts in seconds; config has only
+    // requestTimeoutMs/connectionTimeoutMs. Writing the manifest shape puts a
+    // `timeout` key config never reads, so the configured timeout is silently
+    // dropped on the update path. (The stored digest is unaffected either way —
+    // digestClawMcpServer canonicalizes units itself.)
+    const declared: ClawMcpServer = { command: "uvx", args: ["docs@2"], timeout: 30 };
+    const canonical = { command: "uvx", args: ["docs@2"], requestTimeoutMs: 30_000 };
+    // Typed parameter so the written server can be read back off mock.calls.
+    const setServer = vi.fn(async (_params: { name: string; server: unknown }) => ({
+      ok: true as const,
+      path: "config",
+      config: {},
+      mcpServers: {},
+    }));
+    const upsertRef = vi.fn();
+    await applyClawMcpUpdate(
+      plan([
+        {
+          kind: "mcpServer",
+          id: "docs",
+          action: "add",
+          target: "mcp.servers.docs",
+          blocked: false,
+          reason: "added",
+        },
+      ]),
+      { ...manifest(), mcpServers: { docs: declared } },
+      {
+        config: { mcp: { servers: {} } } as OpenClawConfig,
+        sourceMcpServers: {},
+        nowMs: 20,
+        readRefs: () => [],
+        planRemoval: () => ({ action: "remove" }),
+        setServer,
+        unsetServer: vi.fn(),
+        upsertRef,
+        deleteRef: vi.fn(),
+      },
+    );
+
+    expect(setServer).toHaveBeenCalledWith({
+      name: "docs",
+      server: canonical,
+      createOnly: true,
+      recordIndependentOwner: false,
+    });
+    const written = setServer.mock.calls[0]?.[0]?.server as Record<string, unknown>;
+    expect(written).not.toHaveProperty("timeout");
+    expect(written.requestTimeoutMs).toBe(30_000);
+    const digests = upsertRef.mock.calls.map(([entry]) => entry.configDigest);
+    expect(new Set(digests)).toEqual(new Set([digestClawMcpServer(canonical)]));
+  });
+
   it("releases ownership without removing shared or independently owned config", async () => {
     const independent = {
       ...ref("legacy", legacy),
