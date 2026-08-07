@@ -157,6 +157,7 @@ export async function prepareGatewayServerBootstrap(input: {
       minimalTestGateway,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
+      ambientEnvTriggers,
       ...(opts.startupConfigSnapshotRead
         ? { initialSnapshotRead: opts.startupConfigSnapshotRead }
         : {}),
