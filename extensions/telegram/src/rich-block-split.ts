@@ -3,6 +3,7 @@
 import {
   countInputRichBlockChars,
   countInputRichBlockMedia,
+  countInputRichBlocks,
   countRichTextChars,
   normalizeRichText,
   type InputRichBlock,
@@ -11,6 +12,8 @@ import {
   type RichText,
 } from "./rich-block-model.js";
 import { splitTelegramPlainTextChunks, surrogateSafeChunkEnd } from "./rich-plain-fallback.js";
+
+const TELEGRAM_RICH_MEDIA_LIMIT = 50;
 
 type RichTextStyleWrap =
   | "bold"
@@ -102,8 +105,16 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
   return pieces;
 }
 
-function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): InputRichBlock[] {
-  if (countInputRichBlockChars(block) <= textLimit) {
+function splitOversizedRichBlock(
+  block: InputRichBlock,
+  limits: { textLimit: number; blockLimit: number },
+): InputRichBlock[] {
+  const { textLimit, blockLimit } = limits;
+  if (
+    countInputRichBlockChars(block) <= textLimit &&
+    countInputRichBlocks([block]) <= blockLimit &&
+    countInputRichBlockMedia(block) <= TELEGRAM_RICH_MEDIA_LIMIT
+  ) {
     return [block];
   }
   if (block.type === "pre") {
@@ -119,16 +130,53 @@ function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): Inpu
         : { type: "paragraph", text: piece },
     );
   }
-  if (block.type === "blockquote") {
-    // Reserve the credit's chars while splitting the body, then attach the
-    // credit to the final piece only (attribution belongs at the quote's end).
-    const creditChars = countRichTextChars(block.credit ?? "");
-    const innerLimit = Math.max(1, textLimit - creditChars);
-    const pieces = splitTelegramRichBlocks(block.blocks, { textLimit: innerLimit });
+  if (
+    block.type === "blockquote" ||
+    block.type === "details" ||
+    block.type === "collage" ||
+    block.type === "slideshow"
+  ) {
+    const wrapperChars =
+      block.type === "blockquote"
+        ? countRichTextChars(block.credit ?? "")
+        : block.type === "details"
+          ? countRichTextChars(block.summary)
+          : countRichTextChars(block.caption?.text ?? "") +
+            countRichTextChars(block.caption?.credit ?? "");
+    const remainingText = textLimit - wrapperChars;
+    if (
+      block.blocks.length === 0 ||
+      remainingText < 0 ||
+      (remainingText === 0 && block.blocks.some((child) => countInputRichBlockChars(child) > 0))
+    ) {
+      // Wrapper text cannot be divided without losing its owner; the existing
+      // Telegram plain fallback handles an irreducibly oversized rich block.
+      return [block];
+    }
+    // Reserve the container itself: Telegram counts nested blocks, and albums
+    // cannot hide more than 50 media attachments in one top-level wrapper.
+    const pieces = splitTelegramRichBlocks(block.blocks, {
+      // A zero-character remainder can carry divider/media children only;
+      // the guard above proves no child can consume the normalized one char.
+      textLimit: Math.max(1, remainingText),
+      blockLimit: Math.max(1, blockLimit - 1),
+    });
+    if (block.type === "blockquote") {
+      // Attribution belongs at the quote's end, so emit the credit only once.
+      return pieces.map((inner, index) =>
+        index === pieces.length - 1 && block.credit !== undefined
+          ? { type: "blockquote", blocks: inner, credit: block.credit }
+          : { type: "blockquote", blocks: inner },
+      );
+    }
+    if (block.type === "details") {
+      return pieces.map((inner) => ({ ...block, blocks: inner }));
+    }
+    const { caption, ...album } = block;
     return pieces.map((inner, index) =>
-      index === pieces.length - 1 && block.credit !== undefined
-        ? { type: "blockquote", blocks: inner, credit: block.credit }
-        : { type: "blockquote", blocks: inner },
+      index === 0 && caption !== undefined
+        ? { ...album, blocks: inner, caption }
+        : { ...album, blocks: inner },
     );
   }
   if (block.type === "table") {
@@ -151,7 +199,8 @@ function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): Inpu
     let chars = countRichTextChars(caption ?? "");
     for (const row of block.cells) {
       const rowChars = row.reduce((total, cell) => total + countRichTextChars(cell.text ?? ""), 0);
-      if (rows.length > 0 && chars + rowChars > textLimit) {
+      const wouldExceedBlocks = rows.length + 2 > blockLimit;
+      if (rows.length > 0 && (chars + rowChars > textLimit || wouldExceedBlocks)) {
         pushPiece(rows);
         rows = [];
         chars = 0;
@@ -165,29 +214,67 @@ function splitOversizedRichBlock(block: InputRichBlock, textLimit: number): Inpu
     return pieces;
   }
   if (block.type === "list") {
+    // A list item owns its ordered value and checkbox state; fragmenting its
+    // children into sibling items would duplicate that visible product state.
+    const hasOversizedItem = block.items.some((item) => {
+      const itemChars = item.blocks.reduce(
+        (total, child) => total + countInputRichBlockChars(child),
+        0,
+      );
+      const itemBlocks = 1 + countInputRichBlocks(item.blocks);
+      const itemMedia = item.blocks.reduce(
+        (total, child) => total + countInputRichBlockMedia(child),
+        0,
+      );
+      return (
+        itemChars > textLimit ||
+        1 + itemBlocks > blockLimit ||
+        itemMedia > TELEGRAM_RICH_MEDIA_LIMIT
+      );
+    });
+    if (hasOversizedItem) {
+      return [block];
+    }
+
     const pieces: InputRichBlock[] = [];
     let items: InputRichBlockListItem[] = [];
     let chars = 0;
+    let blocks = 1;
+    let media = 0;
     for (const item of block.items) {
       const itemChars = item.blocks.reduce(
         (total, child) => total + countInputRichBlockChars(child),
         0,
       );
-      if (items.length > 0 && chars + itemChars > textLimit) {
+      const itemBlocks = 1 + countInputRichBlocks(item.blocks);
+      const itemMedia = item.blocks.reduce(
+        (total, child) => total + countInputRichBlockMedia(child),
+        0,
+      );
+      if (
+        items.length > 0 &&
+        (chars + itemChars > textLimit ||
+          blocks + itemBlocks > blockLimit ||
+          media + itemMedia > TELEGRAM_RICH_MEDIA_LIMIT)
+      ) {
         pieces.push({ type: "list", items });
         items = [];
         chars = 0;
+        blocks = 1;
+        media = 0;
       }
       items.push(item);
       chars += itemChars;
+      blocks += itemBlocks;
+      media += itemMedia;
     }
     if (items.length > 0) {
       pieces.push({ type: "list", items });
     }
     return pieces;
   }
-  // Details, media, and remaining container blocks stay atomic; a genuinely
-  // oversized one degrades via the RICH_MESSAGE_TEXT_TOO_LONG plain fallback.
+  // Remaining atomic blocks cannot be divided; an oversized one degrades via
+  // the existing Telegram plain-text fallback instead of disappearing.
   return [block];
 }
 
@@ -203,32 +290,36 @@ export function splitTelegramRichBlocks(
   if (blocks.length === 0) {
     return [];
   }
-  const expanded = blocks.flatMap((block) => splitOversizedRichBlock(block, textLimit));
+  const expanded = blocks.flatMap((block) =>
+    splitOversizedRichBlock(block, { textLimit, blockLimit }),
+  );
   const chunks: InputRichBlock[][] = [];
   let current: InputRichBlock[] = [];
+  let currentBlocks = 0;
   let currentChars = 0;
-  // Live-verified message cap: >50 media elements → RICH_MESSAGE_MEDIA_TOO_MANY.
-  const mediaLimit = 50;
   let currentMedia = 0;
 
   const flush = () => {
     if (current.length > 0) {
       chunks.push(current);
       current = [];
+      currentBlocks = 0;
       currentChars = 0;
       currentMedia = 0;
     }
   };
   for (const block of expanded) {
+    const blockCount = countInputRichBlocks([block]);
     const chars = countInputRichBlockChars(block);
     const media = countInputRichBlockMedia(block);
-    const wouldExceedBlocks = current.length >= blockLimit;
+    const wouldExceedBlocks = current.length > 0 && currentBlocks + blockCount > blockLimit;
     const wouldExceedChars = current.length > 0 && currentChars + chars > textLimit;
-    const wouldExceedMedia = current.length > 0 && currentMedia + media > mediaLimit;
+    const wouldExceedMedia = current.length > 0 && currentMedia + media > TELEGRAM_RICH_MEDIA_LIMIT;
     if (wouldExceedBlocks || wouldExceedChars || wouldExceedMedia) {
       flush();
     }
     current.push(block);
+    currentBlocks += blockCount;
     currentChars += chars;
     currentMedia += media;
   }
