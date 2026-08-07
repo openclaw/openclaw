@@ -1,5 +1,6 @@
 // Msteams plugin module implements conversation store state behavior.
 import crypto from "node:crypto";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   findPreferredDmConversationByUserId,
   mergeStoredConversationReference,
@@ -29,6 +30,8 @@ export const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
 const MSTEAMS_MAX_CONVERSATIONS = 1000;
 export const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
 const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const ACCOUNT_SCOPED_CONVERSATION_PREFIX = "\u0000openclaw:msteams:account:";
+const ACCOUNT_SCOPED_CONVERSATION_SEPARATOR = "\u0000conversation:";
 const CONVERSATION_MUTATION_KEY = "conversations";
 
 type MSTeamsConversationStoreStateOptions = {
@@ -224,5 +227,61 @@ export function createMSTeamsConversationStoreState(
     list,
     remove,
     findPreferredDmByUserId,
+  };
+}
+
+export function createAccountScopedMSTeamsConversationStore(
+  store: MSTeamsConversationStore,
+  accountId: string,
+): MSTeamsConversationStore {
+  const isAccountScopedId = (conversationId: string) =>
+    conversationId.startsWith(ACCOUNT_SCOPED_CONVERSATION_PREFIX);
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    const listDefault = async () =>
+      (await store.list()).filter((entry) => !isAccountScopedId(entry.conversationId));
+    return {
+      upsert: store.upsert,
+      get: async (conversationId) =>
+        isAccountScopedId(conversationId) ? null : await store.get(conversationId),
+      remove: async (conversationId) =>
+        isAccountScopedId(conversationId) ? false : await store.remove(conversationId),
+      list: listDefault,
+      findPreferredDmByUserId: async (id) =>
+        findPreferredDmConversationByUserId(await listDefault(), id),
+    };
+  }
+  const prefix = `${ACCOUNT_SCOPED_CONVERSATION_PREFIX}${encodeURIComponent(accountId)}${ACCOUNT_SCOPED_CONVERSATION_SEPARATOR}`;
+  const scopedId = (conversationId: string) => `${prefix}${conversationId}`;
+  const unscopedId = (conversationId: string) =>
+    conversationId.startsWith(prefix) ? conversationId.slice(prefix.length) : conversationId;
+  const unscopedReference = (reference: Awaited<ReturnType<MSTeamsConversationStore["get"]>>) =>
+    reference
+      ? {
+          ...reference,
+          conversation: reference.conversation
+            ? {
+                ...reference.conversation,
+                id: unscopedId(reference.conversation.id ?? ""),
+              }
+            : reference.conversation,
+        }
+      : null;
+  const listScoped = async () =>
+    (await store.list())
+      .filter((entry) => entry.conversationId.startsWith(prefix))
+      .map((entry) => {
+        return Object.assign({}, entry, {
+          conversationId: unscopedId(entry.conversationId),
+          reference: unscopedReference(entry.reference) ?? entry.reference,
+        });
+      });
+  return {
+    upsert: async (conversationId, reference) =>
+      await store.upsert(scopedId(conversationId), reference),
+    get: async (conversationId) => unscopedReference(await store.get(scopedId(conversationId))),
+    remove: async (conversationId) => await store.remove(scopedId(conversationId)),
+    list: listScoped,
+    findPreferredDmByUserId: async (id) =>
+      findPreferredDmConversationByUserId(await listScoped(), id),
   };
 }

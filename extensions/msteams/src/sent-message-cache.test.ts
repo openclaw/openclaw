@@ -126,4 +126,85 @@ describe("msteams sent message cache", () => {
     ).resolves.toBe(true);
     expect(warn).toHaveBeenCalled();
   });
+
+  it("scopes sent-message markers by account", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_234_567);
+    const register = vi.fn().mockResolvedValue(undefined);
+    const lookup = vi.fn().mockResolvedValue(undefined);
+    const openKeyedStore = vi.fn(() => ({
+      register,
+      lookup,
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    }));
+    setMSTeamsRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    recordMSTeamsSentMessage("conv-1", "msg-1", { accountId: "support" });
+
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({
+        conversationId: "conv-1",
+        messageId: "msg-1",
+        accountId: "support",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({
+        conversationId: "conv-1",
+        messageId: "msg-1",
+        accountId: "finance",
+      }),
+    ).resolves.toBe(false);
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
+    const supportKey = register.mock.calls[0]?.[0];
+    expect(supportKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({
+        conversationId: "conv-1",
+        messageId: "msg-1",
+        accountId: "finance",
+      }),
+    ).resolves.toBe(false);
+    const financeKey = lookup.mock.calls[0]?.[0];
+    expect(financeKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
+    expect(financeKey).not.toBe(supportKey);
+  });
+
+  it("prevents named-account keys from colliding with legacy default keys", async () => {
+    const register = vi.fn().mockResolvedValue(undefined);
+    const openKeyedStore = vi.fn(() => ({
+      register,
+      lookup: vi.fn().mockResolvedValue(undefined),
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    }));
+    setMSTeamsRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    recordMSTeamsSentMessage("19:conversation", "message");
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({
+        conversationId: "conversation",
+        messageId: "message",
+        accountId: "19",
+      }),
+    ).resolves.toBe(false);
+    recordMSTeamsSentMessage("conversation", "message", { accountId: "19" });
+
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(2));
+    const defaultKey = register.mock.calls[0]?.[0];
+    const namedKey = register.mock.calls[1]?.[0];
+    expect(defaultKey).toBe("19:conversation:message");
+    expect(namedKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
+    expect(namedKey).not.toBe(defaultKey);
+  });
 });

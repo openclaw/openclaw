@@ -1,5 +1,6 @@
 // Msteams plugin module implements monitor handler behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
@@ -46,6 +47,7 @@ async function isInvokeAuthorized(params: {
   const { context, deps, deniedLogs, includeInvokeName = false } = params;
   const resolved = await resolveMSTeamsSenderAccess({
     cfg: deps.cfg,
+    accountId: deps.accountId,
     activity: context.activity,
   });
   const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;
@@ -200,7 +202,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     const ctx = context as MSTeamsTurnContext;
     const membersAdded = ctx.activity?.membersAdded ?? [];
     const botId = ctx.activity?.recipient?.id;
-    const msteamsCfg = deps.cfg.channels?.msteams;
+    const msteamsCfg = deps.cfg.channels?.msteams
+      ? resolveMSTeamsAccountConfig(deps.cfg, deps.accountId)
+      : undefined;
 
     for (const member of membersAdded) {
       if (member.id === botId) {
