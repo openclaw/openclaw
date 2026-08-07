@@ -7,6 +7,16 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Cross-boundary contract: the automatic-compaction ownership no-op this plugin
+// produces must stay byte-identical to the core constant that core compaction
+// callers match on. A test-only reach into core (bundled-plugin tests are exempt
+// from the production plugin-SDK import boundary) keeps both sides pinned so a
+// change to either string turns this red instead of silently dropping the
+// forced-preflight escalation (#119977).
+import {
+  CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
+  isCodexOwnedAutomaticCompactionSkip,
+} from "../../../../src/agents/embedded-agent-runner/compact-reasons.js";
 import {
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
@@ -469,6 +479,29 @@ describe("maybeCompactCodexAppServerSession", () => {
       reason: "non_manual_trigger",
       trigger: "budget",
     });
+  });
+
+  it("emits the ownership no-op reason core matches on for forced-preflight escalation", async () => {
+    // #119977: pin the produced deferral reason to the core constant and its
+    // recognizer. If either string drifts, core stops escalating forced preflight
+    // past the deferral and silently drops the turn — so this must stay red.
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+      }),
+    );
+
+    expect(result.reason).toBe(CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON);
+    expect(isCodexOwnedAutomaticCompactionSkip(result)).toBe(true);
   });
 
   it("reports a missing binding on automatic triggers instead of deferring to codex-rs", async () => {

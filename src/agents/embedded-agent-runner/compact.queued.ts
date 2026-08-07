@@ -560,7 +560,7 @@ async function compactResolvedContextEngine(
     promptTokenBudget: contextTokenBudget,
   });
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
-  const harnessResult =
+  let harnessResult =
     attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
       ? await maybeCompactAgentHarnessSession({
           ...preparedParams,
@@ -570,26 +570,51 @@ async function compactResolvedContextEngine(
           contextEngineRuntimeContext,
         })
       : undefined;
+  const forcedPreflightCompaction =
+    params.forcePreflight === true || params.preflightRequired === true;
+  if (
+    harnessResult &&
+    forcedPreflightCompaction &&
+    isCodexOwnedAutomaticCompactionSkip(harnessResult)
+  ) {
+    // A forced/preflight compaction has declared compaction mandatory, so Codex's
+    // "owns automatic compaction" deferral must not end the turn against a thread
+    // that may no longer exist. Re-issue it as a guarded native request (the
+    // allowNonManual compactAfterContextEngine path): a live bound thread compacts
+    // itself over its own OAuth — context-engine compaction would fail an
+    // OAuth-only Codex session with "No API key found" — and a dead thread surfaces
+    // "thread not found" (stale_thread_binding), which the recoverable-binding
+    // handling below repairs (context-engine fallback for unlocked sessions, or
+    // recovery on a locked session) (#119977, #119971).
+    log.warn(
+      `native harness deferred required compaction to codex-rs; escalating to a guarded native request: ${harnessResult.reason ?? "unknown"}`,
+    );
+    const guardedNativeResult = await maybeCompactAgentHarnessSession(
+      {
+        ...preparedParams,
+        runtimeModel: effectiveRuntimeModel,
+        contextEngine,
+        contextTokenBudget,
+        contextEngineRuntimeContext,
+      },
+      { nativeCompactionRequest: "after_context_engine" },
+    );
+    harnessResult = guardedNativeResult ?? harnessResult;
+  }
   if (lockedNativeHarness) {
+    // The model lock forbids replacing native compaction with the context engine,
+    // so a locked session returns the (possibly recovered) native result directly.
     return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
-    const recoverableBindingFailure = shouldFallbackAfterHarnessCompaction(harnessResult);
-    // A forced/preflight compaction has declared compaction mandatory, so Codex's
-    // "owns automatic compaction" deferral must not end the turn against a thread
-    // that may no longer exist. Escalate to the context engine (and its secondary
-    // native request) instead of trusting the deferral indefinitely (#119977,
-    // #119971). Ordinary budget triggers still defer to codex-rs inline compaction.
-    const escalateOwnershipSkip =
-      (params.forcePreflight === true || params.preflightRequired === true) &&
-      isCodexOwnedAutomaticCompactionSkip(harnessResult);
-    if (!recoverableBindingFailure && !escalateOwnershipSkip) {
+    if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
       return harnessResult;
     }
+    // A missing/stale binding — including a dead thread surfaced by the guarded
+    // native escalation above — falls back to context-engine compaction, which
+    // recompacts a live transcript or exposes the stale binding for recovery.
     log.warn(
-      recoverableBindingFailure
-        ? `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`
-        : `native harness deferred required compaction to codex-rs; escalating to context engine: ${harnessResult.reason ?? "unknown"}`,
+      `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
     );
   }
   if (

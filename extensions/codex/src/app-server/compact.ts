@@ -453,12 +453,18 @@ async function compactCodexNativeThread(
     config: params.config,
   });
   const initialBinding = await options.bindingStore.read(bindingIdentity);
-  // Read the binding before deciding to defer. Automatic triggers hand context
-  // pressure to codex-rs's inline compaction, but that is only safe while the
-  // bound thread is live. A missing binding must surface for recovery instead of
-  // being swallowed as a benign no-op that trusts a thread that no longer exists
-  // (#119977). Manual and guarded (allowNonManual) requests fall through to the
-  // native request below, which surfaces "thread not found" for a dead thread.
+  // Read the binding before deciding to defer, and keep its two failure modes
+  // distinct:
+  //   - Missing binding (no threadId): every trigger — automatic, manual, and
+  //     guarded (allowNonManual) — returns missing_thread_binding here. Automatic
+  //     triggers would otherwise hand context pressure to codex-rs's inline
+  //     compaction, which is only safe while a bound thread exists; a missing
+  //     binding must surface for recovery, not be swallowed as a benign no-op that
+  //     trusts a thread that no longer exists (#119977).
+  //   - Dead thread (binding present, thread already retired): the binding clears
+  //     this gate, so manual and guarded requests reach the native request below,
+  //     where thread/compact/start surfaces "thread not found" (stale_thread_binding)
+  //     for the recovery path.
   if (!initialBinding?.threadId) {
     return failedCodexThreadBindingCompactionResult(params, {
       reason: "no codex app-server thread binding",
@@ -490,6 +496,9 @@ async function compactCodexNativeThread(
     sessionId: params.sessionId,
     surface: "native compaction",
   });
+  // Binding presence is verified first (above): a missing binding has no live
+  // thread to run in the sandbox, so it surfaces as recoverable before this gate.
+  // The sandbox block still applies to real native requests that have a binding.
   if (nativeExecutionBlock) {
     return { ok: false, compacted: false, reason: nativeExecutionBlock };
   }
