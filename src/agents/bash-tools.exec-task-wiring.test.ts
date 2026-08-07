@@ -98,6 +98,28 @@ describe("exec background task wiring", () => {
     );
 
     expect(result.details.status).toBe("running");
+    // A running session is not proof the requested work started, so the result
+    // text must send the model to process log/poll instead of letting it report
+    // the command as underway.
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        "Running means only that the session is alive, not that the command's work started or succeeded; check the session's log or poll output before reporting progress.",
+      ),
+    });
+    // The Codex app-server surfaces re-expose exec as sandbox_exec/node_exec
+    // and rename the tool reference by String.replace on this exact literal
+    // (extensions/codex/src/app-server/dynamic-tool-build.ts,
+    // shell-dynamic-tools.ts). Those replaces fail open: if the sentence is
+    // ever split or reworded, they silently no-op and those surfaces ship a
+    // reference to a `process` tool they do not expose. Pin it here, against
+    // real exec output rather than a stub.
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining(
+        "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+      ),
+    });
     if (result.details.status !== "running") {
       throw new Error("expected a running background process");
     }
