@@ -38,7 +38,11 @@ import {
   createSessionMcpRuntimeManager,
   setDefaultCreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager.js";
-import { assignSafeServerNames, sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import {
+  assignSafeServerNames,
+  buildSafeToolName,
+  sanitizeServerName,
+} from "./agent-bundle-mcp-names.js";
 import {
   loadSessionMcpConfig,
   resolveSessionMcpConfigSummary,
@@ -292,6 +296,20 @@ function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | und
   return [...new Set(normalized)].toSorted();
 }
 
+function getListedToolUiVisibility(tool: ListedTool): Array<"app" | "model"> | undefined {
+  const { _meta: metadata } = tool;
+  const uiMeta =
+    metadata?.ui && typeof metadata.ui === "object" && !Array.isArray(metadata.ui)
+      ? (metadata.ui as { visibility?: unknown })
+      : undefined;
+  return normalizeToolUiVisibility(uiMeta?.visibility);
+}
+
+function isModelVisibleListedTool(tool: ListedTool): boolean {
+  const uiVisibility = getListedToolUiVisibility(tool);
+  return uiVisibility === undefined || uiVisibility.includes("model");
+}
+
 function getMcpToolSelection(rawServer: unknown): McpToolSelection {
   if (!isMcpConfigRecord(rawServer) || !isMcpConfigRecord(rawServer.toolFilter)) {
     return {};
@@ -302,16 +320,81 @@ function getMcpToolSelection(rawServer: unknown): McpToolSelection {
   };
 }
 
-function shouldExposeMcpTool(selection: McpToolSelection, toolName: string): boolean {
+function matchesMcpToolSelectionPattern(params: {
+  pattern: string;
+  rawToolName: string;
+  projectedToolName?: string;
+  rawToolNames: ReadonlySet<string>;
+}): boolean {
+  const pattern = params.pattern.trim();
+  if (!pattern) {
+    return false;
+  }
+  if (pattern.includes("*")) {
+    return matchesMcpToolFilterPattern(pattern, params.rawToolName);
+  }
+  if (pattern === params.rawToolName) {
+    return true;
+  }
+  return (
+    params.projectedToolName !== undefined &&
+    pattern === params.projectedToolName &&
+    !params.rawToolNames.has(pattern)
+  );
+}
+
+function shouldExposeMcpTool(
+  selection: McpToolSelection,
+  toolName: string,
+  opts?: { projectedToolName?: string; rawToolNames?: ReadonlySet<string> },
+): boolean {
   const include = selection.include ?? [];
   const exclude = selection.exclude ?? [];
+  const rawToolNames = opts?.rawToolNames ?? new Set([toolName]);
   if (
     include.length > 0 &&
-    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName))
+    !include.some((pattern) =>
+      matchesMcpToolSelectionPattern({
+        pattern,
+        rawToolName: toolName,
+        projectedToolName: opts?.projectedToolName,
+        rawToolNames,
+      }),
+    )
   ) {
     return false;
   }
-  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName));
+  return !exclude.some((pattern) =>
+    matchesMcpToolSelectionPattern({
+      pattern,
+      rawToolName: toolName,
+      projectedToolName: opts?.projectedToolName,
+      rawToolNames,
+    }),
+  );
+}
+
+function buildProjectedMcpToolNames(params: {
+  safeServerName: string;
+  tools: readonly ListedTool[];
+}): Map<string, string> {
+  const projectedNames = new Map<string, string>();
+  const reservedNames = new Set<string>();
+  const sortedTools = [...params.tools]
+    .filter(isModelVisibleListedTool)
+    .map((tool) => tool.name.trim())
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+  for (const toolName of sortedTools) {
+    const projectedName = buildSafeToolName({
+      serverName: params.safeServerName,
+      toolName,
+      reservedNames,
+    });
+    reservedNames.add(normalizeLowercaseStringOrEmpty(projectedName));
+    projectedNames.set(toolName, projectedName);
+  }
+  return projectedNames;
 }
 
 function summarizeServerCapabilities(capabilities: ServerCapabilities | undefined) {
@@ -836,9 +919,28 @@ export function createSessionMcpRuntime(params: {
                 const deniedToolNames = new Set(
                   denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
                 );
-                const policyEligibleTools = listedTools.filter((tool) =>
-                  shouldExposeMcpTool(selection, tool.name.trim()),
+                const rawToolNames = new Set(
+                  listedTools.map((tool) => tool.name.trim()).filter(Boolean),
                 );
+                const projectedToolNames = buildProjectedMcpToolNames({
+                  safeServerName,
+                  tools: listedTools,
+                });
+                const policyEligibleTools = listedTools.filter((tool) =>
+                  shouldExposeMcpTool(selection, tool.name.trim(), {
+                    projectedToolName: projectedToolNames.get(tool.name.trim()),
+                    rawToolNames,
+                  }),
+                );
+                if (
+                  (selection.include?.length ?? 0) > 0 &&
+                  rawToolNames.size > 0 &&
+                  policyEligibleTools.length === 0
+                ) {
+                  logWarn(
+                    `bundle-mcp: server "${serverName}": toolFilter include matched 0 of ${rawToolNames.size} advertised tool(s); exact names from mcp probe are accepted, while wildcard patterns match raw MCP tool names only.`,
+                  );
+                }
                 const exposedTools = policyEligibleTools.filter((tool) => {
                   const toolName = tool.name.trim();
                   return !deniedToolNames.has(toolName);
@@ -890,7 +992,7 @@ export function createSessionMcpRuntime(params: {
                     typeof rawResourceUri === "string" && rawResourceUri.startsWith("ui://")
                       ? rawResourceUri
                       : undefined;
-                  const uiVisibility = normalizeToolUiVisibility(uiMeta?.visibility);
+                  const uiVisibility = getListedToolUiVisibility(tool);
                   toolEntries.push({
                     serverName,
                     safeServerName,

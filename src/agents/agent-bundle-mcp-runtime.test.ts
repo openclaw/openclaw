@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
@@ -1353,6 +1354,333 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("matches exact projected MCP toolFilter names without broadening raw globs", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-projected-tool-filter-");
+    const serverPath = path.join(tempDir, "projected-tool-filter.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      tools: [
+        { name: "read_page", inputSchema: { type: "object", properties: {} } },
+        { name: "docs__raw", inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+
+    const projectedRuntime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-tool-filter",
+      sessionKey: "agent:test:session-projected-tool-filter",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["docs__read_page"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await projectedRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["read_page"]);
+      expect(catalog.servers.docs?.toolCount).toBe(1);
+      expect(catalog.servers.docs?.tools?.filteredCount).toBe(1);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime: projectedRuntime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual(["docs__read_page"]);
+    } finally {
+      await projectedRuntime.dispose();
+    }
+
+    const rawRuntime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-tool-filter-raw",
+      sessionKey: "agent:test:session-projected-tool-filter-raw",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["docs__raw"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await rawRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["docs__raw"]);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime: rawRuntime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual(["docs__docs__raw"]);
+    } finally {
+      await rawRuntime.dispose();
+    }
+
+    const wildcardRuntime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-tool-filter-wildcard",
+      sessionKey: "agent:test:session-projected-tool-filter-wildcard",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["docs__*"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await wildcardRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["docs__raw"]);
+    } finally {
+      await wildcardRuntime.dispose();
+    }
+  });
+
+  it("matches exact probe-projected MCP toolFilter names after app-only collisions", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-projected-app-collision-");
+    const serverPath = path.join(tempDir, "projected-app-collision.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "read-page",
+          inputSchema: { type: "object", properties: {} },
+          _meta: { ui: { visibility: ["app"] } },
+        },
+        { name: "read.page", inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+
+    const unfilteredRuntime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-app-collision-unfiltered",
+      sessionKey: "agent:test:session-projected-app-collision-unfiltered",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await unfilteredRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
+        "read-page",
+        "read.page",
+      ]);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime: unfilteredRuntime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual(["docs__read-page"]);
+      expect(materialized.tools.map((tool) => getPluginToolMeta(tool)?.mcp?.toolName)).toEqual([
+        "read.page",
+      ]);
+    } finally {
+      await unfilteredRuntime.dispose();
+    }
+
+    const filteredRuntime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-app-collision-filtered",
+      sessionKey: "agent:test:session-projected-app-collision-filtered",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["docs__read-page"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await filteredRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["read.page"]);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime: filteredRuntime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual(["docs__read-page"]);
+      expect(materialized.tools.map((tool) => getPluginToolMeta(tool)?.mcp?.toolName)).toEqual([
+        "read.page",
+      ]);
+    } finally {
+      await filteredRuntime.dispose();
+    }
+  });
+
+  it("matches exact probe-projected MCP toolFilter names after model-visible collisions", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-projected-model-collision-");
+    const serverPath = path.join(tempDir, "projected-model-collision.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        { name: "read-page", inputSchema: { type: "object", properties: {} } },
+        { name: "read.page", inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+
+    const unfilteredRuntime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-model-collision-unfiltered",
+      sessionKey: "agent:test:session-projected-model-collision-unfiltered",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const materialized = await materializeBundleMcpToolsForRun({ runtime: unfilteredRuntime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual([
+        "docs__read-page",
+        "docs__read-page-2",
+      ]);
+      expect(materialized.tools.map((tool) => getPluginToolMeta(tool)?.mcp?.toolName)).toEqual([
+        "read-page",
+        "read.page",
+      ]);
+    } finally {
+      await unfilteredRuntime.dispose();
+    }
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-model-collision",
+      sessionKey: "agent:test:session-projected-model-collision",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["docs__read-page-2"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["read.page"]);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual(["docs__read-page"]);
+      expect(materialized.tools.map((tool) => getPluginToolMeta(tool)?.mcp?.toolName)).toEqual([
+        "read.page",
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("does not match exact listed-tool projections to synthetic MCP utilities", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-projected-filter-utilities-");
+    const serverPath = path.join(tempDir, "projected-filter-utilities.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      tools: [{ name: "read_page", inputSchema: { type: "object", properties: {} } }],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-projected-tool-filter-utilities",
+      sessionKey: "agent:test:session-projected-tool-filter-utilities",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: ["docs__read_page"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      expect(materialized.tools.map((tool) => tool.name)).toEqual(["docs__read_page"]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("warns on zero-match MCP toolFilter includes without leaking launch details", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-zero-filter-warning-");
+    const serverPath = path.join(tempDir, "zero-filter-warning.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [{ name: "read_page", inputSchema: { type: "object", properties: {} } }],
+    });
+    const logWarnSpy = vi
+      .spyOn(await import("../logger.js"), "logWarn")
+      .mockImplementation(() => {});
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-zero-filter-warning",
+      sessionKey: "agent:test:session-zero-filter-warning",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              env: { API_TOKEN: "secret-token-value" },
+              toolFilter: { include: ["missing_tool"] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools).toEqual([]);
+      const warnings = logWarnSpy.mock.calls.map((call) => call[0]);
+      expect(warnings).toContain(
+        'bundle-mcp: server "docs": toolFilter include matched 0 of 1 advertised tool(s); exact names from mcp probe are accepted, while wildcard patterns match raw MCP tool names only.',
+      );
+      const warningText = warnings.join("\n");
+      expect(warningText).not.toContain(process.execPath);
+      expect(warningText).not.toContain(serverPath);
+      expect(warningText).not.toContain("secret-token-value");
+    } finally {
+      await runtime.dispose();
+      logWarnSpy.mockRestore();
     }
   });
 
