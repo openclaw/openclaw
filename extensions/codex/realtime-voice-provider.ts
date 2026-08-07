@@ -6,10 +6,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  isProviderAuthProfileConfigured,
-  resolveProviderAuthProfileApiKey,
-} from "openclaw/plugin-sdk/provider-auth";
+import { resolveProviderAuthProfileApiKey } from "openclaw/plugin-sdk/provider-auth";
 import {
   convertPcmToMulaw8k,
   mulawToPcm,
@@ -41,19 +38,12 @@ function hasOpenAIPlatformApiKey(
   }
   if (
     Object.values(cfg?.auth?.profiles ?? {}).some(
-      (profile) =>
-        (profile.provider === "openai" || profile.provider === "codex") &&
-        profile.mode === "api_key",
+      (profile) => profile.provider === "openai" && profile.mode === "api_key",
     )
   ) {
     return true;
   }
-  return isProviderAuthProfileConfigured({
-    provider: "openai",
-    cfg,
-    profileTypes: ["api_key"],
-    includeExternalCliAuth: false,
-  });
+  return false;
 }
 
 async function resolveOpenAIPlatformApiKey(params: {
@@ -83,7 +73,7 @@ async function resolveOpenAIPlatformApiKey(params: {
     return envApiKey;
   }
   throw new Error(
-    "Codex realtime v2 requires a selected OpenAI Platform API key from provider config, an OpenAI API-key auth profile, or OPENAI_API_KEY",
+    "Codex realtime requires a selected OpenAI Platform API key from provider config, an OpenAI API-key auth profile, or OPENAI_API_KEY",
   );
 }
 
@@ -154,16 +144,13 @@ async function resolveBoundVoiceRun(params: {
   }
   const workspaceDir = params.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = params.runtime.agent.resolveAgentDir(cfg, agentId);
-  const realtimeRequest =
-    normalizeOptionalString(params.request.providerConfig.version) === "v2"
-      ? {
-          ...params.request,
-          providerConfig: {
-            ...params.request.providerConfig,
-            apiKey: await resolveOpenAIPlatformApiKey({ request: params.request, agentDir }),
-          },
-        }
-      : params.request;
+  const realtimeRequest = {
+    ...params.request,
+    providerConfig: {
+      ...params.request.providerConfig,
+      apiKey: await resolveOpenAIPlatformApiKey({ request: params.request, agentDir }),
+    },
+  };
   const timeoutMs = params.runtime.agent.resolveAgentTimeoutMs({ cfg });
   try {
     return await params.runtime.agent.runEmbeddedAgent({

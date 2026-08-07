@@ -3,7 +3,7 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCodexRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 function createRuntime(
@@ -111,6 +111,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+beforeEach(() => {
+  vi.stubEnv("OPENAI_API_KEY", "test-platform-key");
+});
+
 describe("Codex realtime voice provider", () => {
   it("advertises only API-key-backed Codex realtime", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -118,6 +122,14 @@ describe("Codex realtime voice provider", () => {
     const provider = buildCodexRealtimeVoiceProvider({ runtime });
 
     expect(provider.isConfigured({ providerConfig: {}, cfg: {} as never })).toBe(false);
+    expect(
+      provider.isConfigured({
+        providerConfig: {},
+        cfg: {
+          auth: { profiles: { "codex:legacy": { provider: "codex", mode: "api_key" } } },
+        } as never,
+      }),
+    ).toBe(false);
     expect(
       provider.isConfigured({
         providerConfig: {},
@@ -190,7 +202,33 @@ describe("Codex realtime voice provider", () => {
     expect(nativeBridge.close.mock.calls).toHaveLength(1);
   });
 
-  it("selects and forwards the realtime v2 Platform key explicitly", async () => {
+  it.each(["v2", "v3"] as const)(
+    "selects and forwards the realtime %s Platform key explicitly",
+    async (version) => {
+      vi.stubEnv("OPENAI_API_KEY", "selected-realtime-key");
+      const harness = createRuntime();
+      const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
+      const bridge = provider.createBridge({
+        cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } } as never,
+        agentId: "main",
+        sessionKey: "agent:main:voice",
+        senderId: "discord-user-1",
+        senderIsOwner: true,
+        providerConfig: { version },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      });
+
+      await bridge.connect();
+      expect(harness.getNativeRequest()?.providerConfig).toMatchObject({
+        version,
+        apiKey: "selected-realtime-key",
+      });
+      bridge.close();
+    },
+  );
+
+  it("selects and forwards the default v3 Platform key explicitly", async () => {
     vi.stubEnv("OPENAI_API_KEY", "selected-realtime-key");
     const harness = createRuntime();
     const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
@@ -200,20 +238,19 @@ describe("Codex realtime voice provider", () => {
       sessionKey: "agent:main:voice",
       senderId: "discord-user-1",
       senderIsOwner: true,
-      providerConfig: { version: "v2" },
+      providerConfig: {},
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });
 
     await bridge.connect();
     expect(harness.getNativeRequest()?.providerConfig).toMatchObject({
-      version: "v2",
       apiKey: "selected-realtime-key",
     });
     bridge.close();
   });
 
-  it("fails realtime v2 before app-server startup when no Platform key can be selected", async () => {
+  it("fails default realtime before app-server startup when no Platform key can be selected", async () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     const harness = createRuntime();
     const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
@@ -223,7 +260,7 @@ describe("Codex realtime voice provider", () => {
       sessionKey: "agent:main:voice",
       senderId: "discord-user-1",
       senderIsOwner: true,
-      providerConfig: { version: "v2" },
+      providerConfig: {},
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });

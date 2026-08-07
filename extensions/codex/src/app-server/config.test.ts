@@ -75,7 +75,9 @@ function expectRuntimePolicy(
 describe("Codex app-server config", () => {
   it("enables realtime conversation only for spawned app-server clients", () => {
     const stdio = resolveRuntimeForTest();
-    const enabled = enableCodexRealtimeConversation(stdio);
+    const enabled = enableCodexRealtimeConversation(stdio, {
+      apiKey: "selected-platform-key",
+    });
 
     expect(enabled.start.args).toEqual([
       "app-server",
@@ -84,8 +86,13 @@ describe("Codex app-server config", () => {
       "--enable",
       "realtime_conversation",
     ]);
-    expect(enabled.start.requiresRealtimeOpenAiApiKeyEnv).toBeUndefined();
-    expect(enableCodexRealtimeConversation(enabled)).toBe(enabled);
+    expect(enabled.start).toMatchObject({
+      requiresRealtimeOpenAiApiKeyEnv: true,
+      env: { OPENAI_API_KEY: "selected-platform-key" },
+    });
+    expect(enableCodexRealtimeConversation(enabled, { apiKey: "selected-platform-key" })).toBe(
+      enabled,
+    );
 
     const selectedV2 = enableCodexRealtimeConversation(stdio, {
       version: "v2",
@@ -102,7 +109,10 @@ describe("Codex app-server config", () => {
       }),
     ).toBe(selectedV2);
     expect(() => enableCodexRealtimeConversation(stdio, { version: "v2" })).toThrow(
-      "Codex realtime v2 requires an explicitly selected OpenAI Platform API key",
+      "Codex realtime requires an explicitly selected OpenAI Platform API key",
+    );
+    expect(() => enableCodexRealtimeConversation(stdio)).toThrow(
+      "Codex realtime requires an explicitly selected OpenAI Platform API key",
     );
 
     const websocket = resolveRuntimeForTest({

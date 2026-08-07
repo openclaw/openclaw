@@ -760,9 +760,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
             store: { version: 1, profiles: {} },
           },
         }),
-      ).rejects.toThrow(
-        "Codex realtime v2 requires an explicitly selected OpenAI Platform API key",
-      );
+      ).rejects.toThrow("Codex realtime requires an explicitly selected OpenAI Platform API key");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

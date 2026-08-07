@@ -328,30 +328,24 @@ export function enableCodexRealtimeConversation(
   if (appServer.start.transport !== "stdio") {
     return appServer;
   }
-  const version = readNonEmptyString(providerConfig.version) ?? "v3";
-  const openAiApiKey = version === "v2" ? readNonEmptyString(providerConfig.apiKey) : undefined;
-  if (version === "v2" && !openAiApiKey) {
-    throw new Error("Codex realtime v2 requires an explicitly selected OpenAI Platform API key");
+  const openAiApiKey = readNonEmptyString(providerConfig.apiKey);
+  if (!openAiApiKey) {
+    throw new Error("Codex realtime requires an explicitly selected OpenAI Platform API key");
   }
   const args = appServer.start.args;
   const featureEnabled = args.some(
     (arg, index) => arg === "--enable" && args[index + 1] === "realtime_conversation",
   );
   const selectedKeyAlreadyApplied =
-    !openAiApiKey ||
-    (appServer.start.requiresRealtimeOpenAiApiKeyEnv === true &&
-      appServer.start.env?.OPENAI_API_KEY === openAiApiKey);
+    appServer.start.requiresRealtimeOpenAiApiKeyEnv === true &&
+    appServer.start.env?.OPENAI_API_KEY === openAiApiKey;
   if (featureEnabled && selectedKeyAlreadyApplied) {
     return appServer;
   }
   const start = {
     ...appServer.start,
-    ...(openAiApiKey
-      ? {
-          requiresRealtimeOpenAiApiKeyEnv: true,
-          env: { ...appServer.start.env, OPENAI_API_KEY: openAiApiKey },
-        }
-      : {}),
+    requiresRealtimeOpenAiApiKeyEnv: true,
+    env: { ...appServer.start.env, OPENAI_API_KEY: openAiApiKey },
     ...(featureEnabled ? {} : { args: [...args, "--enable", "realtime_conversation"] }),
   };
   return {
