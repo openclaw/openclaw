@@ -39,6 +39,7 @@ export function createHarness(
     leaseFailureCount?: number;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
+    resumeError?: Error;
     workspacePath?: string;
     priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
     reconcileConflictPaths?: string[];
@@ -108,6 +109,10 @@ export function createHarness(
       log.push("placement:failed");
       return placementStore.fail(params);
     },
+    failPendingWorkspaceResult: (params) => {
+      log.push("placement:failed");
+      return placementStore.failPendingWorkspaceResult(params);
+    },
     finishReclaim: (params) => {
       log.push("placement:reclaimed");
       if (options.claimOnDrain && !placementStore.get(params.sessionId)?.turnClaim) {
@@ -174,6 +179,9 @@ export function createHarness(
         }),
         resume: vi.fn(async () => {
           log.push("workspace:resume");
+          if (options.resumeError) {
+            throw options.resumeError;
+          }
           if (options.resumeFails) {
             throw new Error("workspace resume failed");
           }

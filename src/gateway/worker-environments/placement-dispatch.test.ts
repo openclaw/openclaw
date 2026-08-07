@@ -15,6 +15,7 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { WorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
 
 describe("worker placement dispatch", () => {
   let root: string;
@@ -200,6 +201,41 @@ describe("worker placement dispatch", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "active",
       turnClaim: { claimId: claim.claimId },
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
+  it("records terminal quiescence recovery while retaining the pending result", async () => {
+    const terminalMessage =
+      "Worker workspace sync failed: workspace quiescence recovery timed out; lease retained for operator recovery";
+    const harness = createHarness(placementStore, {
+      resumeError: new WorkerWorkspaceOperatorRecoveryError(new Error(terminalMessage)),
+    });
+    const active = harness.placements.seedActive(2);
+    harness.markEnvironmentOwnerEpoch(2);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      claimId: "terminal-resume-failure-claim",
+      runId: "terminal-resume-failure-run",
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+    });
+    placementStore.markWorkspaceResultPending(claim);
+    placementStore.handoffWorkspaceResultRecovery(claim);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: terminalMessage,
+      turnClaim: null,
     });
     expect(placementStore.listPendingWorkspaceResults()).toHaveLength(1);
     expect(harness.environments.destroy).not.toHaveBeenCalled();

@@ -7,6 +7,7 @@ import type {
   WorkerDrainingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { WorkerWorkspaceOperatorRecoveryError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -461,7 +462,10 @@ export async function recoverPendingWorkspaceResults(
           }
         }
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof WorkerWorkspaceOperatorRecoveryError) {
+        failure.recordRetainedResultFailure(placement, error);
+      }
       // Keep the result, claim, and environment fenced. The next sweep retries.
     }
   }

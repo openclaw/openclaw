@@ -386,10 +386,7 @@ describe("remote workspace quiescence scripts", () => {
         recovery?: { state: string };
       };
       expect(terminal.watchdog).toBeNull();
-      expect(terminal.processes).toHaveLength(childPids.length);
-      expect(terminal.processes.map((entry) => entry.pid)).toEqual(
-        expect.arrayContaining(childPids),
-      );
+      expect(terminal.processes.map((entry) => entry.pid)).toEqual(childPids);
       expect(terminal.recovery?.state).toBe("probe-timeout");
 
       await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
@@ -576,12 +573,23 @@ describe("remote workspace quiescence scripts", () => {
       lease.expiresAtMs = Date.now() + 9 * 60_000;
       lease.processes = Array.from({ length: 4096 }, () => reference);
       await fs.writeFile(leaseFile, `${JSON.stringify(lease)}\n`);
+      const fastProbeScript = `
+const childProcessModule = require("node:child_process");
+const originalExecFile = childProcessModule.execFile;
+childProcessModule.execFile = function (file, args, options, callback) {
+  if (args.at(-1) === ${JSON.stringify(String(childPid))}) {
+    queueMicrotask(() => callback(null, ${JSON.stringify(`T ${reference.start}\n`)}, ""));
+    return { stdout: null, stderr: null, kill: () => true, unref: () => {} };
+  }
+  return originalExecFile.call(this, file, args, options, callback);
+};
+${REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS}`;
 
       const result = await runCommandWithTimeout(
         [
           process.execPath,
           "-e",
-          REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+          fastProbeScript,
           input.workspace,
           nonce,
           String(12 * 60_000),
@@ -605,6 +613,42 @@ describe("remote workspace quiescence scripts", () => {
       await terminate(child);
     }
   }, 75_000);
+
+  it("renews a zero-process lease using only the watchdog validation budget", async () => {
+    const input = await fixture();
+    const nonce = await quiesce(input, 30_000);
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+
+    try {
+      const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        expiresAtMs: number;
+        processes: Array<{ pid: number; start: string }>;
+      };
+      expect(lease.processes).toEqual([]);
+      lease.expiresAtMs = Date.now() + 7_000;
+      await fs.writeFile(leaseFile, `${JSON.stringify(lease)}\n`);
+
+      const result = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+          input.workspace,
+          nonce,
+          "30000",
+        ],
+        { timeoutMs: 10_000, baseEnv: input.env },
+      );
+
+      expect(result.code, result.stderr).toBe(0);
+      const renewed = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        expiresAtMs: number;
+      };
+      expect(renewed.expiresAtMs).toBeGreaterThan(lease.expiresAtMs);
+    } finally {
+      await resume(input, nonce);
+    }
+  });
 
   it("caps watchdog validation after fast high-cardinality process validation", async () => {
     const input = await fixture();

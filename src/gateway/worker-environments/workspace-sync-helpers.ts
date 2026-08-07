@@ -10,7 +10,11 @@ import {
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
-import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
+import {
+  WorkerWorkspaceOperatorRecoveryError,
+  type WorkerWorkspaceCommand,
+  type WorkerWorkspaceSyncRequest,
+} from "./tunnel-contract.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
@@ -52,9 +56,12 @@ export function workspaceSyncError(result: SpawnResult): Error {
   const detail = redactSensitiveText(result.stderr || result.stdout, { mode: "tools" })
     .replace(/\s+/gu, " ")
     .trim();
-  return new Error(
+  const error = new Error(
     detail ? `Worker workspace sync failed: ${detail}` : "Worker workspace sync failed",
   );
+  return detail.includes("lease retained for operator recovery")
+    ? new WorkerWorkspaceOperatorRecoveryError(error)
+    : error;
 }
 
 export function workerWorkspaceRsyncRemoteCommand(prepared: PreparedWorkerSsh): string {

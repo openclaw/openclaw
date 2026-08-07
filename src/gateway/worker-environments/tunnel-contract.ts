@@ -13,6 +13,13 @@ export class WorkerTunnelOwnerDisconnectedError extends Error {
   }
 }
 
+export class WorkerWorkspaceOperatorRecoveryError extends Error {
+  constructor(cause: Error) {
+    super(cause.message, { cause });
+    this.name = "WorkerWorkspaceOperatorRecoveryError";
+  }
+}
+
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;

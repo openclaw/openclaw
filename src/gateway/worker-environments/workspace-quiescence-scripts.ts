@@ -1,5 +1,7 @@
 const REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS = 1_000;
-const REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS = 5_000; // Whole pass; exhaustion retains operator-visible lease state.
+// This wall-clock ceiling covers the whole recovery pass, not each process.
+// Exhaustion is expected to be rare and leaves an operator-visible terminal lease.
+const REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS = 5_000;
 const REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY = 8;
 
 const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
@@ -102,8 +104,11 @@ async function signalProcessReferences(references, concurrency = ${REMOTE_QUIESC
   return results;
 }
 function remainingProcessReferences(references, outcomes) {
-  return ["deferred", "timeout", "failed"].flatMap((kind) =>
-    references.filter((_reference, index) => outcomes[index].kind === kind),
+  return references.filter(
+    (_reference, index) =>
+      outcomes[index].kind === "deferred" ||
+      outcomes[index].kind === "timeout" ||
+      outcomes[index].kind === "failed",
   );
 }
 async function recoverProcessReferences(references, concurrency = ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY}, deadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS}) {
@@ -209,11 +214,6 @@ function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
     expiresAtMs,
   });
 }
-function roundRobinProcessReferences(groups) {
-  const references = [];
-  for (let index = 0; groups.some((group) => index < group.length); index += 1) for (const group of groups) if (group[index]) references.push(group[index]);
-  return references;
-}
 async function recoverOrphanLeases(orphanNames) {
   const orphans = [];
   for (const name of orphanNames) {
@@ -228,19 +228,18 @@ async function recoverOrphanLeases(orphanNames) {
       ...(lease.watchdog === null ? [] : [{ ...lease.watchdog, signal: "SIGTERM" }]),
       ...lease.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
     ];
-    orphans.push({ orphanPath, lease, references, remaining: [] });
+    orphans.push({ orphanPath, lease, references });
   }
-  const ownerByReference = new Map();
-  for (const orphan of orphans) for (const reference of orphan.references) ownerByReference.set(reference, orphan);
   const recovery = await recoverProcessReferences(
-    roundRobinProcessReferences(orphans.map((orphan) => orphan.references)),
+    orphans.flatMap((orphan) => orphan.references),
     ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
     Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
   );
-  for (const reference of recovery.remaining) ownerByReference.get(reference).remaining.push(reference);
+  const remaining = new Set(recovery.remaining);
   let retained = false;
   let failed = false;
-  for (const { orphanPath, lease, remaining: unresolved } of orphans) {
+  for (const { orphanPath, lease, references } of orphans) {
+    const unresolved = references.filter((reference) => remaining.has(reference));
     if (unresolved.length === 0) { fs.unlinkSync(orphanPath); continue; }
     retained = true;
     const leaseFailed = unresolved.some((reference) => recovery.failedReferences.has(reference));
