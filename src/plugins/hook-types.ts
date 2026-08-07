@@ -340,6 +340,8 @@ export type PluginHookAgentContext = {
   senderExternalId?: string;
   /** Channel-owned sender/chat details. Plugins may augment the nested interfaces. */
   channelContext?: PluginHookChannelContext;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
 
 export type PluginHookContextWindowSource =
@@ -538,6 +540,8 @@ export type PluginHookBeforeDispatchContext = {
   replyToBody?: string;
   replyToSender?: string;
   replyToIsQuote?: boolean;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
 
 export type PluginHookBeforeDispatchResult = {
@@ -700,7 +704,7 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
-  /** Aborts when the owning tool call is cancelled. Hook timeout expiry does not abort this signal. */
+  /** Aborts when the owning tool call is cancelled or this handler's hook timeout expires. */
   abortSignal?: AbortSignal;
   trace?: DiagnosticTraceContext;
   toolName: string;
@@ -757,6 +761,8 @@ export type PluginHookToolResultPersistContext = {
   sessionKey?: string;
   toolName?: string;
   toolCallId?: string;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
 
 export type PluginHookToolResultPersistEvent = {
@@ -785,6 +791,8 @@ export type PluginHookSessionContext = {
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
 
 export type PluginHookSessionStartEvent = {
@@ -820,6 +828,8 @@ export type PluginHookSubagentContext = {
   runId?: string;
   childSessionKey?: string;
   requesterSessionKey?: string;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
 
 type PluginHookSubagentTargetKind = "subagent" | "acp";
@@ -951,6 +961,8 @@ export type PluginHookGatewayContext = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   getCron?: () => PluginHookGatewayCronService | undefined;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
 
 export type PluginHookCronReconciledContext = PluginHookGatewayContext & {
@@ -1179,6 +1191,8 @@ export type PluginHookBeforeInstallContext = {
   targetType: PluginInstallTargetType;
   requestKind: PluginInstallRequestKind;
   origin?: string;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
 
 export type PluginHookBeforeInstallEvent = {

@@ -130,4 +130,6 @@ export type PluginHookSkillProposalChangedEvent = {
 export type PluginHookSkillContext = {
   workspaceDir: string;
   agentId?: string;
+  /** Aborts when this handler's hook timeout expires, composed with any caller cancellation. */
+  abortSignal?: AbortSignal;
 };
