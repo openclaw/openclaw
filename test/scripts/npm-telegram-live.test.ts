@@ -311,7 +311,7 @@ describe("package Telegram live Docker E2E", () => {
     );
     expect(script).toContain('ln -sfn "$source" "$target"');
     expect(script).toContain('link_installed_package_dependency "$dependency"');
-    expect(script).toContain("@modelcontextprotocol/sdk");
+    expect(script).toContain("@modelcontextprotocol/client");
     expect(script).toContain("yaml");
     expect(script).toContain("zod");
   });

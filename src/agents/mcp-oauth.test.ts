@@ -27,7 +27,7 @@ const authMock = vi.hoisted(() => vi.fn());
 const ROTATED_ACCESS = "gateway-token";
 const LEGACY_ACCESS = "example";
 
-vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+vi.mock("@modelcontextprotocol/client", () => ({
   auth: authMock,
 }));
 
