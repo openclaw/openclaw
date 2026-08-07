@@ -2907,6 +2907,55 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("falls back to the context engine when required-preflight native compaction reports a binding change", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    } as never);
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "codex app-server binding changed before native compaction",
+      failure: {
+        reason: "stale_thread_binding",
+        rawError: "codex app-server binding changed before native compaction",
+      },
+    });
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        trigger: "budget",
+        preflightRequired: true,
+        config: {
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(result.result?.summary).toBe("engine-summary");
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        preflightRequired: true,
+      }),
+      { nativeCompactionRequest: "required_preflight" },
+    );
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps queued native auth candidates uncollapsed until native resolution", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({
       runtime: "native",

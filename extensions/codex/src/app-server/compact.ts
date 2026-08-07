@@ -669,7 +669,7 @@ async function compactCodexNativeThread(
                 }
                 if (!currentBinding || !isSameNativeCompactionBinding(currentBinding, binding)) {
                   embeddedAgentLog.warn(
-                    "skipping codex app-server compaction because the thread binding changed",
+                    "codex app-server compaction could not use the thread binding because it changed",
                     {
                       sessionId: params.sessionId,
                       sessionKey: params.sessionKey,
@@ -679,11 +679,15 @@ async function compactCodexNativeThread(
                   );
                   return {
                     started: false as const,
-                    result: skippedCodexNativeCompactionResult(params, {
+                    // A binding change between the initial read and the native
+                    // request is a stale-binding race, not a benign skip. Report
+                    // it as the canonical recoverable failure so preflight and
+                    // CLI callers fall back to the context engine instead of
+                    // treating an uncompacted ok:true result as a dropped turn.
+                    result: failedCodexThreadBindingCompactionResult(params, {
                       reason: "codex app-server binding changed before native compaction",
-                      code: "binding_changed_before_native_compaction",
-                      expectedThreadId: binding.threadId,
-                      currentThreadId: currentBinding?.threadId,
+                      recovery: "stale_thread_binding",
+                      threadId: currentBinding?.threadId ?? binding.threadId,
                     }),
                   };
                 }
