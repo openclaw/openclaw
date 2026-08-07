@@ -404,15 +404,29 @@ describe("context-engine host parameter projection", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("does not warn for undeclared engines before the warning window", async () => {
+  it("stays silent and keeps legacy projection for undeclared engines before the warning window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-28T23:59:59Z"));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [] });
+    const assembleCalls: Array<Record<string, unknown>> = [];
+    const compactCalls: Array<Record<string, unknown>> = [];
+    const engineId = registerProbeEngine({ assembleCalls, compactCalls });
 
-    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+    await invokeHostParamMethods(
+      await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } }),
+    );
 
     expect(warnSpy).not.toHaveBeenCalled();
+    // Pre-warning clocks still project: the diagnostic window must not change
+    // what undeclared engines receive before warningStarts.
+    for (const call of [...assembleCalls, ...compactCalls]) {
+      expect(call).not.toHaveProperty("sessionKey");
+      expect(call).not.toHaveProperty("runtimeSettings");
+    }
+    expect(assembleCalls[0]).not.toHaveProperty("prompt");
+    expect(compactCalls[0]).not.toHaveProperty("sessionTarget");
+    expect(compactCalls[0]).not.toHaveProperty("runtimeContext");
+    expect(compactCalls[0]).toHaveProperty("sessionId", "session-1");
   });
 
   it("deduplicates the warning across repeated resolves of fresh factory instances", async () => {

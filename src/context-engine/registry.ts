@@ -73,7 +73,17 @@ const LEGACY_HOST_PARAM_DEFAULT_WARNED = resolveGlobalSingleton<Set<string>>(
   () => new Set(),
 );
 
-function isLegacyHostParamDefaultWindowOpen(): boolean {
+function isLegacyHostParamDefaultProjectionActive(): boolean {
+  // Projection predates the warning window: params are withheld from before
+  // warningStarts through removeAfter. Warning timing must not change what is
+  // projected; pre-warning clocks keep the shipped legacy projection.
+  return (
+    legacyHostParamDefaultRemoveAfter !== undefined &&
+    new Date().toISOString().slice(0, 10) <= legacyHostParamDefaultRemoveAfter
+  );
+}
+
+function isLegacyHostParamDefaultWarningWindowOpen(): boolean {
   const today = new Date().toISOString().slice(0, 10);
   if (
     legacyHostParamDefaultWarningStarts !== undefined &&
@@ -110,7 +120,7 @@ function warnUndeclaredHostParamsOnce(
   if (engine.info.acceptedHostParams !== undefined) {
     return;
   }
-  if (!isLegacyHostParamDefaultWindowOpen()) {
+  if (!isLegacyHostParamDefaultWarningWindowOpen()) {
     return;
   }
   const identityKey = `${metadata.owner}\u0000${metadata.engineId}`;
@@ -127,7 +137,7 @@ function projectContextEngineHostParams(
 ): Record<string, unknown> {
   // Removal(2026-08-12): undeclared engines get full params.
   // Contract: context-engine-legacy-host-param-default.
-  const useLegacyDefault = isLegacyHostParamDefaultWindowOpen();
+  const useLegacyDefault = isLegacyHostParamDefaultProjectionActive();
   const accepted = engine.info.acceptedHostParams ?? (useLegacyDefault ? [] : undefined);
   if (!accepted) {
     return params;
