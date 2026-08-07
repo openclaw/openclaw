@@ -1,5 +1,5 @@
 // Uninstall command tests cover cleanup flow, prompts, and runtime messages.
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
@@ -11,6 +11,17 @@ import {
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
 
+const gatewayService = vi.hoisted(() => ({
+  notLoadedText: "is not installed",
+  isLoaded: vi.fn(),
+  stop: vi.fn(),
+  uninstall: vi.fn(),
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => gatewayService,
+}));
+
 const { uninstallCommand } = await import("./uninstall.js");
 
 describe("uninstallCommand", () => {
@@ -19,6 +30,126 @@ describe("uninstallCommand", () => {
   beforeEach(() => {
     resetCleanupCommandMocks();
     silenceCleanupCommandRuntime(runtime);
+    gatewayService.isLoaded.mockReset().mockResolvedValueOnce(true).mockResolvedValue(false);
+    gatewayService.stop.mockReset().mockResolvedValue(undefined);
+    gatewayService.uninstall.mockReset().mockResolvedValue(undefined);
+  });
+
+  it.each([
+    {
+      name: "the gateway service cannot be inspected",
+      arrange: () => {
+        gatewayService.isLoaded.mockReset().mockRejectedValue(new Error("service check failed"));
+      },
+    },
+    {
+      name: "the loaded gateway service cannot be uninstalled",
+      arrange: () => {
+        gatewayService.uninstall.mockRejectedValue(new Error("service uninstall failed"));
+      },
+    },
+    {
+      name: "the gateway service remains loaded after uninstall",
+      arrange: () => {
+        gatewayService.isLoaded.mockReset().mockResolvedValue(true);
+      },
+    },
+    {
+      name: "the uninstalled gateway service can no longer be inspected",
+      arrange: () => {
+        gatewayService.isLoaded
+          .mockReset()
+          .mockResolvedValueOnce(true)
+          .mockRejectedValueOnce(new Error("final service check failed"));
+      },
+    },
+  ])("preserves all user data and exits nonzero when $name", async ({ arrange }) => {
+    arrange();
+
+    await expect(
+      uninstallCommand(runtime, {
+        all: true,
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+    expect(prepareLegacyWorkspaceStateReset).not.toHaveBeenCalled();
+    expect(cleanupCommandLogMessages(runtime)).not.toContain(
+      "CLI still installed. Remove via npm/pnpm if desired.",
+    );
+  });
+
+  it("exits nonzero when a service-only uninstall fails", async () => {
+    gatewayService.uninstall.mockRejectedValue(new Error("service uninstall failed"));
+
+    await expect(
+      uninstallCommand(runtime, {
+        service: true,
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+  });
+
+  it("removes all requested data after verifying the gateway is no longer loaded", async () => {
+    await uninstallCommand(runtime, {
+      all: true,
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(gatewayService.stop).toHaveBeenCalledOnce();
+    expect(gatewayService.uninstall).toHaveBeenCalledOnce();
+    expect(gatewayService.isLoaded).toHaveBeenCalledTimes(2);
+    expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+    expect(removeWorkspaceDirs).toHaveBeenCalledOnce();
+  });
+
+  it("continues an idempotent full uninstall when the service is not installed", async () => {
+    gatewayService.isLoaded.mockReset().mockResolvedValue(false);
+
+    await uninstallCommand(runtime, {
+      all: true,
+      yes: true,
+      nonInteractive: true,
+    });
+
+    expect(gatewayService.stop).not.toHaveBeenCalled();
+    expect(gatewayService.uninstall).not.toHaveBeenCalled();
+    expect(removeStateAndLinkedPaths).toHaveBeenCalledOnce();
+    expect(removeWorkspaceDirs).toHaveBeenCalledOnce();
+  });
+
+  it("preserves all user data when Nix owns the gateway service", async () => {
+    vi.resetModules();
+    vi.doMock("../config/config.js", () => ({ isNixMode: true }));
+
+    try {
+      const { uninstallCommand: uninstallNixService } = await import("./uninstall.js");
+
+      await expect(
+        uninstallNixService(runtime, {
+          all: true,
+          yes: true,
+          nonInteractive: true,
+        }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(gatewayService.isLoaded).not.toHaveBeenCalled();
+      expect(gatewayService.stop).not.toHaveBeenCalled();
+      expect(gatewayService.uninstall).not.toHaveBeenCalled();
+      expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+      expect(removeWorkspaceDirs).not.toHaveBeenCalled();
+    } finally {
+      vi.doMock("../config/config.js", () => ({ isNixMode: false }));
+      vi.resetModules();
+    }
   });
 
   it("recommends creating a backup before removing state or workspaces", async () => {
