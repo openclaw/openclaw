@@ -194,12 +194,17 @@ export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | und
   if (value.length > SANDBOX_HOST_CSP_MAX_ENCODED_BYTES) {
     throw new Error("MCP App CSP metadata is too large");
   }
-  const decoded = JSON.parse(
-    new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(value, "base64url")),
-  ) as unknown;
+  const bytes = Buffer.from(value, "base64url");
+  if (bytes.toString("base64url") !== value) {
+    throw new Error("MCP App CSP metadata is not canonical");
+  }
+  const decoded = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
   const normalized = normalizeSandboxHostCsp(decoded);
   if (!normalized) {
     throw new Error("MCP App CSP metadata is not a valid policy");
+  }
+  if (encodeCsp(normalized) !== value) {
+    throw new Error("MCP App CSP metadata is not canonical");
   }
   return normalized;
 }
