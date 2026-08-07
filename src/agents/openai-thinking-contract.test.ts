@@ -71,7 +71,7 @@ describe("OpenAI thinking contract", () => {
 
       await agent.prompt("hello");
 
-      expect(capturedOptions.map(({ reasoning }) => reasoning)).toStrictEqual([undefined]);
+      expect(capturedOptions.map(({ reasoning }) => reasoning)).toStrictEqual(["off"]);
     },
   );
 
