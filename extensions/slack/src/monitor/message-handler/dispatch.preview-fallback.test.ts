@@ -435,6 +435,22 @@ async function dispatchNativeProgressScenario(params: {
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   resolveHumanDelayConfig: () => undefined,
+  resolveAgentConfig: (
+    cfg: {
+      agents?: {
+        defaults?: { typingMode?: string };
+        entries?: Record<string, { typingMode?: string }>;
+        list?: Array<{ id: string; typingMode?: string }>;
+      };
+    },
+    agentId: string,
+  ) => {
+    const agents = cfg.agents;
+    const entry = agents?.entries
+      ? agents.entries[agentId]
+      : agents?.list?.find((candidate) => candidate.id === agentId);
+    return entry ? { typingMode: entry.typingMode ?? agents?.defaults?.typingMode } : undefined;
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
@@ -1956,6 +1972,30 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.suppressTyping).toBe(true);
   });
 
+  it("keeps room events silent when an agent explicitly configures typing", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          agents: { defaults: { typingMode: "instant" } },
+          messages: {
+            groupChat: { visibleReplies: "automatic" },
+            statusReactions: { enabled: true },
+          },
+        },
+        ctxPayload: {
+          ChatType: "channel",
+          InboundEventKind: "room_event",
+          MentionSource: "implicit_thread",
+        },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressTyping).toBe(true);
+    expect(capturedStatusReactionOptions?.enabled).toBe(false);
+  });
+
   it("leaves Slack typing unsuppressed for normal channel turns", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
@@ -1967,6 +2007,336 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.sourceReplyDeliveryMode).toBe("automatic");
     expect(capturedReplyOptions?.suppressTyping).toBeUndefined();
   });
+
+  it("keeps silent implicit thread follow-ups free of typing and progress UI", async () => {
+    const setSlackThreadStatus = vi.fn(async () => undefined);
+    mockedNativeStreaming = true;
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "reasoning", text: "Deciding whether to reply" },
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Inspecting the active thread",
+      },
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: "Inspect the thread before deciding whether to reply",
+        steps: [{ step: "Inspect the thread", status: "in_progress" }],
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          messages: {
+            groupChat: { visibleReplies: "automatic" },
+          },
+        },
+        accountConfig: {
+          streaming: { mode: "progress", progress: { commentary: true, nativeTaskCards: true } },
+        },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+        setSlackThreadStatus,
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressTyping).toBe(true);
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(capturedReplyOptions?.onReasoningStream).toBeUndefined();
+    expect(setSlackThreadStatus).not.toHaveBeenCalled();
+    expect(capturedStatusReactionOptions?.enabled).toBe(false);
+    expect(statusReactionControllerMock.setQueued).not.toHaveBeenCalled();
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps portable implicit-thread progress drafts invisible on silent turns", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "tool_start", name: "web_search", phase: "start" },
+      {
+        kind: "item",
+        itemKind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Inspecting the active thread",
+      },
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: "Inspect the thread before deciding whether to reply",
+        steps: [{ step: "Inspect the thread", status: "in_progress" }],
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        accountConfig: { streaming: { mode: "progress", progress: { commentary: true } } },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+      }),
+    );
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicitly enabled status reactions for quiet implicit thread follow-ups", async () => {
+    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedReplyOptionEvents = [
+      { kind: "reasoning", text: "Inspecting the thread" },
+      { kind: "tool_start", name: "web_search", phase: "start" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          messages: {
+            groupChat: { visibleReplies: "automatic" },
+            statusReactions: { enabled: true },
+          },
+        },
+        accountConfig: { streaming: { mode: "progress", progress: { commentary: true } } },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+        setSlackThreadStatus,
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressTyping).toBe(true);
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(capturedStatusReactionOptions?.enabled).toBe(true);
+    expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setThinking).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setTool).toHaveBeenCalledWith("web_search");
+    expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
+    expect(setSlackThreadStatus).not.toHaveBeenCalled();
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it.each([false, true])(
+    "still delivers final implicit-thread replies with native task cards set to %s",
+    async (nativeTaskCards) => {
+      const draftStream = createDraftStreamStub();
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      mockedNativeStreaming = nativeTaskCards;
+      mockedSlackStreamingMode = "progress";
+      mockedSlackDraftMode = "status_final";
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+          accountConfig: {
+            streaming: { mode: "progress", progress: { commentary: true, nativeTaskCards } },
+          },
+          ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+        }),
+      );
+
+      expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(nativeTaskCards ? 0 : 1);
+      expect(draftStream.update).not.toHaveBeenCalled();
+      expect(startSlackStreamMock).not.toHaveBeenCalled();
+      expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+      expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    },
+  );
+
+  it("preserves actual answer previews for implicit thread follow-ups", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedReplyOptionEvents = [{ kind: "partial", text: "An answer is taking shape" }];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressTyping).toBe(true);
+    expect(draftStream.update).toHaveBeenCalledWith("An answer is taking shape");
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("keeps configured block streaming disabled while hiding implicit-thread plan previews", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedBlockStreamingEnabled = true;
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "plan",
+        phase: "update",
+        explanation: "Inspect the active thread",
+        steps: [{ step: "Inspect the thread", status: "in_progress" }],
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+      }),
+    );
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+    expect(draftStream.update).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ...(["instant", "thinking", "message", "never"] as const).map((typingMode) => ({
+      source: "agent defaults",
+      typingMode,
+      agents: { defaults: { typingMode } },
+    })),
+    {
+      source: "agent entries",
+      typingMode: "instant",
+      agents: { entries: { "agent-1": { typingMode: "instant" } } },
+    },
+    {
+      source: "legacy agent list",
+      typingMode: "instant",
+      agents: { list: [{ id: "agent-1", typingMode: "instant" }] },
+    },
+  ])(
+    "preserves explicit $typingMode feedback behavior from $source in implicit threads",
+    async ({ agents }) => {
+      mockedSlackStreamingMode = "progress";
+      mockedSlackDraftMode = "status_final";
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          cfg: {
+            agents,
+            messages: { groupChat: { visibleReplies: "automatic" } },
+          },
+          accountConfig: { streaming: { mode: "progress", progress: { commentary: true } } },
+          ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+        }),
+      );
+
+      expect(capturedReplyOptions?.suppressTyping).toBeUndefined();
+      expect(capturedReplyOptions?.commentaryProgressEnabled).toBe(true);
+      expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("keeps implicit thread feedback silent when another agent owns the override", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          agents: { entries: { "another-agent": { typingMode: "instant" } } },
+          messages: { groupChat: { visibleReplies: "automatic" } },
+        },
+        accountConfig: { streaming: { mode: "progress", progress: { commentary: true } } },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressTyping).toBe(true);
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBeUndefined();
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("preserves the per-agent typing override when defaults disagree", async () => {
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          agents: {
+            defaults: { typingMode: "instant" },
+            entries: { "agent-1": { typingMode: "never" } },
+          },
+          messages: { groupChat: { visibleReplies: "automatic" } },
+        },
+        accountConfig: { streaming: { mode: "progress", progress: { commentary: true } } },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressTyping).toBeUndefined();
+    expect(capturedReplyOptions?.commentaryProgressEnabled).toBe(true);
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves final native answer streaming for implicit thread follow-ups", async () => {
+    mockedNativeStreaming = true;
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        ctxPayload: { ChatType: "channel", MentionSource: "implicit_thread" },
+      }),
+    );
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["explicit_bot", "subteam", "mention_pattern", "command_bypass"])(
+    "preserves typing and progress UI for %s thread requests",
+    async (mentionSource) => {
+      const setSlackThreadStatus = vi.fn(async () => undefined);
+      mockedSlackStreamingMode = "progress";
+      mockedSlackDraftMode = "status_final";
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+          accountConfig: { streaming: { mode: "progress", progress: { commentary: true } } },
+          ctxPayload: { ChatType: "channel", MentionSource: mentionSource },
+          setSlackThreadStatus,
+        }),
+      );
+
+      expect(capturedReplyOptions?.suppressTyping).toBeUndefined();
+      expect(capturedTyping).toBeDefined();
+      expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+
+      await requireCapturedTyping().start();
+
+      expect(setSlackThreadStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "is typing..." }),
+      );
+    },
+  );
 
   it("escapes Slack mrkdwn in tool progress preview labels", async () => {
     const draftStream = createDraftStreamStub();
