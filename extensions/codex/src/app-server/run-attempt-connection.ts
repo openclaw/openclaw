@@ -207,7 +207,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       binding: startupBinding,
       execPolicyTouched: execPolicy.touched,
     });
-    return params.realtimeVoice ? enableCodexRealtimeConversation(appServer) : appServer;
+    return params.realtimeVoice
+      ? enableCodexRealtimeConversation(appServer, params.realtimeVoice.request.providerConfig)
+      : appServer;
   };
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
@@ -422,7 +424,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       execPolicyTouched: execPolicy.touched,
     });
     return params.realtimeVoice
-      ? enableCodexRealtimeConversation(currentBindingAppServer)
+      ? enableCodexRealtimeConversation(
+          currentBindingAppServer,
+          params.realtimeVoice.request.providerConfig,
+        )
       : currentBindingAppServer;
   };
   return {

@@ -177,7 +177,7 @@ export type ResolvedCodexPluginsPolicy = {
 
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
-  /** Keeps OpenAI's realtime-only API-key fallback available under subscription auth. */
+  /** Confirms that env contains an explicitly selected realtime-only OpenAI API key. */
   requiresRealtimeOpenAiApiKeyEnv?: boolean;
   homeScope?: CodexAppServerHomeScope;
   command: string;

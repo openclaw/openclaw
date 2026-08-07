@@ -323,28 +323,40 @@ export function resolveCodexAppServerRuntimeOptions(
 
 export function enableCodexRealtimeConversation(
   appServer: CodexAppServerRuntimeOptions,
+  providerConfig: Record<string, unknown> = {},
 ): CodexAppServerRuntimeOptions {
   if (appServer.start.transport !== "stdio") {
     return appServer;
   }
-  const args = appServer.start.args;
-  for (let index = 0; index < args.length - 1; index += 1) {
-    if (args[index] === "--enable" && args[index + 1] === "realtime_conversation") {
-      return appServer.start.requiresRealtimeOpenAiApiKeyEnv
-        ? appServer
-        : {
-            ...appServer,
-            start: { ...appServer.start, requiresRealtimeOpenAiApiKeyEnv: true },
-          };
-    }
+  const version = readNonEmptyString(providerConfig.version) ?? "v3";
+  const openAiApiKey = version === "v2" ? readNonEmptyString(providerConfig.apiKey) : undefined;
+  if (version === "v2" && !openAiApiKey) {
+    throw new Error("Codex realtime v2 requires an explicitly selected OpenAI Platform API key");
   }
+  const args = appServer.start.args;
+  const featureEnabled = args.some(
+    (arg, index) => arg === "--enable" && args[index + 1] === "realtime_conversation",
+  );
+  const selectedKeyAlreadyApplied =
+    !openAiApiKey ||
+    (appServer.start.requiresRealtimeOpenAiApiKeyEnv === true &&
+      appServer.start.env?.OPENAI_API_KEY === openAiApiKey);
+  if (featureEnabled && selectedKeyAlreadyApplied) {
+    return appServer;
+  }
+  const start = {
+    ...appServer.start,
+    ...(openAiApiKey
+      ? {
+          requiresRealtimeOpenAiApiKeyEnv: true,
+          env: { ...appServer.start.env, OPENAI_API_KEY: openAiApiKey },
+        }
+      : {}),
+    ...(featureEnabled ? {} : { args: [...args, "--enable", "realtime_conversation"] }),
+  };
   return {
     ...appServer,
-    start: {
-      ...appServer.start,
-      requiresRealtimeOpenAiApiKeyEnv: true,
-      args: [...args, "--enable", "realtime_conversation"],
-    },
+    start,
   };
 }
 

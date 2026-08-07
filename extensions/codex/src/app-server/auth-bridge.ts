@@ -89,6 +89,12 @@ export async function bridgeCodexAppServerStartOptions(params: {
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();
+    if (
+      params.startOptions.requiresRealtimeOpenAiApiKeyEnv &&
+      params.preparedAuth.kind === "profile"
+    ) {
+      assertSelectedRealtimeOpenAiApiKey(scopedStartOptions);
+    }
     return withClearedEnvironmentVariables(
       scopedStartOptions,
       params.startOptions.requiresRealtimeOpenAiApiKeyEnv && params.preparedAuth.kind === "profile"
@@ -119,6 +125,9 @@ export async function bridgeCodexAppServerStartOptions(params: {
     store,
     authProfileId,
   });
+  if (shouldClearInheritedOpenAiApiKey && params.startOptions.requiresRealtimeOpenAiApiKeyEnv) {
+    assertSelectedRealtimeOpenAiApiKey(scopedStartOptions);
+  }
   return shouldClearInheritedOpenAiApiKey
     ? withClearedEnvironmentVariables(
         scopedStartOptions,
@@ -127,6 +136,14 @@ export async function bridgeCodexAppServerStartOptions(params: {
           : CODEX_APP_SERVER_API_KEY_ENV_VARS,
       )
     : scopedStartOptions;
+}
+
+function assertSelectedRealtimeOpenAiApiKey(startOptions: CodexAppServerStartOptions): void {
+  if (!startOptions.env?.[OPENAI_API_KEY_ENV_VAR]?.trim()) {
+    throw new AgentHarnessPreflightError(
+      "Codex realtime v2 requires an explicitly selected OpenAI Platform API key",
+    );
+  }
 }
 
 function assertNoUnimportedAgentCodexAuthFile(params: {

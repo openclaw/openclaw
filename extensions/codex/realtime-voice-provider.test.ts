@@ -190,6 +190,48 @@ describe("Codex realtime voice provider", () => {
     expect(nativeBridge.close.mock.calls).toHaveLength(1);
   });
 
+  it("selects and forwards the realtime v2 Platform key explicitly", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "selected-realtime-key");
+    const harness = createRuntime();
+    const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
+    const bridge = provider.createBridge({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } } as never,
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+      providerConfig: { version: "v2" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    expect(harness.getNativeRequest()?.providerConfig).toMatchObject({
+      version: "v2",
+      apiKey: "selected-realtime-key",
+    });
+    bridge.close();
+  });
+
+  it("fails realtime v2 before app-server startup when no Platform key can be selected", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    const harness = createRuntime();
+    const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
+    const bridge = provider.createBridge({
+      cfg: {} as never,
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+      providerConfig: { version: "v2" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await expect(bridge.connect()).rejects.toThrow("requires a selected OpenAI Platform API key");
+    expect(harness.runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("creates a normal session entry when the routed binding is new", async () => {
     const harness = createRuntime({ missingSession: true });
     const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });

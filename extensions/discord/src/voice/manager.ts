@@ -501,13 +501,16 @@ export class DiscordVoiceManager {
 
     const existing = this.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
+      if (options?.requester) {
+        existing.requester = options.requester;
+      }
       if (options?.transcripts) {
         existing.transcripts = options.transcripts;
       }
       if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode) && !existing.realtime) {
         const realtimeResult = await this.attachRealtimeSession(existing, voiceMode, {
           requireLiveEntry: true,
-          requester: options?.requester,
+          requester: existing.requester,
         });
         if (!realtimeResult.ok) {
           return {
@@ -745,6 +748,7 @@ export class DiscordVoiceManager {
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
       capture: createVoiceCaptureState(),
+      requester: options?.requester,
       transcripts: options?.transcripts,
       receiveRecovery: createVoiceReceiveRecoveryState(),
       isStopped: () => stopped,
@@ -759,7 +763,7 @@ export class DiscordVoiceManager {
 
     if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode)) {
       const realtimeResult = await this.attachRealtimeSession(entry, voiceMode, {
-        requester: options?.requester,
+        requester: entry.requester,
       });
       if (!realtimeResult.ok) {
         destroyVoiceConnectionSafely({
@@ -1973,7 +1977,7 @@ export class DiscordVoiceManager {
     }
     const result = await this.join(
       { guildId: entry.guildId, channelId: entry.channelId },
-      { preserveFollowState },
+      { preserveFollowState, requester: entry.requester },
     );
     if (!result.ok) {
       logger.warn(`discord voice: rejoin after decrypt failures failed: ${result.message}`);

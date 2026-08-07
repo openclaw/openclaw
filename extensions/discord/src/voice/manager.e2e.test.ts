@@ -1335,6 +1335,41 @@ describe("DiscordVoiceManager", () => {
     expect(realtimeSessionMock.sendAudio).toHaveBeenCalledOnce();
   });
 
+  it("preserves the verified requester when direct-agent realtime recovers from DAVE failures", async () => {
+    resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
+      provider: {
+        id: "codex",
+        capabilities: {
+          transports: ["bridge"],
+          inputAudioFormats: [],
+          outputAudioFormats: [],
+          supportsToolCalls: false,
+          handlesAgentTurns: true,
+        },
+      },
+      providerConfig: { model: "codex", voice: "verse" },
+    } as never);
+    joinVoiceChannelMock
+      .mockReturnValueOnce(createConnectionMock())
+      .mockReturnValueOnce(createConnectionMock());
+    const manager = createAgentProxyManager();
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { requester: { senderId: "u-owner", senderIsOwner: true } },
+    );
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+
+    await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(2));
+    expect(lastRealtimeBridgeParams()).toMatchObject({
+      senderId: "u-owner",
+      senderIsOwner: true,
+    });
+    expectConnectedStatus(manager, "1001");
+  });
+
   it("refreshes an active roster from a new gateway guild snapshot", async () => {
     const client = createClient();
     let voiceStates = [

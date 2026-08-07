@@ -7,6 +7,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  isProviderAuthProfileConfigured,
+  resolveProviderAuthProfileApiKey,
+} from "openclaw/plugin-sdk/provider-auth";
+import {
   convertPcmToMulaw8k,
   mulawToPcm,
   resamplePcm,
@@ -16,21 +20,70 @@ import {
   type RealtimeVoiceBridgeCreateRequest,
   type RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function hasOpenAIPlatformApiKey(cfg: OpenClawConfig | undefined): boolean {
+function hasOpenAIPlatformApiKey(
+  cfg: OpenClawConfig | undefined,
+  providerConfig?: Record<string, unknown>,
+): boolean {
+  if (providerConfig?.apiKey) {
+    return true;
+  }
   if (process.env.OPENAI_API_KEY?.trim()) {
     return true;
   }
   if (cfg?.models?.providers?.openai?.apiKey) {
     return true;
   }
-  return Object.values(cfg?.auth?.profiles ?? {}).some(
-    (profile) =>
-      (profile.provider === "openai" || profile.provider === "codex") && profile.mode === "api_key",
+  if (
+    Object.values(cfg?.auth?.profiles ?? {}).some(
+      (profile) =>
+        (profile.provider === "openai" || profile.provider === "codex") &&
+        profile.mode === "api_key",
+    )
+  ) {
+    return true;
+  }
+  return isProviderAuthProfileConfigured({
+    provider: "openai",
+    cfg,
+    profileTypes: ["api_key"],
+    includeExternalCliAuth: false,
+  });
+}
+
+async function resolveOpenAIPlatformApiKey(params: {
+  request: RealtimeVoiceBridgeCreateRequest;
+  agentDir: string;
+}): Promise<string> {
+  const configured = normalizeResolvedSecretInputString({
+    value:
+      params.request.providerConfig.apiKey ?? params.request.cfg?.models?.providers?.openai?.apiKey,
+    path: "channels.discord.voice.realtime.providers.codex.apiKey",
+  });
+  if (configured) {
+    return configured;
+  }
+  const profileApiKey = await resolveProviderAuthProfileApiKey({
+    provider: "openai",
+    cfg: params.request.cfg,
+    agentDir: params.agentDir,
+    profileTypes: ["api_key"],
+    includeExternalCliAuth: false,
+  });
+  if (profileApiKey) {
+    return profileApiKey;
+  }
+  const envApiKey = process.env.OPENAI_API_KEY?.trim();
+  if (envApiKey) {
+    return envApiKey;
+  }
+  throw new Error(
+    "Codex realtime v2 requires a selected OpenAI Platform API key from provider config, an OpenAI API-key auth profile, or OPENAI_API_KEY",
   );
 }
 
@@ -101,6 +154,16 @@ async function resolveBoundVoiceRun(params: {
   }
   const workspaceDir = params.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = params.runtime.agent.resolveAgentDir(cfg, agentId);
+  const realtimeRequest =
+    normalizeOptionalString(params.request.providerConfig.version) === "v2"
+      ? {
+          ...params.request,
+          providerConfig: {
+            ...params.request.providerConfig,
+            apiKey: await resolveOpenAIPlatformApiKey({ request: params.request, agentDir }),
+          },
+        }
+      : params.request;
   const timeoutMs = params.runtime.agent.resolveAgentTimeoutMs({ cfg });
   try {
     return await params.runtime.agent.runEmbeddedAgent({
@@ -126,7 +189,7 @@ async function resolveBoundVoiceRun(params: {
       lane: "voice",
       abortSignal: params.abortSignal,
       realtimeVoice: {
-        request: params.request,
+        request: realtimeRequest,
         onBridgeReady: (bridge) => {
           params.onBridgeReady(bridge);
         },
@@ -322,8 +385,11 @@ export function buildCodexRealtimeVoiceProvider(options: {
       ...(normalizeOptionalString(rawConfig.version)
         ? { version: normalizeOptionalString(rawConfig.version) }
         : {}),
+      ...(normalizeOptionalString(rawConfig.apiKey)
+        ? { apiKey: normalizeOptionalString(rawConfig.apiKey) }
+        : {}),
     }),
-    isConfigured: ({ cfg }) => hasOpenAIPlatformApiKey(cfg),
+    isConfigured: ({ cfg, providerConfig }) => hasOpenAIPlatformApiKey(cfg, providerConfig),
     createBridge: (request) => new CodexBoundRealtimeVoiceBridge(options.runtime, request),
   };
 }

@@ -69,6 +69,7 @@ export type VoiceSessionEntry = {
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
+  requester?: { senderId: string; senderIsOwner: boolean };
   pendingRealtime?: VoiceRealtimeSession;
   realtime?: VoiceRealtimeSession;
   transcripts?: {

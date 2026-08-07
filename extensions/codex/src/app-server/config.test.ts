@@ -84,8 +84,26 @@ describe("Codex app-server config", () => {
       "--enable",
       "realtime_conversation",
     ]);
-    expect(enabled.start.requiresRealtimeOpenAiApiKeyEnv).toBe(true);
+    expect(enabled.start.requiresRealtimeOpenAiApiKeyEnv).toBeUndefined();
     expect(enableCodexRealtimeConversation(enabled)).toBe(enabled);
+
+    const selectedV2 = enableCodexRealtimeConversation(stdio, {
+      version: "v2",
+      apiKey: "selected-platform-key",
+    });
+    expect(selectedV2.start).toMatchObject({
+      requiresRealtimeOpenAiApiKeyEnv: true,
+      env: { OPENAI_API_KEY: "selected-platform-key" },
+    });
+    expect(
+      enableCodexRealtimeConversation(selectedV2, {
+        version: "v2",
+        apiKey: "selected-platform-key",
+      }),
+    ).toBe(selectedV2);
+    expect(() => enableCodexRealtimeConversation(stdio, { version: "v2" })).toThrow(
+      "Codex realtime v2 requires an explicitly selected OpenAI Platform API key",
+    );
 
     const websocket = resolveRuntimeForTest({
       pluginConfig: {
@@ -95,7 +113,9 @@ describe("Codex app-server config", () => {
         },
       },
     });
-    expect(enableCodexRealtimeConversation(websocket)).toBe(websocket);
+    expect(enableCodexRealtimeConversation(websocket, { version: "v2", apiKey: "unused" })).toBe(
+      websocket,
+    );
   });
 
   it("only auto-approves app-server approvals for full yolo runtime policy", () => {
