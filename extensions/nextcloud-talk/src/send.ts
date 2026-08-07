@@ -30,6 +30,17 @@ const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
 const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
 
+// Internal test hook: allows fast regression tests for the error-body idle
+// timeout without waiting the full 10 seconds in CI. Evaluated at call time so
+// tests can set it after module load.
+function getErrorSnippetIdleTimeoutMs(): number {
+  const override = process.env.OPENCLAW_TEST_NEXTCLOUD_TALK_ERROR_IDLE_TIMEOUT_MS;
+  if (override) {
+    return Number(override);
+  }
+  return 10_000;
+}
+
 const NEXTCLOUD_TALK_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
   chunk: { limit: 4000, unit: "chars", hardCap: 32_000 },
@@ -63,8 +74,14 @@ async function readNextcloudTalkErrorSnippet(
     // unbounded body into memory. Use the full result (not just .text) so we
     // can detect truncation: an exact-value replacement below cannot match a
     // secret that straddles the byte-cap boundary, so omit the snippet when
-    // the read was incomplete.
-    const prefix = await readResponseTextPrefix(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
+    // the read was incomplete. Preserve the prior 10-second chunk idle timeout
+    // so a server that sends a 4xx header and then holds the body open cannot
+    // delay send/reaction failures until the outer request timeout.
+    const prefix = await readResponseTextPrefix(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES, {
+      chunkTimeoutMs: getErrorSnippetIdleTimeoutMs(),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Nextcloud Talk error body read stalled for ${chunkTimeoutMs}ms`),
+    });
     if (prefix.truncated) {
       return "";
     }
