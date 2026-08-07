@@ -412,6 +412,35 @@ describe("PluginPage", () => {
     }
   });
 
+  it("exposes a connected gateway to external plugin session actions", async () => {
+    const refresh = vi.fn(async () => externalPluginConfig());
+    const page = createExternalPluginPage(refresh, false);
+    const context = (page as unknown as { context: ApplicationContext<RouteId> }).context;
+    context.gateway.snapshot.client = {
+      request: vi.fn(),
+    } as unknown as GatewayBrowserClient;
+    const tab = context.gateway.snapshot.hello?.controlUiTabs?.[0];
+    if (!tab) {
+      throw new Error("expected external plugin tab");
+    }
+    tab.sessionActions = ["list-sessions"];
+    const bridge = (
+      page as unknown as {
+        pluginUiBridge: { sync: (target: { connected?: boolean } | null) => void };
+      }
+    ).pluginUiBridge;
+    const sync = vi.spyOn(bridge, "sync");
+
+    document.body.append(page);
+    try {
+      await waitForFast(() =>
+        expect(sync).toHaveBeenCalledWith(expect.objectContaining({ connected: true })),
+      );
+    } finally {
+      page.remove();
+    }
+  });
+
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const bundledView = deferred<TestBundledView>();
     const stop = vi.fn();

@@ -22,13 +22,57 @@ import {
   type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import {
+  buildGatewaySessionInfo,
+  resolveFreshestSessionEntryFromStoreKeys,
+  resolveGatewaySessionStoreTargetWithStore,
+} from "../session-utils.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
 function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
   return errors.map((error) => error.text).join("; ");
+}
+
+function resolveSessionActionContextTokens(
+  context: GatewayRequestContext,
+  sessionKey: string | undefined,
+): number | undefined {
+  if (!sessionKey) {
+    return undefined;
+  }
+  const cfg = context.getRuntimeConfig();
+  const target = resolveGatewaySessionStoreTargetWithStore({
+    cfg,
+    key: sessionKey,
+    clone: false,
+    readOnly: true,
+    exactRead: true,
+  });
+  const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+  const sessionContextTokens = buildGatewaySessionInfo({
+    cfg,
+    storePath: target.storePath,
+    store: target.store,
+    key: target.canonicalKey,
+    entry,
+    agentId: target.agentId,
+  }).contextTokens;
+  if (
+    typeof sessionContextTokens === "number" &&
+    Number.isFinite(sessionContextTokens) &&
+    sessionContextTokens > 0
+  ) {
+    return sessionContextTokens;
+  }
+  const defaultContextTokens = cfg.agents?.defaults?.contextTokens;
+  return typeof defaultContextTokens === "number" &&
+    Number.isFinite(defaultContextTokens) &&
+    defaultContextTokens > 0
+    ? defaultContextTokens
+    : undefined;
 }
 
 /** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
@@ -96,7 +140,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "plugins.sessionAction": async ({ params, client, respond }) => {
+  "plugins.sessionAction": async ({ params, client, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -203,10 +247,12 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           return;
         }
       }
+      const contextTokens = resolveSessionActionContextTokens(context, sessionKey);
       const result = await registration.action.handler({
         pluginId,
         actionId,
         ...(sessionKey ? { sessionKey } : {}),
+        ...(contextTokens ? { contextTokens } : {}),
         ...(params.payload !== undefined ? { payload: params.payload } : {}),
         client: {
           ...(client?.connId ? { connId: client.connId } : {}),
