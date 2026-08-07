@@ -82,7 +82,7 @@ describe("createEmbeddedAttemptExternalAbortController", () => {
     expect(state.markAborted).toHaveBeenCalledTimes(1);
     expect(state.setPromptError).toHaveBeenCalledWith(reason);
     expect(runAbortController.signal.reason).toBe(reason);
-    expect(abortActiveSession).toHaveBeenCalledTimes(1);
+    expect(abortActiveSession).toHaveBeenCalledExactlyOnceWith(reason);
     controller.dispose();
   });
 
@@ -299,7 +299,7 @@ describe("createEmbeddedAttemptRunAbort", () => {
     expect(onAttemptTimeout).toHaveBeenCalledWith(timeoutReason);
     expect(runAbortController.signal.reason).toBe(timeoutReason);
     expect(abortCompaction).toHaveBeenCalledTimes(1);
-    expect(abortActiveSession).toHaveBeenCalledTimes(1);
+    expect(abortActiveSession).toHaveBeenCalledExactlyOnceWith(timeoutReason);
     expect(mocks.markActiveEmbeddedRunAbandoned).toHaveBeenCalledWith({
       sessionId: "session-timeout",
       handle: queueHandle,
