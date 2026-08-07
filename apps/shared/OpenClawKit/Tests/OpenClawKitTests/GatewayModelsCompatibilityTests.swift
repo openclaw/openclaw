@@ -182,6 +182,50 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `agent update emoji and avatar keep String call sites and nullable clears`() throws {
+        let legacyParams = AgentsUpdateParams(agentid: "work", emoji: "🐢", avatar: "https://example.com/a.png")
+        let omittedParams = AgentsUpdateParams(agentid: "work")
+        let clearedParams = AgentsUpdateParams(
+            agentid: "work",
+            emojivalue: AnyCodable(NSNull()),
+            avatarvalue: AnyCodable(NSNull()))
+
+        #expect(legacyParams.emoji == "🐢")
+        #expect(legacyParams.avatar == "https://example.com/a.png")
+        #expect(omittedParams.emojivalue == nil)
+        #expect(omittedParams.avatarvalue == nil)
+
+        let legacyJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(legacyParams))
+                as? [String: Any])
+        let omittedJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(omittedParams))
+                as? [String: Any])
+        let clearedJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(clearedParams))
+                as? [String: Any])
+
+        #expect(legacyJSON["emoji"] as? String == "🐢")
+        #expect(legacyJSON["avatar"] as? String == "https://example.com/a.png")
+        #expect(omittedJSON["emoji"] == nil)
+        #expect(omittedJSON["avatar"] == nil)
+        #expect(clearedJSON["emoji"] is NSNull)
+        #expect(clearedJSON["avatar"] is NSNull)
+
+        let decodedCleared = try JSONDecoder().decode(
+            AgentsUpdateParams.self,
+            from: Data(#"{"agentId":"work","emoji":null,"avatar":null}"#.utf8))
+        let reencodedCleared = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedCleared))
+                as? [String: Any])
+
+        #expect(decodedCleared.emojivalue?.value is NSNull)
+        #expect(decodedCleared.avatarvalue?.value is NSNull)
+        #expect(reencodedCleared["emoji"] is NSNull)
+        #expect(reencodedCleared["avatar"] is NSNull)
+    }
+
+    @Test
     func `node invoke session envelope preserves omitted null and value states`() throws {
         let omitted = try JSONDecoder().decode(
             NodeInvokeRequestEvent.self,
