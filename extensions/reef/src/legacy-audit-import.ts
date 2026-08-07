@@ -79,15 +79,18 @@ async function registerAuditEntry(
 // windowSize entries with one-entry lag for the nextHash link, so migration
 // memory stays bounded by bytes no matter how large the journal or its entries
 // are. Re-validating the chain on this pass also closes a TOCTOU gap between
-// the count pass and the persistence pass.
+// the count pass and the persistence pass: the observed count, final hash, and
+// final sequence must exactly match the first-pass summary, otherwise the
+// source changed between the two reads and the import aborts before a head is
+// committed or the legacy source can be archived.
 export async function streamLegacyReefAuditWindow(
   filePath: string,
-  totalEntries: number,
+  expected: LegacyReefAuditJournalSummary,
   store: PluginStateKeyedStore<ReefAuditStateRecord>,
   headStore: PluginStateKeyedStore<ReefAuditHeadRecord>,
   windowSize = REEF_AUDIT_MAX_ENTRIES,
 ): Promise<{ persistedCount: number; oldestHash: string }> {
-  const windowStart = Math.max(0, totalEntries - windowSize);
+  const windowStart = Math.max(0, expected.totalEntries - windowSize);
   let index = 0;
   let pending: AuditEntry | undefined;
   let persistedCount = 0;
@@ -95,6 +98,9 @@ export async function streamLegacyReefAuditWindow(
   let lastEntry: AuditEntry | undefined;
   let previousHash = "";
   let previousSeq = 0;
+  let observedTotal = 0;
+  let observedLastHash = "";
+  let observedLastSeq = 0;
   await forEachLegacyReefJsonlRecord(filePath, "reject-torn", async (value, recordBytes) => {
     if (recordBytes > REEF_LEGACY_AUDIT_RECORD_MAX_BYTES) {
       throw new Error(
@@ -113,6 +119,9 @@ export async function streamLegacyReefAuditWindow(
     }
     previousHash = entry.entryHash;
     previousSeq = entry.event.seq;
+    observedTotal += 1;
+    observedLastHash = entry.entryHash;
+    observedLastSeq = entry.event.seq;
     if (index >= windowStart) {
       if (pending) {
         await registerAuditEntry(store, pending, entry.entryHash);
@@ -125,6 +134,13 @@ export async function streamLegacyReefAuditWindow(
     }
     index += 1;
   });
+  if (
+    observedTotal !== expected.totalEntries ||
+    observedLastHash !== expected.lastHash ||
+    observedLastSeq !== expected.lastSeq
+  ) {
+    throw new Error("Reef audit journal changed between validation and import");
+  }
   if (pending) {
     await registerAuditEntry(store, pending);
     persistedCount += 1;

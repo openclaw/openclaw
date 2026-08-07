@@ -297,7 +297,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
         persistedCount = await countStoredReefAuditWindow(store, headStore);
       } else {
         persistedCount = (
-          await streamLegacyReefAuditWindow(filePath, legacyEntryCount, store, headStore)
+          await streamLegacyReefAuditWindow(filePath, journalSummary, store, headStore)
         ).persistedCount;
       }
     } catch (error) {
