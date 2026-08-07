@@ -10,7 +10,12 @@ import {
 } from "openclaw/plugin-sdk/web-content-extractor";
 
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
-const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
+// Sole guard before a synchronous, uncancellable Readability parse whose cost
+// grows superlinearly with nesting depth: 800 keeps real pages (browsers
+// flatten near depth 512) while bounding the worst accepted parse to a few
+// seconds. Raising it restores multi-minute gateway event-loop stalls on
+// attacker-crafted pages; over-cap pages intentionally use fallback extraction.
+const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 800;
 const HTML_VOID_TAGS = new Set([
   "area",
   "base",
@@ -28,6 +33,11 @@ const HTML_VOID_TAGS = new Set([
   "wbr",
 ]);
 
+// Mirrors htmlparser2's raw-text tokenization (linkedom's parser): these
+// bodies become flat text nodes, so tag literals inside them are not DOM
+// nesting. noscript is excluded on purpose; htmlparser2 parses its children.
+const HTML_RAW_TEXT_TAGS = new Set(["script", "style", "title", "textarea", "xmp"]);
+
 const READABILITY_MODULE = "@mozilla/readability";
 const LINKEDOM_MODULE = "linkedom";
 
@@ -37,6 +47,40 @@ const loadReadabilityDeps = createLazyRuntimeModule(() =>
     import(LINKEDOM_MODULE) as Promise<typeof import("linkedom")>,
   ]),
 );
+
+// Locate the case-insensitive closing tag for a raw-text element in the
+// original string's index space. Tag names are ASCII, so folding stays
+// length-preserving; scanning a toLowerCase() copy would drift the offset
+// whenever an interior code point lowercases to a different UTF-16 length.
+function findRawTextClose(html: string, tagName: string, from: number): number {
+  const len = html.length;
+  for (let p = from; p < len; p++) {
+    if (html.charCodeAt(p) !== 60 || html.charCodeAt(p + 1) !== 47) {
+      continue;
+    }
+    let q = p + 2;
+    let matched = 0;
+    while (matched < tagName.length) {
+      let c = html.charCodeAt(q);
+      if (c >= 65 && c <= 90) {
+        c += 32;
+      }
+      if (c !== tagName.charCodeAt(matched)) {
+        break;
+      }
+      q += 1;
+      matched += 1;
+    }
+    if (matched < tagName.length) {
+      continue;
+    }
+    const boundary = html.charCodeAt(q);
+    if (q >= len || boundary === 62 || boundary === 47 || boundary <= 32) {
+      return p;
+    }
+  }
+  return -1;
+}
 
 function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
@@ -87,25 +131,42 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
       continue;
     }
     const tagName = html.slice(nameStart, j).toLowerCase();
-    if (HTML_VOID_TAGS.has(tagName)) {
-      continue;
-    }
 
-    let selfClosing = false;
-    for (let k = j; k < len && k < j + 200; k++) {
+    let quote = 0;
+    let k = j;
+    while (k < len) {
       const c = html.charCodeAt(k);
-      if (c === 62) {
-        selfClosing = html.charCodeAt(k - 1) === 47;
+      if (quote !== 0) {
+        if (c === quote) {
+          quote = 0;
+        }
+      } else if (c === 34 || c === 39) {
+        quote = c;
+      } else if (c === 62) {
         break;
       }
+      k += 1;
     }
-    if (selfClosing) {
+    if (k >= len) {
+      return false;
+    }
+    i = k;
+
+    if (HTML_VOID_TAGS.has(tagName) || html.charCodeAt(k - 1) === 47) {
       continue;
     }
 
     depth += 1;
     if (depth > maxDepth) {
       return true;
+    }
+
+    if (HTML_RAW_TEXT_TAGS.has(tagName)) {
+      const closeStart = findRawTextClose(html, tagName, k + 1);
+      if (closeStart < 0) {
+        return false;
+      }
+      i = closeStart - 1;
     }
   }
   return false;

@@ -64,6 +64,81 @@ describe("web readability extractor", () => {
     expect(extracted.title).toBe("Example Article");
   });
 
+  it("rejects deeply nested markup above the estimated depth cap", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = `${"<div>".repeat(1_000)}deep${"</div>".repeat(1_000)}`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const started = performance.now();
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("does not count tag literals inside raw text elements", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const script = `<script>${'render("<div>");'.repeat(900)}</script>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${script}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
+  it("does not count tag literals inside quoted attributes", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const attr = `data-template="${"<div>".repeat(900)}"`;
+    const html = SAMPLE_HTML.replace("<article>", `<article ${attr}>`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
+  it("resumes the raw text skip only at a real closing tag boundary", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const script = `<script>"</scripture>";${'render("<div>");'.repeat(900)}</script>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${script}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(requireReadabilityResult(result).text).toContain("Main content starts here");
+  });
+
+  it("counts nesting after a raw text body containing length-changing unicode", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const script = `<script>${"İ".repeat(3_000)}</script>`;
+    const nested = `${"<div>".repeat(1_000)}deep${"</div>".repeat(1_000)}`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${script}${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("still counts nesting inside noscript", async () => {
+    const extractor = createReadabilityWebContentExtractor();
+    const nested = `<noscript>${"<div>".repeat(1_000)}deep${"</div>".repeat(1_000)}</noscript>`;
+    const html = SAMPLE_HTML.replace("<article>", `<article>${nested}`);
+    const result = await extractor.extract({
+      html,
+      url: "https://example.com/article",
+      extractMode: "markdown",
+    });
+    expect(result).toBeNull();
+  });
+
   it("does not count void tags toward the nesting limit", async () => {
     const extractor = createReadabilityWebContentExtractor();
     const html = SAMPLE_HTML.replace("<article>", `<article>${"<BR>".repeat(3100)}`);
