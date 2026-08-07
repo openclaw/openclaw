@@ -19,6 +19,7 @@ export {
 } from "../../gateway/chat-display-projection.js";
 export { augmentChatHistoryWithCliSessionImports } from "../../gateway/cli-session-history.js";
 export { getMaxChatHistoryMessagesBytes } from "../../gateway/server-constants.js";
+export { resolveSessionHistoryTailReadOptions } from "../../gateway/session-history-state.js";
 export {
   augmentChatHistoryWithCanvasBlocks,
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,

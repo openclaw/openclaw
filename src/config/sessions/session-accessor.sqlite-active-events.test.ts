@@ -226,6 +226,40 @@ describe("SQLite active transcript event projection", () => {
     expect(page.events.map(({ event }) => (event as { id?: unknown }).id)).toEqual(["small"]);
   });
 
+  it("does not parse oversized rows excluded from the recent tail", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "oversized-older",
+          parentId: null,
+          message: { role: "user", content: "x".repeat(16_384) },
+        },
+        {
+          eventId: "small-newer",
+          parentId: "oversized-older",
+          message: { role: "assistant", content: "keep" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const oversized = database.db
+      .prepare("SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?")
+      .get(scope.sessionId, "oversized-older") as { seq: number };
+    database.db
+      .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?")
+      .run(`{"padding":"${"x".repeat(16_384)}`, scope.sessionId, oversized.seq);
+
+    const page = readRecentSessionTranscriptMessageEvents(scope, {
+      maxBytes: 1_024,
+      maxLines: 2,
+      maxMessages: 2,
+    });
+
+    expect(page.totalMessages).toBe(2);
+    expect(page.events.map(({ event }) => (event as { id?: unknown }).id)).toEqual(["small-newer"]);
+  });
+
   it("fails fast and schedules maintenance when out-of-band state is dirty", async () => {
     await persistSessionTranscriptTurn(scope, {
       messages: [

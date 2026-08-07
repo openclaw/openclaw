@@ -104,12 +104,21 @@ interface EmbeddedGatewayRuntime {
   ) => Promise<unknown[]>;
   readRecentSessionMessagesWithStatsAsync: (
     scope: SessionTranscriptReadScope,
-    opts: { maxMessages: number; maxBytes?: number; allowResetArchiveFallback?: boolean },
+    opts: {
+      maxMessages: number;
+      maxBytes?: number;
+      maxLines?: number;
+      allowResetArchiveFallback?: boolean;
+    },
   ) => Promise<{ messages: unknown[]; totalMessages: number }>;
   readSessionMessagesPageWithStatsAsync: (
     scope: SessionTranscriptReadScope,
     opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
   ) => Promise<{ messages: unknown[]; totalMessages: number }>;
+  resolveSessionHistoryTailReadOptions: (limit: number) => {
+    maxLines: number;
+    maxMessages: number;
+  };
   resolveSessionModelRef: (
     cfg: OpenClawConfig,
     entry: unknown,
@@ -318,7 +327,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const defaultLimit = 200;
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
-  const rawHistoryWindowMessages = max * 20 + 20;
+  const rawHistoryWindow = rt.resolveSessionHistoryTailReadOptions(max);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
   const sessionEntry =
     typeof entry?.sessionId === "string"
@@ -342,6 +351,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
             ? {
                 mode: "recent",
                 maxMessages: max,
+                maxLines: rawHistoryWindow.maxLines,
                 maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
                 allowResetArchiveFallback: true,
               }
@@ -364,7 +374,8 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
               storePath,
             },
             {
-              maxMessages: rawHistoryWindowMessages + 1,
+              maxLines: rawHistoryWindow.maxLines + 1,
+              maxMessages: rawHistoryWindow.maxMessages + 1,
               maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
               allowResetArchiveFallback: true,
             },
@@ -390,7 +401,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const offsetPageOverreadContextMessage =
     offsetPage !== undefined
       ? offset === 0
-        ? offsetPage.messages.length > rawHistoryWindowMessages
+        ? offsetPage.messages.length > rawHistoryWindow.maxMessages
           ? offsetPage.messages[0]
           : undefined
         : offsetPage.messages.length > max

@@ -26,6 +26,10 @@ const runtime = vi.hoisted(() => ({
     entry: { sessionId: "sess-main" },
   })),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
+  resolveSessionHistoryTailReadOptions: vi.fn((limit: number) => ({
+    maxLines: limit * 20 + 20,
+    maxMessages: limit * 20 + 20,
+  })),
   readSessionMessagesAsync: vi.fn(async (): Promise<unknown[]> => []),
   readRecentSessionMessagesWithStatsAsync: vi.fn(async () => ({
     messages: [] as unknown[],
@@ -62,6 +66,7 @@ vi.mock("./embedded-gateway-stub.runtime.js", () => runtime);
 describe("embedded gateway stub", () => {
   beforeEach(() => {
     runtime.getRuntimeConfig.mockClear();
+    runtime.resolveSessionHistoryTailReadOptions.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.augmentChatHistoryWithCliSessionImports.mockClear();
     runtime.projectChatDisplayMessages.mockClear();
@@ -215,6 +220,7 @@ describe("embedded gateway stub", () => {
       },
       {
         mode: "recent",
+        maxLines: 4020,
         maxMessages: 200,
         maxBytes: 1024 * 1024,
         allowResetArchiveFallback: true,
@@ -282,6 +288,7 @@ describe("embedded gateway stub", () => {
       },
       {
         mode: "recent",
+        maxLines: 40,
         maxMessages: 1,
         maxBytes: 1024 * 1024,
         allowResetArchiveFallback: true,
@@ -458,6 +465,7 @@ describe("embedded gateway stub", () => {
         storePath: "/tmp/openclaw-sessions.json",
       },
       {
+        maxLines: 61,
         maxMessages: 61,
         maxBytes: 1024 * 1024,
         allowResetArchiveFallback: true,
@@ -531,6 +539,7 @@ describe("embedded gateway stub", () => {
       },
       {
         mode: "recent",
+        maxLines: 60,
         maxMessages: 2,
         maxBytes: 1024 * 1024,
         allowResetArchiveFallback: true,
