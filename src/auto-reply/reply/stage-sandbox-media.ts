@@ -181,7 +181,7 @@ export async function stageSandboxMedia(params: {
       nextMedia[index] = {
         ...fact,
         path: stagedPath,
-        originalPath: fact.originalPath ?? fact.path,
+        ...(hostWorkspaceStagingDir ? { originalPath: fact.originalPath ?? fact.path } : {}),
         ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
         workspaceDir: effectiveWorkspaceDir,
       };
