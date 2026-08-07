@@ -142,7 +142,7 @@ describe("check-docs-i18n-glossary", () => {
     mkdirSync(binDir);
     writeGitFixture(
       binDir,
-      'if (process.argv[2] === "show") { setTimeout(() => {}, 10_000); }\nelse { process.exit(0); }\n',
+      'if (process.argv[2] === "ls-tree") { console.log("100644 blob abc123\\tdocs/example.md"); process.exit(0); }\nif (process.argv[2] === "show") { setTimeout(() => {}, 10_000); }\nelse { process.exit(0); }\n',
     );
 
     const git = createGitRunner({
@@ -180,13 +180,53 @@ describe("check-docs-i18n-glossary", () => {
     await expect(readGitFile("HEAD", "docs/new.md", git)).resolves.toBe("");
   });
 
+  it("detects an absent base file without parsing localized git diagnostics", async () => {
+    const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeGitFixture(
+      binDir,
+      "if (process.argv[2] === \"show\") { console.error(\"fatal: 路径 'docs/new.md' 在 'HEAD' 中不存在\"); process.exit(128); }\nprocess.exit(0);\n",
+    );
+
+    const git = createGitRunner({
+      timeoutMs: 500,
+      env: {
+        ...process.env,
+        PATH: binDir,
+      },
+    });
+
+    await expect(readGitFile("HEAD", "docs/new.md", git)).resolves.toBe("");
+  });
+
+  it("reads baseline content when the base file exists", async () => {
+    const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
+    const binDir = path.join(tempDir, "bin");
+    mkdirSync(binDir);
+    writeGitFixture(
+      binDir,
+      'if (process.argv[2] === "ls-tree") { console.log("100644 blob abc123\\tdocs/example.md"); process.exit(0); }\nif (process.argv[2] === "show") { console.log("base content"); process.exit(0); }\nprocess.exit(0);\n',
+    );
+
+    const git = createGitRunner({
+      timeoutMs: 500,
+      env: {
+        ...process.env,
+        PATH: binDir,
+      },
+    });
+
+    await expect(readGitFile("HEAD", "docs/example.md", git)).resolves.toBe("base content");
+  });
+
   it("surfaces other git show failures instead of an empty baseline", async () => {
     const tempDir = makeTempDir(tempDirs, "check-docs-i18n-glossary-");
     const binDir = path.join(tempDir, "bin");
     mkdirSync(binDir);
     writeGitFixture(
       binDir,
-      'if (process.argv[2] === "show") { console.error("fatal: bad object"); process.exit(128); }\nprocess.exit(0);\n',
+      'if (process.argv[2] === "ls-tree") { console.log("100644 blob abc123\\tdocs/example.md"); process.exit(0); }\nif (process.argv[2] === "show") { console.error("fatal: bad object"); process.exit(128); }\nprocess.exit(0);\n',
     );
 
     const git = createGitRunner({

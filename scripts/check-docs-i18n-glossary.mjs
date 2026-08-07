@@ -212,16 +212,17 @@ function isGlossaryCandidate(term, maxWords) {
   return wordCount(term) <= maxWords;
 }
 
-const MISSING_BASE_FILE_RE = /does not exist in|exists on disk, but not in/i;
-
 /**
  * Reads a file from the merge-base revision.
  *
- * The empty-string fallback exists for one intended case only: the base
- * revision has no such file (for example a newly added doc). Every other git
- * failure, most importantly the runner's tagged timeouts, must propagate so a
- * stalled `git show` stays an actionable timeout instead of degrading into a
- * glossary comparison against an empty baseline.
+ * Absence is decided by a machine-readable `git ls-tree` result: an empty
+ * listing means the base revision has no such file (for example a newly added
+ * doc), so the empty-string fallback applies without parsing human-localized
+ * `git show` diagnostics. The literal pathspec keeps filenames with glob
+ * characters exact. Every other git failure, most importantly the runner's
+ * tagged timeouts, must propagate so a stalled lookup stays an actionable
+ * timeout instead of degrading into a glossary comparison against an empty
+ * baseline.
  *
  * Test code can inject a short-timeout runner through the optional `git`
  * parameter without adding a production environment/config surface.
@@ -231,14 +232,11 @@ const MISSING_BASE_FILE_RE = /does not exist in|exists on disk, but not in/i;
  * @param {(args: string[]) => Promise<string>} [git]
  */
 export async function readGitFile(base, relPath, git = runGit) {
-  try {
-    return await git(["show", `${base}:${relPath}`]);
-  } catch (error) {
-    if (error?.timedOut || !MISSING_BASE_FILE_RE.test(error?.message ?? "")) {
-      throw error;
-    }
+  const listing = await git(["ls-tree", base, "--", `:(literal)${relPath}`]);
+  if (listing === "") {
     return "";
   }
+  return git(["show", `${base}:${relPath}`]);
 }
 
 /**
