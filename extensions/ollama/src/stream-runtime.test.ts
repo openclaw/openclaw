@@ -1,5 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Ollama tests cover stream runtime plugin behavior.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -2935,5 +2937,77 @@ describe("parseNdjsonStream UTF-8 decoding", () => {
     }
     expect(chunks).toHaveLength(1);
     expect((chunks[0] as { message?: { content?: string } }).message?.content).toBe("hello");
+  });
+});
+
+describe("parseNdjsonStream real HTTP transport", () => {
+  async function serve(bytes: Uint8Array): Promise<{ url: string; close: () => Promise<void> }> {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.end(bytes);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+    const address = server.address() as AddressInfo;
+    return {
+      url: `http://127.0.0.1:${address.port}/api/chat`,
+      close: async () => {
+        server.closeAllConnections?.();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      },
+    };
+  }
+
+  async function drain(url: string): Promise<unknown[]> {
+    const response = await fetch(url, { method: "POST" });
+    if (!response.body) {
+      throw new Error("response body missing");
+    }
+    const chunks: unknown[] = [];
+    for await (const chunk of parseNdjsonStream(response.body.getReader())) {
+      chunks.push(chunk);
+    }
+    return chunks;
+  }
+
+  it("rejects invalid UTF-8 bytes through a real HTTP response stream", async () => {
+    const valid = new TextEncoder().encode('{"message":{"role":"assistant","content":"hello"}}\n');
+    const corrupted = new Uint8Array(valid);
+    corrupted[valid.indexOf(0x68) + 1] = 0xff;
+    const { url, close } = await serve(corrupted);
+    try {
+      await expect(drain(url)).rejects.toThrow(/not valid for encoding utf-8/i);
+    } finally {
+      await close();
+    }
+  });
+
+  it("rejects a terminal partial UTF-8 sequence at EOF through a real HTTP stream", async () => {
+    const valid = new TextEncoder().encode('{"message":{"role":"assistant","content":"hello"}}\n');
+    const { url, close } = await serve(new Uint8Array([...valid, 0xc3]));
+    try {
+      await expect(drain(url)).rejects.toThrow(/not valid for encoding utf-8/i);
+    } finally {
+      await close();
+    }
+  });
+
+  it("parses valid UTF-8 NDJSON through a real HTTP response stream", async () => {
+    const valid = new TextEncoder().encode('{"message":{"role":"assistant","content":"hello"}}\n');
+    const { url, close } = await serve(valid);
+    try {
+      const chunks = await drain(url);
+      expect(chunks).toHaveLength(1);
+      expect((chunks[0] as { message?: { content?: string } }).message?.content).toBe("hello");
+    } finally {
+      await close();
+    }
   });
 });
