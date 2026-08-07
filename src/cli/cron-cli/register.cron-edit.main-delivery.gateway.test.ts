@@ -129,7 +129,6 @@ describe("cron edit main delivery CLI→gateway", () => {
       ],
       env,
     );
-    // eslint-disable-next-line no-console
     console.log(
       [
         "----- cli-edit-main-chat-delivery-reject -----",
@@ -148,7 +147,6 @@ describe("cron edit main delivery CLI→gateway", () => {
     expect(get.ok).toBe(true);
     const job = get.payload as { delivery?: unknown };
     expect(job.delivery).toBeUndefined();
-    // eslint-disable-next-line no-console
     console.log(
       [
         "----- gateway-cron-get-unchanged -----",
@@ -163,7 +161,6 @@ describe("cron edit main delivery CLI→gateway", () => {
         delivery: { mode: "announce", channel: "telegram", to: "123" },
       },
     });
-    // eslint-disable-next-line no-console
     console.log(
       [
         "----- rpc-cron-update-main-announce-reject -----",
@@ -174,5 +171,66 @@ describe("cron edit main delivery CLI→gateway", () => {
     expect(String(update.error?.message ?? "")).toContain(
       'cron channel delivery config is only supported for sessionTarget="isolated"',
     );
+
+    const completionUpdate = await rpcReq(ws, "cron.update", {
+      id: jobId,
+      patch: {
+        delivery: {
+          mode: "announce",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/complete",
+          },
+        },
+      },
+    });
+    console.log(
+      [
+        "----- rpc-cron-update-main-completion-reject -----",
+        JSON.stringify({ ok: completionUpdate.ok, error: completionUpdate.error }, null, 2),
+      ].join("\n"),
+    );
+    expect(completionUpdate.ok).toBe(false);
+    expect(String(completionUpdate.error?.message ?? "")).toContain(
+      'cron channel delivery config is only supported for sessionTarget="isolated"',
+    );
+
+    // Retarget cleanup: isolated announce → main without delivery patch clears route.
+    const isolatedAdd = await rpcReq(ws, "cron.add", {
+      name: "proof-retarget-cleanup",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 3_600_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
+    expect(isolatedAdd.ok, JSON.stringify(isolatedAdd.error ?? isolatedAdd.payload)).toBe(true);
+    const isolatedId = jobIdFromCronAdd(isolatedAdd.payload);
+    expect(isolatedId.length > 0).toBe(true);
+
+    const retarget = await rpcReq(ws, "cron.update", {
+      id: isolatedId,
+      patch: {
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "tick" },
+      },
+    });
+    console.log(
+      [
+        "----- rpc-cron-update-retarget-main-cleanup -----",
+        JSON.stringify({ ok: retarget.ok, error: retarget.error }, null, 2),
+      ].join("\n"),
+    );
+    expect(retarget.ok).toBe(true);
+
+    const retargetGet = await rpcReq(ws, "cron.get", { id: isolatedId });
+    expect(retargetGet.ok).toBe(true);
+    const retargetJob = retargetGet.payload as {
+      sessionTarget?: string;
+      delivery?: unknown;
+    };
+    expect(retargetJob.sessionTarget).toBe("main");
+    expect(retargetJob.delivery).toBeUndefined();
   }, 120_000);
 });

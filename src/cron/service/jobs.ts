@@ -43,8 +43,8 @@ import {
   assertStreamScheduleSupport,
   assertSupportedJobSpec,
   assertTriggerSupport,
-  hasConcreteChatDeliveryTarget,
   hasConcreteFailureDestination,
+  patchRequestsUnsupportedMainDelivery,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
 import { mergeCronPayload } from "./payload-merge.js";
@@ -375,17 +375,21 @@ export function applyJobPatch(
     );
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
-    // Main-session jobs cannot auto-announce. Strip benign shells (bestEffort-only
-    // or empty failureDestination opt-outs) so those edits stay no-ops, but do
-    // not swallow concrete chat routing — create rejects those via
-    // assertDeliverySupport, and silent drop made update look successful.
-    if (!hasConcreteChatDeliveryTarget(job.delivery)) {
-      const failureDestination = job.delivery?.failureDestination;
-      job.delivery =
-        failureDestination && !hasConcreteFailureDestination(failureDestination)
-          ? { mode: "none", failureDestination }
-          : undefined;
+    // Fail closed only for explicit unsupported delivery patches. Retargeting
+    // an isolated announce job onto main without a delivery patch must still
+    // clear inherited chat routing (historical cleanup contract).
+    if (patchRequestsUnsupportedMainDelivery(patch.delivery)) {
+      throw new Error(
+        'cron channel delivery config is only supported for sessionTarget="isolated"',
+      );
     }
+    // Strip inherited announce delivery and benign shells (bestEffort-only /
+    // empty failureDestination opt-outs) so those edits stay no-ops.
+    const failureDestination = job.delivery?.failureDestination;
+    job.delivery =
+      failureDestination && !hasConcreteFailureDestination(failureDestination)
+        ? { mode: "none", failureDestination }
+        : undefined;
   }
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;

@@ -364,19 +364,54 @@ describe("applyJobPatch delivery merge", () => {
     ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
   });
 
-  it("rejects retargeting an announce job onto main while keeping chat routing", () => {
+  it("rejects mode-only announce delivery patches on main instead of stripping them", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: { mode: "announce" },
+      }),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+
+  it("rejects completion-delivery patches on main instead of silently dropping them", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: {
+          mode: "announce",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/complete",
+          },
+        },
+      }),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+
+  it("clears inherited announce delivery when retargeting to main without a delivery patch", () => {
     const job = makeJob({
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "hello" },
       delivery: { mode: "announce", channel: "telegram", to: "123" },
     });
 
-    expect(() =>
-      applyJobPatch(job, {
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "tick" },
-      }),
-    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+    applyJobPatch(job, {
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    expect(job.sessionTarget).toBe("main");
+    expect(job.delivery).toBeUndefined();
   });
 });
 

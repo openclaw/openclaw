@@ -7,7 +7,7 @@ import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
-import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
+import type { CronDelivery, CronDeliveryPatch, CronJob, CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 
 /** Validates that session target and payload kind form a supported cron job shape. */
@@ -307,6 +307,32 @@ export function hasConcreteChatDeliveryTarget(
       String(delivery.threadId).trim() !== "") ||
     (typeof delivery.accountId === "string" && delivery.accountId.trim() !== ""),
   );
+}
+
+/**
+ * True when an incoming delivery patch asks for main-unsupported announce/chat
+ * routing (including completion destinations). Used so retarget-to-main without
+ * a delivery patch can still clear inherited announce delivery.
+ */
+export function patchRequestsUnsupportedMainDelivery(
+  delivery: CronDeliveryPatch | undefined,
+): boolean {
+  if (!delivery) {
+    return false;
+  }
+  if (delivery.mode === "webhook") {
+    return false;
+  }
+  if (hasConcreteChatDeliveryTarget(delivery)) {
+    return true;
+  }
+  if (delivery.mode === "announce") {
+    return true;
+  }
+  if ("completionDestination" in delivery && delivery.completionDestination != null) {
+    return true;
+  }
+  return false;
 }
 
 export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
