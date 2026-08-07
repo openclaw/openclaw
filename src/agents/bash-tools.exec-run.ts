@@ -13,6 +13,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
+import type { ExecAutoReviewDecision } from "../infra/exec-auto-review.js";
 import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
@@ -66,6 +67,10 @@ import type { AgentToolWithMeta } from "./tools/common.js";
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
+  // Run-scoped verdict memo: persists across exec invocations within the same
+  // agent run so identical exec requests reuse the reviewer's verdict instead
+  // of re-issuing paid model completions. FIFO-capped inside the reviewer.
+  const verdictMemo = new Map<string, ExecAutoReviewDecision>();
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
@@ -161,6 +166,7 @@ export function createExecTool(
           agentId,
           reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
           signal,
+          verdictMemo,
         });
       let params = requestPreparation.normalizeParams(args);
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
