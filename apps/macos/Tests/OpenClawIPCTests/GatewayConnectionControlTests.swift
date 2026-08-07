@@ -258,6 +258,12 @@ private func assertConfigLookupCannotRecreateRoute(
         let transport = try await connection.acquireRealtimeTalkTransport()
         #expect(await transport.isCurrent())
 
+        let events = await transport.subscribeServerEvents(10)
+        let nextEvent = Task {
+            var iterator = events.makeAsyncIterator()
+            return await iterator.next()
+        }
+
         _ = try await transport.request(
             "talk.session.close",
             ["sessionId": AnyCodable("talk-session-1")],
@@ -274,6 +280,14 @@ private func assertConfigLookupCannotRecreateRoute(
             JSONSerialization.jsonObject(with: talkRequestData) as? [String: Any])
         let params = try #require(talkRequestFrame["params"] as? [String: Any])
         #expect(params["sessionId"] as? String == "talk-session-1")
+
+        let socketGeneration = try #require(await connection._test_activeSocketGeneration())
+        await connection._test_handleDisconnect(socketGeneration: socketGeneration)
+        let eventAfterDisconnect = try await AsyncTimeout.withTimeout(
+            seconds: 1,
+            onTimeout: { CancellationError() },
+            operation: { await nextEvent.value })
+        #expect(eventAfterDisconnect == nil)
 
         await connection.shutdown()
         #expect(!(await transport.isCurrent()))

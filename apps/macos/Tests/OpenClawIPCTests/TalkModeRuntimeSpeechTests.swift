@@ -128,6 +128,31 @@ struct TalkModeRuntimeSpeechTests {
         session.stop()
     }
 
+    @Test @MainActor func `selected microphone restart failure terminates relay and schedules recovery`() async {
+        let runtime = TalkModeRuntime()
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in throw CancellationError() }),
+            options: .init(sessionKey: "main", provider: "openai", model: "gpt-realtime-2", voice: nil),
+            audioCapture: RuntimeTestAudioCapture(),
+            pcmPlayer: RuntimeTestPCMPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in })
+        let relayGeneration = await runtime._test_prepareEnabledRealtimeSessionForClose(session)
+
+        await runtime._test_handleRealtimeInputRestartFailure(
+            "selected microphone unavailable",
+            relayGeneration: relayGeneration)
+
+        #expect(await !(runtime._test_realtimeSessionIsActive()))
+        #expect(await runtime._test_rapidRealtimeRestartCount() == 1)
+        #expect(await runtime._test_hasPendingRealtimeRestart())
+
+        await runtime._test_cancelRealtimeRecovery()
+        session.stop()
+    }
+
     @Test func `talk speak params carry resolved voice and directive overrides`() {
         let params = TalkModeRuntime.makeTalkSpeakParams(
             text: "hello",

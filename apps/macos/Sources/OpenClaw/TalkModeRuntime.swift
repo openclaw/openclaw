@@ -261,6 +261,7 @@ actor TalkModeRuntime {
     func inputDeviceSelectionDidChange() async {
         if let realtimeSession {
             guard self.isEnabled, !self.isPaused else { return }
+            let relayGeneration = self.realtimeRelayGeneration
             do {
                 try await MainActor.run {
                     try realtimeSession.setInputPaused(true)
@@ -269,6 +270,9 @@ actor TalkModeRuntime {
             } catch {
                 self.logger.error(
                     "talk realtime input restart failed: \(error.localizedDescription, privacy: .public)")
+                await self.handleRealtimeInputRestartFailure(
+                    error.localizedDescription,
+                    relayGeneration: relayGeneration)
             }
             return
         }

@@ -70,7 +70,7 @@ actor GatewayConnection {
         // Managed-image HTTP reuses this captured route from its focused extension file.
         // Carrying the snapshot forward prevents endpoint or TLS rediscovery after suspension.
         let route: Route
-        fileprivate let socketGeneration: UInt64
+        let socketGeneration: UInt64
         fileprivate let client: GatewayChannelActor
     }
 
@@ -163,11 +163,14 @@ actor GatewayConnection {
     private var shutdownGeneration: UInt64 = 0
     // Callback work keeps the physical socket epoch that decoded it. Retiring
     // that epoch prevents delayed pushes from entering a replacement socket.
-    private var activeSocketGeneration: UInt64?
+    var activeSocketGeneration: UInt64?
     private var lastRetiredSocketGeneration: UInt64?
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
-    private var lastSnapshot: HelloOk?
+    var realtimeTalkSubscribers: [
+        UInt64: [UUID: AsyncStream<GatewayPush>.Continuation]
+    ] = [:]
+    var lastSnapshot: HelloOk?
     var canvasPluginSurfaceURL: String?
 
     struct CanvasPluginSurfaceRefresh {
@@ -776,7 +779,7 @@ extension GatewayConnection {
         return lease.route.activationOwnershipFingerprint
     }
 
-    private func serverLeaseMatchesCurrentState(_ lease: ServerLease) -> Bool {
+    func serverLeaseMatchesCurrentState(_ lease: ServerLease) -> Bool {
         self.routeMatchesConfiguredConnection(lease.route) &&
             self.configuredConnection?.client === lease.client &&
             self.activeSocketGeneration == lease.socketGeneration &&
@@ -911,6 +914,7 @@ extension GatewayConnection {
     /// reentrant work could continue on a client whose replacement is in flight.
     private func retireConfiguredConnection() -> GatewayChannelActor? {
         self.routeGeneration &+= 1
+        self.finishRealtimeTalkSubscribers()
         self.resetSocketGeneration()
         self.lastSnapshot = nil
         self.resetCanvasPluginSurfaceState()
@@ -954,6 +958,7 @@ extension GatewayConnection {
         guard routeGeneration == self.routeGeneration,
               retireSocketGeneration(socketGeneration)
         else { return }
+        self.finishRealtimeTalkSubscribers(socketGeneration: socketGeneration)
         self.lastSnapshot = nil
         self.resetCanvasPluginSurfaceState()
     }
@@ -1195,6 +1200,11 @@ extension GatewayConnection {
         }
         for (_, continuation) in self.subscribers {
             continuation.yield(push)
+        }
+        if let socketGeneration = self.activeSocketGeneration {
+            for (_, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
+                continuation.yield(push)
+            }
         }
     }
 

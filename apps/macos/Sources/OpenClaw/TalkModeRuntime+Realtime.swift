@@ -146,6 +146,23 @@ extension TalkModeRuntime {
         }
     }
 
+    func handleRealtimeInputRestartFailure(
+        _ message: String,
+        relayGeneration: UInt64) async
+    {
+        let issue = RealtimeTalkRelayIssue(
+            code: "audio_input_unavailable",
+            message: message,
+            provider: self.realtimeProvider,
+            model: self.realtimeModelId,
+            transport: "gateway-relay",
+            phase: "audio-input")
+        await self.handleRealtimeIssue(issue, relayGeneration: relayGeneration)
+        await self.handleRealtimeTermination(
+            .audioCaptureFailed(message: issue.message),
+            relayGeneration: relayGeneration)
+    }
+
     private func handleRealtimeTermination(
         _ termination: RealtimeTalkRelayTermination,
         relayGeneration: UInt64) async
@@ -348,6 +365,13 @@ extension TalkModeRuntime {
         relayGeneration: UInt64) async
     {
         await self.handleRealtimeTermination(termination, relayGeneration: relayGeneration)
+    }
+
+    func _test_handleRealtimeInputRestartFailure(
+        _ message: String,
+        relayGeneration: UInt64) async
+    {
+        await self.handleRealtimeInputRestartFailure(message, relayGeneration: relayGeneration)
     }
 
     func _test_realtimeSessionIsActive() -> Bool {
