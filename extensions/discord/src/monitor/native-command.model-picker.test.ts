@@ -7,6 +7,7 @@ import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native"
 import type {
   ChatCommandDefinition,
   CommandArgsParsing,
+  NativeCommandSpec,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -31,6 +32,8 @@ import {
   createDiscordModelPickerFallbackSelect,
   replyWithDiscordModelPickerProviders,
 } from "./native-command-ui.js";
+import { createDiscordNativeCommand } from "./native-command.js";
+import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createNoopThreadBindingManager, type ThreadBindingManager } from "./thread-bindings.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
@@ -49,6 +52,14 @@ type MockInteraction = {
   guild: { id: string } | null;
   rawData: { id: string; member: { roles: string[] } };
   values?: string[];
+  options: {
+    getString: ReturnType<typeof vi.fn>;
+    getNumber: ReturnType<typeof vi.fn>;
+    getBoolean: ReturnType<typeof vi.fn>;
+  };
+  responseState: "unacknowledged" | "deferred" | "deferred-update" | "replied";
+  defer: ReturnType<typeof vi.fn>;
+  deleteReply: ReturnType<typeof vi.fn>;
   reply: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
@@ -91,7 +102,7 @@ function createModelPickerContext(): ModelPickerContext {
 
 function createInteraction(params?: { userId?: string; values?: string[] }): MockInteraction {
   const userId = params?.userId ?? "owner";
-  const interaction = {
+  const interaction: MockInteraction = {
     user: {
       id: userId,
       username: "tester",
@@ -107,6 +118,14 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
       member: { roles: [] },
     },
     values: params?.values,
+    options: {
+      getString: vi.fn().mockReturnValue(null),
+      getNumber: vi.fn().mockReturnValue(null),
+      getBoolean: vi.fn().mockReturnValue(null),
+    },
+    responseState: "unacknowledged",
+    defer: vi.fn(),
+    deleteReply: vi.fn(),
     reply: vi.fn().mockResolvedValue({ ok: true }),
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     update: vi.fn().mockResolvedValue({ ok: true }),
@@ -115,7 +134,13 @@ function createInteraction(params?: { userId?: string; values?: string[] }): Moc
     acknowledged: false,
     client: {},
   };
-  interaction.acknowledge.mockImplementation(async () => {
+  interaction.defer.mockImplementation(() => {
+    interaction.responseState = "deferred";
+  });
+  interaction.deleteReply.mockImplementation(() => {
+    interaction.responseState = "replied";
+  });
+  interaction.acknowledge.mockImplementation(() => {
     interaction.acknowledged = true;
     return { ok: true };
   });
@@ -139,6 +164,109 @@ function createModelCommandDefinition(): ChatCommandDefinition {
     argsParsing: "none" as CommandArgsParsing,
     scope: "native",
   };
+}
+
+function createNativeModelCommand(cfg: OpenClawConfig) {
+  return createDiscordNativeCommand({
+    command: {
+      name: "model",
+      description: "Show or set the model",
+      acceptsArgs: true,
+    } satisfies NativeCommandSpec,
+    cfg,
+    discordConfig: cfg.channels?.discord ?? {},
+    accountId: "default",
+    sessionPrefix: "discord:slash",
+    ephemeralDefault: true,
+    threadBindings: createNoopThreadBindingManager("default"),
+  });
+}
+
+function createNativeModelPickerConfig(context: ModelPickerContext): OpenClawConfig {
+  return {
+    ...context.cfg,
+    channels: {
+      ...context.cfg.channels,
+      discord: {
+        ...context.cfg.channels?.discord,
+        allowFrom: ["*"],
+      },
+    },
+    commands: {
+      allowFrom: { discord: ["user:owner"] },
+    },
+    agents: {
+      defaults: {
+        model: { primary: "openai/gpt-5.5" },
+        models: {
+          "openai/gpt-5.5": {},
+          "anthropic/claude-sonnet-4-5": {},
+        },
+      },
+    },
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.example.test/v1",
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              reasoning: false,
+              input: ["text" as const],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 8_192,
+            },
+          ],
+        },
+        anthropic: {
+          baseUrl: "https://api.anthropic.example.test/v1",
+          models: [
+            {
+              id: "claude-sonnet-4-5",
+              name: "Claude Sonnet 4.5",
+              reasoning: false,
+              input: ["text" as const],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 8_192,
+            },
+          ],
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createNativeModelPickerRouteState(bindingReadiness: { ok: boolean; error?: string }) {
+  return {
+    route: {
+      agentId: "main",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    },
+    effectiveRoute: {
+      agentId: "codex",
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:codex:acp:binding:discord:default:dm",
+      mainSessionKey: "agent:codex:main",
+      lastRoutePolicy: "session",
+      matchedBy: "binding.channel",
+    },
+    boundSessionKey: "agent:codex:acp:binding:discord:default:dm",
+    configuredRoute: null,
+    configuredBinding: {
+      record: { conversation: { conversationId: "owner" } },
+      statefulTarget: { agentId: "codex" },
+    },
+    bindingReadiness,
+  } as never;
 }
 
 function mockModelCommandPipeline(modelCommand: ChatCommandDefinition) {
@@ -405,6 +533,70 @@ describe("Discord model picker interactions", () => {
       expect(rendered).not.toContain('"value":"provider-01"');
     },
   );
+
+  it("opens bare /model with the effective bound route", async () => {
+    const context = createModelPickerContext();
+    const cfg = createNativeModelPickerConfig(context);
+    const pickerData = createModelsProviderData({
+      openai: ["gpt-5.5"],
+      anthropic: ["claude-sonnet-4-5"],
+    });
+    pickerData.resolvedDefault = { provider: "openai", model: "gpt-5.5" };
+    const loadSpy = vi
+      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
+      .mockResolvedValue(pickerData);
+    const routeSpy = vi
+      .fn<typeof nativeCommandRuntime.resolveDiscordNativeInteractionRouteState>()
+      .mockResolvedValue(createNativeModelPickerRouteState({ ok: true }));
+    const previousRouteState = nativeCommandRuntime.resolveDiscordNativeInteractionRouteState;
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = routeSpy;
+    const interaction = createInteraction({ userId: "owner" });
+
+    try {
+      await (createNativeModelCommand(cfg) as { run: (interaction: unknown) => Promise<void> }).run(
+        interaction,
+      );
+    } finally {
+      nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = previousRouteState;
+    }
+
+    expect(firstMockArg(routeSpy, "resolve route state")).toMatchObject({
+      enforceConfiguredBindingReadiness: true,
+    });
+    expect(loadSpy).toHaveBeenCalledWith(cfg, "codex");
+    expect(interaction.followUp).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects bare /model when its configured ACP binding is unavailable", async () => {
+    const context = createModelPickerContext();
+    const cfg = createNativeModelPickerConfig(context);
+    const loadSpy = vi.spyOn(modelPickerModule, "loadDiscordModelPickerData");
+    const routeSpy = vi
+      .fn<typeof nativeCommandRuntime.resolveDiscordNativeInteractionRouteState>()
+      .mockResolvedValue(
+        createNativeModelPickerRouteState({
+          ok: false,
+          error: "missing configured binding",
+        }),
+      );
+    const previousRouteState = nativeCommandRuntime.resolveDiscordNativeInteractionRouteState;
+    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = routeSpy;
+    const interaction = createInteraction({ userId: "owner" });
+
+    try {
+      await (createNativeModelCommand(cfg) as { run: (interaction: unknown) => Promise<void> }).run(
+        interaction,
+      );
+    } finally {
+      nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = previousRouteState;
+    }
+
+    expect(loadSpy).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: "Configured ACP binding is unavailable right now. Please try again.",
+      ephemeral: true,
+    });
+  });
 
   it("uses the hot-reloaded runtime config when old components reset to default", async () => {
     const context = createModelPickerContext();
