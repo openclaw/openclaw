@@ -72,6 +72,38 @@ describe("extractStructuredWithImageModel", () => {
     });
   });
 
+  // The bundled Codex extractor sets this boundary in its own developer
+  // instructions. This path is reachable from Logbook, whose inputs are full
+  // screen captures and whose output is persisted, so the generic fallback must
+  // not be the weaker of the two. Asserted on the prompt actually handed to the
+  // model, not on the constant.
+  it("instructs the model to withhold secrets, in the request it actually sends", async () => {
+    mocks.describeImagesWithModel.mockResolvedValueOnce({
+      text: '{"summary":"ok"}',
+      model: "claude-sonnet-5",
+    });
+
+    await extractStructuredWithImageModel(baseRequest());
+
+    const call = mocks.describeImagesWithModel.mock.calls[0]?.[0];
+    expect(call.prompt).toContain("Do not include secrets");
+    expect(call.prompt).toContain("passwords, API keys, tokens, or credentials");
+  });
+
+  it("keeps the no-secrets instruction in text-mode extraction", async () => {
+    // jsonMode:false takes a different tail branch in the prompt builder; the
+    // boundary must not depend on which one runs.
+    mocks.describeImagesWithModel.mockResolvedValueOnce({
+      text: "a summary",
+      model: "claude-sonnet-5",
+    });
+
+    await extractStructuredWithImageModel(baseRequest({ jsonMode: false }));
+
+    const call = mocks.describeImagesWithModel.mock.calls[0]?.[0];
+    expect(call.prompt).toContain("Do not include secrets");
+  });
+
   it("carries the caller's provider through to the model call", async () => {
     mocks.describeImagesWithModel.mockResolvedValueOnce({
       text: '{"summary":"ok"}',

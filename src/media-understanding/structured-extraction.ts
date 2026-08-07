@@ -58,11 +58,23 @@ function splitsMultiImageRequests(provider: string, model: string): boolean {
   return isMinimaxVlmModel(provider, model);
 }
 
+/**
+ * Mirrors the boundary the bundled Codex extractor already sets on its own
+ * developer instructions. Structured extraction is reachable from Logbook, whose
+ * inputs are full screen captures and whose own docs acknowledge they can carry
+ * secrets, and whose output is persisted. A generic path made reachable without
+ * this instruction would be a weaker boundary than the bespoke one it stands in
+ * for.
+ */
+const NO_SECRETS_INSTRUCTION =
+  "Return only the requested extraction. Do not include secrets such as passwords, API keys, tokens, or credentials, even when they are visible in the input.";
+
 /** Builds the extraction prompt from instructions, schema, and any text inputs. */
 function buildStructuredExtractionPrompt(req: StructuredExtractionRequest): string {
   const textInputs = req.input.filter(isStructuredTextInput).map((entry) => entry.text);
   return [
     req.instructions.trim(),
+    NO_SECRETS_INSTRUCTION,
     req.schemaName ? `Schema name: ${req.schemaName}` : undefined,
     req.jsonSchema ? `JSON schema:\n${JSON.stringify(req.jsonSchema)}` : undefined,
     ...textInputs,
