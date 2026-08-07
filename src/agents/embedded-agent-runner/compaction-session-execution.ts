@@ -182,6 +182,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         agentDir,
         settingsManager,
         extensionFactories,
+        maxSkillFileBytes: params.config?.skills?.limits?.maxSkillFileBytes,
       });
       await resourceLoader.reload();
       // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
