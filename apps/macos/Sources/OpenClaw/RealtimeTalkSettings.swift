@@ -20,6 +20,16 @@ struct RealtimeTalkProviderDescriptor: Equatable {
     let configured: Bool
     let models: [String]
     let voices: [String]
+    let transports: [String]
+    let brains: [String]
+
+    /// This card only ever writes `gateway-relay` + `agent-consult`, so readiness means the Gateway
+    /// declared that exact pair for OpenAI -- `configured` alone would enable a setting the
+    /// realtime session cannot launch.
+    var supportsGatewayRelayAgentConsult: Bool {
+        self.transports.contains { $0.caseInsensitiveCompare("gateway-relay") == .orderedSame } &&
+            self.brains.contains { $0.caseInsensitiveCompare("agent-consult") == .orderedSame }
+    }
 }
 
 enum RealtimeTalkSettingsConfig {
@@ -69,6 +79,15 @@ enum RealtimeTalkSettingsConfig {
             realtime["mode"] = "realtime"
             realtime["transport"] = "gateway-relay"
             realtime["brain"] = "agent-consult"
+            // GPT-Live delegates to the agent natively, so the provider rejects a gateway-relay
+            // launch that also forces consult routing. Saving both would persist an "enabled"
+            // state that can never create a Talk session; GA realtime models keep their routing.
+            if Self.isGptLiveModel(draft.model),
+               Self.string(realtime["consultRouting"])?
+                   .caseInsensitiveCompare("force-agent-consult") == .orderedSame
+            {
+                realtime.removeValue(forKey: "consultRouting")
+            }
         } else if selectsOpenAI {
             realtime["provider"] = "openai"
             realtime["model"] = draft.model
@@ -102,13 +121,22 @@ enum RealtimeTalkSettingsConfig {
             return RealtimeTalkProviderDescriptor(
                 configured: provider["configured"]?.boolValue ?? false,
                 models: Self.strings(provider["models"]),
-                voices: Self.strings(provider["voices"]))
+                voices: Self.strings(provider["voices"]),
+                transports: Self.strings(provider["transports"]),
+                brains: Self.strings(provider["brains"]))
         }
         return nil
     }
 
     private static func strings(_ value: AnyCodable?) -> [String] {
         value?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
+    /// Mirrors the provider's own GPT-Live check (`isOpenAIGptLiveModel`), which keys off the
+    /// `gpt-live` model-id prefix rather than an enumerated list.
+    static func isGptLiveModel(_ model: String) -> Bool {
+        let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "gpt-live" || normalized.hasPrefix("gpt-live-")
     }
 
     private static func string(_ value: Any?) -> String? {
@@ -192,6 +220,12 @@ final class RealtimeTalkSettingsModel {
             }
             self.models = Self.options(current: self.draft.model, catalog: provider.models)
             self.voices = Self.options(current: self.draft.voice, catalog: provider.voices)
+            guard provider.supportsGatewayRelayAgentConsult else {
+                self.availability = .unavailable(
+                    "This Gateway's OpenAI realtime provider does not support relayed Talk sessions.")
+                self.hasLoaded = true
+                return
+            }
             self.availability = provider.configured ? .ready : .needsOpenAIAccess
         } catch {
             self.availability = .unavailable("Could not verify realtime access: \(error.localizedDescription)")

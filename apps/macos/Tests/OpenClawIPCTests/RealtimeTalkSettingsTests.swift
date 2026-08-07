@@ -244,6 +244,8 @@ struct RealtimeTalkSettingsTests {
                         "configured": true,
                         "models": ["gpt-realtime-2.1", "gpt-live-1-codex"],
                         "voices": ["marin", "cedar"],
+                        "transports": ["webrtc", "gateway-relay"],
+                        "brains": ["agent-consult"],
                     ],
                 ]),
             ])
@@ -252,5 +254,72 @@ struct RealtimeTalkSettingsTests {
         #expect(provider.configured)
         #expect(provider.models == ["gpt-realtime-2.1", "gpt-live-1-codex"])
         #expect(provider.voices == ["marin", "cedar"])
+        #expect(provider.transports == ["webrtc", "gateway-relay"])
+        #expect(provider.brains == ["agent-consult"])
+        #expect(provider.supportsGatewayRelayAgentConsult)
+    }
+
+    @Test(arguments: [
+        (["webrtc", "gateway-relay"], ["agent-consult"], true),
+        (["webrtc"], ["agent-consult"], false),
+        (["webrtc", "gateway-relay"], ["none"], false),
+        ([String](), [String](), false),
+    ])
+    func `relay readiness requires the exact configuration this card writes`(
+        transports: [String],
+        brains: [String],
+        expected: Bool) throws
+    {
+        let catalog = TalkCatalogResult(
+            modes: [],
+            transports: [],
+            brains: [],
+            speech: [:],
+            transcription: [:],
+            realtime: [
+                "providers": AnyCodable([
+                    [
+                        "id": "openai",
+                        "configured": true,
+                        "transports": transports,
+                        "brains": brains,
+                    ] as [String: Any],
+                ]),
+            ])
+
+        let provider = try #require(RealtimeTalkSettingsConfig.openAIProvider(in: catalog))
+        #expect(provider.supportsGatewayRelayAgentConsult == expected)
+    }
+
+    @Test func `enabling gpt-live clears forced consult routing but keeps it for GA models`() throws {
+        let root: [String: Any] = [
+            "talk": ["realtime": ["consultRouting": "force-agent-consult"]],
+        ]
+
+        let gptLive = RealtimeTalkSettingsConfig.applying(
+            RealtimeTalkSettingsDraft(
+                enabled: true,
+                model: "gpt-live-1-codex",
+                voice: "cedar",
+                explicitlyUsesOpenAI: true),
+            to: root)
+        let gaRealtime = RealtimeTalkSettingsConfig.applying(
+            RealtimeTalkSettingsDraft(
+                enabled: true,
+                model: "gpt-realtime-2.1",
+                voice: "cedar",
+                explicitlyUsesOpenAI: true),
+            to: root)
+
+        let gptLiveRealtime = try #require(
+            (gptLive["talk"] as? [String: Any])?["realtime"] as? [String: Any])
+        let gaRealtimeValues = try #require(
+            (gaRealtime["talk"] as? [String: Any])?["realtime"] as? [String: Any])
+
+        // The provider rejects GPT-Live gateway-relay launches that force consult routing, so
+        // saving both would persist an enabled state no Talk session can start.
+        #expect(gptLiveRealtime["consultRouting"] == nil)
+        #expect(gptLiveRealtime["brain"] as? String == "agent-consult")
+        #expect(gaRealtimeValues["consultRouting"] as? String == "force-agent-consult")
     }
 }
