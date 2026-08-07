@@ -49,6 +49,23 @@ import {
 } from "./src/trust-store.js";
 import type { ReefKeys } from "./src/types.js";
 
+async function archiveOversizedLegacySource(params: {
+  filePath: string;
+  label: string;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const archivedPath = `${params.filePath}.migrated`;
+  try {
+    await fs.rename(params.filePath, archivedPath);
+    params.changes.push(`Archived oversized ${params.label} legacy source -> ${archivedPath}`);
+  } catch (error) {
+    params.warnings.push(
+      `Failed archiving oversized ${params.label} legacy source: ${String(error)}; left source in place`,
+    );
+  }
+}
+
 const RETIRED_REEF_CONFIG_KEYS = ["friends", "dmPolicy", "allowFrom"] as const;
 const REEF_CONFIG_IMPORT_NAMESPACE = "peer-state-config-imports";
 const LegacyReefFriendSchema = ReefPeerTrustSchema.omit({ approvedAt: true });
@@ -80,6 +97,42 @@ type ReefLegacyRegistrationSource =
       parse: typeof parseReefSetupSession;
       label: string;
     };
+
+// Legacy Reef state files are small JSON config blobs — cap at 10 MiB to
+// prevent OOM on corrupted or artificially inflated migration sources.
+export const MAX_LEGACY_REEF_FILE_BYTES = 10 * 1024 * 1024;
+
+async function readLegacyReefFileSafely(filePath: string): Promise<string> {
+  const file = await fs.open(filePath, "r");
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${filePath}`);
+    }
+    if (stat.size > MAX_LEGACY_REEF_FILE_BYTES) {
+      throw new Error(
+        `file too large: ${stat.size} bytes exceeds ${MAX_LEGACY_REEF_FILE_BYTES} bytes: ${filePath}`,
+      );
+    }
+    // Bind the descriptor read to the validated size so a concurrent writer
+    // cannot grow the file after validation and exceed the migration cap. If
+    // the file shrinks after validation, fail closed rather than migrating a
+    // silent partial read.
+    const size = stat.size;
+    const buffer = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const { bytesRead } = await file.read(buffer, offset, size - offset, offset);
+      if (bytesRead === 0) {
+        throw new Error(`file shrank during read: ${filePath}`);
+      }
+      offset += bytesRead;
+    }
+    return buffer.toString("utf8");
+  } finally {
+    await file.close();
+  }
+}
 
 const REEF_LEGACY_REGISTRATION_SOURCES: ReefLegacyRegistrationSource[] = [
   {
@@ -290,9 +343,19 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       });
       let keys: ReefKeys;
       try {
-        keys = parseReefKeys(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
+        keys = parseReefKeys(JSON.parse(await readLegacyReefFileSafely(filePath)) as unknown);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return { changes, warnings };
+        }
+        if (error instanceof Error && error.message.includes("file too large")) {
+          warnings.push(error.message);
+          await archiveOversizedLegacySource({
+            filePath,
+            label: "Reef identity keys",
+            changes,
+            warnings,
+          });
           return { changes, warnings };
         }
         warnings.push(
@@ -418,9 +481,20 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         let legacy: ReefIdentityBinding | ReefSetupSession | undefined;
         try {
-          legacy = source.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
-        } catch {
-          // The structural validation below owns the fail-closed warning.
+          legacy = source.parse(JSON.parse(await readLegacyReefFileSafely(filePath)) as unknown);
+        } catch (err) {
+          // The structural validation below owns the fail-closed warning, but
+          // oversized-file errors get a descriptive message instead of "invalid JSON".
+          if (err instanceof Error && err.message.includes("file too large")) {
+            warnings.push(err.message);
+            await archiveOversizedLegacySource({
+              filePath,
+              label: source.label,
+              changes,
+              warnings,
+            });
+            continue;
+          }
         }
         if (!legacy) {
           warnings.push(`Failed importing ${source.label}: invalid JSON; left source in place`);

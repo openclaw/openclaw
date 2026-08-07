@@ -12,7 +12,7 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import { MAX_LEGACY_TOGGLE_FILE_BYTES, stateMigrations } from "./doctor-contract-api.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -135,5 +135,40 @@ describe("active-memory doctor state migration", () => {
         },
       },
     ]);
+  });
+
+  it("warns and skips migration when the legacy toggle file exceeds the safety cap", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, Buffer.alloc(MAX_LEGACY_TOGGLE_FILE_BYTES + 1, "x"));
+
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const detectResult = await migration.detectLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(detectResult).toMatchObject({
+      preview: [expect.stringContaining("file too large")],
+    });
+
+    const result = await migration.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+
+    expect(result.warnings).toEqual([expect.stringContaining("file too large")]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Archived oversized Active Memory session toggles legacy source"),
+    ]);
+    const migratedPath = `${sourcePath}.migrated`;
+    await expect(fs.access(sourcePath)).rejects.toThrow("ENOENT");
+    await expect(fs.access(migratedPath)).resolves.toBeUndefined();
   });
 });
