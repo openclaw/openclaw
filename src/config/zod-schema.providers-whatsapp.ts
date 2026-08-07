@@ -47,7 +47,8 @@ const WhatsAppCommonShape = {
     reactionLevels: ["off", "ack", "minimal", "extensive"],
   }),
   pluginHooks: WhatsAppPluginHooksSchema,
-  pollVoteRetentionMs: z.number().int().positive().optional(),
+  // Limits how long decrypted poll-vote key material may be retained.
+  pollVoteRetentionMs: z.number().int().positive().max(24 * 60 * 60 * 1000).optional(),
 };
 
 const WhatsAppAccountSchema = z.strictObject({
