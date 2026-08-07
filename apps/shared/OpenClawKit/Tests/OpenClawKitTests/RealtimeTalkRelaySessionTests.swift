@@ -313,6 +313,57 @@ struct RealtimeTalkRelaySessionTests {
         #expect(!audioCapture.isStarted)
     }
 
+    @Test func `pre-ready event stream end promptly fails startup and closes created session once`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
+        let eventChannel = AsyncStream<EventFrame>.makeStream()
+        let result = TalkSessionCreateResult(
+            sessionid: "talk-session",
+            mode: AnyCodable("realtime"),
+            transport: AnyCodable("gateway-relay"),
+            brain: AnyCodable("agent-consult"),
+            relaysessionid: "relay-1")
+        let resultData = try JSONEncoder().encode(result)
+        let transport = RealtimeTalkRelayTransport(
+            subscribeServerEvents: { _ in eventChannel.stream },
+            request: { method, params, _ in
+                await requests.record(method: method, params: params)
+                if method == "talk.session.create" {
+                    return resultData
+                }
+                return Data("{\"ok\":true}".utf8)
+            })
+        let audioCapture = TestRealtimeTalkAudioCapture()
+        var issues: [RealtimeTalkRelayIssue] = []
+        let session = RealtimeTalkRelaySession(
+            transport: transport,
+            options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
+            audioCapture: audioCapture,
+            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onIssue: { issues.append($0) },
+            onSpeakingChanged: { _ in })
+        let start = Task { @MainActor in try await session.start() }
+        while !audioCapture.isStarted {
+            await Task.yield()
+        }
+
+        let disconnectedAt = ContinuousClock.now
+        eventChannel.continuation.finish()
+        do {
+            try await start.value
+            Issue.record("Expected the pre-ready event stream end to throw")
+        } catch {
+            #expect(error.localizedDescription == "Realtime connection ended before it became ready.")
+        }
+
+        #expect(disconnectedAt.duration(to: .now) < .seconds(1))
+        #expect(issues.map(\.phase) == ["connect"])
+        let recorded = await requests.snapshot()
+        #expect(recorded.map(\.method) == ["talk.session.create", "talk.session.close"])
+        #expect(recorded.last?.params?["sessionId"]?.stringValue == "relay-1")
+        #expect(!audioCapture.isStarted)
+    }
+
     @Test func `microphone failure terminates relay and reports typed issue`() async throws {
         let requests = RealtimeRelayStartupRequestLog()
         let transport = RealtimeTalkRelayTransport(

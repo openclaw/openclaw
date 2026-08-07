@@ -472,8 +472,23 @@ public final class RealtimeTalkRelaySession {
     }
 
     private func handleEventStreamEnded(lifecycleGeneration: UInt64) async {
-        guard self.isCurrentLifecycleLocally(lifecycleGeneration), self.hasReceivedReady else { return }
+        guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
         self.logger.debug("talk realtime: event stream ended")
+        guard self.hasReceivedReady else {
+            guard !self.hasReceivedFailure else { return }
+            let issue = RealtimeTalkRelayIssue(
+                message: "Realtime connection ended before it became ready.",
+                provider: self.options.provider,
+                model: self.options.model,
+                transport: "gateway-relay",
+                phase: "connect")
+            self.hasReceivedFailure = true
+            self.startupIssue = issue
+            self.onIssue(issue)
+            self.onStatus(issue.message)
+            self.finishStartupWait(.failed(issue))
+            return
+        }
         self.onStatus("Ready")
         self.close(sendClose: false)
         self.onTermination(.eventStreamEnded)
