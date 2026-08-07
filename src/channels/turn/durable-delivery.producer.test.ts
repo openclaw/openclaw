@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { ChannelOutboundAdapter } from "../plugins/types.public.js";
-import { deliverInboundReplyWithMessageSendContext } from "./durable-delivery.js";
+import {
+  deliverInboundReplyWithMessageSendContext,
+  isDurableInboundReplyDeliveryHandled,
+  throwIfDurableInboundReplyDeliveryFailed,
+} from "./durable-delivery.js";
 
 const matrixPluginId = "matrix";
 
@@ -62,7 +66,23 @@ describe("durable inbound reply delivery — real producer boundary (#119169)", 
     // Real producer: sendDurableMessageBatch -> deliverCore -> sendPayload
     // returned no identity -> suppressed/adapter_returned_no_identity.
     // Settlement: durable-delivery maps it to handled_visible, not handled_no_send.
-    expect(result.status).toBe("handled_visible");
+    // Explicit status guard narrows the result union so `.delivery` typechecks
+    // (vitest's expect().toBe() does not narrow; matches the adjacent unit test).
+    if (result.status !== "handled_visible") {
+      throw new Error(`expected handled_visible, got ${result.status}`);
+    }
+    expect(result.delivery.visibleReplySent).toBe(true);
+
+    // Lifecycle settlement boundary (lifecycle.ts:519-522): the durable result
+    // must (1) not throw as a failed delivery, (2) be classified handled so the
+    // caller skips fallback, and (3) carry visibleReplySent=true so the private
+    // isExplicitlyNonVisibleChannelDelivery predicate (lifecycle.ts:129,
+    // `visibleReplySent === false`) settles it as a visible send — emitting
+    // message_sent and suppressing a duplicate fallback reply. Current main
+    // returns handled_no_send (visibleReplySent=false) for this outcome, which
+    // settles as explicitly non-visible and would allow a duplicate reply.
+    expect(() => throwIfDurableInboundReplyDeliveryFailed(result)).not.toThrow();
+    expect(isDurableInboundReplyDeliveryHandled(result)).toBe(true);
     expect(result.delivery.visibleReplySent).toBe(true);
   });
 });
