@@ -1,17 +1,10 @@
-import {
-  closeSync,
-  existsSync,
-  fstatSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-} from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
@@ -234,7 +227,17 @@ export function readBoundedSkillFile(filePath: string): string {
         { code: "E2BIG" },
       );
     }
-    return readFileSync(fd, "utf-8");
+    try {
+      return readFileDescriptorBoundedSync(fd, MAX_SKILL_FILE_BYTES).toString("utf-8");
+    } catch (error) {
+      if (error instanceof RangeError) {
+        console.warn(`Skill file rejected (exceeds ${MAX_SKILL_FILE_BYTES} bytes): ${filePath}`);
+        throw Object.assign(new Error(`skill file exceeds ${MAX_SKILL_FILE_BYTES} bytes`), {
+          code: "E2BIG",
+        });
+      }
+      throw error;
+    }
   } finally {
     closeSync(fd);
   }

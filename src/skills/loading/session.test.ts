@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { parseFrontmatter, resolveOpenClawMetadata } from "./frontmatter.js";
-import { loadSkills } from "./session.js";
+import { loadSkills, readBoundedSkillFile } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -111,6 +111,25 @@ disable-model-invocation: true
         message: expect.stringContaining("exceeds"),
       }),
     ]);
+  });
+
+  it("rejects oversized files through the bounded descriptor reader (growth-race regression)", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-scan-");
+    const skillDir = path.join(tempDir, "oversized");
+    await fs.mkdir(skillDir);
+    const skillFile = path.join(skillDir, "SKILL.md");
+    // Write content well above the 256 KB limit so the bounded descriptor
+    // read catches it even if an earlier fstatSync reported a smaller size.
+    const oversizeBody = "x".repeat(512_000);
+    await fs.writeFile(
+      skillFile,
+      `---\nname: oversized\ndescription: Bypass attempt\n---\n${oversizeBody}`,
+      "utf-8",
+    );
+
+    // readBoundedSkillFile uses readFileDescriptorBoundedSync which
+    // enforces the bound regardless of any prior stat result.
+    expect(() => readBoundedSkillFile(skillFile)).toThrow("exceeds");
   });
 
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {
