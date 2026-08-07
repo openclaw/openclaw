@@ -211,6 +211,30 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result.warning).toContain("gateway.auth.token");
     expect(result.warning).toContain("unresolved");
   });
+
+  it("resolves a remote token SecretRef alongside an environment password", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: envSecretRef("REMOTE_GATEWAY_TOKEN"),
+        },
+      }),
+      mode: "remote",
+      env: {
+        REMOTE_GATEWAY_TOKEN: "resolved-remote-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toEqual({
+      auth: {
+        token: "resolved-remote-token",
+        password: "env-password", // pragma: allowlist secret
+      },
+    });
+  });
 });
 
 describe("resolveGatewayProbeAuthWithSecretInputs", () => {

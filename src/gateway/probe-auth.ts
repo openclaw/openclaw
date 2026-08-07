@@ -107,6 +107,7 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
     explicitAuth: policy.explicitAuth,
     modeOverride: policy.modeOverride,
     remoteTokenFallback: policy.remoteTokenFallback,
+    remoteCredentialTypesIndependent: true,
   });
 }
 
