@@ -231,6 +231,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Build private QA harness
+        run: OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build
+
+      - name: Preflight private QA harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for entry in \
+            dist/plugin-sdk/qa-lab.js \
+            dist/plugin-sdk/qa-runtime.js; do
+            if [[ ! -f "$entry" ]]; then
+              echo "Trusted private QA harness is missing: $entry" >&2
+              exit 1
+            fi
+          done
+
       - name: Validate inputs and secrets
         env:
           PACKAGE_SPEC: ${{ inputs.package_spec }}

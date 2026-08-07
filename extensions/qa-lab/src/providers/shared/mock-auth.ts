@@ -10,8 +10,25 @@ const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
 /** Agent IDs the mock harness stages credentials under. */
 const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
 
-function buildQaMockProfileId(provider: string): string {
+export function buildQaMockProfileId(provider: string): string {
   return `qa-mock-${provider}`;
+}
+
+export function applyQaMockAuthProfileConfig(params: {
+  cfg: OpenClawConfig;
+  providers?: readonly string[];
+}): OpenClawConfig {
+  const providers = uniqueStrings(params.providers ?? QA_MOCK_AUTH_PROVIDERS);
+  let next = params.cfg;
+  for (const provider of providers) {
+    next = applyAuthProfileConfig(next, {
+      profileId: buildQaMockProfileId(provider),
+      provider,
+      mode: "api_key",
+      displayName: `QA mock ${provider} credential`,
+    });
+  }
+  return next;
 }
 
 /**
@@ -41,7 +58,6 @@ export async function stageQaMockAuthProfiles(params: {
 }): Promise<OpenClawConfig> {
   const agentIds = uniqueStrings(params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS);
   const providers = uniqueStrings(params.providers ?? QA_MOCK_AUTH_PROVIDERS);
-  let next = params.cfg;
   for (const agentId of agentIds) {
     await writeQaAuthProfiles({
       agentDir: resolveQaAgentAuthDir({ stateDir: params.stateDir, agentId }),
@@ -58,13 +74,5 @@ export async function stageQaMockAuthProfiles(params: {
       ),
     });
   }
-  for (const provider of providers) {
-    next = applyAuthProfileConfig(next, {
-      profileId: buildQaMockProfileId(provider),
-      provider,
-      mode: "api_key",
-      displayName: `QA mock ${provider} credential`,
-    });
-  }
-  return next;
+  return applyQaMockAuthProfileConfig({ cfg: params.cfg, providers });
 }

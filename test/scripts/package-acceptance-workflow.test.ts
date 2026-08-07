@@ -1635,12 +1635,25 @@ describe("package acceptance workflow", () => {
     expect(npmTelegramWorkflow).toContain("Download package-under-test artifact from release run");
     expect(npmTelegramWorkflow).toContain("run-id: ${{ inputs.package_artifact_run_id }}");
     expect(npmTelegramWorkflow).toContain("github-token: ${{ github.token }}");
+    expect(npmTelegramWorkflow).toContain("name: Build private QA harness");
+    expect(npmTelegramWorkflow).toContain("OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build");
+    expect(npmTelegramWorkflow).toContain("name: Preflight private QA harness");
+    expect(npmTelegramWorkflow).toContain("dist/plugin-sdk/qa-lab.js");
+    expect(npmTelegramWorkflow).toContain("dist/plugin-sdk/qa-runtime.js");
+    const buildPrivateQaIndex = npmTelegramWorkflow.indexOf("name: Build private QA harness");
+    const preflightPrivateQaIndex = npmTelegramWorkflow.indexOf(
+      "name: Preflight private QA harness",
+    );
+    const runPackageTelegramIndex = npmTelegramWorkflow.indexOf(
+      "- name: Run package Telegram E2E",
+      preflightPrivateQaIndex,
+    );
+    expect(buildPrivateQaIndex).toBeLessThan(preflightPrivateQaIndex);
+    expect(preflightPrivateQaIndex).toBeLessThan(runPackageTelegramIndex);
     expect(workflow).toContain(
       "package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}",
     );
-    expect(workflow).toContain(
-      "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
-    );
+    expect(workflow).toContain("harness_ref: ${{ inputs.workflow_ref }}");
     expect(workflow).toContain('fallback_version="$(npm view openclaw@latest version)"');
     expect(workflow).toContain('echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"');
     expect(workflow).toContain(
