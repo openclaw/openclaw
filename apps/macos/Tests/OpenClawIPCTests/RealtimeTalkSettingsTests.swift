@@ -2,9 +2,8 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-@Suite
 struct RealtimeTalkSettingsTests {
-    @Test func `parses top level realtime selection`() throws {
+    @Test func `parses top level realtime selection`() {
         let root: [String: Any] = [
             "talk": [
                 "realtime": [
@@ -24,7 +23,7 @@ struct RealtimeTalkSettingsTests {
         #expect(draft.voice == "cedar")
     }
 
-    @Test func `parses provider defaults without enabling realtime`() throws {
+    @Test func `parses provider defaults without enabling realtime`() {
         let root: [String: Any] = [
             "talk": [
                 "realtime": [
@@ -72,6 +71,19 @@ struct RealtimeTalkSettingsTests {
         #expect(realtime["mode"] as? String == "realtime")
         #expect(realtime["transport"] as? String == "gateway-relay")
         #expect(realtime["brain"] as? String == "agent-consult")
+    }
+
+    @Test func `applied model and voice survive a config reload`() {
+        let selected = RealtimeTalkSettingsDraft(
+            enabled: true,
+            model: "gpt-live-1-codex",
+            voice: "cedar",
+            explicitlyUsesOpenAI: true)
+
+        let saved = RealtimeTalkSettingsConfig.applying(selected, to: [:])
+        let reloaded = RealtimeTalkSettingsConfig.parse(saved)
+
+        #expect(reloaded == selected)
     }
 
     @Test func `enabling adds canonical openai entry to an existing provider map`() throws {
