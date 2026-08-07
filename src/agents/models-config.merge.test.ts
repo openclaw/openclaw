@@ -572,4 +572,342 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.apiKey).toBe(configApiKey);
     expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
   });
+
+  // ── Own-property checks: Object.hasOwn() vs `in` operator ──
+
+  it("ignores proto-inherited contextWindow on the explicit model", () => {
+    // The explicit model's contextWindow lives only on the prototype chain.
+    // mergeProviderModels must NOT treat it as an explicit user override.
+    const explicitModel = Object.create({ contextWindow: 99000 });
+    explicitModel.id = "explicit-only-model";
+
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "explicit-only-model",
+            contextWindow: 128000,
+            maxTokens: 4096,
+            name: "Explicit",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [explicitModel as unknown as ProviderConfig["models"][number]],
+      },
+    );
+
+    expect(merged.models?.[0]?.contextWindow).toBe(128000);
+  });
+
+  it("preserves own contextWindow from the explicit model", () => {
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            contextWindow: 128000,
+            maxTokens: 4096,
+            name: "M",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            contextWindow: 64000,
+            maxTokens: 2048,
+            name: "M",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+    );
+
+    expect(merged.models?.[0]?.contextWindow).toBe(64000);
+  });
+
+  it("ignores proto-inherited maxTokens on the explicit model", () => {
+    const explicitModel = Object.create({ maxTokens: 99999 });
+    explicitModel.id = "m";
+
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            contextWindow: 128000,
+            maxTokens: 4096,
+            name: "M",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [explicitModel as unknown as ProviderConfig["models"][number]],
+      },
+    );
+
+    expect(merged.models?.[0]?.maxTokens).toBe(4096);
+  });
+
+  it("ignores proto-inherited 'input' on the explicit model", () => {
+    const explicitModel = Object.create({ input: ["image"] });
+    explicitModel.id = "m";
+
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            contextWindow: 128000,
+            maxTokens: 4096,
+            name: "M",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [explicitModel as unknown as ProviderConfig["models"][number]],
+      },
+    );
+
+    // The inherited input modality must be ignored; fall back to implicit's own input
+    expect(merged.models?.[0]?.input).toEqual(["text"]);
+  });
+
+  it("preserves own 'input' from the explicit model", () => {
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            contextWindow: 128000,
+            maxTokens: 4096,
+            name: "M",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            contextWindow: 128000,
+            maxTokens: 4096,
+            name: "M",
+            input: ["image"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+    );
+
+    expect(merged.models?.[0]?.input).toEqual(["image"]);
+  });
+
+  it("ignores proto-inherited 'reasoning' on the explicit model", () => {
+    const explicitModel = Object.create({ reasoning: false });
+    explicitModel.id = "m";
+
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            contextWindow: 64000,
+            maxTokens: 2048,
+            reasoning: true,
+            name: "M",
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [explicitModel as unknown as ProviderConfig["models"][number]],
+      },
+    );
+
+    // The inherited reasoning value must be ignored; fall back to implicit's own reasoning
+    expect(merged.models?.[0]?.reasoning).toBe(true);
+  });
+
+  // ── Absent-implicit regression: resolvePreferredTokenLimit final fallback ──
+  // These test the edge case where the explicit model has a proto-inherited value
+  // AND the implicit model has no valid value. Before the fix, the final fallback
+  // in resolvePreferredTokenLimit would bypass explicitPresent and pick up the
+  // proto-inherited value directly from the property access.
+
+  it("blocks proto-inherited contextWindow when implicit is absent", () => {
+    const explicitModel = Object.create({ contextWindow: 99999 });
+    explicitModel.id = "absent-implicit";
+
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "absent-implicit",
+            // contextWindow=0 satisfies the type but isPositiveFiniteTokenLimit(0)→false
+            contextWindow: 0,
+            maxTokens: 4096,
+            name: "Implicit",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [explicitModel as unknown as ProviderConfig["models"][number]],
+      },
+    );
+
+    // The final fallback in resolvePreferredTokenLimit must NOT pick up the
+    // proto-inherited value when explicitPresent is false AND implicit is absent
+    expect(merged.models?.[0]?.contextWindow).toBeUndefined();
+  });
+
+  it("blocks proto-inherited contextTokens when implicit is absent", () => {
+    const explicitModel = Object.create({ contextTokens: 88888 });
+    explicitModel.id = "absent-implicit";
+
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "absent-implicit",
+            contextWindow: 8192,
+            maxTokens: 4096,
+            name: "Implicit",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [explicitModel as unknown as ProviderConfig["models"][number]],
+      },
+    );
+
+    expect(merged.models?.[0]?.contextTokens).toBeUndefined();
+  });
+
+  it("blocks proto-inherited maxTokens when implicit is absent", () => {
+    const explicitModel = Object.create({ maxTokens: 77777 });
+    explicitModel.id = "absent-implicit";
+
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "absent-implicit",
+            contextWindow: 8192,
+            // maxTokens=0 satisfies the type but isPositiveFiniteTokenLimit(0)→false
+            maxTokens: 0,
+            name: "Implicit",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [explicitModel as unknown as ProviderConfig["models"][number]],
+      },
+    );
+
+    expect(merged.models?.[0]?.maxTokens).toBeUndefined();
+  });
+
+  it("uses own contextWindow when implicit is absent (backward compat)", () => {
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            // contextWindow=0 satisfies the type but isPositiveFiniteTokenLimit(0)→false
+            contextWindow: 0,
+            maxTokens: 4096,
+            name: "M",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      {
+        api: "ollama",
+        baseUrl: "https://ollama.example/v1",
+        models: [
+          {
+            id: "m",
+            contextWindow: 64000,
+            maxTokens: 2048,
+            name: "M",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+    );
+
+    expect(merged.models?.[0]?.contextWindow).toBe(64000);
+  });
 });
