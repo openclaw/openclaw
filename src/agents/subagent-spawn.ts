@@ -198,6 +198,9 @@ export async function spawnSubagentDirect(
         childSessionKey,
       };
     }
+    // Frozen before context prep so early failures still delete the provisional
+    // child. Fork rewrites sessionId afterward; update expectedSessionId so
+    // later guarded cleanup can still match the spawn-owned lifecycle row.
     const provisionalSessionIdentity = {
       expectedSessionId: initialSession.entry?.sessionId,
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
@@ -223,6 +226,12 @@ export async function spawnSubagentDirect(
         error: preparedSpawnContext.error,
         childSessionKey,
       };
+    }
+    if (preparedSpawnContext.mode === "fork") {
+      const forkedSessionId = preparedSpawnContext.forked.sessionId.trim();
+      if (forkedSessionId) {
+        provisionalSessionIdentity.expectedSessionId = forkedSessionId;
+      }
     }
     if (resolvedModel) {
       const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
