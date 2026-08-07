@@ -83,14 +83,21 @@ describe("cron edit main delivery CLI→gateway", () => {
     expect(started).toBeDefined();
     const { ws, port } = started!;
     const url = `ws://127.0.0.1:${port}`;
-    const env = {
+    // Keep the spawned source-entry CLI single-process: host CI may export
+    // NODE_COMPILE_CACHE / OPENCLAW_GATEWAY_PORT from sibling harnesses.
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: tempRoot,
       OPENCLAW_HOME: tempRoot,
       OPENCLAW_STATE_DIR: path.join(tempRoot, ".openclaw"),
       OPENCLAW_CONFIG_PATH: path.join(tempRoot, ".openclaw", "openclaw.json"),
       OPENCLAW_GATEWAY_TOKEN: token,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_NO_RESPAWN: "1",
     };
+    delete env.OPENCLAW_GATEWAY_PORT;
+    delete env.NODE_COMPILE_CACHE;
+    delete env.NODE_COMPILE_CACHE_PORTABLE;
 
     const add = await rpcReq(ws, "cron.add", {
       name: "proof-main-delivery",
@@ -131,6 +138,35 @@ describe("cron edit main delivery CLI→gateway", () => {
     );
     expect(edit.code).toBe(1);
     expect(`${edit.stdout}\n${edit.stderr}`).toContain(
+      "--channel, --to, --account, and --thread-id require a non-main",
+    );
+
+    const blankThread = await runCli(
+      [
+        "cron",
+        "edit",
+        jobId,
+        "--thread-id",
+        "",
+        "--clear-thread-id",
+        "--url",
+        url,
+        "--token",
+        token,
+      ],
+      env,
+    );
+    console.log(
+      [
+        "----- cli-edit-main-blank-thread-id-reject -----",
+        `$ openclaw cron edit ${jobId} --thread-id '' --clear-thread-id --url ${url} --token ***`,
+        blankThread.stdout.trim(),
+        blankThread.stderr.trim(),
+        `exit=${blankThread.code}`,
+      ].join("\n"),
+    );
+    expect(blankThread.code).toBe(1);
+    expect(`${blankThread.stdout}\n${blankThread.stderr}`).toContain(
       "--channel, --to, --account, and --thread-id require a non-main",
     );
 

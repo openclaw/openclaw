@@ -19,8 +19,7 @@ export async function notifyGatewayPluginMetadataChanged(
       method: "plugins.refresh",
       params: {},
       timeoutMs: 1_000,
-      // Ignore ambient OPENCLAW_GATEWAY_PORT from sibling gateway harnesses.
-      localPortOverride: resolveGatewayPort(config, {}),
+      localPortOverride: resolveGatewayPort(config),
       ignoreEnvUrlOverride: true,
       requiredMethods: ["plugins.refresh"],
       scopes: ["operator.admin"],
