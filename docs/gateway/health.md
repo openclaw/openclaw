@@ -85,20 +85,13 @@ unreachable or the probe fails/times out.
 Options:
 
 - `--json`: machine-readable JSON output
-- `--timeout <ms>`: set an explicit overall client response deadline
+- `--timeout <ms>`: set the maximum wait for the Gateway response
 - `--verbose`: force a live probe and print gateway connection details
 - `--debug`: alias for `--verbose`
 
-Cached health uses a 10-second response deadline when `--timeout` is omitted.
-Verbose/debug health and `status --deep` keep that deadline with an older
-Gateway. An updated Gateway advertises bounded live-health support during the
-connection handshake, after which the CLI waits for the account-dependent
-result. The Gateway gives each account's complete plugin-hook pipeline 10
-seconds and runs at most five accounts for one channel concurrently. A hook that
-outlives its deadline keeps its capacity slot; accounts that cannot start are
-included as skipped partial results.
-If a newly updated CLI still reports a 10-second transport timeout, restart the
-Gateway so the new process advertises bounded live-health support.
+Without `--timeout`, cached health and older Gateways use a 10-second response
+timeout; verbose health waits for a current Gateway's bounded live probes. If
+verbose health still times out after an update, restart the Gateway.
 
 The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
 

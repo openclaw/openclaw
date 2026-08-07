@@ -1,0 +1,25 @@
+{
+  "id": "qa-health-hook-deadline",
+  "activation": {
+    "onStartup": true
+  },
+  "channels": ["qa-health-hook-deadline"],
+  "channelConfigs": {
+    "qa-health-hook-deadline": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "mode": { "type": "string", "enum": ["delayed", "hanging-probe"] },
+          "accounts": { "type": "object", "additionalProperties": true }
+        }
+      }
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

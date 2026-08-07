@@ -43,7 +43,8 @@ import type {
 } from "./types.js";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 10_000;
-const HEALTH_PROBE_CONCURRENCY = 5;
+// Match channels.status's cap so multi-account health cannot create unbounded plugin fan-out.
+const HEALTH_ACCOUNT_PIPELINE_CONCURRENCY = 5;
 const healthLog = createSubsystemLogger("health");
 
 type HealthSnapshotAudience = "public" | "admin";
@@ -389,9 +390,8 @@ export async function collectGatewayHealthSnapshot(params: {
       record.accountId = accountId;
       return record;
     });
-    // The timeout covers the full Promise-capable account pipeline. A timed-out
-    // task retains its process-wide channel slot until its backing work settles.
-    const accountConcurrency = params.probe ? HEALTH_PROBE_CONCURRENCY : 1;
+    // A timed-out task retains its process-wide channel slot until its backing work settles.
+    const accountConcurrency = params.probe ? HEALTH_ACCOUNT_PIPELINE_CONCURRENCY : 1;
     const accountRun = await runChannelHookTasksWithTimeout({
       capacityKey: `health:${plugin.id}`,
       tasks: accountTasks,

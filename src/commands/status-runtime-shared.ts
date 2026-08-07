@@ -260,8 +260,8 @@ type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>
 /** Resolves optional usage/deep runtime details plus service summaries for status output. */
 async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
-  timeoutMs: number;
-  liveHealthTimeoutMs?: number;
+  statusTimeoutMs: number;
+  liveHealthTimeoutOverrideMs?: number;
   usage?: boolean;
   deep?: boolean;
   gatewayReachable: boolean;
@@ -276,7 +276,7 @@ async function resolveStatusRuntimeDetails(params: {
   const resolveGatewayHealthSummary = params.resolveHealth ?? resolveStatusGatewayHealth;
   const usage = params.usage
     ? await resolveUsageSummary({
-        timeoutMs: params.timeoutMs,
+        timeoutMs: params.statusTimeoutMs,
         config: params.config,
       })
     : undefined;
@@ -285,22 +285,22 @@ async function resolveStatusRuntimeDetails(params: {
     ? params.suppressHealthErrors
       ? await resolveGatewayHealthSummary({
           config: params.config,
-          timeoutMs: params.liveHealthTimeoutMs,
+          timeoutMs: params.liveHealthTimeoutOverrideMs,
         }).catch((error: unknown) => ({ error: String(error) }))
       : await resolveGatewayHealthSummary({
           config: params.config,
-          timeoutMs: params.liveHealthTimeoutMs,
+          timeoutMs: params.liveHealthTimeoutOverrideMs,
         })
     : undefined;
   // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
   const lastHeartbeat = params.deep
     ? await resolveStatusLastHeartbeat({
         config: params.config,
-        timeoutMs: params.timeoutMs,
+        timeoutMs: params.statusTimeoutMs,
         gatewayReachable: params.gatewayReachable,
       })
     : null;
-  const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
+  const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.statusTimeoutMs);
   const result = {
     usage,
     health,
@@ -338,20 +338,20 @@ export async function resolveStatusRuntimeSnapshot(params: {
     timeoutMs?: number;
   }) => Promise<StatusGatewayHealth>;
 }) {
-  // Ordinary status probes keep the public 10-second default. Only deep health
-  // receives the omitted value, which requests the negotiated Gateway-owned deadline.
-  const timeoutMs = params.timeoutMs ?? 10_000;
+  // Ordinary status work keeps the public 10-second default. Preserve an omitted caller
+  // timeout separately so negotiated live health can use Gateway-owned deadlines.
+  const statusTimeoutMs = params.timeoutMs ?? 10_000;
   const securityAudit = params.includeSecurityAudit
     ? await (params.resolveSecurityAudit ?? resolveStatusSecurityAudit)({
         config: params.config,
         sourceConfig: params.sourceConfig,
-        timeoutMs,
+        timeoutMs: statusTimeoutMs,
       })
     : undefined;
   const runtimeDetails = await resolveStatusRuntimeDetails({
     config: params.config,
-    timeoutMs,
-    liveHealthTimeoutMs: params.timeoutMs,
+    statusTimeoutMs,
+    liveHealthTimeoutOverrideMs: params.timeoutMs,
     usage: params.usage,
     deep: params.deep,
     gatewayReachable: params.gatewayReachable,

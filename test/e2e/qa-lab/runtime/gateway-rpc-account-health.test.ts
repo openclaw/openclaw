@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  createHealthHookDeadlineFixturePlugin,
+  resolveHealthHookDeadlineFixturePluginDir,
   withHealthHookDeadlineFixture,
 } from "./gateway-rpc-account-health-hook-deadlines.js";
 import {
@@ -39,27 +39,23 @@ describe("Gateway RPC account health producer", () => {
     });
   });
 
-  it("builds an isolated six-account channel hook deadline fixture", async () => {
-    const fixture = await createHealthHookDeadlineFixturePlugin();
-    try {
-      const config = withHealthHookDeadlineFixture({} as never, fixture.pluginDir, "delayed");
-      expect(config.channels?.["qa-health-hook-deadline"]).toMatchObject({
-        enabled: true,
-        mode: "delayed",
-        accounts: {
-          "account-1": { enabled: true },
-          "account-6": { enabled: true },
-        },
-      });
-      expect(config.plugins).toMatchObject({
-        enabled: true,
-        allow: ["qa-health-hook-deadline"],
-        entries: { "qa-health-hook-deadline": { enabled: true } },
-      });
-      expect(config.plugins?.load?.paths).toContain(fixture.pluginDir);
-    } finally {
-      await fixture.cleanup();
-    }
+  it("builds an isolated six-account channel hook deadline fixture", () => {
+    const pluginDir = resolveHealthHookDeadlineFixturePluginDir();
+    const config = withHealthHookDeadlineFixture({} as never, pluginDir, "delayed");
+    expect(config.channels?.["qa-health-hook-deadline"]).toMatchObject({
+      enabled: true,
+      mode: "delayed",
+      accounts: {
+        "account-1": { enabled: true },
+        "account-6": { enabled: true },
+      },
+    });
+    expect(config.plugins).toMatchObject({
+      enabled: true,
+      allow: ["qa-health-hook-deadline"],
+      entries: { "qa-health-hook-deadline": { enabled: true } },
+    });
+    expect(config.plugins?.load?.paths).toContain(pluginDir);
   });
 
   it("reads account visibility from status channel-summary lines", () => {

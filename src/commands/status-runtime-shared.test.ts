@@ -455,7 +455,7 @@ describe("status-runtime-shared", () => {
     });
   });
 
-  it("keeps the status default while preserving an omitted deep-health timeout", async () => {
+  it("keeps the status default while preserving an omitted live-health override", async () => {
     await resolveStatusRuntimeSnapshot({
       config: { gateway: {} },
       sourceConfig: { gateway: {} },
