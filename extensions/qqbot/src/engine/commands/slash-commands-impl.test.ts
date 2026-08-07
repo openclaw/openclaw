@@ -1,6 +1,7 @@
 // Qqbot tests cover slash commands impl plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { registerBasicBotCommands } from "./builtin/register-basic.js";
 import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-test-support.js";
 import { getFrameworkCommands, matchSlashCommand } from "./slash-commands-impl.js";
@@ -303,5 +304,38 @@ describe("QQBot framework slash commands", () => {
     expect(result).toContain("已关闭");
     expect(writes).toHaveLength(1);
     expect(qqbot?.streaming).toEqual({ mode: "off" });
+  });
+});
+
+describe("bot-upgrade guide url", () => {
+  function runUpgradeCommand(accountConfig: SlashCommandContext["accountConfig"]): string {
+    const registry = new SlashCommandRegistry();
+    registerBasicBotCommands(registry);
+    const command = registry.getAllCommands().get("bot-upgrade");
+    if (!command) {
+      throw new Error("bot-upgrade command not registered");
+    }
+    const result = command.handler(
+      createStreamingContext({ rawContent: "/bot-upgrade", accountConfig }),
+    );
+    return typeof result === "string" ? result : "";
+  }
+
+  it("returns the operator-configured upgrade url", () => {
+    const output = runUpgradeCommand({
+      allowFrom: ["*"],
+      upgradeUrl: "https://ops.example.com/qqbot-upgrade",
+    });
+    expect(output).toContain("https://ops.example.com/qqbot-upgrade");
+    expect(output).not.toContain("q.qq.com/qqbot/openclaw/upgrade.html");
+  });
+
+  it("falls back to the bundled guide when the key is unset or blank", () => {
+    expect(runUpgradeCommand({ allowFrom: ["*"] })).toContain(
+      "q.qq.com/qqbot/openclaw/upgrade.html",
+    );
+    expect(runUpgradeCommand({ allowFrom: ["*"], upgradeUrl: "   " })).toContain(
+      "q.qq.com/qqbot/openclaw/upgrade.html",
+    );
   });
 });
