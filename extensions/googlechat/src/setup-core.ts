@@ -4,6 +4,7 @@ import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import {
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
+  type ChannelSetupAdapter,
 } from "openclaw/plugin-sdk/setup-runtime";
 
 const channel = "googlechat" as const;
@@ -15,7 +16,7 @@ type GoogleChatSetupInput = ChannelSetupInput & {
   webhookUrl?: string;
 };
 
-export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
+const googlechatSetupAdapterBase = createPatchedAccountSetupAdapter<GoogleChatSetupInput>({
   channelKey: channel,
   validateInput: createSetupInputPresenceValidator({
     defaultAccountOnlyEnvError:
@@ -49,6 +50,18 @@ export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
     };
   },
 });
+
+export const googlechatSetupAdapter: ChannelSetupAdapter = {
+  ...googlechatSetupAdapterBase,
+  singleAccountKeysToMove: [
+    "serviceAccount",
+    "serviceAccountFile",
+    "audienceType",
+    "audience",
+    "webhookPath",
+    "webhookUrl",
+  ],
+};
 
 export const googlechatSetupContract = defineChannelSetupContract({
   fields: {
