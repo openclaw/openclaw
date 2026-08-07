@@ -815,7 +815,7 @@ describe("runPreparedReply media-only handling", () => {
         ],
       },
     });
-    const fact = persisted?.["__openclaw"]?.media?.[0];
+    const fact = (persisted as any)?.["__openclaw"]?.media?.[0];
     expect(fact).not.toHaveProperty("originalPath");
     expect(fact).not.toHaveProperty("workspaceDir");
   });

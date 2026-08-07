@@ -193,11 +193,11 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])].map(
     (fact) => {
       if (fact.originalPath) {
-        const { originalPath, workspaceDir, ...rest } = fact;
-        return {
-          ...rest,
-          path: originalPath,
-        };
+        const copy = Object.assign({}, fact);
+        copy.path = fact.originalPath;
+        delete copy.originalPath;
+        delete copy.workspaceDir;
+        return copy;
       }
       return fact;
     },
