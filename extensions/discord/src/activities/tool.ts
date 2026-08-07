@@ -123,10 +123,10 @@ function createDiscordWidgetToolVariant(
       assertWidgetHtmlSize(html, DISCORD_WIDGET_HTML_MAX_BYTES, {
         inputName: variant.htmlParam,
       });
-      if (title.length > 80) {
+      if (Array.from(title).length > 80) {
         throw new WidgetHtmlInputError("title must be 80 characters or fewer");
       }
-      if (!buttonLabel.trim() || buttonLabel.length > 80) {
+      if (!buttonLabel.trim() || Array.from(buttonLabel).length > 80) {
         throw new WidgetHtmlInputError("button_label must be 1 to 80 characters");
       }
       const channelId = resolveDiscordChannelId(context);
