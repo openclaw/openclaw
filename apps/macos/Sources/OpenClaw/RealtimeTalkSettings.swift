@@ -69,6 +69,9 @@ enum RealtimeTalkSettingsConfig {
         let explicitProvider = Self.string(realtime["provider"])
         let selectedProvider = explicitProvider ?? Self.onlyProviderKey(in: realtime["providers"] as? [String: Any])
         let selectsOpenAI = selectedProvider?.caseInsensitiveCompare("openai") == .orderedSame
+        // Captured before any mutation: it decides whether the pre-save state was the exact
+        // triple this card manages, and therefore whether clearing those keys is ours to do.
+        let managedRelayBeforeApply = Self.selectsManagedRelay(realtime)
 
         Self.persistOpenAIOptions(draft, in: &realtime)
 
@@ -92,11 +95,12 @@ enum RealtimeTalkSettingsConfig {
             realtime["provider"] = "openai"
             realtime["model"] = draft.model
             realtime["speakerVoice"] = draft.voice
-            realtime.removeValue(forKey: "mode")
-            if Self.string(realtime["transport"])?.caseInsensitiveCompare("gateway-relay") == .orderedSame {
+            // Clear only the selectors this card itself writes. Any non-relay OpenAI setup --
+            // WebRTC, for example -- also parses as disabled here, and dropping its `mode` would
+            // leave a working configuration the card never owned in a broken half-state.
+            if managedRelayBeforeApply {
+                realtime.removeValue(forKey: "mode")
                 realtime.removeValue(forKey: "transport")
-            }
-            if Self.string(realtime["brain"])?.caseInsensitiveCompare("agent-consult") == .orderedSame {
                 realtime.removeValue(forKey: "brain")
             }
         } else if explicitProvider == nil, let selectedProvider {
@@ -130,6 +134,14 @@ enum RealtimeTalkSettingsConfig {
 
     private static func strings(_ value: AnyCodable?) -> [String] {
         value?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
+    /// The exact selector triple this card writes, matching the `enabled` derivation in `parse`.
+    private static func selectsManagedRelay(_ realtime: [String: Any]) -> Bool {
+        self.string(realtime["mode"])?.caseInsensitiveCompare("realtime") == .orderedSame &&
+            self.string(realtime["transport"])?
+            .caseInsensitiveCompare("gateway-relay") == .orderedSame &&
+            self.string(realtime["brain"])?.caseInsensitiveCompare("agent-consult") == .orderedSame
     }
 
     /// Mirrors the provider's own GPT-Live check (`isOpenAIGptLiveModel`), which keys off the

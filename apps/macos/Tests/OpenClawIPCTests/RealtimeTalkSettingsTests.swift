@@ -170,6 +170,30 @@ struct RealtimeTalkSettingsTests {
         #expect(openAI["speakerVoice"] as? String == "marin")
     }
 
+    @Test func `saving preserves a non-relay openai realtime configuration`() throws {
+        // A WebRTC setup is a valid OpenAI realtime configuration that this card does not manage,
+        // so it parses as disabled. Saving must not strip the selectors that make it work.
+        let root: [String: Any] = [
+            "talk": [
+                "realtime": [
+                    "provider": "openai",
+                    "model": "gpt-realtime-2.1",
+                    "mode": "realtime",
+                    "transport": "webrtc",
+                ],
+            ],
+        ]
+        let draft = RealtimeTalkSettingsConfig.parse(root)
+        #expect(!draft.enabled)
+
+        let updated = RealtimeTalkSettingsConfig.applying(draft, to: root)
+        let realtime = try #require((updated["talk"] as? [String: Any])?["realtime"] as? [String: Any])
+
+        #expect(realtime["mode"] as? String == "realtime")
+        #expect(realtime["transport"] as? String == "webrtc")
+        #expect(realtime["provider"] as? String == "openai")
+    }
+
     @Test func `disabling inferred openai provider removes managed selectors`() throws {
         let root: [String: Any] = [
             "talk": [
