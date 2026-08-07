@@ -559,13 +559,18 @@ async function compactResolvedContextEngine(
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   const harnessResult =
     attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
-      ? await maybeCompactAgentHarnessSession({
-          ...preparedParams,
-          runtimeModel: effectiveRuntimeModel,
-          contextEngine,
-          contextTokenBudget,
-          contextEngineRuntimeContext,
-        })
+      ? await maybeCompactAgentHarnessSession(
+          {
+            ...preparedParams,
+            runtimeModel: effectiveRuntimeModel,
+            contextEngine,
+            contextTokenBudget,
+            contextEngineRuntimeContext,
+          },
+          preparedParams.preflightRequired === true
+            ? { nativeCompactionRequest: "required_preflight" }
+            : undefined,
+        )
       : undefined;
   if (lockedNativeHarness) {
     return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);

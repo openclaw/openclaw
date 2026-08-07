@@ -2633,6 +2633,101 @@ describe("selectAgentHarness", () => {
     expect(compact).not.toHaveBeenCalled();
   });
 
+  it("routes required-preflight compaction through the harness private capability", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    const compactAfterContextEngine = vi.fn(
+      async (_params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult> => ({
+        ok: true,
+        compacted: false,
+        result: {
+          summary: "codex owns automatic compaction",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 10,
+          details: { request: "required_preflight" },
+        },
+      }),
+    );
+    const harness: AgentHarness & {
+      compactAfterContextEngine(
+        params: AgentHarnessCompactParams,
+      ): Promise<AgentHarnessCompactResult | undefined>;
+    } = {
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      compact,
+      compactAfterContextEngine,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          preflightRequired: true,
+        },
+        { nativeCompactionRequest: "required_preflight" },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      compacted: false,
+      result: {
+        summary: "codex owns automatic compaction",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 10,
+        details: { request: "required_preflight" },
+      },
+    });
+    expect(compact).not.toHaveBeenCalled();
+    expect(compactAfterContextEngine).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the regular compact hook when required-preflight capability is absent", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: true,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      maybeCompactAgentHarnessSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          preflightRequired: true,
+        },
+        { nativeCompactionRequest: "required_preflight" },
+      ),
+    ).resolves.toEqual({ ok: true, compacted: true });
+    expect(compact).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps compaction recoverable when auth profile lookup fails", async () => {
     compactAuthMocks.getApiKeyForModel.mockRejectedValue(new Error("missing auth profile"));
     const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
