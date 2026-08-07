@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => ({
   createTalkRealtimeRelaySession: vi.fn(),
   sendTalkRealtimeRelayAudio: vi.fn(),
   acknowledgeTalkRealtimeRelayMark: vi.fn(),
+  cancelTalkRealtimeRelayOutput: vi.fn(),
   cancelTalkRealtimeRelayTurn: vi.fn(),
   stopTalkRealtimeRelaySession: vi.fn(),
   registerTalkRealtimeRelayAgentRun: vi.fn(),
@@ -193,6 +194,7 @@ vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
   return {
     ...actual,
     acknowledgeTalkRealtimeRelayMark: mocks.acknowledgeTalkRealtimeRelayMark,
+    cancelTalkRealtimeRelayOutput: mocks.cancelTalkRealtimeRelayOutput,
     cancelTalkRealtimeRelayTurn: mocks.cancelTalkRealtimeRelayTurn,
     createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
     ensureTalkRealtimeRelayVoiceSession: mocks.ensureTalkRealtimeRelayVoiceSession,
@@ -1721,16 +1723,18 @@ describe("talk.session unified handlers", () => {
 
     const cancelRespond = vi.fn();
     await callTalkHandler("talk.session.cancelOutput", {
-      params: { sessionId: "relay-unified-1", reason: "barge-in" },
+      params: { sessionId: "relay-unified-1", turnId: "turn-1", reason: "barge-in" },
       id: "3",
       respond: cancelRespond,
       context: {},
     });
-    expect(mocks.cancelTalkRealtimeRelayTurn).toHaveBeenCalledWith({
+    expect(mocks.cancelTalkRealtimeRelayOutput).toHaveBeenCalledWith({
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
+      turnId: "turn-1",
       reason: "barge-in",
     });
+    expect(mocks.cancelTalkRealtimeRelayTurn).not.toHaveBeenCalled();
 
     const markRespond = vi.fn();
     await callTalkHandler("talk.session.acknowledgeMark", {

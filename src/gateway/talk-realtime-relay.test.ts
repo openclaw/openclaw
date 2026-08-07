@@ -27,6 +27,7 @@ import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-stat
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
+  cancelTalkRealtimeRelayOutput,
   cancelTalkRealtimeRelayTurn,
   closeTalkRealtimeRelaySessionsForConnection,
   createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
@@ -2772,6 +2773,196 @@ describe("talk realtime gateway relay", () => {
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expectChatAbortPayload(broadcast, "barge-in");
     expectNodeAbortPayload(nodeSendToSession);
+  });
+
+  it("cancels relay output without aborting the active turn or agent consult", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(() => bridgeRequest?.onClearAudio("barge-in")),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return bridge;
+      },
+    };
+    const { abortController, broadcast, broadcastToConnIds, session } =
+      createAbortableRelayRunFixture(provider);
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("input").toString("base64"),
+    });
+    const activeTurnId = relaySessions.get(session.relaySessionId)?.harness.talk.activeTurnId;
+    bridgeRequest?.onAudio(Buffer.from("output"));
+
+    cancelTalkRealtimeRelayOutput({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      turnId: activeTurnId,
+      reason: "barge-in",
+    });
+
+    expect(bridge.handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+    expect(abortController.signal.aborted).toBe(false);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId: "run-1", state: "aborted" }),
+      expect.anything(),
+    );
+    expect(relaySessions.get(session.relaySessionId)?.harness.talk.activeTurnId).toBe(activeTurnId);
+    expect(
+      broadcastToConnIds.mock.calls.filter(
+        (call) =>
+          (call[1] as { type?: string; talkEvent?: { type?: string } }).type === "clear" &&
+          (call[1] as { talkEvent?: { type?: string } }).talkEvent?.type === "output.audio.done",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("ignores a delayed provider clear from the replaced output generation", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    let deliverProviderClear: (() => void) | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(() => {
+        deliverProviderClear = () => bridgeRequest?.onClearAudio("barge-in");
+      }),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return bridge;
+      },
+    };
+    const { broadcastToConnIds, session } = createAbortableRelayRunFixture(provider);
+    bridgeRequest?.onAudio(Buffer.from("first output"));
+
+    cancelTalkRealtimeRelayOutput({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+
+    const clearCount = () =>
+      broadcastToConnIds.mock.calls.filter(
+        (call) => (call[1] as { type?: string }).type === "clear",
+      ).length;
+    expect(clearCount()).toBe(1);
+
+    bridgeRequest?.onAudio(Buffer.from("replacement output"));
+    deliverProviderClear?.();
+    expect(clearCount()).toBe(1);
+
+    bridgeRequest?.onClearAudio("barge-in");
+    expect(clearCount()).toBe(2);
+  });
+
+  it("ignores an output cancellation for a turn that is no longer active", () => {
+    const handleBargeIn = vi.fn();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () => ({
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn,
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    });
+    const { broadcastToConnIds, session } = createAbortableRelayRunFixture(provider);
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("input").toString("base64"),
+    });
+    const relay = relaySessions.get(session.relaySessionId);
+    const staleTurnId = relay?.harness.talk.activeTurnId;
+    expect(staleTurnId).toBeTruthy();
+    relay?.harness.endTurn("completed");
+    const clearCount = broadcastToConnIds.mock.calls.filter(
+      (call) => (call[1] as { type?: string }).type === "clear",
+    ).length;
+
+    cancelTalkRealtimeRelayOutput({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      turnId: staleTurnId,
+      reason: "late-cancel",
+    });
+
+    expect(handleBargeIn).not.toHaveBeenCalled();
+    expect(
+      broadcastToConnIds.mock.calls.filter(
+        (call) => (call[1] as { type?: string }).type === "clear",
+      ),
+    ).toHaveLength(clearCount);
+  });
+
+  it("clears queued playback after provider output is already marked done", () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return bridge;
+      },
+    };
+    const { abortController, broadcastToConnIds, session } =
+      createAbortableRelayRunFixture(provider);
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("input").toString("base64"),
+    });
+    bridgeRequest?.onAudio(Buffer.from("output"));
+    bridgeRequest?.onEvent?.({ direction: "server", type: "response.done" });
+    const clearCount = () =>
+      broadcastToConnIds.mock.calls.filter(
+        (call) => (call[1] as { type?: string }).type === "clear",
+      ).length;
+    const beforeCancel = clearCount();
+
+    cancelTalkRealtimeRelayOutput({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+
+    expect(clearCount()).toBe(beforeCancel + 1);
+    expect(abortController.signal.aborted).toBe(false);
   });
 
   it("terminally satisfies a late normal result after turn cancellation without a new turn", async () => {

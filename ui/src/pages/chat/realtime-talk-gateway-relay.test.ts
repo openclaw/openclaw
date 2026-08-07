@@ -542,6 +542,18 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       relaySessionId: "relay-1",
       type: "audio",
       audioBase64: zeroPcmBase64(24000 * 11),
+      talkEvent: {
+        id: "relay-1:2",
+        type: "output.audio.delta",
+        sessionId: "relay-1",
+        turnId: "turn-authoritative",
+        seq: 2,
+        timestamp: "2026-08-05T00:00:00.000Z",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        payload: { byteLength: 48_000 },
+      } satisfies RealtimeTalkEvent,
     });
 
     await waitForFast(() =>
@@ -550,6 +562,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
           "talk.session.cancelOutput",
           {
             sessionId: "relay-1",
+            turnId: "turn-authoritative",
             reason: "playback-overflow",
           },
         ],

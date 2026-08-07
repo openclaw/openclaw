@@ -35,6 +35,7 @@ import {
   type TalkHandoffTurnResult,
 } from "../talk-handoff.js";
 import {
+  cancelTalkRealtimeRelayOutput,
   cancelTalkRealtimeRelayTurn,
   createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
@@ -97,11 +98,9 @@ function canCloseManagedRoomSession(
   return !handoff?.room.activeClientId || handoff.room.activeClientId === connId;
 }
 
-function canCreateUnscopedManagedRoomSession(
+const canCreateUnscopedManagedRoomSession = (
   client: { connect?: { scopes?: string[] } } | null,
-): boolean {
-  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
-}
+): boolean => client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
 
 function managedRoomOwnershipError(action: string) {
   return errorShape(
@@ -131,9 +130,8 @@ function respondUnavailable(respond: RespondFn, err: unknown) {
   );
 }
 
-function respondOk(respond: RespondFn, payload: unknown = { ok: true }) {
+const respondOk = (respond: RespondFn, payload: unknown = { ok: true }) =>
   respond(true, payload, undefined);
-}
 
 function respondManagedRoomTurn(params: {
   session: UnifiedTalkSessionRecord;
@@ -589,9 +587,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         return;
       }
       const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-      cancelTalkRealtimeRelayTurn({
+      cancelTalkRealtimeRelayOutput({
         relaySessionId: session.relaySessionId,
         connId,
+        turnId: normalizeOptionalString(params.turnId),
         reason: normalizeOptionalString(params.reason) ?? "output-cancelled",
       });
       respondOk(respond);

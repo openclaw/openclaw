@@ -110,6 +110,11 @@ export type RelaySession = {
   forcedTerminalProviderResults: Map<string, ForcedTerminalProviderResult>;
   // Turn cancellation invalidates async acceptance callbacks from the prior turn.
   toolResultEpoch: number;
+  // Provider clears can arrive after the local fallback has already retired an
+  // output. Keep their original generation so they cannot clear replacement audio.
+  outputGeneration: number;
+  clearedOutputGeneration?: number;
+  pendingProviderClearGeneration?: number;
   voiceConfig?: OpenClawConfig;
   voiceSessionCreated: boolean;
   voiceTranscriptSeq: number;
@@ -192,6 +197,30 @@ export function broadcastToOwner(
   // for transient tool progress by individual provider callback paths.
   const delivery = relayEventDeliveryOptions(event, event.talkEvent);
   context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), delivery);
+}
+
+export function clearTalkRealtimeRelayOutputGeneration(params: {
+  session: RelaySession;
+  generation: number;
+  reason: string;
+  providerReason?: RealtimeVoiceAudioClearReason;
+}): TalkEvent | undefined {
+  const { session, generation } = params;
+  if (generation !== session.outputGeneration || session.clearedOutputGeneration === generation) {
+    return undefined;
+  }
+  session.clearedOutputGeneration = generation;
+  let outputDone: TalkEvent | undefined;
+  session.harness.flushOutput(() => {
+    outputDone = session.harness.finishOutputAudio(params.reason);
+  });
+  broadcastToOwner(session.context, session.connId, {
+    relaySessionId: session.id,
+    type: "clear",
+    ...(params.providerReason ? { reason: params.providerReason } : {}),
+    ...(outputDone ? { talkEvent: outputDone } : {}),
+  });
+  return outputDone;
 }
 
 function relayEventDeliveryOptions(

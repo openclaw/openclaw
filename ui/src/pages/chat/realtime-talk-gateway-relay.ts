@@ -59,6 +59,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private readonly markAckTimers = new Set<number>();
   private cancelRequestedForPlayback = false;
   private playbackOverflowed = false;
+  private playbackTurnId: string | undefined;
   private pendingOutputCancellations = 0;
   private speechFramesDuringPlayback = 0;
   private lastRelayError: string | undefined;
@@ -321,6 +322,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           break;
         case "audio":
           if (event.audioBase64 && !this.playbackOverflowed) {
+            const turnId = event.talkEvent?.turnId?.trim();
+            if (turnId) {
+              this.playbackTurnId = turnId;
+            }
             this.cancelRequestedForPlayback = false;
             this.speechFramesDuringPlayback = 0;
             this.playPcm16(event.audioBase64);
@@ -394,6 +399,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
 
   private stopOutput(options: { releaseDelayedToolResults?: boolean } = {}): void {
     this.outputQueue.stop(this.outputContext);
+    this.playbackTurnId = undefined;
     this.speechFramesDuringPlayback = 0;
     if (options.releaseDelayedToolResults ?? true) {
       this.flushDelayedToolResults();
@@ -675,10 +681,12 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     // Releasing earlier can let the provider answer from a turn the user interrupted.
     this.pendingOutputCancellations += 1;
     this.pauseDelayedToolResults();
+    const turnId = this.playbackTurnId;
     this.stopOutput({ releaseDelayedToolResults: false });
     void this.ctx.client
       .request("talk.session.cancelOutput", {
         sessionId: this.session.relaySessionId,
+        ...(turnId ? { turnId } : {}),
         reason,
       })
       .then(
