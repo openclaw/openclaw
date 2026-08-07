@@ -136,10 +136,11 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
       defaultRuntime.log(
         `Attaching Claude Code to session ${grant.sessionKey} (grant expires ${expiresAt})…`,
       );
+      const detached = shouldDetachChildForProcessTree();
       const child = spawn(opts.bin, claudeArgs, {
         stdio: "inherit",
         env: { ...process.env, ...grant.env },
-        detached: shouldDetachChildForProcessTree(),
+        detached,
       });
 
       let forceKillTimer: NodeJS.Timeout | undefined;
@@ -206,10 +207,15 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
         })();
       });
       child.on("exit", (code, signal) => {
-        // Keep escalation armed: a detached wrapper may exit while an
-        // inherited-group descendant ignores SIGINT. The timer is the only
-        // mechanism that escalates to SIGKILL for the whole tree, so do not
-        // cancel it here.
+        // A detached POSIX child owns a process group; even if the original
+        // leader exits, the group ID stays alive as long as any descendant
+        // remains, so we can safely escalate SIGKILL to the whole tree later.
+        // On Windows the child is not detached and `taskkill /T` targets the
+        // wrapper PID; once that PID exits, it is no longer a stable tree
+        // identity and may be reused, so disarm the timer immediately.
+        if (!detached) {
+          disarm();
+        }
         childHasExited = true;
         childExitCode = code;
         childExitSignal = signal;
