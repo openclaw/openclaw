@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createGatewayByteStream,
-  resolveByteResponse,
+  resolveByteResponse as resolveByteResponseImpl,
   writeByteHeaders,
 } from "./http-byte-range.js";
 
@@ -31,6 +31,24 @@ function createByteRequest(
       entries.map(([name, value]) => [name, Array.isArray(value) ? value : [value]]),
     ),
   };
+}
+
+const IMMUTABLE_FILE = { file: FILE, validatorPolicy: "immutable-metadata" } as const;
+const MUTABLE_FILE = { file: FILE, validatorPolicy: "none" } as const;
+
+function resolveByteResponse(
+  params: Omit<Parameters<typeof resolveByteResponseImpl>[0], "validatorPolicy"> & {
+    validatorPolicy?: "immutable-metadata" | "none";
+  },
+) {
+  return resolveByteResponseImpl({ validatorPolicy: "immutable-metadata", ...params });
+}
+
+function requireEtag(plan: ReturnType<typeof resolveByteResponse>): string {
+  if (!plan.etag) {
+    throw new Error("expected an ETag");
+  }
+  return plan.etag;
 }
 
 describe("resolveByteResponse", () => {
@@ -116,11 +134,11 @@ describe("resolveByteResponse", () => {
     },
   );
 
-  it("honors a matching If-Range ETag", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+  it("honors a matching strong If-Range ETag", () => {
+    const etag = requireEtag(resolveByteResponse(IMMUTABLE_FILE));
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": etag }),
       }),
@@ -201,7 +219,7 @@ describe("resolveByteResponse", () => {
     "bounds the future Last-Modified validator on %s not-modified responses",
     (method) => {
       const nowMs = FILE.mtimeMs - 60_000;
-      const etag = resolveByteResponse({ file: FILE, nowMs }).etag;
+      const etag = requireEtag(resolveByteResponse({ file: FILE, nowMs }));
 
       expect(
         resolveByteResponse({
@@ -404,10 +422,40 @@ describe("resolveByteResponse", () => {
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
 
+  it("does not use an ETag as an If-Range validator for mutable content", () => {
+    expect(
+      resolveByteResponse({
+        ...MUTABLE_FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=1-2", "if-range": '"stale"' }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
+  it("does not use a Last-Modified date as an If-Range validator for mutable content", () => {
+    expect(
+      resolveByteResponse({
+        ...MUTABLE_FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=1-2", "if-range": LAST_MODIFIED }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
+  it("still serves an unconditional range for mutable content", () => {
+    expect(
+      resolveByteResponse({
+        ...MUTABLE_FILE,
+        method: "GET",
+        request: createByteRequest({ range: "bytes=1-2" }),
+      }),
+    ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
+  });
+
   it("falls back to a full response for a mismatched If-Range ETag", () => {
     expect(
       resolveByteResponse({
-        file: FILE,
+        ...IMMUTABLE_FILE,
         method: "GET",
         request: createByteRequest({ range: "bytes=1-2", "if-range": '"different"' }),
       }),
@@ -421,7 +469,7 @@ describe("resolveByteResponse", () => {
     { label: "list", header: (etag: string) => `"other", ${etag}` },
     { label: "multiple headers", header: (etag: string) => ['"other"', `W/${etag}`] },
   ])("returns 304 for a matching $label If-None-Match validator", ({ header }) => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+    const etag = requireEtag(resolveByteResponse({ file: FILE }));
     const plan = resolveByteResponse({
       file: FILE,
       method: "GET",
@@ -443,10 +491,40 @@ describe("resolveByteResponse", () => {
     expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
   });
 
+  it("does not match a specific If-None-Match tag without a current validator", () => {
+    expect(
+      resolveByteResponse({
+        ...MUTABLE_FILE,
+        method: "GET",
+        request: createByteRequest({ "if-none-match": '"stale"' }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
+  it("still honors If-None-Match wildcard for an existing mutable representation", () => {
+    expect(
+      resolveByteResponse({
+        ...MUTABLE_FILE,
+        method: "GET",
+        request: createByteRequest({ "if-none-match": "*" }),
+      }),
+    ).toEqual({ kind: "not-modified", statusCode: 304 });
+  });
+
+  it("ignores If-Modified-Since without a reliable modification validator", () => {
+    expect(
+      resolveByteResponse({
+        ...MUTABLE_FILE,
+        method: "GET",
+        request: createByteRequest({ "if-modified-since": LAST_MODIFIED }),
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
+  });
+
   it.each(["GET", "HEAD"])(
     "evaluates matching If-None-Match before Range and If-Range for %s",
     (method) => {
-      const etag = resolveByteResponse({ file: FILE }).etag;
+      const etag = requireEtag(resolveByteResponse({ file: FILE }));
 
       expect(
         resolveByteResponse({
@@ -463,7 +541,7 @@ describe("resolveByteResponse", () => {
   );
 
   it("keeps the requested range when If-None-Match does not match", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
+    const etag = requireEtag(resolveByteResponse({ file: FILE }));
 
     expect(
       resolveByteResponse({
@@ -502,14 +580,30 @@ describe("resolveByteResponse", () => {
 });
 
 describe("byte ETag generation", () => {
-  it("is stable for the same file identity and changes with size or mtime", () => {
-    const etag = resolveByteResponse({ file: FILE }).etag;
-    expect(resolveByteResponse({ file: { ...FILE } }).etag).toBe(etag);
-    expect(resolveByteResponse({ file: { ...FILE, size: FILE.size + 1 } }).etag).not.toBe(etag);
-    expect(resolveByteResponse({ file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 } }).etag).not.toBe(
-      etag,
-    );
-    expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+  it("is stable for the same immutable file identity", () => {
+    const strongEtag = requireEtag(resolveByteResponse(IMMUTABLE_FILE));
+    expect(resolveByteResponse({ ...IMMUTABLE_FILE, file: { ...FILE } }).etag).toBe(strongEtag);
+    expect(
+      resolveByteResponse({ ...IMMUTABLE_FILE, file: { ...FILE, size: FILE.size + 1 } }).etag,
+    ).not.toBe(strongEtag);
+    expect(
+      resolveByteResponse({
+        ...IMMUTABLE_FILE,
+        file: { ...FILE, mtimeMs: FILE.mtimeMs + 1 },
+      }).etag,
+    ).not.toBe(strongEtag);
+    expect(strongEtag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+  });
+
+  it("omits representation validators for mutable content", () => {
+    const plan = resolveByteResponse(MUTABLE_FILE);
+    const setHeader = vi.fn();
+    const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
+
+    expect(plan).toEqual({ kind: "full", statusCode: 200, contentLength: FILE.size });
+    writeByteHeaders(res, plan);
+    expect(setHeader).not.toHaveBeenCalledWith("ETag", expect.anything());
+    expect(setHeader).not.toHaveBeenCalledWith("Last-Modified", expect.anything());
   });
 });
 
