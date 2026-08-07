@@ -596,9 +596,10 @@ Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct mes
 For admitted automatic turns where typing is allowed, WhatsApp sends a
 `composing` presence update when agent execution begins and refreshes it while
 the turn remains active. Refreshing stops when the run completes, including
-terminal failure or cancellation; the controller seals and cleans up after its
-reply dispatch settles. Turns for which the existing typing and suppression
-policy disables typing do not start this activity.
+terminal failure or cancellation. The controller seals and cleans up when the
+reply dispatcher reports idle, or after a short safety timeout if that signal
+does not arrive. Turns for which the existing typing and suppression policy
+disables typing do not start this activity.
 
 Typing presence is ephemeral, best-effort activity feedback. It is not a
 persisted message, delivery receipt, or guarantee that every WhatsApp client
