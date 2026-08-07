@@ -552,6 +552,13 @@ async function runSelectedAgentHarnessAttempt(
       // trusted setup authority and must survive ordinary deny-all policy.
       const attemptParams =
         harness.id === "openclaw" ? pluginParams : preparePluginHarnessParams(pluginParams);
+      if (attemptParams.operation === "realtime-voice") {
+        const runRealtimeVoiceSession = harness.runRealtimeVoiceSession?.bind(harness);
+        if (!runRealtimeVoiceSession) {
+          throw new Error(`Agent harness ${harness.id} does not support realtime voice sessions.`);
+        }
+        return runAgentHarnessLifecycleAttempt(harness, attemptParams, runRealtimeVoiceSession);
+      }
       return runAgentHarnessLifecycleAttempt(harness, attemptParams);
     }),
   );

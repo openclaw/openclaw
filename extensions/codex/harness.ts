@@ -192,6 +192,16 @@ export function createCodexAppServerAgentHarness(options: {
         nativeHookRelay: { enabled: true },
       });
     },
+    runRealtimeVoiceSession: async (params) => {
+      const { runCodexAppServerRealtimeVoiceSession } =
+        await import("./src/app-server/realtime-voice-session.js");
+      return runCodexAppServerRealtimeVoiceSession(params, {
+        agentHarnessCodingToolsFactory: options.toolAuthority?.createForAttempt,
+        bindingStore: options.bindingStore,
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        nativeHookRelay: { enabled: true },
+      });
+    },
     runIsolatedCompletion: async (params) => {
       // Codex app-server always exposes update_plan. Pure inference therefore
       // uses the already-prepared OpenAI/ChatGPT transport and credential

@@ -92,6 +92,10 @@ export type RealtimeVoiceProviderCapabilities = {
   /** True when provider VAD reports confirmed interruptions through onClearAudio("barge-in"). */
   handlesInputAudioBargeIn?: boolean;
   supportsToolCalls?: boolean;
+  /** True when the provider runs the bound OpenClaw agent turn directly. */
+  handlesAgentTurns?: boolean;
+  /** True when provider selection requires a host-verified bound agent session. */
+  requiresBoundAgentSession?: boolean;
   supportsVideoFrames?: boolean;
   supportsSessionResumption?: boolean;
 };
@@ -115,6 +119,12 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   cfg?: OpenClawConfig;
   /** Host-selected agent scope for provider auth and agent-owned bridge state. */
   agentId?: string;
+  /** Canonical OpenClaw session whose native runtime owns this voice bridge. */
+  sessionKey?: string;
+  /** Trusted sender identity propagated by a surface that authorizes direct agent turns. */
+  senderId?: string;
+  /** Trusted owner bit; direct agent providers must fail closed unless this is true. */
+  senderIsOwner?: boolean;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;

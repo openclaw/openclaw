@@ -1278,6 +1278,57 @@ describe("DiscordVoiceManager", () => {
     expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("binds direct-agent realtime providers without running the Discord consult path", async () => {
+    resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
+      provider: {
+        id: "codex",
+        capabilities: {
+          transports: ["bridge"],
+          inputAudioFormats: [],
+          outputAudioFormats: [],
+          supportsToolCalls: false,
+          handlesAgentTurns: true,
+        },
+      },
+      providerConfig: { model: "codex", voice: "verse" },
+    } as never);
+    const manager = createAgentProxyManager();
+    const onUtterance = vi.fn();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { transcripts: { sessionId: "notes-1", onUtterance } },
+    );
+    const bridgeParams = lastRealtimeBridgeParams();
+    const rawBridgeParams = bridgeParams as unknown as Record<string, unknown>;
+    expect(rawBridgeParams.agentId).toBe("agent-1");
+    expect(rawBridgeParams.sessionKey).toBe("discord:g1:c1");
+    expect(rawBridgeParams.senderIsOwner).toBe(true);
+    expect(bridgeParams.autoRespondToAudio).toBe(true);
+    expect(bridgeParams.tools).toEqual([]);
+
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Handle this on the bound agent.");
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
+
+    const entry = getSessionEntry(manager);
+    beginSpeakerTurn(entry);
+    expect(realtimeSessionMock.sendAudio).toHaveBeenCalledOnce();
+    bridgeParams.onTranscript?.("user", "native owner transcript", true);
+    await vi.waitFor(() =>
+      expect(onUtterance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "notes-1",
+          speaker: { id: "u-owner", label: "Owner" },
+          text: "native owner transcript",
+        }),
+      ),
+    );
+    beginSpeakerTurn(entry, { senderIsOwner: false });
+    expect(realtimeSessionMock.sendAudio).toHaveBeenCalledOnce();
+  });
+
   it("refreshes an active roster from a new gateway guild snapshot", async () => {
     const client = createClient();
     let voiceStates = [

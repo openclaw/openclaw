@@ -93,6 +93,36 @@ describe("realtime voice bridge session runtime", () => {
     );
   });
 
+  it("passes the resolved agent session binding to the provider bridge", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    expect(expectBridgeRequest(request)).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+    });
+  });
+
   it("passes the audio auto-response preference to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const provider: RealtimeVoiceProviderPlugin = {

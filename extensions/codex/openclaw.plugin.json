@@ -3,6 +3,7 @@
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
   "contracts": {
+    "realtimeVoiceProviders": ["codex"],
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
     "tools": [
