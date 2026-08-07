@@ -1,23 +1,23 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { writeSqliteTranscriptArchive } from "./session-accessor.sqlite-archive.js";
 
 describe("SQLite transcript archive stream writer", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let archiveDirectory: string;
 
   beforeEach(() => {
-    archiveDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-archive-stream-"));
+    archiveDirectory = tempDirs.make("openclaw-archive-stream-");
   });
 
   afterEach(() => {
     __setFsSafeTestHooksForTest();
     vi.restoreAllMocks();
-    fs.rmSync(archiveDirectory, { force: true, recursive: true });
   });
 
   it("routes existing whole-content callers through the canonical publisher", async () => {
@@ -178,6 +178,74 @@ describe("SQLite transcript archive stream writer", () => {
     ).rejects.toThrow(`SQLite transcript archive verification failed for ${sessionId}`);
 
     expect(findArchiveEntries(archiveDirectory, sessionId)).toEqual([]);
+  });
+
+  it("removes its published archive when final content verification fails", async () => {
+    const sessionId = "corrupt-after-publication-session";
+    __setFsSafeTestHooksForTest({
+      beforePublishDirectorySync: (_method, targetPath) => {
+        fs.writeFileSync(targetPath, "corrupt after publication\n", "utf8");
+      },
+    });
+
+    await expect(
+      writeSqliteTranscriptArchive({
+        archiveDirectory,
+        contentChunks: [Buffer.from("verified before publication\n", "utf8")],
+        reason: "deleted",
+        sessionId,
+      }),
+    ).rejects.toThrow(`SQLite transcript archive verification failed for ${sessionId}`);
+
+    expect(findArchiveEntries(archiveDirectory, sessionId)).toEqual([]);
+  });
+
+  it("preserves a replacement at the archive path after final verification fails", async () => {
+    const sessionId = "replaced-after-publication-session";
+    let publishedPath: string | undefined;
+    const displacedPath = path.join(archiveDirectory, "displaced-publication");
+    __setFsSafeTestHooksForTest({
+      beforePublishDirectorySync: (_method, targetPath) => {
+        publishedPath = targetPath;
+        fs.renameSync(targetPath, displacedPath);
+        fs.writeFileSync(targetPath, "replacement owner\n", "utf8");
+      },
+    });
+
+    await expect(
+      writeSqliteTranscriptArchive({
+        archiveDirectory,
+        contentChunks: [Buffer.from("original publication\n", "utf8")],
+        reason: "deleted",
+        sessionId,
+      }),
+    ).rejects.toThrow(`SQLite transcript archive verification failed for ${sessionId}`);
+
+    expect(publishedPath).toBeDefined();
+    expect(fs.readFileSync(publishedPath!, "utf8")).toBe("replacement owner\n");
+  });
+
+  it("preserves the verification error when published archive cleanup fails", async () => {
+    const sessionId = "busy-after-publication-session";
+    __setFsSafeTestHooksForTest({
+      beforePublishDirectorySync: (_method, targetPath) => {
+        fs.writeFileSync(targetPath, "corrupt after publication\n", "utf8");
+      },
+    });
+    vi.spyOn(fs, "unlinkSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("injected busy published archive cleanup"), { code: "EBUSY" });
+    });
+
+    await expect(
+      writeSqliteTranscriptArchive({
+        archiveDirectory,
+        contentChunks: [Buffer.from("verified before publication\n", "utf8")],
+        reason: "deleted",
+        sessionId,
+      }),
+    ).rejects.toThrow(`SQLite transcript archive verification failed for ${sessionId}`);
+
+    expect(findArchiveEntries(archiveDirectory, sessionId)).toHaveLength(1);
   });
 });
 

@@ -88,6 +88,8 @@ export function createSessionArchiveCompressionStream(): {
   suffix: "" | typeof SESSION_ARCHIVE_ZSTD_SUFFIX;
 } {
   if (!zstdStreamCodec) {
+    // A sync-only fallback would materialize the entire transcript and defeat
+    // this writer's bounded-memory contract. Keep partial runtimes on plain JSONL.
     return { stream: null, suffix: "" };
   }
   return {

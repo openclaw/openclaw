@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -20,17 +20,17 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 const BATCHED_TRANSCRIPT_EVENT_COUNT = 33;
 
 describe("SQLite transcript archive worker concurrency", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-archive-concurrency-"));
+    tempDir = tempDirs.make("openclaw-sqlite-archive-concurrency-");
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("allows a rollback-journal writer between bounded archive batches", async () => {
