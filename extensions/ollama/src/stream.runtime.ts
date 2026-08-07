@@ -890,6 +890,10 @@ export async function* parseNdjsonStream(
       }
     }
 
+    // Finalize the fatal decoder so a terminal partial UTF-8 sequence
+    // (buffered by the continuing stream decode) rejects the stream at EOF.
+    buffer += decoder.decode();
+
     if (buffer.trim()) {
       try {
         yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;

@@ -2909,6 +2909,22 @@ describe("parseNdjsonStream UTF-8 decoding", () => {
     }).rejects.toThrow(/not valid for encoding utf-8/i);
   });
 
+  it("rejects a terminal partial UTF-8 sequence at EOF", async () => {
+    const encoded = new TextEncoder().encode(
+      '{"message":{"role":"assistant","content":"hello"}}\n',
+    );
+    // A lone leading UTF-8 byte stays buffered by the continuing stream decode
+    // and must reject the stream when the fatal decoder is finalized at EOF.
+    const truncated = new Uint8Array([...encoded, 0xc3]);
+
+    const generator = parseNdjsonStream(byteReader(truncated));
+    await expect(async () => {
+      for await (const _ of generator) {
+        // Drain the generator; the terminal partial sequence must reject.
+      }
+    }).rejects.toThrow(/not valid for encoding utf-8/i);
+  });
+
   it("parses valid UTF-8 NDJSON unchanged (negative control)", async () => {
     const encoded = new TextEncoder().encode(
       '{"message":{"role":"assistant","content":"hello"}}\n',
