@@ -103,6 +103,17 @@ describe("sendClickClackText routing", () => {
     expect(createThreadReply).not.toHaveBeenCalled();
   });
 
+  it("accepts provider-prefixed mixed-case channel targets", async () => {
+    await sendClickClackText({ cfg, to: "ClickClack:Channel:General", text: "hi" });
+
+    expect(createChannelMessage).toHaveBeenCalledWith(
+      "General",
+      "hi",
+      expect.objectContaining({ quotedMessageId: undefined }),
+    );
+    expect(createThreadReply).not.toHaveBeenCalled();
+  });
+
   it("uses the inbound correlation id for outbound ClickClack HTTP calls", async () => {
     await sendClickClackText({
       cfg,

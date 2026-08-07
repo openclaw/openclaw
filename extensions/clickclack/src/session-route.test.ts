@@ -18,6 +18,32 @@ describe("ClickClack outbound session routing", () => {
     expect(channelRoute?.recipientSessionExact).toBe(false);
   });
 
+  it("routes provider-prefixed mixed-case targets to canonical sessions", async () => {
+    const dmRoute = await clickClackPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "cc:DM:usr_1",
+    });
+    const channelRoute = await clickClackPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      target: "ClickClack:Channel:General",
+    });
+
+    expect(dmRoute).toMatchObject({
+      to: "dm:usr_1",
+      chatType: "direct",
+      recipientSessionExact: true,
+      peer: { kind: "direct", id: "dm:usr_1" },
+    });
+    expect(channelRoute).toMatchObject({
+      to: "channel:General",
+      chatType: "group",
+      recipientSessionExact: false,
+      peer: { kind: "channel", id: "channel:General" },
+    });
+  });
+
   it("keeps threaded DMs on the inbound base session", async () => {
     const route = await clickClackPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: { session: { dmScope: "per-channel-peer" } },
