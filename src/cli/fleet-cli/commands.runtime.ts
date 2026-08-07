@@ -8,6 +8,7 @@ import {
   type FleetLogsOptions,
 } from "../../fleet/service.runtime.js";
 import { defaultRuntime } from "../../runtime.js";
+import { maskApiKey } from "../../security/secret-mask.js";
 
 const fleetService = createFleetService();
 
@@ -22,7 +23,7 @@ export async function runFleetCreateCommand(
   defaultRuntime.log(`Tenant: ${result.tenant}`);
   defaultRuntime.log(`Container: ${result.containerName}`);
   defaultRuntime.log(`Port: ${result.port}`);
-  defaultRuntime.log(`Token: ${result.token}`);
+  defaultRuntime.log(`Token: ${maskApiKey(result.token)}`);
   defaultRuntime.log(result.tokenNote);
   defaultRuntime.log(`Next: ${result.nextStep}`);
 }
@@ -60,7 +61,7 @@ export async function runFleetRestoreCommand(options: {
     return;
   }
   defaultRuntime.log(`Tenant: ${result.tenant}`);
-  defaultRuntime.log(`Token: ${result.token}`);
+  defaultRuntime.log(`Token: ${maskApiKey(result.token)}`);
   defaultRuntime.log(result.tokenNote);
 }
 
