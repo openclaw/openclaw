@@ -1,7 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveClickClackAccount } from "./accounts.js";
 import type { ClickClackInboundAccess } from "./access.js";
+import { resolveClickClackAccount } from "./accounts.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
 import type { ClickClackMessage, CoreConfig } from "./types.js";
@@ -36,10 +36,7 @@ function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMe
   };
 }
 
-function createAccess(params: {
-  isDirect: boolean;
-  target: string;
-}): ClickClackInboundAccess {
+function createAccess(params: { isDirect: boolean; target: string }): ClickClackInboundAccess {
   return {
     shouldDispatch: true,
     commandAuthorized: true,
@@ -95,41 +92,39 @@ describe("ClickClack inbound replay ordinals", () => {
       to: "dm:usr_owner",
       threadId: undefined,
     },
-  ])("reuses stable agent reply ordinals after $name replay", async ({
-    access,
-    message,
-    threadId,
-    to,
-  }) => {
-    const runtime = createPluginRuntimeMock();
-    setClickClackRuntime(runtime);
-    const account = resolveClickClackAccount({ cfg: CONFIG });
+  ])(
+    "reuses stable agent reply ordinals after $name replay",
+    async ({ access, message, threadId, to }) => {
+      const runtime = createPluginRuntimeMock();
+      setClickClackRuntime(runtime);
+      const account = resolveClickClackAccount({ cfg: CONFIG });
 
-    const dispatchOnce = async () => {
-      await handleClickClackInbound({ account, config: CONFIG, message, access });
-      const calls = vi.mocked(runtime.channel.inbound.dispatch).mock.calls;
-      return calls.at(-1)?.[0].delivery;
-    };
+      const dispatchOnce = async () => {
+        await handleClickClackInbound({ account, config: CONFIG, message, access });
+        const calls = vi.mocked(runtime.channel.inbound.dispatch).mock.calls;
+        return calls.at(-1)?.[0].delivery;
+      };
 
-    const firstDelivery = await dispatchOnce();
-    await firstDelivery?.deliver({ text: "first part" }, { kind: "block" });
-    await firstDelivery?.deliver({ text: "final part" }, { kind: "final" });
-    const replayDelivery = await dispatchOnce();
-    await replayDelivery?.deliver({ text: "regenerated first part" }, { kind: "block" });
+      const firstDelivery = await dispatchOnce();
+      await firstDelivery?.deliver({ text: "first part" }, { kind: "block" });
+      await firstDelivery?.deliver({ text: "final part" }, { kind: "final" });
+      const replayDelivery = await dispatchOnce();
+      await replayDelivery?.deliver({ text: "regenerated first part" }, { kind: "block" });
 
-    expect(sendClickClackInboundReplyMock.mock.calls.map(([call]) => call.deliveryPartIndex)).toEqual(
-      [0, 1, 0],
-    );
-    expect(sendClickClackInboundReplyMock).toHaveBeenCalledTimes(3);
-    for (const [call] of sendClickClackInboundReplyMock.mock.calls) {
-      expect(call).toEqual(
-        expect.objectContaining({
-          replyToId: SOURCE_MESSAGE_ID,
-          sourceMessageId: SOURCE_MESSAGE_ID,
-          threadId,
-          to,
-        }),
-      );
-    }
-  });
+      expect(
+        sendClickClackInboundReplyMock.mock.calls.map(([call]) => call.deliveryPartIndex),
+      ).toEqual([0, 1, 0]);
+      expect(sendClickClackInboundReplyMock).toHaveBeenCalledTimes(3);
+      for (const [call] of sendClickClackInboundReplyMock.mock.calls) {
+        expect(call).toEqual(
+          expect.objectContaining({
+            replyToId: SOURCE_MESSAGE_ID,
+            sourceMessageId: SOURCE_MESSAGE_ID,
+            threadId,
+            to,
+          }),
+        );
+      }
+    },
+  );
 });
