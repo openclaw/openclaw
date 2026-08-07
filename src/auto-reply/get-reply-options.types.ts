@@ -1,6 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type { CronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -107,6 +108,7 @@ type ReasoningProgressPayload = {
 type ProgressCallbackResult = false | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -159,6 +161,8 @@ export type GetReplyOptions = {
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
+  /** Server-stamped scheduled run policy authority for trusted scheduled runs. */
+  scheduledToolPolicy?: CronScheduledToolPolicy | undefined;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
