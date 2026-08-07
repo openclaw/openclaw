@@ -80,7 +80,7 @@ vi.mock("../../routing/session-key.js", () => ({
   resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
 }));
 
-const { ensureSkillSnapshot } = await import("./session-updates.js");
+const { ensureSkillSnapshot, incrementCompactionCount } = await import("./session-updates.js");
 
 describe("ensureSkillSnapshot", () => {
   beforeEach(() => {
@@ -308,5 +308,66 @@ describe("ensureSkillSnapshot", () => {
     });
     expect(result.sessionEntry?.pinnedAt).toBeUndefined();
     expect(sessionStore[sessionKey]).toEqual(result.sessionEntry);
+  });
+});
+
+describe("incrementCompactionCount", () => {
+  it("persists byte-triggered compaction metadata in the session entry", async () => {
+    const sessionEntry = {
+      sessionId: "session",
+      sessionFile: "/tmp/session.jsonl",
+      updatedAt: 1,
+      compactionCount: 0,
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const nextCount = await incrementCompactionCount({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      now: 123,
+      tokensAfter: 42,
+      transcriptBytesCompaction: {
+        bytes: 1234.9,
+        threshold: 100,
+        sessionId: "session-after-compaction",
+      },
+    });
+
+    expect(nextCount).toBe(1);
+    expect(sessionStore.main).toMatchObject({
+      compactionCount: 1,
+      totalTokens: 42,
+      totalTokensFresh: true,
+      transcriptBytesCompaction: {
+        bytes: 1234,
+        threshold: 100,
+        sessionId: "session-after-compaction",
+      },
+    });
+  });
+
+  it("clears stale byte-triggered metadata for ordinary token compactions", async () => {
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      compactionCount: 0,
+      transcriptBytesCompaction: {
+        bytes: 1234,
+        threshold: 100,
+        sessionId: "session",
+      },
+    };
+    const sessionStore = { main: sessionEntry };
+
+    await incrementCompactionCount({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      now: 123,
+      tokensAfter: 42,
+    });
+
+    expect(sessionStore.main.transcriptBytesCompaction).toBeUndefined();
   });
 });

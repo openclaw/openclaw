@@ -555,6 +555,12 @@ type SessionEntryCore = SessionRestartRecoveryState &
     contextTokens?: number;
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
+    /** State recorded after the last byte-triggered preflight compaction. */
+    transcriptBytesCompaction?: {
+      bytes: number;
+      threshold: number;
+      sessionId: string;
+    };
     compactionCheckpoints?: SessionCompactionCheckpoint[];
     memoryFlush?: MemoryFlushState;
     cliSessionIds?: Record<string, string>;

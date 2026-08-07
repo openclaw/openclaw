@@ -1197,6 +1197,7 @@ describe("initSessionState RawBody", () => {
         },
         compactionCount: 3,
         memoryFlush: { kind: "failed", compactionCount: 2, failureCount: 3 },
+        transcriptBytesCompaction: { lastAttemptBytes: 42_000, blockedAtBytes: 42_000 },
         skillsSnapshot: {
           prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
           skills: [{ name: "stale" }],
@@ -1231,6 +1232,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.contextBudgetStatus).toBeUndefined();
     expect(result.sessionEntry.compactionCount).toBe(0);
     expect(result.sessionEntry.memoryFlush).toBeUndefined();
+    expect(result.sessionEntry.transcriptBytesCompaction).toBeUndefined();
 
     const store = readSessionStoreFast(storePath) as Record<
       string,
@@ -1242,6 +1244,7 @@ describe("initSessionState RawBody", () => {
         contextBudgetStatus?: unknown;
         compactionCount?: number;
         memoryFlush?: unknown;
+        transcriptBytesCompaction?: unknown;
       }
     >;
     expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
@@ -1251,6 +1254,7 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.contextBudgetStatus).toBeUndefined();
     expect(store[sessionKey]?.compactionCount).toBe(0);
     expect(store[sessionKey]?.memoryFlush).toBeUndefined();
+    expect(store[sessionKey]?.transcriptBytesCompaction).toBeUndefined();
   });
 
   it("drains stale system events when /new rotates an existing session", async () => {

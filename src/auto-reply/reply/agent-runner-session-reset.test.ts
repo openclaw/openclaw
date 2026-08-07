@@ -112,6 +112,11 @@ describe("resetReplyRunSession", () => {
       },
       compactionCount: 4,
       memoryFlush: { kind: "failed", compactionCount: 3, failureCount: 2 },
+      transcriptBytesCompaction: {
+        sessionId: "session",
+        threshold: 1_000,
+        bytes: 2_000,
+      },
       systemPromptReport: {
         source: "run",
         generatedAt: 1,
@@ -162,6 +167,7 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
     expect(activeSessionEntry?.memoryFlush).toBeUndefined();
+    expect(activeSessionEntry?.transcriptBytesCompaction).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
     expect(activeSessionEntry?.memoryFlush).toBeUndefined();
@@ -186,6 +192,7 @@ describe("resetReplyRunSession", () => {
     expect(persisted?.fallbackNotice).toBeUndefined();
     expect(persisted?.compactionCount).toBe(0);
     expect(persisted?.memoryFlush).toBeUndefined();
+    expect(persisted?.transcriptBytesCompaction).toBeUndefined();
   });
 
   it("rejects automatic recovery rotation for a model-locked session", async () => {

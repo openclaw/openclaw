@@ -95,6 +95,7 @@ export async function resetReplyRunSession(params: {
     fallbackNotice: undefined,
     compactionCount: 0,
     memoryFlush: undefined,
+    transcriptBytesCompaction: undefined,
   };
   clearAllCliSessions(nextEntry);
   nextEntry.agentHarnessId = undefined;

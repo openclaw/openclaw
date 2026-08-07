@@ -937,6 +937,7 @@ async function initSessionStateAttemptLocked(
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlush = undefined;
+    sessionEntry.transcriptBytesCompaction = undefined;
     // Runtime model fields are persisted last-run cache, not user selection.
     // Reset must drop them so the next turn resolves current defaults or the
     // explicit providerOverride/modelOverride values preserved above.

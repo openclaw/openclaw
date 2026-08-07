@@ -10,6 +10,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  readSessionTranscriptActiveStats,
   readTranscriptStatsSync,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -349,6 +350,9 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       if (typeof params.newSessionId === "string" && params.newSessionId) {
         nextEntry.sessionId = params.newSessionId;
+      }
+      if (params.transcriptBytesCompaction) {
+        nextEntry.transcriptBytesCompaction = params.transcriptBytesCompaction;
       }
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
@@ -2801,6 +2805,154 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.currentTokenCount).toBe(12);
     expect(compactCall.sessionFile).toBe("main");
+    expect(entry).toMatchObject({
+      transcriptBytesCompaction: {
+        bytes: expect.any(Number),
+        threshold: 10,
+        sessionId: "session",
+      },
+    });
+  });
+
+  it("suppresses repeated byte compaction until the active SQLite transcript grows", async () => {
+    const storePath = path.join(rootDir, "sqlite-byte-retry.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    const byteSize = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      transcriptBytesCompaction: { bytes: byteSize, threshold: 10, sessionId: "session" },
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("retries byte compaction after any active SQLite transcript growth", async () => {
+    const storePath = path.join(rootDir, "sqlite-byte-growth-retry.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    const previousBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(257) }, type: "message" },
+    ]);
+    expect(readSessionTranscriptActiveStats(scope).sizeBytes).toBeGreaterThan(previousBytes);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      transcriptBytesCompaction: { bytes: previousBytes, threshold: 10, sessionId: "session" },
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry?.compactionCount).toBe(2);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+  });
+
+  it("records the rotated SQLite successor size instead of the predecessor size", async () => {
+    const storePath = path.join(rootDir, "sqlite-byte-successor.json");
+    const sessionKey = "agent:main:main";
+    const predecessorScope = {
+      agentId: "main",
+      sessionId: "session",
+      sessionKey,
+      storePath,
+    };
+    const successorScope = {
+      agentId: "main",
+      sessionId: "session-rotated",
+      sessionKey,
+      storePath,
+    };
+    await upsertSessionEntry(predecessorScope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(predecessorScope, [
+      { message: { role: "user", content: "x".repeat(4096) }, type: "message" },
+    ]);
+    const predecessorBytes = readTranscriptStatsSync(predecessorScope).sizeBytes;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
+      await upsertSessionEntry(successorScope, { sessionId: "session-rotated", updatedAt: 20 });
+      await replaceSqliteTranscriptEvents(successorScope, [
+        { message: { role: "user", content: "successor" }, type: "message" },
+      ]);
+      return {
+        ok: true,
+        compacted: true,
+        result: { tokensAfter: 42, sessionId: "session-rotated" },
+      };
+    });
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const successorBytes = readSessionTranscriptActiveStats(successorScope).sizeBytes;
+    expect(successorBytes).not.toBe(predecessorBytes);
+    expect(entry).toMatchObject({
+      sessionId: "session-rotated",
+      transcriptBytesCompaction: {
+        bytes: successorBytes,
+        threshold: 10,
+        sessionId: "session-rotated",
+      },
+    });
   });
 
   it("byte-guards a Codex runtime session through SQLite semantic compaction", async () => {

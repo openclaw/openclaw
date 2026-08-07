@@ -1,5 +1,6 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   type ExecPolicyOverrides,
@@ -322,6 +323,8 @@ export async function incrementCompactionCount(params: {
   tokensAfter?: number;
   /** Session id after compaction when a context engine changed identity. */
   newSessionId?: string;
+  /** State recorded after a byte-triggered preflight compaction. */
+  transcriptBytesCompaction?: SessionEntry["transcriptBytesCompaction"];
 }): Promise<number | undefined> {
   const {
     agentId,
@@ -334,6 +337,7 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
+    transcriptBytesCompaction,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -369,6 +373,34 @@ export async function incrementCompactionCount(params: {
     updates.cacheWrite = undefined;
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
+  }
+  const normalizedTranscriptBytesCompactionBytes =
+    typeof transcriptBytesCompaction?.bytes === "number" &&
+    Number.isFinite(transcriptBytesCompaction.bytes) &&
+    transcriptBytesCompaction.bytes >= 0
+      ? Math.floor(transcriptBytesCompaction.bytes)
+      : undefined;
+  const normalizedTranscriptBytesCompactionThreshold =
+    typeof transcriptBytesCompaction?.threshold === "number" &&
+    Number.isFinite(transcriptBytesCompaction.threshold) &&
+    transcriptBytesCompaction.threshold > 0
+      ? Math.floor(transcriptBytesCompaction.threshold)
+      : undefined;
+  const normalizedTranscriptBytesCompactionSessionId = normalizeOptionalString(
+    transcriptBytesCompaction?.sessionId,
+  );
+  if (
+    normalizedTranscriptBytesCompactionBytes !== undefined &&
+    normalizedTranscriptBytesCompactionThreshold !== undefined &&
+    normalizedTranscriptBytesCompactionSessionId
+  ) {
+    updates.transcriptBytesCompaction = {
+      bytes: normalizedTranscriptBytesCompactionBytes,
+      threshold: normalizedTranscriptBytesCompactionThreshold,
+      sessionId: normalizedTranscriptBytesCompactionSessionId,
+    };
+  } else {
+    updates.transcriptBytesCompaction = undefined;
   }
   const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
   sessionStore[sessionKey] = nextEntry;
