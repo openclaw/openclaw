@@ -277,7 +277,13 @@ export function bootstrapApplication(
     startup.password ?? "",
     startup.pendingBootstrapToken ?? "",
     undefined,
-    { persistDefaultConnectionSettings: documentMode === null, basePath },
+    {
+      persistDefaultConnectionSettings: documentMode === null,
+      basePath,
+      ...(startup.pendingBootstrapProfile
+        ? { bootstrapProfile: startup.pendingBootstrapProfile }
+        : {}),
+    },
   );
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
@@ -359,6 +365,9 @@ export function bootstrapApplication(
           gatewayUrl: startup.pendingGatewayUrl,
           token: startup.pendingGatewayToken ?? "",
           bootstrapToken: startup.pendingBootstrapToken ?? "",
+          ...(startup.pendingBootstrapProfile
+            ? { bootstrapProfile: startup.pendingBootstrapProfile }
+            : {}),
         }
       : null;
   let lastPostConnectClient: GatewayBrowserClient | null = null;
@@ -414,6 +423,7 @@ export function bootstrapApplication(
       gatewayUrl: pending.gatewayUrl,
       token: pending.token,
       bootstrapToken: pending.bootstrapToken,
+      bootstrapProfile: pending.bootstrapProfile,
     });
   };
   const cancelPendingGatewayConnection = () => {
