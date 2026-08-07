@@ -54,6 +54,7 @@ import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
+  resolveAgentExecConfig,
   resolveEffectiveSystemRunExecPolicy,
 } from "./invoke-system-run.js";
 import type {
@@ -797,7 +798,13 @@ async function dispatchInvoke(
         ),
         frame,
       );
-      const prepared = buildSystemRunApprovalPlan(params);
+      const { getRuntimeConfig } = await import("../config/config.js");
+      const cfg = await getRuntimeConfig();
+      const normalizedAgentId =
+        typeof params.agentId === "string" ? params.agentId : undefined;
+      const agentExec = resolveAgentExecConfig(cfg, normalizedAgentId);
+      const allowSymlinkPath = agentExec?.allowSymlinkPath ?? cfg.tools?.exec?.allowSymlinkPath;
+      const prepared = buildSystemRunApprovalPlan({ ...params, allowSymlinkPath });
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
         return;

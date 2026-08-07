@@ -44,6 +44,7 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 export type ApprovedCwdSnapshot = {
   cwd: string;
   stat: fs.Stats;
+  allowSymlinkPath?: boolean;
 };
 
 const MUTABLE_ARGV1_INTERPRETER_PATTERNS = [
@@ -943,7 +944,10 @@ export function resolveMutableFileOperandSnapshotSync(params: {
   };
 }
 
-function resolveCanonicalApprovalCwdSync(cwd: string):
+function resolveCanonicalApprovalCwdSync(
+  cwd: string,
+  allowSymlinkPath?: boolean,
+):
   | {
       ok: true;
       snapshot: ApprovedCwdSnapshot;
@@ -971,23 +975,24 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
       message: "SYSTEM_RUN_DENIED: approval requires cwd to be a directory",
     };
   }
-  if (hasMutableSymlinkPathComponentSync(requestedCwd)) {
+  if (!allowSymlinkPath && hasMutableSymlinkPathComponentSync(requestedCwd)) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)",
     };
   }
-  if (cwdLstat.isSymbolicLink()) {
+  if (!allowSymlinkPath && cwdLstat.isSymbolicLink()) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink cwd)",
     };
   }
-  if (
-    !sameFileIdentity(cwdStat, cwdLstat) ||
-    !sameFileIdentity(cwdStat, cwdRealStat) ||
-    !sameFileIdentity(cwdLstat, cwdRealStat)
-  ) {
+  const identityMismatch = allowSymlinkPath
+    ? !sameFileIdentity(cwdStat, cwdRealStat)
+    : !sameFileIdentity(cwdStat, cwdLstat) ||
+      !sameFileIdentity(cwdStat, cwdRealStat) ||
+      !sameFileIdentity(cwdLstat, cwdRealStat);
+  if (identityMismatch) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval cwd identity mismatch",
@@ -998,13 +1003,14 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
     snapshot: {
       cwd: cwdReal,
       stat: cwdStat,
+      allowSymlinkPath,
     },
   };
 }
 
 /** Rechecks that the approved cwd still points at the same directory identity. */
 export function revalidateApprovedCwdSnapshot(params: { snapshot: ApprovedCwdSnapshot }): boolean {
-  const current = resolveCanonicalApprovalCwdSync(params.snapshot.cwd);
+  const current = resolveCanonicalApprovalCwdSync(params.snapshot.cwd, params.snapshot.allowSymlinkPath);
   if (!current.ok) {
     return false;
   }
@@ -1042,6 +1048,7 @@ export function hardenApprovedExecutionPaths(params: {
   argv: string[];
   shellCommand: string | null;
   cwd: string | undefined;
+  allowSymlinkPath?: boolean;
 }):
   | {
       ok: true;
@@ -1064,7 +1071,7 @@ export function hardenApprovedExecutionPaths(params: {
   let hardenedCwd = params.cwd;
   let approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
   if (hardenedCwd) {
-    const canonicalCwd = resolveCanonicalApprovalCwdSync(hardenedCwd);
+    const canonicalCwd = resolveCanonicalApprovalCwdSync(hardenedCwd, params.allowSymlinkPath);
     if (!canonicalCwd.ok) {
       return canonicalCwd;
     }
@@ -1137,6 +1144,7 @@ export function buildSystemRunApprovalPlan(params: {
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
+  allowSymlinkPath?: boolean;
 }): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
   const command = resolveSystemRunCommandRequest({
     command: params.command,
@@ -1154,11 +1162,13 @@ export function buildSystemRunApprovalPlan(params: {
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
     };
   }
+  const requestedCwd = normalizeNullableString(params.cwd) ?? undefined;
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,
     argv: command.argv,
     shellCommand: command.shellPayload,
-    cwd: normalizeNullableString(params.cwd) ?? undefined,
+    cwd: requestedCwd,
+    allowSymlinkPath: params.allowSymlinkPath,
   });
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
@@ -1181,6 +1191,7 @@ export function buildSystemRunApprovalPlan(params: {
     plan: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
+      requestedCwd: requestedCwd && requestedCwd !== hardening.cwd ? requestedCwd : null,
       commandText,
       commandPreview,
       agentId: normalizeNullableString(params.agentId),
