@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import {
@@ -322,6 +321,12 @@ export async function runMantisDesktopBrowserSmoke(
   );
   const summaryPath = path.join(outputDir, "mantis-desktop-browser-smoke-summary.json");
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
+  const screenshotPath = path.join(outputDir, "desktop-browser-smoke.png");
+  const videoPath = path.join(outputDir, "desktop-browser-smoke.mp4");
+  const clearVisualArtifacts = () =>
+    Promise.allSettled([fs.rm(screenshotPath, { force: true }), fs.rm(videoPath, { force: true })]);
+  // Capture cleanup failures without skipping option validation or leaking prior evidence.
+  const initialArtifactCleanup = await clearVisualArtifacts();
   const crabboxBin = await resolveCrabboxBin({
     env,
     envName: CRABBOX_BIN_ENV,
@@ -372,6 +377,12 @@ export async function runMantisDesktopBrowserSmoke(
   let summary: MantisDesktopBrowserSmokeSummary | undefined;
 
   try {
+    // Report cleanup failures only after both workflow-visible paths have settled.
+    for (const cleanup of initialArtifactCleanup) {
+      if (cleanup.status === "rejected") {
+        throw cleanup.reason;
+      }
+    }
     leaseId =
       leaseId ??
       (await warmupCrabbox({
@@ -419,20 +430,71 @@ export async function runMantisDesktopBrowserSmoke(
       runner,
       stdio: "inherit",
     });
-    await copyRemoteArtifacts({
-      cwd: repoRoot,
-      env,
-      inspect: inspected,
-      outputDir,
-      remoteOutputDir,
-      runner,
-    });
-    const screenshotPath = path.join(outputDir, "desktop-browser-smoke.png");
-    const videoPath = path.join(outputDir, "desktop-browser-smoke.mp4");
-    if (!(await pathExists(screenshotPath))) {
-      throw new Error("Desktop browser screenshot was not copied back from Crabbox.");
+    try {
+      await copyRemoteArtifacts({
+        cwd: repoRoot,
+        env,
+        inspect: inspected,
+        outputDir,
+        remoteOutputDir,
+        runner,
+      });
+    } catch (error) {
+      // rsync can leave partial captures behind even when its transfer ultimately fails.
+      await clearVisualArtifacts();
+      throw error;
     }
-    const copiedVideoPath = (await pathExists(videoPath)) ? videoPath : undefined;
+    const inspectArtifact = async (artifactPath: string) => {
+      try {
+        return await fs.lstat(artifactPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
+      }
+    };
+    const [screenshotInspection, videoInspection] = await Promise.allSettled([
+      inspectArtifact(screenshotPath),
+      inspectArtifact(videoPath),
+    ]);
+    const screenshot =
+      screenshotInspection.status === "fulfilled" ? screenshotInspection.value : undefined;
+    const video = videoInspection.status === "fulfilled" ? videoInspection.value : undefined;
+    const screenshotIsValid = Boolean(screenshot?.isFile() && screenshot.size > 0);
+    const videoIsValid = Boolean(video?.isFile() && video.size > 0);
+    const invalidArtifacts: string[] = [];
+    if (
+      screenshotInspection.status === "rejected" ||
+      (screenshot && !screenshotIsValid && !screenshot.isDirectory())
+    ) {
+      invalidArtifacts.push(screenshotPath);
+    }
+    if (videoInspection.status === "rejected" || (video && !videoIsValid && !video.isDirectory())) {
+      invalidArtifacts.push(videoPath);
+    }
+    // Failure workflows publish both raw paths; sanitize both before rejecting either capture.
+    for (const cleanup of await Promise.allSettled(
+      invalidArtifacts.map((artifactPath) => fs.rm(artifactPath, { force: true })),
+    )) {
+      if (cleanup.status === "rejected") {
+        throw cleanup.reason;
+      }
+    }
+    for (const inspection of [screenshotInspection, videoInspection]) {
+      if (inspection.status === "rejected") {
+        throw inspection.reason;
+      }
+    }
+    if (!screenshotIsValid) {
+      throw new Error(
+        "Desktop browser screenshot copied from Crabbox is missing, empty, or not a regular file.",
+      );
+    }
+    if (video?.isDirectory()) {
+      throw new Error("Desktop browser video copied from Crabbox must be a regular file.");
+    }
+    const copiedVideoPath = videoIsValid ? videoPath : undefined;
     summary = {
       artifacts: {
         reportPath,
