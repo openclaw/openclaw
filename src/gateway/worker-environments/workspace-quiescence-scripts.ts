@@ -216,7 +216,7 @@ function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
   });
 }
 async function recoverOrphanLeases(orphanNames) {
-  const orphans = [];
+  const orphans = []; let retainedOperatorRecovery = false;
   for (const name of orphanNames) {
     const match = name.match(/^[a-f0-9]{64}\.([a-f0-9]{32})\.json$/);
     if (!match) continue;
@@ -225,6 +225,7 @@ async function recoverOrphanLeases(orphanNames) {
     try { raw = fs.readFileSync(orphanPath, "utf8"); }
     catch (error) { if (error && error.code === "ENOENT") continue; throw error; }
     const lease = parseLease(raw, match[1]);
+    if (lease.recovery !== undefined) { retainedOperatorRecovery = true; continue; }
     const references = [
       ...(lease.watchdog === null ? [] : [{ ...lease.watchdog, signal: "SIGTERM" }]),
       ...lease.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
@@ -237,7 +238,7 @@ async function recoverOrphanLeases(orphanNames) {
     Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS},
   );
   const remaining = new Set(recovery.remaining);
-  let retained = false;
+  let retained = retainedOperatorRecovery;
   let failed = false;
   for (const { orphanPath, lease, references } of orphans) {
     const unresolved = references.filter((reference) => remaining.has(reference));
@@ -258,7 +259,7 @@ async function recoverOrphanLeases(orphanNames) {
       }
     });
   }
-  if (retained) throw new WorkspaceOperatorRecoveryError("workspace quiescence orphan recovery " + (failed ? "failed" : "timed out") + "; lease retained for operator recovery");
+  if (retained) throw new WorkspaceOperatorRecoveryError("workspace quiescence orphan recovery " + (retainedOperatorRecovery ? "requires operator action" : failed ? "failed" : "timed out") + "; lease retained for operator recovery");
 }
 async function quiesce() {
 const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>

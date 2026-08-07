@@ -202,6 +202,54 @@ describe("forced worker environment abandonment", () => {
     }
   });
 
+  it("atomically rolls back forced terminal abandonment when the pending identity changed", () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const { environmentId } = createDispatchEnvironmentFixtures();
+    const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const claim = store.claimTurn({
+      ...REQUEST,
+      claimId: "atomic-terminal-claim",
+      runId: "atomic-terminal-run",
+      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+    });
+    store.markWorkspaceResultPending(claim);
+    const terminalMessage = "Worker workspace sync failed: lease retained for operator recovery";
+    store.failPendingWorkspaceResult({
+      sessionId: active.sessionId,
+      expectedGeneration: active.generation,
+      recoveryError: terminalMessage,
+    });
+    const pending = store.listPendingWorkspaceResults()[0]!;
+
+    expect(() =>
+      store.forceAbandonPendingWorkspaceResult({
+        pending: { ...pending, claimId: "changed-claim" },
+        recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      }),
+    ).toThrow(`Worker workspace result changed for ${active.sessionId}`);
+
+    expect(store.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: terminalMessage,
+      turnClaim: null,
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([pending]);
+
+    store.forceAbandonPendingWorkspaceResult({
+      pending,
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+    expect(store.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
+      turnClaim: null,
+    });
+    expect(store.listPendingWorkspaceResults()).toEqual([]);
+  });
+
   it("deletes a stale journal without replaying it into the current workspace", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();

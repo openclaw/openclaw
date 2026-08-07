@@ -86,12 +86,12 @@ async function useBatchedDelayedProcessFixture(input: Awaited<ReturnType<typeof 
   );
 }
 
-async function quiesce(
+async function runQuiesce(
   input: Awaited<ReturnType<typeof fixture>>,
   watchdogTimeoutMs = 10_000,
   commandTimeoutMs = 10_000,
 ) {
-  const result = await runCommandWithTimeout(
+  return await runCommandWithTimeout(
     [
       process.execPath,
       "-e",
@@ -101,6 +101,14 @@ async function quiesce(
     ],
     { timeoutMs: commandTimeoutMs, baseEnv: input.env },
   );
+}
+
+async function quiesce(
+  input: Awaited<ReturnType<typeof fixture>>,
+  watchdogTimeoutMs = 10_000,
+  commandTimeoutMs = 10_000,
+) {
+  const result = await runQuiesce(input, watchdogTimeoutMs, commandTimeoutMs);
   expect(result.code, result.stderr).toBe(0);
   const match = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout);
   expect(match).not.toBeNull();
@@ -200,10 +208,7 @@ describe("remote workspace quiescence scripts", () => {
 
     try {
       const startedAt = Date.now();
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "1000"],
-        { timeoutMs: 4_000, baseEnv: input.env },
-      );
+      const result = await runQuiesce(input, 1_000, 4_000);
 
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain("workspace quiescence watchdog identity was not observable");
@@ -296,10 +301,7 @@ describe("remote workspace quiescence scripts", () => {
       }
       await fs.writeFile(input.failedProcessProbeTargetPath, `${failedPid}\n`);
 
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
-        { timeoutMs: 10_000, baseEnv: input.env },
-      );
+      const result = await runQuiesce(input);
 
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain("workspace quiescence orphan recovery failed");
@@ -338,10 +340,7 @@ describe("remote workspace quiescence scripts", () => {
       await fs.writeFile(input.extraProcessPath, `${childPid}\n`);
       await fs.writeFile(input.failedProcessScanPath, "fail after first scan\n");
 
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
-        { timeoutMs: 10_000, baseEnv: input.env },
-      );
+      const result = await runQuiesce(input);
 
       expect(result.code).not.toBe(0);
       expect(
@@ -405,7 +404,7 @@ describe("remote workspace quiescence scripts", () => {
     }
   }, 35_000);
 
-  it("reports when failed quiescence recovery retains a terminal lease", async () => {
+  it("keeps failed quiescence recovery terminal across automatic retries", async () => {
     const input = await fixture();
     const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       stdio: "ignore",
@@ -418,10 +417,7 @@ describe("remote workspace quiescence scripts", () => {
       await fs.writeFile(input.failedProcessScanPath, "fail after first scan\n");
       await fs.writeFile(input.failedProcessProbeTargetPath, `${childPid}\n`);
 
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
-        { timeoutMs: 10_000, baseEnv: input.env },
-      );
+      const result = await runQuiesce(input);
 
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain(
@@ -430,9 +426,8 @@ describe("remote workspace quiescence scripts", () => {
       const leaseDirectory = path.join(input.home, ".openclaw-worker", "quiescence");
       const leases = (await fs.readdir(leaseDirectory)).filter((name) => name.endsWith(".json"));
       expect(leases).toHaveLength(1);
-      const terminal = JSON.parse(
-        await fs.readFile(path.join(leaseDirectory, leases[0]!), "utf8"),
-      ) as {
+      const terminalLeasePath = path.join(leaseDirectory, leases[0]!);
+      const terminal = JSON.parse(await fs.readFile(terminalLeasePath, "utf8")) as {
         nonce: string;
         processes: Array<{ pid: number }>;
         recovery?: { state: string };
@@ -442,6 +437,12 @@ describe("remote workspace quiescence scripts", () => {
       expect(terminal.recovery?.state).toBe("recovery-failed");
 
       await fs.rm(input.failedProcessProbeTargetPath, { force: true });
+      process.kill(childPid, "SIGSTOP");
+      await expectProcessState(childPid, true);
+      const retry = await runQuiesce(input);
+      expect(retry.code).toBe(WORKER_WORKSPACE_OPERATOR_RECOVERY_EXIT_CODE);
+      await expectProcessState(childPid, true);
+      await expect(fs.access(terminalLeasePath)).resolves.toBeUndefined();
       await resume(input, nonce);
       await expectProcessState(childPid, false);
     } finally {

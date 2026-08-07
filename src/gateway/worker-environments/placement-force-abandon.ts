@@ -124,14 +124,14 @@ export async function forceAbandonWorkerEnvironment(params: {
         ],
       });
     }
-    if (isRetainedFailedOwner) {
-      placements.fail({
-        sessionId: placement.sessionId,
-        expectedGeneration: placement.generation,
+    if (isCurrentOwner || isRetainedFailedOwner) {
+      placements.forceAbandonPendingWorkspaceResult({
+        pending,
         recoveryError,
       });
+    } else {
+      placements.abandonWorkspaceResult(pending);
     }
-    placements.abandonWorkspaceResult(pending);
   }
   for (const placement of placements.listForReconcile()) {
     if (placement.environmentId !== environmentId) {

@@ -94,6 +94,8 @@ export function createHarness(
       return completed;
     },
     abandonWorkspaceResult: (pending) => placementStore.abandonWorkspaceResult(pending),
+    forceAbandonPendingWorkspaceResult: (params) =>
+      placementStore.forceAbandonPendingWorkspaceResult(params),
     releaseTurn: (claim) => placementStore.releaseTurn(claim),
     updateWorkspaceBaseManifest: (params) => placementStore.updateWorkspaceBaseManifest(params),
     acceptIdleWorkspaceReconciliation: (params) =>

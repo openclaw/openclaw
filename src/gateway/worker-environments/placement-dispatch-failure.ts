@@ -34,6 +34,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "fail"
   | "failPendingWorkspaceResult"
+  | "forceAbandonPendingWorkspaceResult"
   | "finishReclaim"
   | "get"
   | "loadWorkspaceReconciliation"
