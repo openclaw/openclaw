@@ -82,8 +82,7 @@ function isLegacyHostParamDefaultWindowOpen(): boolean {
     return false;
   }
   return (
-    legacyHostParamDefaultRemoveAfter !== undefined &&
-    today <= legacyHostParamDefaultRemoveAfter
+    legacyHostParamDefaultRemoveAfter !== undefined && today <= legacyHostParamDefaultRemoveAfter
   );
 }
 
