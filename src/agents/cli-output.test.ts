@@ -4187,6 +4187,198 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
+  it("streams deltas from Claude assistant partial messages", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl" },
+      providerId: "claude-cli",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+          stop_reason: null,
+        },
+        session_id: "s1",
+      }) + "\n",
+    );
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello world" }],
+          stop_reason: null,
+        },
+        session_id: "s1",
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      { text: "Hello", delta: "Hello" },
+      { text: "Hello world", delta: " world" },
+    ]);
+  });
+
+  it("streams later assistant partials after tool use without commentary (per-message baseline)", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      // No onCommentaryText: no-commentary path that previously dropped post-tool partials.
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-tool-later" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-pre-tool",
+            role: "assistant",
+            content: [{ type: "text", text: "I will inspect the repository first." }],
+            stop_reason: null,
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-pre-tool",
+            role: "assistant",
+            content: [
+              { type: "text", text: "I will inspect the repository first." },
+              { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
+            ],
+            stop_reason: null,
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "message_start", message: { id: "msg-post-tool" } },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-post-tool",
+            role: "assistant",
+            content: [{ type: "text", text: "Done." }],
+            stop_reason: null,
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-post-tool",
+            role: "assistant",
+            content: [{ type: "text", text: "Done. Found it." }],
+            stop_reason: null,
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    // Post-tool message is shorter than the pre-tool snapshot; turn-wide baseline
+    // would drop it. Per-message baseline must still emit Done. / Found it.
+    const joined = deltas.map((d) => d.delta).join("");
+    expect(joined).toContain("I will inspect the repository first.");
+    expect(joined).toContain("Done.");
+    expect(joined).toContain("Found it.");
+    expect(deltas.some((d) => d.delta.includes("Done."))).toBe(true);
+    expect(deltas.some((d) => d.delta.includes("Found it.") || d.text.includes("Found it."))).toBe(
+      true,
+    );
+  });
+
+  it("deduplicates when both stream_event deltas and assistant partials arrive", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl" },
+      providerId: "claude-cli",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    // Claude often emits stream_event text_delta and a cumulative assistant
+    // snapshot with stop_reason: null for the same prefix. The snapshot must
+    // not re-emit text already delivered via stream_event.
+    parser.push(
+      JSON.stringify({
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hi" } },
+      }) + "\n",
+    );
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi" }],
+          stop_reason: null,
+        },
+      }) + "\n",
+    );
+    parser.push(
+      JSON.stringify({
+        type: "stream_event",
+        event: { type: "content_block_delta", delta: { type: "text_delta", text: " there" } },
+      }) + "\n",
+    );
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hi there" }],
+          stop_reason: null,
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      { text: "Hi", delta: "Hi" },
+      { text: "Hi there", delta: " there" },
+    ]);
+  });
+
+  it("ignores assistant partial messages for non-Claude backends", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "other-cli", output: "jsonl" },
+      providerId: "other-provider",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([]);
+  });
+
   it("does not fire onCommentaryText when no text precedes tool_use", () => {
     const commentaryTexts: string[] = [];
     const parser = createCliJsonlStreamingParser({
@@ -4318,6 +4510,156 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
+  });
+
+  it("skips assistant partials with only tool_use content", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl" },
+      providerId: "claude-cli",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }],
+          stop_reason: null,
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([]);
+  });
+
+  it("extracts text from assistant partial with mixed text and tool_use content", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl" },
+      providerId: "claude-cli",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Let me read that file." },
+            { type: "tool_use", id: "t1", name: "Read", input: { path: "README.md" } },
+          ],
+          stop_reason: null,
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([{ text: "Let me read that file.", delta: "Let me read that file." }]);
+  });
+
+  it("routes assistant partial pre-tool text to commentary when classification is active", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const commentaryTexts: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+      onCommentaryText: (text) => commentaryTexts.push(text),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-partial-commentary" }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Let me check that." }],
+            stop_reason: null,
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Let me check that." },
+              { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
+            ],
+            stop_reason: null,
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(commentaryTexts).toEqual(["Let me check that."]);
+    expect(deltas).toEqual([]);
+  });
+
+  it("skips assistant records without stop_reason field", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl" },
+      providerId: "claude-cli",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    // Assistant record without stop_reason -- not a confirmed partial
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([]);
+  });
+
+  it("skips complete assistant message with stop_reason set", () => {
+    const deltas: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl" },
+      providerId: "claude-cli",
+      onAssistantDelta: (d) => deltas.push({ text: d.text, delta: d.delta }),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello" }],
+          stop_reason: null,
+        },
+      }) + "\n",
+    );
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello world" }],
+          stop_reason: "end_turn",
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([{ text: "Hello", delta: "Hello" }]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

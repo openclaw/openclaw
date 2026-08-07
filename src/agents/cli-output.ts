@@ -828,6 +828,48 @@ function parseClaudeCliStreamingDelta(params: {
   };
 }
 
+function parseClaudeCliPartialAssistantDelta(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  textSoFar: string;
+  sessionId?: string;
+  usage?: CliUsage;
+}): CliStreamingDelta | null {
+  if (!supportsCliJsonlToolEvents(params)) {
+    return null;
+  }
+  if (params.parsed.type !== "assistant" || !isRecord(params.parsed.message)) {
+    return null;
+  }
+  // Claude CLI --include-partial-messages emits assistant records with
+  // stop_reason: null while streaming and a non-null stop_reason (e.g.
+  // "end_turn") for the final complete message.  Only relay true partials
+  // that have an explicit stop_reason: null (the documented partial signal).
+  // Records without stop_reason at all are not confirmed partials and could
+  // be complete messages from custom claude-stream-json backends.
+  const message = params.parsed.message;
+  if (!isRecord(message) || !("stop_reason" in message) || message.stop_reason !== null) {
+    return null;
+  }
+  const partialText = collectCliText(params.parsed.message);
+  if (!partialText || partialText.length <= params.textSoFar.length) {
+    return null;
+  }
+  const delta = partialText.startsWith(params.textSoFar)
+    ? partialText.slice(params.textSoFar.length)
+    : partialText;
+  if (!delta) {
+    return null;
+  }
+  return {
+    text: partialText,
+    delta,
+    sessionId: params.sessionId,
+    usage: params.usage,
+  };
+}
+
 type PendingToolUse = {
   toolCallId: string;
   name: string;
@@ -1420,6 +1462,8 @@ export function createCliJsonlStreamingParser(params: {
   let assistantText = "";
   let customThinkingText = "";
   let pendingClaudeText = "";
+  let lastClaudePartialMessageId: string | undefined;
+  let claudePartialTextSoFar = "";
   let pendingMessageSeparator = false;
   let currentMessageStart = 0;
   let segmentStart = 0;
@@ -1901,41 +1945,107 @@ export function createCliJsonlStreamingParser(params: {
       sessionId,
       usage,
     });
-    if (!delta) {
-      if (
-        isGeminiStreamJsonDialect(params) &&
-        parsed.type === "message" &&
-        parsed.role === "assistant" &&
-        typeof parsed.content === "string"
-      ) {
-        const deltaText = parsed.content;
-        if (deltaText) {
-          assistantText = `${assistantText}${deltaText}`;
-          params.onAssistantDelta({
-            text: assistantText,
-            delta: deltaText,
-            sessionId,
-            usage,
-          });
+    if (delta) {
+      if (claudeStreamJson) {
+        routeTaggedReasoningDeltas(taggedReasoningRouter.push(delta.delta));
+        return;
+      }
+      emitClaudeVisibleText(delta.delta);
+      return;
+    }
+
+    // Claude CLI --include-partial-messages emits assistant records with
+    // stop_reason: null. Relay them when stream_event text deltas are absent.
+    // Baseline is per assistant message so a later post-tool message that is
+    // shorter than prior turn text still streams (message-local snapshots).
+    if (parsed.type === "assistant" && isRecord(parsed.message)) {
+      const messageId =
+        typeof parsed.message.id === "string" && parsed.message.id.trim()
+          ? parsed.message.id
+          : undefined;
+      if (messageId !== lastClaudePartialMessageId) {
+        lastClaudePartialMessageId = messageId;
+        claudePartialTextSoFar = "";
+      } else {
+        const nextText = collectCliText(parsed.message);
+        if (claudePartialTextSoFar && nextText && !nextText.startsWith(claudePartialTextSoFar)) {
+          claudePartialTextSoFar = "";
         }
-      } else if (
-        isGeminiStreamJsonDialect(params) &&
-        parsed.type === "result" &&
-        parsed.status === "success"
+      }
+    }
+    // Stream-event text deltas advance `assistantText`. Partial assistant
+    // snapshots are cumulative and must not re-emit that prefix when Claude
+    // also sends stream_event text (mixed delivery). Prefer the longer of the
+    // message-local partial baseline and the already-streamed assistant text
+    // only when the snapshot still starts with that stream text.
+    let partialTextSoFar = claudePartialTextSoFar;
+    if (parsed.type === "assistant" && isRecord(parsed.message)) {
+      const snapshotText = collectCliText(parsed.message);
+      if (
+        snapshotText &&
+        assistantText &&
+        snapshotText.startsWith(assistantText) &&
+        assistantText.length > partialTextSoFar.length
       ) {
-        output = {
-          text: assistantText.trim(),
+        partialTextSoFar = assistantText;
+      }
+    }
+    const partialDelta = parseClaudeCliPartialAssistantDelta({
+      backend: params.backend,
+      providerId: params.providerId,
+      parsed,
+      textSoFar: partialTextSoFar,
+      sessionId,
+      usage,
+    });
+    if (partialDelta) {
+      claudePartialTextSoFar = partialDelta.text;
+      if (classifyClaudeCommentary) {
+        pendingClaudeText = `${pendingClaudeText}${partialDelta.delta}`;
+      } else {
+        emitClaudeVisibleText(partialDelta.delta);
+      }
+    }
+
+    // Assistant partials may add tool_use without growing text. Flush pending
+    // narration to commentary then.
+    if (classifyClaudeCommentary && parsed.type === "assistant" && isRecord(parsed.message)) {
+      const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+      const hasToolUse = content.some(
+        (block) => isRecord(block) && isClaudeToolUseBlockType(block.type),
+      );
+      if (hasToolUse) {
+        flushPendingClaudeCommentaryText();
+      }
+    }
+
+    if (
+      isGeminiStreamJsonDialect(params) &&
+      parsed.type === "message" &&
+      parsed.role === "assistant" &&
+      typeof parsed.content === "string"
+    ) {
+      const deltaText = parsed.content;
+      if (deltaText) {
+        assistantText = `${assistantText}${deltaText}`;
+        params.onAssistantDelta({
+          text: assistantText,
+          delta: deltaText,
           sessionId,
           usage,
-        };
+        });
       }
-      return;
+    } else if (
+      isGeminiStreamJsonDialect(params) &&
+      parsed.type === "result" &&
+      parsed.status === "success"
+    ) {
+      output = {
+        text: assistantText.trim(),
+        sessionId,
+        usage,
+      };
     }
-    if (claudeStreamJson) {
-      routeTaggedReasoningDeltas(taggedReasoningRouter.push(delta.delta));
-      return;
-    }
-    emitClaudeVisibleText(delta.delta);
   };
 
   const handleJsonlLine = (rawLine: string) => {
