@@ -25,6 +25,7 @@ import {
 import { DiscordChannelConfigSchema } from "./config-schema.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
+import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import {
   collectRuntimeConfigAssignments,
@@ -140,6 +141,7 @@ export function createDiscordPluginBase(params: {
     doctor: discordDoctor,
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+      resolvePreviewStreamMode: resolveDiscordPreviewStreamMode,
     },
     reload: { configPrefixes: ["channels.discord"] },
     configSchema: DiscordChannelConfigSchema,

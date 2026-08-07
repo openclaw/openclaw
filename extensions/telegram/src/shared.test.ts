@@ -28,6 +28,17 @@ function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegra
   return telegramPluginBase.config.resolveAccount(cfg, accountId);
 }
 
+describe("telegram streaming adapter", () => {
+  it("declares the channel's progress default for core mode resolution", () => {
+    // Core relays (ACP parent stream) ask the plugin for this instead of
+    // assuming the core "partial" default; a missing declaration silently
+    // downgrades those paths.
+    const resolve = telegramPluginBase.streaming?.resolvePreviewStreamMode;
+    expect(resolve?.({})).toBe("progress");
+    expect(resolve?.({ streaming: { mode: "off" } })).toBe("off");
+  });
+});
+
 describe("createTelegramPluginBase config duplicate token guard", () => {
   it("wires the top-level models menu adapter into the production plugin", () => {
     const channelData = telegramPluginBase.commands?.buildModelsMenuChannelData?.({

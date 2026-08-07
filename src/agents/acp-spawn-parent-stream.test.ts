@@ -7,6 +7,26 @@ const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
 const recordAcpParentStreamEventsMock = vi.fn();
 
+// The relay asks the channel plugin for its preview-stream-mode rule. Discord
+// and Telegram default to "progress"; bundled plugins are not materialized in
+// this project, so declare the same rule the shipped channels declare.
+vi.mock("../channels/plugins/registry.js", async () => {
+  const { resolveChannelPreviewStreamMode } = await vi.importActual<
+    typeof import("../channels/streaming.js")
+  >("../channels/streaming.js");
+  return {
+    getChannelPlugin: (id: string) =>
+      id === "discord" || id === "telegram"
+        ? {
+            streaming: {
+              resolvePreviewStreamMode: (entry: { streaming?: unknown }) =>
+                resolveChannelPreviewStreamMode(entry, "progress"),
+            },
+          }
+        : undefined,
+  };
+});
+
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
@@ -668,6 +688,35 @@ describe("startAcpSpawnParentStreamRelay", () => {
       "codex: checking thread context; then post a tight progress reply here.",
     );
     relay.dispose();
+  });
+
+  it("uses each channel's own default mode for parent commentary", () => {
+    // The default used to be a hardcoded "discord" check, so every other
+    // progress-default channel silently relayed nothing.
+    for (const channel of ["discord", "telegram"]) {
+      const runId = `run-${channel}-unset-mode`;
+      const relay = startAcpSpawnParentStreamRelay({
+        runId,
+        parentSessionKey: "agent:main:main",
+        childSessionKey: `agent:codex:acp:child-${channel}-unset-mode`,
+        agentId: "codex",
+        cfg: { channels: { [channel]: {} } },
+        deliveryContext: { ...progressCommentaryDeliveryContext, channel },
+        streamFlushMs: 10,
+        noOutputNoticeMs: 120_000,
+        emitStartNotice: false,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { delta: `relayed from ${channel}`, phase: "commentary" },
+      });
+      vi.advanceTimersByTime(15);
+
+      expectTextWithFragment(collectedTexts(), `codex: relayed from ${channel}`);
+      relay.dispose();
+    }
   });
 
   it("flushes visible commentary before final answer text", () => {

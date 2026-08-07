@@ -28,6 +28,7 @@ import {
 } from "./command-ui.js";
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { telegramDoctor } from "./doctor.js";
+import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { telegramSecurityAdapter } from "./security.js";
 
@@ -184,6 +185,7 @@ export function createTelegramPluginBase(params: {
     },
     doctor: telegramDoctor,
     security: telegramSecurityAdapter,
+    streaming: { resolvePreviewStreamMode: resolveTelegramPreviewStreamMode },
     reload: { configPrefixes: ["channels.telegram"] },
     configSchema: TelegramChannelConfigSchema,
     config: {

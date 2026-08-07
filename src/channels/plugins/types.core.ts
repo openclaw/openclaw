@@ -18,6 +18,7 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
+import type { StreamingCompatEntry, StreamingMode } from "../streaming.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
@@ -337,6 +338,13 @@ export type ChannelStreamingAdapter = {
     minChars: number;
     idleMs: number;
   };
+  /**
+   * The channel's own rule for the effective preview stream mode. Channels pick
+   * their default when `streaming.mode` is unset, so core paths that resolve the
+   * mode outside channel dispatch (the ACP parent relay) must ask the channel
+   * instead of assuming the core "partial" default. Omit it to accept "partial".
+   */
+  resolvePreviewStreamMode?: (entry: StreamingCompatEntry) => StreamingMode;
 };
 
 // Keep core transport-agnostic. Plugins can carry richer component types on

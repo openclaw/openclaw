@@ -7,6 +7,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("discord streaming adapter", () => {
+  it("declares the channel's progress default for core mode resolution", () => {
+    const plugin = createDiscordPluginBase({ setup: {} as never });
+    const resolve = plugin.streaming?.resolvePreviewStreamMode;
+    expect(resolve?.({})).toBe("progress");
+    expect(resolve?.({ streaming: { mode: "off" } })).toBe("off");
+  });
+});
+
 describe("createDiscordPluginBase", () => {
   it("owns Discord native command name overrides", () => {
     const plugin = createDiscordPluginBase({ setupContract: {} as never });

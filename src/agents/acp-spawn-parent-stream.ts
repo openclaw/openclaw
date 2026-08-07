@@ -7,9 +7,12 @@ import {
   resolveAcpProjectionSettings,
   type AcpProjectionSettings,
 } from "../auto-reply/reply/acp-stream-settings.js";
+import { getChannelPlugin } from "../channels/plugins/registry.js";
 import {
+  resolveChannelPreviewStreamMode,
   resolveChannelStreamingProgressCommentary,
   type StreamingCompatEntry,
+  type StreamingMode,
 } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -120,35 +123,10 @@ function mergeStreamingEntry(
   };
 }
 
-function hasConfiguredPreviewStreamMode(entry: StreamingCompatEntry): boolean {
-  return asObjectRecord(entry.streaming)?.mode !== undefined;
-}
-
-function applyParentPreviewStreamModeDefault(
-  entry: StreamingCompatEntry,
-  channelId: string,
-): StreamingCompatEntry {
-  if (channelId !== "discord" || hasConfiguredPreviewStreamMode(entry)) {
-    return entry;
-  }
-  const streaming = asObjectRecord(entry.streaming);
-  return {
-    ...entry,
-    streaming: streaming
-      ? {
-          ...streaming,
-          mode: "progress",
-        }
-      : {
-          mode: "progress",
-        },
-  };
-}
-
-function resolveParentProgressStreamingEntry(params: {
+function resolveParentProgressStreaming(params: {
   cfg: OpenClawConfig | undefined;
   deliveryContext: DeliveryContext | undefined;
-}): StreamingCompatEntry | undefined {
+}): { entry: StreamingCompatEntry; mode: StreamingMode } | undefined {
   const channelId = normalizeOptionalString(params.deliveryContext?.channel);
   if (!params.cfg || !channelId) {
     return undefined;
@@ -165,20 +143,21 @@ function resolveParentProgressStreamingEntry(params: {
     normalizeAccountId(params.deliveryContext?.accountId),
     normalizeAccountId,
   );
-  return applyParentPreviewStreamModeDefault(
-    mergeStreamingEntry(channelCfg, accountCfg),
-    channelId,
-  );
+  const entry = mergeStreamingEntry(channelCfg, accountCfg);
+  // Channels own their default when `streaming.mode` is unset, so ask the
+  // channel rather than assuming one here: this relay runs outside channel
+  // dispatch, and a core-side guess silently disables progress relays for every
+  // channel whose default is not the one guessed.
+  const resolveMode = getChannelPlugin(channelId)?.streaming?.resolvePreviewStreamMode;
+  return { entry, mode: resolveMode?.(entry) ?? resolveChannelPreviewStreamMode(entry, "partial") };
 }
 
 function resolveParentProgressCommentary(params: {
   cfg: OpenClawConfig | undefined;
   deliveryContext: DeliveryContext | undefined;
 }): boolean {
-  return resolveChannelStreamingProgressCommentary(
-    resolveParentProgressStreamingEntry(params),
-    true,
-  );
+  const streaming = resolveParentProgressStreaming(params);
+  return resolveChannelStreamingProgressCommentary(streaming?.entry, true, streaming?.mode);
 }
 
 function shouldRelayAcpStatusProgress(params: {
@@ -764,4 +743,3 @@ export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
   notifyStarted: () => void;
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
