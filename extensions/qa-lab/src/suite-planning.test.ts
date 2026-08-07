@@ -250,6 +250,68 @@ describe("qa suite planning helpers", () => {
     expect(sleeps).toEqual([25, 25, 25]);
   });
 
+  it("settles started mappers and stagger gates before rejecting the lowest-index error", async () => {
+    const lowerError = new Error("lower-index failure");
+    const higherError = new Error("higher-index failure");
+    const started: number[] = [];
+    const sleepReleases: Array<() => void> = [];
+    let releaseLower!: () => void;
+    let markHigherFailed!: () => void;
+    const lowerBlocked = new Promise<void>((resolve) => {
+      releaseLower = resolve;
+    });
+    const higherFailed = new Promise<void>((resolve) => {
+      markHigherFailed = resolve;
+    });
+    const outcome = mapQaSuiteWithConcurrency(
+      [0, 1, 2, 3],
+      3,
+      async (item) => {
+        started.push(item);
+        if (item === 0) {
+          await lowerBlocked;
+          throw lowerError;
+        }
+        if (item === 1) {
+          markHigherFailed();
+          throw higherError;
+        }
+        throw new Error(`unexpected producer ${item}`);
+      },
+      {
+        startStaggerMs: 1,
+        sleepImpl: async () =>
+          await new Promise<void>((resolve) => {
+            sleepReleases.push(resolve);
+          }),
+      },
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let settled = false;
+    void outcome.then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(started).toEqual([0]));
+    sleepReleases.shift()?.();
+    await higherFailed;
+    expect(started).toEqual([0, 1]);
+    expect(settled).toBe(false);
+
+    releaseLower();
+    await vi.waitFor(() => expect(sleepReleases).toHaveLength(1));
+    expect(settled).toBe(false);
+    sleepReleases.shift()?.();
+    await vi.waitFor(() => expect(sleepReleases).toHaveLength(1));
+    expect(settled).toBe(false);
+    sleepReleases.shift()?.();
+
+    await expect(outcome).resolves.toBe(lowerError);
+    expect(started).toEqual([0, 1]);
+  });
+
   it("resolves a default worker startup stagger for concurrent suite workers", () => {
     expect(resolveQaSuiteWorkerStartStaggerMs(1, {})).toBe(0);
     expect(resolveQaSuiteWorkerStartStaggerMs(4, {})).toBe(1500);

@@ -961,12 +961,18 @@ describe("qa test file scenario runner", () => {
       makeDockerE2eScenario("prefix-lane", "gateway"),
       makeDockerE2eScenario("failing-lane", "gateway-network"),
     ];
+    const complete = vi.fn(async () => {});
     const result = await runQaTestFileScenarios({
       repoRoot,
       outputDir,
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios,
+      profileRun: {
+        complete,
+        hasTerminalEvidence: () => complete.mock.calls.length > 0,
+        retryPhase: async (_phase, run) => await run(),
+      },
       runCommand: async (command) => {
         commands.push(command);
         await expect(fs.access(staleSummaryPath)).rejects.toThrow();
@@ -1019,6 +1025,9 @@ describe("qa test file scenario runner", () => {
       { scenario: { id: "failing-lane" }, status: "fail" },
     ]);
     expect(result.results[3]?.failureMessage).toBe("gateway-network exited with 1");
+    expect(complete.mock.calls.map(([input]) => input.scenarioId)).toEqual(
+      scenarios.map((scenario) => scenario.id),
+    );
   });
 
   it("uses script scenario timeout overrides when running producer commands", async () => {

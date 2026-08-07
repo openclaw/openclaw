@@ -46,7 +46,8 @@ vi.mock("./gateway-child.js", () => ({
 vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer: vi.fn(async () => undefined),
 }));
-vi.mock("./suite-artifacts.js", () => ({
+vi.mock("./suite-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite-artifacts.js")>()),
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 vi.mock("./suite-runtime-gateway.js", () => ({
@@ -217,6 +218,141 @@ describe("isolated QA suite transport cleanup", () => {
     } finally {
       stderrWrite.mockRestore();
     }
+  });
+
+  it("drains a blocked partial artifact write before exposing partition failure or cleanup", async () => {
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    context.selectedScenarios = [
+      makeQaSuiteTestScenario("completed-scenario"),
+      makeQaSuiteTestScenario("failed-scenario"),
+    ];
+    context.concurrency = 2;
+    let releaseArtifactWrite!: () => void;
+    let markArtifactWriteStarted!: () => void;
+    const artifactWriteBlocked = new Promise<void>((resolve) => {
+      releaseArtifactWrite = resolve;
+    });
+    const artifactWriteStarted = new Promise<void>((resolve) => {
+      markArtifactWriteStarted = resolve;
+    });
+    mocks.writeQaSuiteArtifacts.mockImplementationOnce(async () => {
+      markArtifactWriteStarted();
+      await artifactWriteBlocked;
+      return {
+        evidence: undefined,
+        evidencePath: "/qa-output/qa-evidence.json",
+        report: "",
+        reportPath: "/qa-output/qa-suite-report.md",
+        summaryPath: "/qa-output/qa-suite-summary.json",
+      };
+    });
+    const partitionError = new Error("partition failed");
+    const runChild = vi.fn<QaSuiteRunner>(async (params) => {
+      const scenarioId = params?.scenarioIds?.[0];
+      if (scenarioId === "failed-scenario") {
+        await artifactWriteStarted;
+        throw partitionError;
+      }
+      return {
+        outputDir: "/qa-child",
+        evidencePath: "/qa-child/qa-evidence.json",
+        reportPath: "/qa-child/qa-suite-report.md",
+        summaryPath: "/qa-child/qa-suite-summary.json",
+        report: "",
+        scenarios: [{ name: "completed-scenario", status: "pass", steps: [] }],
+        startedScenarioIds: ["completed-scenario"],
+        watchUrl: lab.baseUrl,
+      };
+    });
+    const outcome = runQaFlowSuiteIsolated(
+      {
+        profileRun: {
+          complete: async () => {},
+          hasTerminalEvidence: () => false,
+          retryPhase: async (_phase, run) => await run(),
+        },
+        startLab: async () => lab,
+        workerStartStaggerMs: 0,
+      },
+      context,
+      runChild,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let settled = false;
+    void outcome.then(() => {
+      settled = true;
+    });
+
+    await artifactWriteStarted;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(mocks.disposeRegisteredAgentHarnesses).not.toHaveBeenCalled();
+    expect(lab.stop).not.toHaveBeenCalled();
+
+    releaseArtifactWrite();
+    await expect(outcome).resolves.toBe(partitionError);
+    expect(mocks.disposeRegisteredAgentHarnesses).toHaveBeenCalledOnce();
+    expect(lab.stop).toHaveBeenCalledOnce();
+  });
+
+  it("preserves partition failure when the drained artifact write also fails", async () => {
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    context.selectedScenarios = [
+      makeQaSuiteTestScenario("completed-scenario"),
+      makeQaSuiteTestScenario("failed-scenario"),
+    ];
+    context.concurrency = 2;
+    let markArtifactWriteStarted!: () => void;
+    const artifactWriteStarted = new Promise<void>((resolve) => {
+      markArtifactWriteStarted = resolve;
+    });
+    const artifactError = new Error("partial artifact write failed");
+    mocks.writeQaSuiteArtifacts.mockImplementationOnce(async () => {
+      markArtifactWriteStarted();
+      throw artifactError;
+    });
+    const partitionError = new Error("partition failed");
+    const runChild = vi.fn<QaSuiteRunner>(async (params) => {
+      const scenarioId = params?.scenarioIds?.[0];
+      if (scenarioId === "failed-scenario") {
+        await artifactWriteStarted;
+        throw partitionError;
+      }
+      return {
+        outputDir: "/qa-child",
+        evidencePath: "/qa-child/qa-evidence.json",
+        reportPath: "/qa-child/qa-suite-report.md",
+        summaryPath: "/qa-child/qa-suite-summary.json",
+        report: "",
+        scenarios: [{ name: "completed-scenario", status: "pass", steps: [] }],
+        startedScenarioIds: ["completed-scenario"],
+        watchUrl: lab.baseUrl,
+      };
+    });
+
+    const thrown = await runQaFlowSuiteIsolated(
+      {
+        profileRun: {
+          complete: async () => {},
+          hasTerminalEvidence: () => false,
+          retryPhase: async (_phase, run) => await run(),
+        },
+        startLab: async () => lab,
+        workerStartStaggerMs: 0,
+      },
+      context,
+      runChild,
+    ).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors).toEqual([partitionError, artifactError]);
+    expect((thrown as Error).cause).toBe(partitionError);
+    expect(mocks.disposeRegisteredAgentHarnesses).toHaveBeenCalledOnce();
+    expect(lab.stop).toHaveBeenCalledOnce();
   });
 
   it.each(["cleanup", "cleanupAfterGatewayStop"] as const)(

@@ -74,6 +74,51 @@ describe("qa suite", () => {
     ]);
   });
 
+  it("retries only the failed cleanup step without changing cleanup order", async () => {
+    const calls: string[] = [];
+    let gatewayAttempts = 0;
+    const retryPhase = async (_phase: string, run: () => Promise<void>) => {
+      try {
+        await run();
+      } catch {
+        await run();
+      }
+    };
+
+    const failures = await qaSuiteProgressTesting.runQaFlowSuiteCleanupPlan({
+      cleanupTransportBeforeGatewayStop: async () => {
+        calls.push("transport before gateway");
+      },
+      stopGateway: async () => {
+        gatewayAttempts += 1;
+        calls.push(`gateway ${gatewayAttempts}`);
+        if (gatewayAttempts === 1) {
+          throw new Error("gateway stop reset");
+        }
+      },
+      cleanupTransportAfterGatewayStop: async () => {
+        calls.push("transport after gateway");
+      },
+      disposeAgentHarnesses: async () => {
+        calls.push("agent harnesses");
+      },
+      finishLab: async () => {
+        calls.push("lab");
+      },
+      retryPhase,
+    });
+
+    expect(failures).toEqual([]);
+    expect(calls).toEqual([
+      "transport before gateway",
+      "gateway 1",
+      "gateway 2",
+      "transport after gateway",
+      "agent harnesses",
+      "lab",
+    ]);
+  });
+
   it("keeps the primary suite error as the cause of aggregated cleanup failures", () => {
     const runError = new Error("gateway infrastructure failed");
     const cleanupError = new Error("transport cleanup failed");

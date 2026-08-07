@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
+import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
+import type { QaProfileRunControl, QaProfileRunSpec } from "./profile-run-checkpoint.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
 import type { QaSuiteScenarioResult } from "./suite.js";
 import { throwQaSuiteCleanupErrors } from "./suite.js";
 import type {
@@ -16,6 +19,25 @@ const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hois
   runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
+const atomicState = vi.hoisted(() => ({
+  finalEvidenceFailures: 0,
+  writes: [] as string[],
+}));
+
+vi.mock("openclaw/plugin-sdk/json-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/json-store")>();
+  return {
+    ...actual,
+    writeJsonFileAtomically: async (filePath: string, value: unknown) => {
+      atomicState.writes.push(filePath);
+      if (filePath.endsWith("qa-evidence.json") && atomicState.finalEvidenceFailures > 0) {
+        atomicState.finalEvidenceFailures -= 1;
+        throw new Error("final evidence disk full");
+      }
+      await actual.writeJsonFileAtomically(filePath, value);
+    },
+  };
+});
 
 vi.mock("@openclaw/crabline", async (importOriginal) => {
   crablineRuntimeLoads();
@@ -42,19 +64,47 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
-async function writeEvidence(pathLocal: string, writeFile = true) {
+async function writeEvidence(pathLocal: string, writeFile = true, testIds: readonly string[] = []) {
   const evidence = {
     kind: "openclaw.qa.evidence-summary",
     schemaVersion: 2,
     generatedAt: "2026-06-14T00:00:00.000Z",
     evidenceMode: "full",
-    entries: [],
+    entries: testIds.map((testId) => ({
+      test: { kind: "flow", id: testId, title: testId },
+      coverage: [],
+      refs: [],
+      result: { status: "pass" as const },
+    })),
   };
   if (writeFile) {
     await fs.mkdir(path.dirname(pathLocal), { recursive: true });
     await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
   }
   return evidence;
+}
+
+function profileRunSpec(scenarioIds: readonly string[]): QaProfileRunSpec {
+  const scenarios = scenarioIds.map(readQaScenarioById);
+  return {
+    profile: "release",
+    membershipScenarios: scenarios,
+    selectedScenarios: scenarios,
+    excludedScenarios: [],
+    filters: {},
+    categories: [],
+  };
+}
+
+async function completeProfileRun(
+  params: { profileRun?: QaProfileRunControl; scenarioIds?: string[] },
+  evidence: Awaited<ReturnType<typeof writeEvidence>>,
+) {
+  const scenarioId = params.scenarioIds?.[0];
+  if (!scenarioId || !params.profileRun) {
+    throw new Error("expected profile partition");
+  }
+  await params.profileRun.complete({ scenarioId, evidence });
 }
 
 function trackMaxActiveFlowRuns() {
@@ -103,18 +153,29 @@ function mockFlowPartitionFailures(failuresByScenarioId: ReadonlyMap<string, rea
 
 describe("qa suite runtime launcher", () => {
   beforeEach(() => {
+    atomicState.finalEvidenceFailures = 0;
+    atomicState.writes.length = 0;
     runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
     runQaFlowSuite.mockImplementation(
       async (
         params:
-          | { outputDir?: string; scenarioIds?: string[]; writeEvidenceFile?: boolean }
+          | {
+              outputDir?: string;
+              profileRun?: QaProfileRunControl;
+              scenarioIds?: string[];
+              writeEvidenceFile?: boolean;
+            }
           | undefined,
       ) => {
         const outputDir = params?.outputDir ?? "/tmp/qa-flow";
         const evidencePath = path.join(outputDir, "qa-evidence.json");
-        const evidence = await writeEvidence(evidencePath, params?.writeEvidenceFile);
         const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
+        const evidence = await writeEvidence(
+          evidencePath,
+          params?.writeEvidenceFile,
+          params?.profileRun ? scenarioIds : [],
+        );
         return {
           evidence,
           outputDir,
@@ -188,12 +249,12 @@ describe("qa suite runtime launcher", () => {
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expect(result).toMatchObject({
-      executionKind: "flow",
-      result: {
-        summaryPath: "/tmp/qa-flow/qa-suite-summary.json",
-      },
-    });
+    expect(result.executionKind).toBe("flow");
+    if (result.executionKind !== "flow") {
+      throw new Error("expected flow suite result");
+    }
+    expect(result.result.summaryPath).toMatch(/qa-suite-summary\.json$/);
+    expect(result.result.watchUrl).toBe("http://127.0.0.1:43124");
     expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
     expect(runQaFlowSuite).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -279,6 +340,228 @@ describe("qa suite runtime launcher", () => {
     } finally {
       stderrWrite.mockRestore();
     }
+  });
+
+  it("finalizes a single-flow profile through unified execution", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-profile-flow-");
+    const run = runQaFlowSuite.getMockImplementation();
+    if (!run) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementation(async (params) => {
+      const result = await run(params);
+      await completeProfileRun(params, result.evidence);
+      return result;
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/profile-flow",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline"],
+      profileRunSpec: profileRunSpec(["channel-chat-baseline"]),
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({ writeEvidenceFile: false }),
+    );
+    expect(result.result.evidence?.profilePlan?.observedCells).toEqual([
+      {
+        scenarioId: "channel-chat-baseline",
+        executionKind: "flow",
+        channel: "qa-channel",
+      },
+    ]);
+    const evidencePath = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "profile-flow",
+      "qa-evidence.json",
+    );
+    expect(atomicState.writes.filter((writtenPath) => writtenPath === evidencePath)).toHaveLength(
+      1,
+    );
+  });
+
+  it("does not start a profile run when canonical evidence invalidation fails", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-profile-invalidation-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "profile-invalidation");
+    await fs.mkdir(path.join(outputDir, "qa-evidence.json"), { recursive: true });
+
+    await expect(
+      runQaSuite({
+        repoRoot,
+        outputDir: ".artifacts/qa-e2e/profile-invalidation",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-chat-baseline"],
+        profileRunSpec: profileRunSpec(["channel-chat-baseline"]),
+      }),
+    ).rejects.toThrow();
+
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
+    await expect(
+      fs.access(path.join(outputDir, "qa-profile-run-checkpoint.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("retries one preterminal profile partition after another partition completes", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-profile-partition-retry-");
+    const scenarioIds = ["channel-chat-baseline", "matrix-allowlist-hot-reload"];
+    const run = runQaFlowSuite.getMockImplementation();
+    if (!run) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    const attempts = new Map<string, number>();
+    runQaFlowSuite.mockImplementation(async (params) => {
+      const scenarioId = params?.scenarioIds?.[0];
+      if (!scenarioId) {
+        throw new Error("expected one scenario per profile partition");
+      }
+      const attempt = (attempts.get(scenarioId) ?? 0) + 1;
+      attempts.set(scenarioId, attempt);
+      if (scenarioId === scenarioIds[1] && attempt === 1) {
+        throw new QaSuiteInfraError("agent_wait_failed", "second partition wait failed");
+      }
+      const result = await run(params);
+      await completeProfileRun(params, result.evidence);
+      return result;
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/profile-partition-retry",
+      providerMode: "mock-openai",
+      concurrency: 1,
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds,
+      profileRunSpec: profileRunSpec(scenarioIds),
+    });
+
+    expect(attempts).toEqual(
+      new Map([
+        ["channel-chat-baseline", 1],
+        ["matrix-allowlist-hot-reload", 2],
+      ]),
+    );
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")),
+    );
+    expect(evidence.profilePlan?.observedCells).toEqual([
+      {
+        scenarioId: "channel-chat-baseline",
+        executionKind: "flow",
+        channel: "qa-channel",
+      },
+      {
+        scenarioId: "matrix-allowlist-hot-reload",
+        executionKind: "flow",
+        channel: "qa-channel",
+      },
+    ]);
+  });
+
+  it("finalizes unified terminal evidence once before rethrowing the original cleanup failure", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-profile-post-terminal-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "profile-post-terminal");
+    const scenarioIds = ["channel-chat-baseline"];
+    const run = runQaFlowSuite.getMockImplementation();
+    if (!run) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    let cleanupFailure: unknown;
+    runQaFlowSuite.mockImplementation(async (params) => {
+      expect(params?.writeEvidenceFile).toBe(false);
+      const result = await run(params);
+      await completeProfileRun(params, result.evidence);
+      const cleanupError = Object.assign(new Error("gateway cleanup reset"), {
+        code: "ECONNRESET",
+      });
+      try {
+        throwQaSuiteCleanupErrors({
+          cleanupFailures: [{ phase: "gateway stop", error: cleanupError }],
+          runFailed: false,
+          runError: undefined,
+          result,
+          evidenceWritten: false,
+        });
+      } catch (error) {
+        cleanupFailure = error;
+        throw error;
+      }
+    });
+
+    const thrown = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/profile-post-terminal",
+      providerMode: "mock-openai",
+      scenarioIds,
+      profileRunSpec: profileRunSpec(scenarioIds),
+    }).catch((error: unknown) => error);
+
+    expect(thrown).toBe(cleanupFailure);
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    expect(atomicState.writes.filter((writtenPath) => writtenPath === evidencePath)).toHaveLength(
+      1,
+    );
+    const finalized = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(evidencePath, "utf8")),
+    );
+    expect(finalized.entries.map((entry) => entry.test.id)).toEqual(scenarioIds);
+    const checkpoint = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-profile-run-checkpoint.json"), "utf8"),
+    ) as { cells: Array<{ scenarioId: string; evidence?: { path: string } }> };
+    const terminal = checkpoint.cells.find((entry) => entry.scenarioId === "channel-chat-baseline");
+    const stored = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(path.join(outputDir, terminal!.evidence!.path), "utf8")),
+    );
+    expect(stored.entries.map((entry) => entry.test.id)).toEqual(scenarioIds);
+  });
+
+  it("aggregates unified cleanup and finalization failures without replay", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-profile-finalize-failure-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "profile-finalize-failure");
+    const scenarioIds = ["channel-chat-baseline"];
+    const originalError = new Error("cleanup failed");
+    const run = runQaFlowSuite.getMockImplementation();
+    if (!run) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementation(async (params) => {
+      const result = await run(params);
+      await completeProfileRun(params, result.evidence);
+      throw originalError;
+    });
+    atomicState.finalEvidenceFailures = 1;
+
+    const thrown = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/profile-finalize-failure",
+      providerMode: "mock-openai",
+      scenarioIds,
+      profileRunSpec: profileRunSpec(scenarioIds),
+    }).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors[0]).toBe(originalError);
+    expect((thrown as AggregateError).errors[1]).toMatchObject({
+      message: "final evidence disk full",
+    });
+    expect((thrown as Error & { cause?: unknown }).cause).toBe(originalError);
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    expect(atomicState.writes.filter((writtenPath) => writtenPath === evidencePath)).toHaveLength(
+      1,
+    );
   });
 
   it("partitions flow-only suites that request isolated workers", async () => {
@@ -440,15 +723,6 @@ describe("qa suite runtime launcher", () => {
     expect(
       result.result.scenarios.find((scenario) => scenario.name === "thread-isolation [matrix]"),
     ).toMatchObject({ status: "fail" });
-    expect(result.observedCells).toEqual(
-      expect.arrayContaining([
-        { scenarioId: "channel-chat-baseline", executionKind: "flow", channel: null },
-        { scenarioId: "telegram-help-command", executionKind: "flow", channel: "telegram" },
-        { scenarioId: "matrix-restart-resume", executionKind: "flow", channel: "matrix" },
-        { scenarioId: "thread-isolation", executionKind: "flow", channel: "slack" },
-        { scenarioId: "thread-isolation", executionKind: "flow", channel: "matrix" },
-      ]),
-    );
   });
 
   it("uses one eligible channel outside profile execution", async () => {
@@ -699,7 +973,6 @@ describe("qa suite runtime launcher", () => {
     expect(evidence.entries).toMatchObject([
       { test: { id: "whatsapp-status-command" }, result: { status: "fail" } },
     ]);
-    expect(result.observedCells).toEqual([]);
     await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
   });
 
@@ -2230,6 +2503,8 @@ describe("qa suite runtime launcher", () => {
 
   it("reuses unavailable channel credential evidence across serial partitions", async () => {
     const repoRoot = await makeTempRepo("qa-suite-credential-unavailable-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "credential-unavailable");
+    const scenarioIds = ["whatsapp-status-command", "whatsapp-access-control-dm-open"];
     const poolError = Object.assign(new Error("no WhatsApp credential is available"), {
       code: "POOL_EXHAUSTED",
     });
@@ -2245,11 +2520,9 @@ describe("qa suite runtime launcher", () => {
       providerMode: "mock-openai",
       channelDriver: "live",
       adapterFactories: [{ id: "whatsapp", matches: () => true, create: vi.fn() }],
-      scenarioIds: [
-        "whatsapp-status-command",
-        "whatsapp-access-control-dm-open",
-        "control-ui-chat-flow-playwright",
-      ],
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds,
+      profileRunSpec: profileRunSpec(scenarioIds),
     });
 
     expect(result.executionKind).toBe("suite");
@@ -2268,7 +2541,7 @@ describe("qa suite runtime launcher", () => {
         test?: { id?: string };
       }>;
     };
-    for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
+    for (const scenarioId of scenarioIds) {
       const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
       expect(blocked).toMatchObject({
         execution: { channel: { id: "whatsapp", live: false } },
@@ -2276,16 +2549,246 @@ describe("qa suite runtime launcher", () => {
       });
       expect(blocked?.execution?.channel?.driver).toBeUndefined();
     }
-    expect(result.observedCells).not.toEqual(
-      expect.arrayContaining([
-        { scenarioId: "whatsapp-status-command", executionKind: "flow", channel: "whatsapp" },
-        {
-          scenarioId: "whatsapp-access-control-dm-open",
-          executionKind: "flow",
-          channel: "whatsapp",
+    const checkpoint = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-profile-run-checkpoint.json"), "utf8"),
+    ) as { cells: Array<{ evidence?: { path: string }; scenarioId: string }> };
+    expect(checkpoint.cells).toHaveLength(2);
+    for (const cell of checkpoint.cells) {
+      const stored = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(path.join(outputDir, cell.evidence!.path), "utf8")),
+      );
+      expect(stored.entries.map((entry) => entry.test.id)).toEqual([cell.scenarioId]);
+      expect(stored.entries[0]?.result.status).toBe("blocked");
+    }
+  });
+
+  it("invalidates prior success before exhausted single-flow profile retry publishes failure", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-profile-retry-exhausted-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "profile-retry-exhausted");
+    const scenarioId = "channel-chat-baseline";
+    const run = runQaFlowSuite.getMockImplementation();
+    if (!run) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    let failing = false;
+    let failureAttempts = 0;
+    let releaseFirstFailure!: () => void;
+    let markFirstFailureStarted!: () => void;
+    const firstFailureBlocked = new Promise<void>((resolve) => {
+      releaseFirstFailure = resolve;
+    });
+    const firstFailureStarted = new Promise<void>((resolve) => {
+      markFirstFailureStarted = resolve;
+    });
+    runQaFlowSuite.mockImplementation(async (params) => {
+      if (failing) {
+        failureAttempts += 1;
+        if (failureAttempts === 1) {
+          markFirstFailureStarted();
+          await firstFailureBlocked;
+        }
+        throw new QaSuiteInfraError("agent_wait_failed", "partition wait failed");
+      }
+      const result = await run(params);
+      await completeProfileRun(params, result.evidence);
+      return result;
+    });
+    const runParams = {
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/profile-retry-exhausted",
+      providerMode: "mock-openai" as const,
+      scenarioIds: [scenarioId],
+      profileRunSpec: profileRunSpec([scenarioId]),
+    };
+
+    const success = await runQaSuite(runParams);
+    expect(success.executionKind).toBe("suite");
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    expect(
+      validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(evidencePath, "utf8"))).entries[0]
+        ?.result.status,
+    ).toBe("pass");
+    const canonicalWritesAfterSuccess = atomicState.writes.filter(
+      (writtenPath) => writtenPath === evidencePath,
+    ).length;
+
+    failing = true;
+    const failedRun = runQaSuite(runParams);
+    await firstFailureStarted;
+    await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    releaseFirstFailure();
+    const result = await failedRun;
+
+    expect(failureAttempts).toBe(2);
+    expect(atomicState.writes.filter((writtenPath) => writtenPath === evidencePath)).toHaveLength(
+      canonicalWritesAfterSuccess + 1,
+    );
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")),
+    );
+    expect(evidence.entries).toMatchObject([
+      {
+        test: { id: scenarioId },
+        result: {
+          status: "fail",
+          failure: { reason: "suite partition failed: partition wait failed" },
         },
+      },
+    ]);
+    expect(evidence.profilePlan?.observedCells).toEqual([
+      {
+        scenarioId,
+        executionKind: "flow",
+        channel: "qa-channel",
+      },
+    ]);
+    expect(result.result.scenarios).toMatchObject([
+      {
+        status: "fail",
+        details: "suite partition failed: partition wait failed",
+      },
+    ]);
+    const summary = JSON.parse(await fs.readFile(result.result.summaryPath, "utf8")) as {
+      counts: { failed: number; passed: number; total: number };
+    };
+    expect(summary.counts).toMatchObject({ total: 1, passed: 0, failed: 1 });
+    await expect(fs.access(result.result.evidencePath)).resolves.toBeUndefined();
+    await expect(fs.access(result.result.reportPath)).resolves.toBeUndefined();
+    await expect(fs.access(result.result.summaryPath)).resolves.toBeUndefined();
+    const checkpoint = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-profile-run-checkpoint.json"), "utf8"),
+    ) as { cells: Array<{ evidence?: { path: string }; scenarioId: string }> };
+    expect(checkpoint.cells).toMatchObject([
+      {
+        scenarioId,
+        evidence: { path: expect.stringMatching(/^qa-profile-evidence\//) },
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "finalizes unified terminal evidence once before rethrowing deterministic cleanup failure",
+      finalEvidenceFailures: 0,
+    },
+    {
+      name: "aggregates unified cleanup and finalization failures without losing the cleanup error",
+      finalEvidenceFailures: 1,
+    },
+  ])("$name", async ({ finalEvidenceFailures }) => {
+    const repoRoot = await makeTempRepo("qa-suite-profile-terminal-producer-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "profile-terminal-producer");
+    const scenarioIds = ["dm-chat-baseline", "control-ui-chat-flow-playwright"];
+    const lowerError = new QaSuiteInfraError("agent_wait_failed", "lower partition failed");
+    const higherError = new QaSuiteInfraError("agent_wait_failed", "higher partition failed");
+    const runFlow = runQaFlowSuite.getMockImplementation();
+    const runTestFile = runQaTestFileScenarios.getMockImplementation();
+    if (!runFlow || !runTestFile) {
+      throw new Error("expected default QA suite mock implementations");
+    }
+    let releaseLower!: () => void;
+    let markHigherFailed!: () => void;
+    const lowerBlocked = new Promise<void>((resolve) => {
+      releaseLower = resolve;
+    });
+    const higherFailed = new Promise<void>((resolve) => {
+      markHigherFailed = resolve;
+    });
+    const attempts = new Map<string, number>();
+    runQaFlowSuite.mockImplementation(async (params) => {
+      const scenarioId = params?.scenarioIds?.[0];
+      if (scenarioId !== scenarioIds[0]) {
+        throw new Error("expected the flow profile partition");
+      }
+      attempts.set(scenarioId, (attempts.get(scenarioId) ?? 0) + 1);
+      const result = await runFlow(params);
+      await completeProfileRun(params, result.evidence);
+      await higherFailed;
+      await lowerBlocked;
+      throw lowerError;
+    });
+    runQaTestFileScenarios.mockImplementation(async (params) => {
+      const scenarioId = params.scenarios[0]?.id;
+      if (scenarioId !== scenarioIds[1] || !params.profileRun) {
+        throw new Error("expected the test-file profile partition");
+      }
+      attempts.set(scenarioId, (attempts.get(scenarioId) ?? 0) + 1);
+      const result = await runTestFile(params);
+      result.evidence = await writeEvidence(result.evidencePath, false, [scenarioId]);
+      await params.profileRun.complete({ scenarioId, evidence: result.evidence });
+      markHigherFailed();
+      throw higherError;
+    });
+    atomicState.finalEvidenceFailures = finalEvidenceFailures;
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/profile-terminal-producer",
+      concurrency: 2,
+      scenarioIds,
+      profileRunSpec: profileRunSpec(scenarioIds),
+    });
+    await higherFailed;
+    let settled = false;
+    void runPromise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseLower();
+    const thrown = await runPromise.catch((error: unknown) => error);
+
+    if (finalEvidenceFailures > 0) {
+      expect(thrown).toBeInstanceOf(AggregateError);
+      expect((thrown as AggregateError).errors[0]).toBe(lowerError);
+      expect((thrown as AggregateError).errors[1]).toMatchObject({
+        message: "final evidence disk full",
+      });
+      expect((thrown as Error).cause).toBe(lowerError);
+    } else {
+      expect(thrown).toBe(lowerError);
+    }
+    expect(attempts).toEqual(
+      new Map([
+        [scenarioIds[0], 1],
+        [scenarioIds[1], 1],
       ]),
     );
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    expect(atomicState.writes.filter((writtenPath) => writtenPath === evidencePath)).toHaveLength(
+      1,
+    );
+    if (finalEvidenceFailures > 0) {
+      await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      const finalized = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(evidencePath, "utf8")),
+      );
+      expect(finalized.entries.map((entry) => entry.test.id).sort()).toEqual(
+        [...scenarioIds].sort(),
+      );
+    }
+    const checkpoint = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-profile-run-checkpoint.json"), "utf8"),
+    ) as { cells: Array<{ evidence?: { path: string }; scenarioId: string }> };
+    for (const cell of checkpoint.cells) {
+      const stored = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(path.join(outputDir, cell.evidence!.path), "utf8")),
+      );
+      expect(stored.entries).toMatchObject([
+        { result: { status: "pass" }, test: { id: cell.scenarioId } },
+      ]);
+    }
   });
 
   it("omits later credential failures after the first failed flow scenario", async () => {

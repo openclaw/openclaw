@@ -2,7 +2,6 @@
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap from "p-map";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -378,7 +377,10 @@ async function mapQaSuiteWithConcurrency<T, U>(
   },
 ) {
   let stopped = false;
-  let nextStartGate = Promise.resolve();
+  let failure: { error: unknown; index: number } | undefined;
+  let nextIndex = 0;
+  let startGate = Promise.resolve();
+  const results: Array<U | undefined> = Array.from({ length: items.length });
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
     opts?.sleepImpl ??
@@ -386,49 +388,40 @@ async function mapQaSuiteWithConcurrency<T, U>(
       new Promise<void>((resolve) => {
         setTimeout(resolve, ms);
       }));
-  async function waitForStartSlot(shouldReleaseNextSlot: boolean) {
-    const currentGate = nextStartGate;
-    let releaseNextSlot: (() => void) | undefined;
-    if (shouldReleaseNextSlot) {
-      nextStartGate = new Promise<void>((resolve) => {
-        releaseNextSlot = resolve;
-      });
-    }
-    await currentGate;
-    if (!releaseNextSlot) {
-      return;
-    }
-    void (async () => {
+  const worker = async () => {
+    while (!stopped && nextIndex < items.length) {
+      const index = nextIndex++;
+      const currentGate = startGate;
+      if (index < items.length - 1) {
+        startGate = currentGate.then(async () => {
+          if (startStaggerMs > 0) {
+            await sleepImpl(startStaggerMs);
+          }
+        });
+      }
+      await currentGate;
+      if (stopped) {
+        return;
+      }
       try {
-        if (startStaggerMs > 0) {
-          await sleepImpl(startStaggerMs);
+        const result = await mapper(items[index]!, index);
+        results[index] = result;
+        if (opts?.shouldStop?.(result, index)) {
+          stopped = true;
         }
-      } finally {
-        releaseNextSlot();
-      }
-    })();
-  }
-  const results = await pMap(
-    items,
-    async (item, index) => {
-      if (stopped) {
-        return undefined;
-      }
-      await waitForStartSlot(index < items.length - 1);
-      if (stopped) {
-        return undefined;
-      }
-      const result = await mapper(item, index);
-      if (opts?.shouldStop?.(result, index)) {
+      } catch (error) {
         stopped = true;
+        failure = !failure || index < failure.index ? { error, index } : failure;
       }
-      return result;
-    },
-    {
-      concurrency: Math.max(1, Math.floor(concurrency)),
-      stopOnError: true,
-    },
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(items.length, Math.max(1, Math.floor(concurrency))) }, worker),
   );
+  await startGate;
+  if (failure) {
+    throw failure.error;
+  }
   const completed: U[] = [];
   for (const result of results) {
     if (result !== undefined) {

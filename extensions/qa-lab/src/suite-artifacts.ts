@@ -9,6 +9,7 @@ import {
 } from "./crabline-artifacts.js";
 import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
+import type { QaProfilePhaseRetry, QaProfileRunControl } from "./profile-run-checkpoint.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
@@ -56,6 +57,38 @@ export type QaSuiteGatewayRssSample = NonNullable<
 export type QaSuiteGatewayHeapSnapshot = NonNullable<
   NonNullable<QaSuiteSummaryJson["metrics"]>["gatewayHeapSnapshots"]
 >[number];
+
+export async function persistQaSuiteScenarioEvidence(params: {
+  channelDriver?: QaTransportDriver;
+  channelId: string;
+  evidenceMode?: QaScorecardEvidenceMode;
+  primaryModel: string;
+  profileRun?: QaProfileRunControl;
+  providerMode: QaProviderMode;
+  repoRoot: string;
+  scenarioDefinition: QaSeedScenarioWithSource;
+  scenarioResult: QaSuiteScenarioResult;
+}) {
+  if (!params.profileRun) {
+    return;
+  }
+  await params.profileRun.complete({
+    scenarioId: params.scenarioDefinition.id,
+    evidence: buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      evidenceMode: params.evidenceMode,
+      channelDriver: params.channelDriver,
+      channelId: params.channelId,
+      env: process.env,
+      generatedAt: new Date().toISOString(),
+      primaryModel: params.primaryModel,
+      providerMode: params.providerMode,
+      repoRoot: params.repoRoot,
+      scenarioDefinitions: [params.scenarioDefinition],
+      scenarioResults: [params.scenarioResult],
+    }),
+  });
+}
 
 /**
  * Pure-ish JSON builder for qa-suite-summary.json. Exported so the GPT-5.6 Luna
@@ -133,6 +166,7 @@ export async function writeQaSuiteArtifacts(params: {
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
   writeEvidenceFile?: boolean;
+  retryPhase?: QaProfilePhaseRetry;
   runCrablineChannelDriverSmoke?: (
     params: Parameters<QaCrablineRuntime["runOpenClawCrablineChannelDriverSmoke"]>[0],
   ) => Promise<QaCrablineChannelDriverSmokeResult>;
@@ -219,71 +253,74 @@ export async function writeQaSuiteArtifacts(params: {
           scenarioResults: params.scenarios,
         })
       : undefined;
-  if (
-    crablineChannelDriverSelection &&
-    crablineChannelDriverSmoke &&
-    !hasQaCrablineArtifactPath(crablineChannelDriverSmoke.capabilityMatrixPath)
-  ) {
-    await fs.writeFile(
-      path.join(params.outputDir, crablineChannelDriverSelection.capabilityMatrixPath),
-      `${JSON.stringify(
-        {
-          version: 1,
-          source: "openclaw/crabline",
-          channelDriver: crablineChannelDriverSelection.channelDriver,
-          selectedChannel: crablineChannelDriverSelection.channel,
-          manifestPath: crablineChannelDriverSmoke.manifestPath,
-          report: crablineChannelDriverSmoke.capabilityReport,
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-  }
-  if (
-    crablineChannelDriverSelection &&
-    crablineChannelDriverSmoke &&
-    !hasQaCrablineArtifactPath(crablineChannelDriverSmoke.smokeArtifactPath)
-  ) {
-    await fs.writeFile(
-      path.join(params.outputDir, crablineChannelDriverSelection.smokeArtifactPath),
-      `${JSON.stringify(
-        {
-          version: 1,
-          source: "openclaw/crabline",
-          channelDriver: crablineChannelDriverSelection.channelDriver,
-          selectedChannel: crablineChannelDriverSelection.channel,
-          manifestPath: crablineChannelDriverSmoke.manifestPath,
-          smoke: crablineChannelDriverSmoke.smoke,
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-  }
   const writeEvidenceFile = params.writeEvidenceFile ?? true;
-  await fs.writeFile(reportPath, report, "utf8");
-  if (evidence && writeEvidenceFile) {
-    await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-  }
-  await fs.writeFile(
-    summaryPath,
-    `${JSON.stringify(
-      buildQaSuiteSummaryJson({
-        ...params,
-        channelDriverSelection: effectiveChannelDriverSelection,
-      }),
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  await assertQaSuiteArtifactWritten("report", reportPath);
-  await assertQaSuiteArtifactWritten("summary", summaryPath);
-  if (evidence && writeEvidenceFile) {
-    await assertQaSuiteArtifactWritten("evidence", evidencePath);
-  }
+  const persistArtifacts = async () => {
+    if (
+      crablineChannelDriverSelection &&
+      crablineChannelDriverSmoke &&
+      !hasQaCrablineArtifactPath(crablineChannelDriverSmoke.capabilityMatrixPath)
+    ) {
+      await fs.writeFile(
+        path.join(params.outputDir, crablineChannelDriverSelection.capabilityMatrixPath),
+        `${JSON.stringify(
+          {
+            version: 1,
+            source: "openclaw/crabline",
+            channelDriver: crablineChannelDriverSelection.channelDriver,
+            selectedChannel: crablineChannelDriverSelection.channel,
+            manifestPath: crablineChannelDriverSmoke.manifestPath,
+            report: crablineChannelDriverSmoke.capabilityReport,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    }
+    if (
+      crablineChannelDriverSelection &&
+      crablineChannelDriverSmoke &&
+      !hasQaCrablineArtifactPath(crablineChannelDriverSmoke.smokeArtifactPath)
+    ) {
+      await fs.writeFile(
+        path.join(params.outputDir, crablineChannelDriverSelection.smokeArtifactPath),
+        `${JSON.stringify(
+          {
+            version: 1,
+            source: "openclaw/crabline",
+            channelDriver: crablineChannelDriverSelection.channelDriver,
+            selectedChannel: crablineChannelDriverSelection.channel,
+            manifestPath: crablineChannelDriverSmoke.manifestPath,
+            smoke: crablineChannelDriverSmoke.smoke,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    }
+    await fs.writeFile(reportPath, report, "utf8");
+    if (evidence && writeEvidenceFile) {
+      await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+    }
+    await fs.writeFile(
+      summaryPath,
+      `${JSON.stringify(
+        buildQaSuiteSummaryJson({
+          ...params,
+          channelDriverSelection: effectiveChannelDriverSelection,
+        }),
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await assertQaSuiteArtifactWritten("report", reportPath);
+    await assertQaSuiteArtifactWritten("summary", summaryPath);
+    if (evidence && writeEvidenceFile) {
+      await assertQaSuiteArtifactWritten("evidence", evidencePath);
+    }
+  };
+  await (params.retryPhase?.("suite artifact persistence", persistArtifacts) ?? persistArtifacts());
   return { evidence, evidencePath, report, reportPath, summaryPath };
 }

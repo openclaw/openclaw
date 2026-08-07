@@ -106,10 +106,7 @@ import { QaSuiteInfraError } from "./errors.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
-import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import type { QaProviderModeInput } from "./run-config.js";
-import { expandQaScenarioExecutionCells } from "./scenario-lane.js";
-import type { QaSuiteRunParams } from "./suite.js";
 
 const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
 const QA_PASSING_SUITE_SCENARIO = {
@@ -157,24 +154,12 @@ function makeQaEvidence(entries: unknown[] = []) {
 
 function flowSuiteRuntimeResult(params: {
   evidencePath?: string;
-  expectedCells?: Array<{
-    scenarioId: string;
-    executionKind: "flow" | "script" | "vitest" | "playwright";
-    channel: string | null;
-  }>;
-  observedCells?: Array<{
-    scenarioId: string;
-    executionKind: "flow" | "script" | "vitest" | "playwright";
-    channel: string | null;
-  }>;
   reportPath: string;
   summaryPath: string;
   scenarios?: unknown[];
 }) {
   return {
     executionKind: "flow",
-    expectedCells: params.expectedCells ?? params.observedCells ?? [],
-    observedCells: params.observedCells ?? [],
     result: {
       outputDir: path.dirname(params.reportPath),
       evidencePath:
@@ -190,16 +175,6 @@ function flowSuiteRuntimeResult(params: {
 
 function unifiedSuiteRuntimeResult(params: {
   evidencePath: string;
-  expectedCells?: Array<{
-    scenarioId: string;
-    executionKind: "flow" | "script" | "vitest" | "playwright";
-    channel: string | null;
-  }>;
-  observedCells?: Array<{
-    scenarioId: string;
-    executionKind: "flow" | "script" | "vitest" | "playwright";
-    channel: string | null;
-  }>;
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -207,8 +182,6 @@ function unifiedSuiteRuntimeResult(params: {
 }) {
   return {
     executionKind: "suite",
-    expectedCells: params.expectedCells ?? params.observedCells ?? [],
-    observedCells: params.observedCells ?? [],
     result: {
       outputDir: params.outputDir,
       reportPath: params.reportPath,
@@ -218,31 +191,6 @@ function unifiedSuiteRuntimeResult(params: {
       scenarios: params.scenarios ?? [QA_PASSING_SUITE_SCENARIO],
     },
   };
-}
-
-function executionCellsForSuiteParams(params?: QaSuiteRunParams) {
-  const scenarioIds = new Set(params?.scenarioIds ?? []);
-  const scenarios = readQaScenarioPack().scenarios.filter((scenario) =>
-    scenarioIds.has(scenario.id),
-  );
-  const adapterFactories: readonly QaTransportAdapterFactory[] = params?.adapterFactories ?? [];
-  return expandQaScenarioExecutionCells({
-    scenarios,
-    channelDriver: params?.channelDriver ?? "qa-channel",
-    channel: params?.channelId ?? params?.channelDriverSelection?.channel,
-    defaultChannel:
-      params?.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
-    supportsChannel:
-      params?.channelDriver === "crabline"
-        ? isCrablineServerChannel
-        : params?.channelDriver === "live"
-          ? (channel) =>
-              adapterFactories.some((factory) =>
-                factory.matches({ channelId: channel, driver: "live" }),
-              )
-          : undefined,
-    expandChannels: params?.expandScenarioChannels === true,
-  });
 }
 
 describe("qa cli runtime", () => {
@@ -341,14 +289,12 @@ describe("qa cli runtime", () => {
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
     readQaScenarioPack.mockClear();
-    runQaSuite.mockImplementation(async (params) => {
-      const observedCells = executionCellsForSuiteParams(params);
-      return flowSuiteRuntimeResult({
-        observedCells,
+    runQaSuite.mockImplementation(async () =>
+      flowSuiteRuntimeResult({
         reportPath: suiteReportPath,
         summaryPath: suiteSummaryPath,
-      });
-    });
+      }),
+    );
     runQaFlowSuiteFromRuntime.mockResolvedValue({
       outputDir: suiteArtifactsDir,
       evidencePath: suiteEvidencePath,
@@ -717,14 +663,6 @@ describe("qa cli runtime", () => {
           "utf8",
         );
         return flowSuiteRuntimeResult({
-          observedCells: expandQaScenarioExecutionCells({
-            scenarios: [readQaScenarioById("telegram-commands-command")],
-            channelDriver: params?.channelDriver ?? "qa-channel",
-            channel: params?.channelId ?? params?.channelDriverSelection?.channel,
-            defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
-            supportsChannel: isCrablineServerChannel,
-            expandChannels: true,
-          }),
           reportPath: suiteReportPath,
           summaryPath: suiteSummaryPath,
         });
@@ -758,50 +696,14 @@ describe("qa cli runtime", () => {
         channelDriver: "crabline",
       });
       expect(suiteArgs.scenarioIds).toEqual(["telegram-commands-command"]);
-      expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
-      const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
-        evidenceMode?: unknown;
-        entries?: unknown[];
-        profile?: unknown;
-        profilePlan?: {
-          counts?: Record<string, unknown>;
-          expectedCells?: unknown[];
-          observedCells?: unknown[];
-        };
-        scorecard?: {
-          run?: { evidenceEntryCount?: unknown };
-          coverageIds?: { fulfilled?: unknown };
-          categoryReports?: Array<{
-            id?: unknown;
-            coverageIds?: { fulfilled?: unknown };
-            missingCoverageIds?: unknown;
-          }>;
-        };
-      };
-      expect(evidence.profile).toBe("smoke-ci");
-      expect(evidence.profilePlan?.counts).toMatchObject({
-        membership: 1,
-        selected: 1,
-        excluded: 0,
-        expectedCells: 1,
-        observedCells: 1,
-        missingCells: 0,
-      });
-      expect(evidence.profilePlan?.observedCells).toEqual(evidence.profilePlan?.expectedCells);
-      expect(evidence.evidenceMode).toBe("slim");
-      expect(evidence.scorecard).toMatchObject({
-        run: {
-          evidenceEntryCount: 1,
+      expect(suiteArgs.profileRunSpec).toMatchObject({
+        profile: "smoke-ci",
+        filters: {
+          surface: "telegram",
+          category: "telegram.native-controls-and-approvals",
         },
       });
-      expect(evidence.scorecard).not.toHaveProperty("kind");
-      expect(evidence.scorecard).not.toHaveProperty("taxonomy");
-      expect(evidence.scorecard).not.toHaveProperty("profile");
-      expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
-        id: "telegram.native-controls-and-approvals",
-      });
-      expect(evidence.entries?.[0]).not.toHaveProperty("execution");
-      expect(JSON.stringify(evidence.scorecard)).not.toContain("telegram-commands-command");
+      expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
       expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
     } finally {
@@ -894,10 +796,8 @@ describe("qa cli runtime", () => {
         }),
         "utf8",
       );
-      runQaSuite.mockImplementationOnce(async (params) => {
-        const observedCells = executionCellsForSuiteParams(params);
+      runQaSuite.mockImplementationOnce(async () => {
         return flowSuiteRuntimeResult({
-          observedCells,
           reportPath: suiteReportPath,
           summaryPath: suiteSummaryPath,
           scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
@@ -924,11 +824,9 @@ describe("qa cli runtime", () => {
   );
 
   it("filters QA-channel-pinned scenarios from an implicit Crabline smoke profile", async () => {
-    runQaSuite.mockImplementationOnce(async (params) => {
+    runQaSuite.mockImplementationOnce(async () => {
       await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
-      const observedCells = executionCellsForSuiteParams(params);
       return flowSuiteRuntimeResult({
-        observedCells,
         reportPath: suiteReportPath,
         summaryPath: suiteSummaryPath,
       });

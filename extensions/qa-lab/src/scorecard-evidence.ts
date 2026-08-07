@@ -1,17 +1,10 @@
-// QA Lab plugin module embeds profile scorecard context into QA evidence.
-import fs from "node:fs/promises";
-import {
-  attachQaEvidenceScorecard,
-  validateQaEvidenceSummaryJson,
-  type QaEvidenceScorecardJson,
-  type QaEvidenceSummaryEntry,
-  type QaEvidenceSummaryJson,
-} from "./evidence-summary.js";
-import type { QaProfileEvidencePlan } from "./profile-evidence-plan.js";
+// QA Lab plugin module builds profile scorecard context from authoritative evidence.
 import type {
-  QaScorecardCategoryCoverageReport,
-  QaScorecardEvidenceMode,
-} from "./scorecard-taxonomy.js";
+  QaEvidenceScorecardJson,
+  QaEvidenceSummaryEntry,
+  QaEvidenceSummaryJson,
+} from "./evidence-summary.js";
+import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js";
 
 type QaProfileScorecardFilters = {
   surface?: string;
@@ -85,7 +78,7 @@ function featureCounts(
   };
 }
 
-function buildQaProfileScorecardEvidence(params: {
+export function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
@@ -171,31 +164,4 @@ function buildQaProfileScorecardEvidence(params: {
     },
     categoryReports,
   };
-}
-
-export async function attachQaProfileScorecardEvidenceToFile(params: {
-  evidencePath: string;
-  evidenceMode?: QaScorecardEvidenceMode;
-  profile: string;
-  profilePlan: QaProfileEvidencePlan;
-  filters: QaProfileScorecardFilters;
-  categories: readonly QaScorecardCategoryCoverageReport[];
-}) {
-  const evidence = validateQaEvidenceSummaryJson(
-    JSON.parse(await fs.readFile(params.evidencePath, "utf8")),
-  );
-  const scorecard = buildQaProfileScorecardEvidence({
-    evidence,
-    filters: params.filters,
-    categories: params.categories,
-  });
-  const nextEvidence = attachQaEvidenceScorecard({
-    summary: evidence,
-    evidenceMode: params.evidenceMode,
-    profile: params.profile,
-    profilePlan: params.profilePlan,
-    scorecard,
-  });
-  await fs.writeFile(params.evidencePath, `${JSON.stringify(nextEvidence, null, 2)}\n`, "utf8");
-  return scorecard;
 }

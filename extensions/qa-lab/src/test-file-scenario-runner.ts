@@ -16,6 +16,7 @@ import {
   resolveQaEvidenceProfile,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import type { QaProfileRunControl } from "./profile-run-checkpoint.js";
 import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
@@ -57,6 +58,7 @@ type QaTestFileScenarioRunParams = {
   runCommand?: QaScenarioCommandRunner;
   scenarios: readonly QaSeedScenarioWithSource[];
   writeEvidenceFile?: boolean;
+  profileRun?: QaProfileRunControl;
 };
 
 type QaScenarioCommandRunner = (
@@ -547,13 +549,39 @@ async function writeTestFileEvidenceFile(params: {
   evidence: unknown;
   outputDir: string;
   writeEvidenceFile?: boolean;
+  profileRun?: QaProfileRunControl;
 }): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath">> {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   if (params.writeEvidenceFile ?? true) {
-    await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
-    await assertQaSuiteArtifactWritten("evidence", evidencePath);
+    const persist = async () => {
+      await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
+      await assertQaSuiteArtifactWritten("evidence", evidencePath);
+    };
+    await (params.profileRun?.retryPhase?.("test-file artifact persistence", persist) ?? persist());
   }
   return { evidencePath };
+}
+
+async function persistTestFileScenarioEvidence(
+  params: QaTestFileScenarioRunParams,
+  env: NodeJS.ProcessEnv,
+  kind: QaTestFileExecutionKind,
+  result: QaTestFileScenarioResult,
+) {
+  if (!params.profileRun) {
+    return;
+  }
+  await params.profileRun.complete({
+    scenarioId: result.scenario.id,
+    evidence: buildTestFileEvidence({
+      ...params,
+      artifactPaths: buildScenarioArtifactPaths({ repoRoot: params.repoRoot, results: [result] }),
+      env,
+      generatedAt: new Date().toISOString(),
+      kind,
+      results: [result],
+    }),
+  });
 }
 
 export async function runQaTestFileScenarios(
@@ -590,16 +618,18 @@ export async function runQaTestFileScenarios(
   for (const [scenarioTimeoutMs, group] of dockerBatchGroups) {
     // A scheduler invocation shares one fallback lane timeout, so timeout overrides
     // stay in separate batches instead of borrowing another scenario's budget.
-    results.push(
-      ...(await runDockerE2eBatch({
-        commandTimeoutMs: scenarioTimeoutMs,
-        env,
-        outputDir: params.outputDir,
-        repoRoot: params.repoRoot,
-        runCommand,
-        scenarios: group,
-      })),
-    );
+    const batchResults = await runDockerE2eBatch({
+      commandTimeoutMs: scenarioTimeoutMs,
+      env,
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+      runCommand,
+      scenarios: group,
+    });
+    for (const result of batchResults) {
+      await persistTestFileScenarioEvidence(params, env, kind, result);
+      results.push(result);
+    }
   }
   const dockerBatchScenarioIds = new Set(dockerBatchScenarios.map((scenario) => scenario.id));
   for (const scenario of scenarios) {
@@ -614,6 +644,7 @@ export async function runQaTestFileScenarios(
       runCommand,
       scenario,
     });
+    await persistTestFileScenarioEvidence(params, env, kind, result);
     results.push(result);
     if (params.failFast && result.status !== "pass") {
       break;
@@ -643,6 +674,7 @@ export async function runQaTestFileScenarios(
   const paths = await writeTestFileEvidenceFile({
     evidence,
     outputDir: params.outputDir,
+    profileRun: params.profileRun,
     writeEvidenceFile: params.writeEvidenceFile,
   });
   return {

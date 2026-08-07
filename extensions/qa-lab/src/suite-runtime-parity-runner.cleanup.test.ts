@@ -73,7 +73,8 @@ vi.mock("./runtime-parity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-parity.js")>()),
   captureRuntimeParityCell: mocks.captureRuntimeParityCell,
 }));
-vi.mock("./suite-artifacts.js", () => ({
+vi.mock("./suite-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite-artifacts.js")>()),
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 vi.mock("./suite-runtime-gateway.js", () => ({

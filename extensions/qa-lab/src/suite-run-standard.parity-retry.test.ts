@@ -61,7 +61,8 @@ vi.mock("./providers/server-runtime.js", () => ({
 vi.mock("./runtime-parity.js", () => ({
   captureRuntimeParityCell: mocks.captureRuntimeParityCell,
 }));
-vi.mock("./suite-artifacts.js", () => ({
+vi.mock("./suite-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./suite-artifacts.js")>()),
   writeQaSuiteArtifacts: mocks.writeQaSuiteArtifacts,
 }));
 vi.mock("./suite-runtime-gateway.js", () => ({
@@ -237,6 +238,46 @@ describe("QA runtime parity scenario retry isolation", () => {
         String(message).startsWith("run complete"),
       ),
     ).toHaveLength(0);
+  });
+
+  it("retries cleanup without replaying terminal scenario evidence", async () => {
+    const cleanup = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("cleanup reset"))
+      .mockResolvedValueOnce(undefined);
+    const complete = vi.fn(async () => {});
+    const retryPhase = vi.fn(async (_phase: string, run: () => Promise<unknown>) => {
+      try {
+        return await run();
+      } catch {
+        return await run();
+      }
+    });
+    mocks.runQaFlowSuiteCleanupPlan.mockImplementationOnce(async (params) => {
+      await params.retryPhase?.("cleanup: gateway stop", cleanup);
+      return [];
+    });
+    const runScenario = vi
+      .fn<QaSuiteScenarioRunner>()
+      .mockResolvedValue(makeRetryTestResult("pass"));
+
+    await runQaFlowSuiteStandard(
+      {
+        lab: makeRetryTestLab(),
+        profileRun: {
+          complete,
+          hasTerminalEvidence: () => complete.mock.calls.length > 0,
+          retryPhase,
+        },
+      },
+      makeRetryTestContext(),
+      runScenario,
+    );
+
+    expect(runScenario).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledTimes(2);
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledOnce();
   });
 
   it.each([

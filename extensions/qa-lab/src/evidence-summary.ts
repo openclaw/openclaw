@@ -164,6 +164,7 @@ const qaEvidenceSummarySchema = z.strictObject({
   generatedAt: nonEmptyStringSchema,
   evidenceMode: qaScorecardEvidenceModeSchema,
   entries: z.array(qaEvidenceSummaryEntrySchema),
+  profileCell: qaProfileEvidencePlan.schema.shape.expectedCells.element.optional(),
   profile: qaEvidenceProfileIdSchema.optional(),
   profilePlan: qaProfileEvidencePlan.schema.optional(),
   scorecard: qaEvidenceScorecardSchema.optional(),

@@ -3,6 +3,7 @@ import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harne
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { startQaGatewayChild } from "./gateway-child.js";
 import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.types.js";
+import type { QaProfileRunControl } from "./profile-run-checkpoint.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import {
@@ -13,6 +14,7 @@ import { captureRuntimeParityCell } from "./runtime-parity.js";
 import {
   type QaSuiteGatewayHeapSnapshot,
   type QaSuiteGatewayRssSample,
+  persistQaSuiteScenarioEvidence,
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
 import {
@@ -50,7 +52,7 @@ import {
 import { closeQaWebSessions } from "./web-runtime.js";
 
 export async function runQaFlowSuiteStandard(
-  params: QaSuiteRunParams | undefined,
+  params: (QaSuiteRunParams & { profileRun?: QaProfileRunControl }) | undefined,
   context: QaSuiteResolvedRunContext,
   runScenarioDefinition: QaSuiteScenarioRunner,
 ): Promise<QaSuiteResult> {
@@ -311,6 +313,15 @@ export async function runQaFlowSuiteStandard(
           scenarioFinishedAt: scenarioExecutionFinishedAt,
         });
       }
+      await persistQaSuiteScenarioEvidence({
+        ...context,
+        channelDriver: transportFactoryResult.driver,
+        channelId: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
+        evidenceMode: params?.evidenceMode,
+        profileRun: params?.profileRun,
+        scenarioDefinition: scenario,
+        scenarioResult,
+      });
       sampleGatewayProcessRss(`scenario:${scenario.id}:finish`);
       scenarios.push(scenarioResult);
       writeQaSuiteProgress(
@@ -406,6 +417,7 @@ export async function runQaFlowSuiteStandard(
           params?.scenarioIds && params.scenarioIds.length > 0
             ? selectedScenarios.map((scenario) => scenario.id)
             : undefined,
+        retryPhase: params?.profileRun?.retryPhase,
       },
     );
     const latestReport = {
@@ -461,6 +473,7 @@ export async function runQaFlowSuiteStandard(
               });
             }
           },
+      retryPhase: params?.profileRun?.retryPhase,
     });
     throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
   }

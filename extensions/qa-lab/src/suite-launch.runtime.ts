@@ -13,6 +13,11 @@ import {
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
+import {
+  createQaProfileRunCheckpoint,
+  type QaProfileRunControl,
+  type QaProfileRunSpec,
+} from "./profile-run-checkpoint.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
@@ -52,10 +57,7 @@ import {
   type QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
-export type QaSuiteRuntimeResult = {
-  expectedCells: QaScenarioExecutionCell[];
-  observedCells: QaScenarioExecutionCell[];
-} & (
+export type QaSuiteRuntimeResult =
   | {
       executionKind: "flow";
       result: QaSuiteResult;
@@ -63,10 +65,10 @@ export type QaSuiteRuntimeResult = {
   | {
       executionKind: "suite";
       result: QaUnifiedSuiteResult;
-    }
-);
+    };
 
 type QaUnifiedSuiteResult = {
+  evidence: QaEvidenceSummaryJson;
   evidencePath: string;
   outputDir: string;
   report: string;
@@ -74,6 +76,13 @@ type QaUnifiedSuiteResult = {
   scenarios: QaSuiteScenarioResult[];
   summaryPath: string;
 };
+
+type QaSuiteLaunchParams = QaSuiteRunParams & {
+  expandScenarioChannels?: boolean;
+  profileRun?: QaProfileRunControl;
+  profileRunSpec?: QaProfileRunSpec;
+};
+type QaProfileCheckpoint = Awaited<ReturnType<typeof createQaProfileRunCheckpoint>>;
 
 type QaSuiteExecutionPlan = {
   expectedCells: QaScenarioExecutionCell[];
@@ -116,6 +125,7 @@ type QaUnifiedPartitionTask = {
   channel?: string;
   channelId: string;
   exclusiveKey?: string;
+  profileRun?: QaProfileRunControl;
   run: () => Promise<QaUnifiedPartitionResult>;
   scenarios: readonly QaSeedScenarioWithSource[];
   weight: number;
@@ -192,16 +202,21 @@ function isQaSuiteInfraRetryableError(error: unknown) {
 export async function runQaSuiteWithInfraRetry<Result>(
   run: () => Promise<Result>,
   maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
+  options?: { phase?: string; shouldRetry?: () => boolean },
 ) {
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
       return await run();
     } catch (error) {
-      if (!isQaSuiteInfraRetryableError(error) || attempt >= maxRetries) {
+      if (
+        !isQaSuiteInfraRetryableError(error) ||
+        attempt >= maxRetries ||
+        options?.shouldRetry?.() === false
+      ) {
         throw error;
       }
       process.stderr.write(
-        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
+        `[qa-suite] ${options?.phase ?? "infra"} retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
       );
     }
   }
@@ -218,7 +233,7 @@ async function loadQaFlowSuiteRuntime() {
     import("./suite.js"),
     loadQaLabServerRuntime(),
   ]);
-  return async (params: QaSuiteRunParams | undefined) =>
+  return async (params: QaSuiteLaunchParams | undefined) =>
     await runQaFlowSuite({
       ...params,
       startLab: params?.startLab ?? startLab,
@@ -240,7 +255,7 @@ function resolveRequestedScenarios(params: {
 }
 
 async function resolveQaFlowChannelGroups(
-  runParams: QaSuiteRunParams | undefined,
+  runParams: QaSuiteLaunchParams | undefined,
   scenarios: readonly QaSeedScenarioWithSource[],
 ): Promise<QaFlowChannelGroup[]> {
   if (runParams?.adapterFactories) {
@@ -346,10 +361,10 @@ async function resolveQaFlowChannelGroups(
 }
 
 async function resolveSuiteExecutionPlan(
-  params: QaSuiteRunParams | undefined,
+  params: QaSuiteLaunchParams | undefined,
 ): Promise<QaSuiteExecutionPlan> {
   const scenarioIds = params?.scenarioIds ?? [];
-  if (scenarioIds.length === 0) {
+  if (scenarioIds.length === 0 && !params?.profileRunSpec) {
     return { kind: "flow", expectedCells: [], scenarios: [] };
   }
   const selectedScenarios = resolveRequestedScenarios({
@@ -393,7 +408,7 @@ async function resolveSuiteExecutionPlan(
       (scenario) => scenario.execution.kind === "flow" && scenario.execution.runtime !== undefined,
     ) ||
     (flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker));
-  if (testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
+  if (!params?.profileRunSpec && testFileScenariosByKind.size === 0 && !requiresFlowPartitions) {
     return { kind: "flow", expectedCells, scenarios: selectedScenarios };
   }
   return {
@@ -405,7 +420,7 @@ async function resolveSuiteExecutionPlan(
   };
 }
 async function runQaTestFileSuiteFromRuntime(params: {
-  runParams: QaSuiteRunParams | undefined;
+  runParams: QaSuiteLaunchParams | undefined;
   scenarios: readonly QaTestFileScenario[];
 }): Promise<QaTestFileScenarioRunResult> {
   const runParams = params.runParams;
@@ -430,11 +445,12 @@ async function runQaTestFileSuiteFromRuntime(params: {
     providerMode,
     primaryModel,
     scenarios: params.scenarios,
+    profileRun: runParams?.profileRun,
     writeEvidenceFile: runParams?.writeEvidenceFile,
   });
 }
 
-function rejectFlowOnlySuiteOptionsForUnifiedRun(runParams: QaSuiteRunParams | undefined) {
+function rejectFlowOnlySuiteOptionsForUnifiedRun(runParams: QaSuiteLaunchParams | undefined) {
   if (runParams?.runtimePair) {
     throw new Error("--runtime-pair requires execution.kind: flow scenarios.");
   }
@@ -479,83 +495,54 @@ async function runWeightedUnifiedPartitionTasks(
   tasks: readonly QaUnifiedPartitionTask[],
   maxWeight: number,
 ) {
-  if (tasks.length === 0) {
-    return [];
-  }
   const limit = Math.max(1, Math.floor(maxWeight));
   const results: QaUnifiedPartitionResult[] = [];
   const pending = tasks.map((task, index) => ({ index, task }));
   const activeExclusiveKeys = new Set<string>();
+  const active = new Set<Promise<void>>();
   let activeWeight = 0;
-  return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
-    let firstError: Error | undefined;
-    let finished = false;
-    const finishIfSettled = () => {
-      if (finished || activeWeight > 0) {
-        return;
-      }
-      finished = true;
-      if (firstError) {
-        reject(firstError);
-        return;
-      }
-      resolve(results);
-    };
-    const launch = () => {
-      if (firstError) {
-        finishIfSettled();
-        return;
-      }
-      while (pending.length > 0) {
-        const pendingIndex = pending.findIndex(({ task }) => {
-          const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
-          return (
-            (activeWeight === 0 || activeWeight + taskWeight <= limit) &&
-            (!task.exclusiveKey || !activeExclusiveKeys.has(task.exclusiveKey))
-          );
-        });
-        if (pendingIndex === -1) {
-          return;
-        }
-        const pendingTask = pending.splice(pendingIndex, 1)[0];
-        if (!pendingTask) {
-          throw new Error("failed to select a pending QA suite partition task");
-        }
-        const { index, task } = pendingTask;
-        const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
-        activeWeight += taskWeight;
-        if (task.exclusiveKey) {
-          activeExclusiveKeys.add(task.exclusiveKey);
-        }
-        task.run().then(
-          (result) => {
-            results[index] = result;
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            if (pending.length === 0 && activeWeight === 0) {
-              finishIfSettled();
-              return;
-            }
-            launch();
-          },
-          (error: unknown) => {
-            firstError = error instanceof Error ? error : new Error(String(error));
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            finishIfSettled();
-          },
+  let failure: { error: unknown; index: number } | undefined;
+  while ((!failure && pending.length > 0) || active.size > 0) {
+    while (!failure && pending.length > 0) {
+      const pendingIndex = pending.findIndex(({ task }) => {
+        const weight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
+        return (
+          (activeWeight === 0 || activeWeight + weight <= limit) &&
+          (!task.exclusiveKey || !activeExclusiveKeys.has(task.exclusiveKey))
         );
+      });
+      if (pendingIndex === -1) {
+        break;
       }
-      if (activeWeight === 0) {
-        finishIfSettled();
+      const { index, task } = pending.splice(pendingIndex, 1)[0]!;
+      const weight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
+      activeWeight += weight;
+      if (task.exclusiveKey) {
+        activeExclusiveKeys.add(task.exclusiveKey);
       }
-    };
-    launch();
-  });
+      const run = Promise.resolve()
+        .then(task.run)
+        .then((result) => {
+          results[index] = result;
+        })
+        .catch((error: unknown) => {
+          failure = !failure || index < failure.index ? { error, index } : failure;
+        })
+        .finally(() => {
+          activeWeight -= weight;
+          if (task.exclusiveKey) {
+            activeExclusiveKeys.delete(task.exclusiveKey);
+          }
+          active.delete(run);
+        });
+      active.add(run);
+    }
+    await Promise.race(active);
+  }
+  if (failure) {
+    throw failure.error;
+  }
+  return results;
 }
 
 async function readQaSuiteEvidenceSummary(evidencePath: string) {
@@ -697,6 +684,8 @@ async function writeUnifiedQaSuiteArtifacts(params: {
   scenarioIds: readonly string[];
   scenarios: readonly QaSuiteScenarioResult[];
   startedAt: Date;
+  retryPhase?: QaProfileRunControl["retryPhase"];
+  writeEvidenceFile?: boolean;
 }) {
   await fs.mkdir(params.outputDir, { recursive: true });
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
@@ -722,10 +711,16 @@ async function writeUnifiedQaSuiteArtifacts(params: {
     scenarios: [...params.scenarios],
     startedAt: params.startedAt,
   }) satisfies QaSuiteSummaryJson;
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
-  await fs.writeFile(reportPath, report, "utf8");
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  const persist = async () => {
+    if (params.writeEvidenceFile !== false) {
+      await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
+    }
+    await fs.writeFile(reportPath, report, "utf8");
+    await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  };
+  await (params.retryPhase?.("unified artifact persistence", persist) ?? persist());
   return {
+    evidence: params.evidence,
     evidencePath,
     outputDir: params.outputDir,
     report,
@@ -736,9 +731,11 @@ async function writeUnifiedQaSuiteArtifacts(params: {
 }
 
 async function runUnifiedQaSuite(params: {
+  finalizeProfile?: QaProfileCheckpoint["finalize"];
   plan: Extract<QaSuiteExecutionPlan, { kind: "unified" }>;
-  runParams: QaSuiteRunParams | undefined;
-}): Promise<QaUnifiedSuiteResult & { observedCells: QaScenarioExecutionCell[] }> {
+  profileCheckpoint?: QaProfileCheckpoint;
+  runParams: QaSuiteLaunchParams | undefined;
+}): Promise<QaUnifiedSuiteResult> {
   if (params.plan.testFileScenariosByKind.size > 0) {
     rejectFlowOnlySuiteOptionsForUnifiedRun(params.runParams);
   }
@@ -788,25 +785,70 @@ async function runUnifiedQaSuite(params: {
       );
   const evidenceSummaries: QaEvidenceSummaryJson[] = [];
   const scenarioResultsById = new Map<string, QaSuiteScenarioResult[]>();
-  const observedCellsByKey = new Map<string, QaScenarioExecutionCell>();
-  const recordObservedScenarios = (
-    scenarios: readonly QaSeedScenarioWithSource[],
-    channel?: string,
-  ) => {
-    for (const cell of expandQaScenarioExecutionCells({
-      scenarios,
-      channelDriver: params.runParams?.channelDriver ?? "qa-channel",
-      channel,
-      expandChannels: false,
-    })) {
-      observedCellsByKey.set(JSON.stringify(cell), cell);
-    }
-  };
   const sharedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
   const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
   const unavailableChannelCredentialDetails = new Map<string, string>();
+  const synthesizePartitionFailure = async (
+    task: QaUnifiedPartitionTask,
+    error: unknown,
+    details: string,
+    options?: { blocked?: boolean; channelLabel?: string },
+  ): Promise<QaUnifiedPartitionResult> => {
+    if (task.profileRun?.hasTerminalEvidence()) {
+      throw error;
+    }
+    const step = options?.blocked ? "Acquire channel credential" : "suite partition";
+    const scenarioResults = task.scenarios.map((scenario) => {
+      const name = options?.channelLabel
+        ? `${scenario.title} [${options.channelLabel}]`
+        : scenario.title;
+      return {
+        scenarioId: scenario.id,
+        result: {
+          name,
+          status: "fail" as const,
+          details,
+          steps: [{ name: step, status: "fail" as const, details }],
+        },
+      };
+    });
+    const evidenceSummaries = task.scenarios.map((scenario, index) =>
+      buildQaSuiteEvidenceSummary({
+        artifactPaths: [],
+        evidenceMode: params.runParams?.evidenceMode,
+        channelId: task.channelId,
+        env: process.env,
+        generatedAt: new Date().toISOString(),
+        primaryModel,
+        providerMode,
+        repoRoot,
+        scenarioDefinitions: [scenario],
+        scenarioResults: [
+          {
+            name: scenarioResults[index]!.result.name,
+            status: options?.blocked ? "blocked" : "fail",
+            details,
+          },
+        ],
+      }),
+    );
+    if (task.profileRun) {
+      for (const [index, scenario] of task.scenarios.entries()) {
+        await task.profileRun.complete({
+          scenarioId: scenario.id,
+          evidence: evidenceSummaries[index]!,
+        });
+      }
+    }
+    return {
+      evidenceSummaries,
+      scenarioResults,
+      startedScenarioIds: task.scenarios.map((scenario) => scenario.id),
+      submittedScenarioIds: task.scenarios.map((scenario) => scenario.id),
+    };
+  };
   if (params.plan.channelGroups.length > 0) {
     const channelGroups = params.plan.channelGroups;
     const runFlowSuite = await loadQaFlowSuiteRuntime();
@@ -902,47 +944,15 @@ async function runUnifiedQaSuite(params: {
           channelGroup.channelDriverSelection?.channel ??
           channelGroup.channel ??
           transportId;
-        const buildCredentialUnavailableResult = (details: string): QaUnifiedPartitionResult => {
-          const blockedResults = partition.scenarios.map((scenario) => ({
-            name:
-              params.runParams?.expandScenarioChannels && channelGroup.channel
-                ? `${scenario.title} [${channelGroup.channel}]`
-                : scenario.title,
-            status: "blocked" as const,
-            details,
-          }));
-          return {
-            evidenceSummaries: [
-              buildQaSuiteEvidenceSummary({
-                artifactPaths: [],
-                evidenceMode: params.runParams?.evidenceMode,
-                channelId: taskChannelId,
-                env: process.env,
-                generatedAt: new Date().toISOString(),
-                primaryModel,
-                providerMode,
-                repoRoot,
-                scenarioDefinitions: partition.scenarios,
-                scenarioResults: blockedResults,
-              }),
-            ],
-            scenarioResults: partition.scenarios.map((scenario) => ({
-              scenarioId: scenario.id,
-              result: {
-                name:
-                  params.runParams?.expandScenarioChannels && channelGroup.channel
-                    ? `${scenario.title} [${channelGroup.channel}]`
-                    : scenario.title,
-                status: "fail",
-                details,
-                steps: [{ name: "Acquire channel credential", status: "fail", details }],
-              },
-            })),
-            startedScenarioIds: partition.scenarios.map((scenario) => scenario.id),
-            submittedScenarioIds: partition.scenarios.map((scenario) => scenario.id),
-          };
-        };
-        const task = {
+        const profileRun = params.profileCheckpoint?.control(
+          expandQaScenarioExecutionCells({
+            scenarios: partition.scenarios,
+            channelDriver: params.runParams?.channelDriver ?? "qa-channel",
+            channel: channelGroup.channel,
+            expandChannels: false,
+          }),
+        );
+        const task: QaUnifiedPartitionTask = {
           channel: channelGroup.channel,
           channelId: taskChannelId,
           // One channel's credential and Gateway state stay serial unless each adapter create()
@@ -950,6 +960,7 @@ async function runUnifiedQaSuite(params: {
           exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
             ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
             : undefined,
+          profileRun,
           scenarios: partition.scenarios,
           weight: partition.concurrency,
           run: async () => {
@@ -957,10 +968,22 @@ async function runUnifiedQaSuite(params: {
               ? unavailableChannelCredentialDetails.get(channelGroup.channelId)
               : undefined;
             if (unavailableDetails) {
-              return buildCredentialUnavailableResult(unavailableDetails);
+              return await synthesizePartitionFailure(
+                task,
+                new Error(unavailableDetails),
+                unavailableDetails,
+                {
+                  blocked: true,
+                  channelLabel:
+                    params.runParams?.expandScenarioChannels && channelGroup.channel
+                      ? channelGroup.channel
+                      : undefined,
+                },
+              );
             }
             const result = await runFlowSuite({
               ...params.runParams,
+              profileRun,
               ...(progress
                 ? {
                     lab: progress.createPartitionLab(
@@ -993,26 +1016,29 @@ async function runUnifiedQaSuite(params: {
                   ))
                 : params.runParams?.workerStartStaggerMs,
               scenarioIds: partition.scenarios.map((scenario) => scenario.id),
-            }).catch((error: unknown) => {
+            }).catch(async (error: unknown) => {
               if (!isChannelCredentialPoolUnavailable(error, channelGroup.channelId)) {
                 throw error;
               }
-              // Preserve other channels' evidence, but keep the suite failed: maturity
-              // docs must not publish until every required channel can run.
+              if (profileRun?.hasTerminalEvidence()) {
+                throw error;
+              }
+              // Preserve sibling evidence, but keep the suite failed.
               const details = `channel credential unavailable: ${formatErrorMessage(error)}`;
               if (channelDriverFlowRequiresExclusiveWorkers && channelGroup.channelId) {
                 unavailableChannelCredentialDetails.set(channelGroup.channelId, details);
               }
-              return buildCredentialUnavailableResult(details);
+              return await synthesizePartitionFailure(task, error, details, {
+                blocked: true,
+                channelLabel:
+                  params.runParams?.expandScenarioChannels && channelGroup.channel
+                    ? channelGroup.channel
+                    : undefined,
+              });
             });
             if ("evidenceSummaries" in result) {
               return result;
             }
-            const startedScenarioIdSet = new Set(result.startedScenarioIds);
-            recordObservedScenarios(
-              partition.scenarios.filter((scenario) => startedScenarioIdSet.has(scenario.id)),
-              channelGroup.channel,
-            );
             const scenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
             for (const [index, scenario] of partition.scenarios.entries()) {
               const scenarioResult = result.scenarios[index];
@@ -1041,7 +1067,7 @@ async function runUnifiedQaSuite(params: {
               submittedScenarioIds: partition.scenarios.map((scenario) => scenario.id),
             };
           },
-        } satisfies QaUnifiedPartitionTask;
+        };
         if (isolatedPartition) {
           isolatedFlowPartitionTasks.push(task);
         } else {
@@ -1054,8 +1080,16 @@ async function runUnifiedQaSuite(params: {
     scenariosByKind: ReadonlyMap<QaTestFileExecutionKind, QaTestFileScenario[]>,
   ) => {
     const taskScenarios = [...scenariosByKind.values()].flat();
+    const profileRun = params.profileCheckpoint?.control(
+      expandQaScenarioExecutionCells({
+        scenarios: taskScenarios,
+        channelDriver: params.runParams?.channelDriver ?? "qa-channel",
+        expandChannels: false,
+      }),
+    );
     return {
       channelId: transportId,
+      profileRun,
       scenarios: taskScenarios,
       weight: 1,
       run: async () => {
@@ -1071,6 +1105,7 @@ async function runUnifiedQaSuite(params: {
           const result = await runQaTestFileSuiteFromRuntime({
             runParams: {
               ...params.runParams,
+              profileRun,
               outputDir: suitePartitionOutputDir(outputDir, kind),
               writeEvidenceFile: false,
               providerMode,
@@ -1109,9 +1144,6 @@ async function runUnifiedQaSuite(params: {
             break;
           }
         }
-        recordObservedScenarios(
-          taskScenarios.filter((scenario) => testFileStartedScenarioIds.includes(scenario.id)),
-        );
         return {
           evidenceSummaries: testFileEvidenceSummaries,
           scenarioResults: testFileScenarioResults,
@@ -1240,41 +1272,6 @@ async function runUnifiedQaSuite(params: {
     );
     return partition.startedScenarioIds.some((scenarioId) => !returnedScenarioIds.has(scenarioId));
   };
-  const capturePartitionFailure = (
-    task: QaUnifiedPartitionTask,
-    error: unknown,
-  ): QaUnifiedPartitionResult => {
-    const scenarios = task.scenarios;
-    const details = `suite partition failed: ${formatErrorMessage(error)}`;
-    const scenarioResults = scenarios.map((scenario) => ({
-      scenarioId: scenario.id,
-      result: {
-        name: scenario.title,
-        status: "fail" as const,
-        details,
-        steps: [{ name: "suite partition", status: "fail" as const, details }],
-      },
-    }));
-    return {
-      evidenceSummaries: [
-        buildQaSuiteEvidenceSummary({
-          artifactPaths: [],
-          evidenceMode: params.runParams?.evidenceMode,
-          channelId: task.channelId,
-          env: process.env,
-          generatedAt: new Date().toISOString(),
-          primaryModel,
-          providerMode,
-          repoRoot,
-          scenarioDefinitions: scenarios,
-          scenarioResults: scenarioResults.map(({ result }) => result),
-        }),
-      ],
-      scenarioResults,
-      startedScenarioIds: scenarios.map((scenario) => scenario.id),
-      submittedScenarioIds: task.scenarios.map((scenario) => scenario.id),
-    };
-  };
   const runPartitionTasks = async (tasks: readonly QaUnifiedPartitionTask[], maxWeight: number) => {
     // Retry inside the scheduled task so its weight and exclusive key stay held;
     // one failed channel must not replay partitions that already completed.
@@ -1282,11 +1279,19 @@ async function runUnifiedQaSuite(params: {
       ...task,
       run: async () => {
         try {
-          return await runQaSuiteWithInfraRetry(task.run);
+          return await runQaSuiteWithInfraRetry(task.run, QA_SUITE_INFRA_RETRY_LIMIT, {
+            shouldRetry: () => !task.profileRun?.hasTerminalEvidence(),
+          });
         } catch (error) {
-          // Failed partitions still own durable failure evidence; rejecting here would
-          // discard completed siblings and prevent the unified artifacts from existing.
-          return capturePartitionFailure(task, error);
+          if (task.profileRun?.hasTerminalEvidence()) {
+            throw error;
+          }
+          // Failed partitions still own durable evidence for the unified report.
+          return await synthesizePartitionFailure(
+            task,
+            error,
+            `suite partition failed: ${formatErrorMessage(error)}`,
+          );
         }
       },
     }));
@@ -1313,10 +1318,12 @@ async function runUnifiedQaSuite(params: {
     evidenceSummaries.push(...partitionResult.evidenceSummaries);
   }
   const finishedAt = new Date();
-  const evidence = mergeQaEvidenceSummaries({
-    evidenceSummaries,
-    generatedAt: finishedAt.toISOString(),
-  });
+  const evidence = params.finalizeProfile
+    ? await params.finalizeProfile()
+    : mergeQaEvidenceSummaries({
+        evidenceSummaries,
+        generatedAt: finishedAt.toISOString(),
+      });
   const channel = summarizeQaEvidenceChannel([evidence]);
   const scenarios = params.plan.scenarios.flatMap((scenario) => {
     const results = scenarioResultsById.get(scenario.id);
@@ -1356,6 +1363,8 @@ async function runUnifiedQaSuite(params: {
     scenarioIds: params.plan.scenarios.map((scenario) => scenario.id),
     scenarios,
     startedAt,
+    retryPhase: params.profileCheckpoint?.retryPhase,
+    writeEvidenceFile: !params.profileCheckpoint,
   });
   const progressResults = params.plan.scenarios.flatMap((scenario) => {
     const results = scenarioResultsById.get(scenario.id);
@@ -1399,41 +1408,43 @@ async function runUnifiedQaSuite(params: {
     markdown: unifiedResult.report,
     generatedAt: finishedAt.toISOString(),
   });
-  return {
-    ...unifiedResult,
-    observedCells: [...observedCellsByKey.values()].toSorted((left, right) =>
-      JSON.stringify(left).localeCompare(JSON.stringify(right)),
-    ),
-  };
+  return unifiedResult;
 }
 
-export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
-  const runParams = args[0];
+export async function runQaSuite(...args: [QaSuiteLaunchParams?]): Promise<QaSuiteRuntimeResult> {
+  const input = args[0];
+  const repoRoot = path.resolve(input?.repoRoot ?? process.cwd());
+  const outputDir = await resolveQaSuiteOutputDir(repoRoot, input?.outputDir);
+  const runParams = input ? { ...input, repoRoot, outputDir } : input;
   const plan = await resolveSuiteExecutionPlan(runParams);
+  const profileCheckpoint = runParams?.profileRunSpec
+    ? await createQaProfileRunCheckpoint({
+        expectedCells: plan.expectedCells,
+        outputDir,
+        retryPhase: (phase, run) =>
+          runQaSuiteWithInfraRetry(run, QA_SUITE_INFRA_RETRY_LIMIT, { phase }),
+        spec: runParams.profileRunSpec,
+      })
+    : undefined;
   if (plan.kind === "unified") {
-    const { observedCells, ...result } = await runUnifiedQaSuite({
-      runParams,
-      plan,
-    });
+    const runUnified = (finalizeProfile?: QaProfileCheckpoint["finalize"]) =>
+      runUnifiedQaSuite({ runParams, plan, profileCheckpoint, finalizeProfile });
+    const result = profileCheckpoint
+      ? await profileCheckpoint.finalizeRun(runUnified)
+      : await runUnified();
     return {
       executionKind: "suite",
-      expectedCells: plan.expectedCells,
-      observedCells,
       result,
     };
   }
-  const result = await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(...args));
-  const startedScenarioIds = new Set(result.startedScenarioIds);
   return {
     executionKind: "flow",
-    expectedCells: plan.expectedCells,
-    observedCells: plan.expectedCells.filter((cell) => startedScenarioIds.has(cell.scenarioId)),
-    result,
+    result: await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(runParams)),
   };
 }
 
 export async function runQaFlowSuiteFromRuntime(
-  ...args: [QaSuiteRunParams?]
+  ...args: [QaSuiteLaunchParams?]
 ): Promise<QaSuiteResult> {
   return await (
     await loadQaFlowSuiteRuntime()

@@ -1,15 +1,7 @@
 // QA Lab tests cover profile scorecard evidence math.
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  validateQaEvidenceSummaryJson,
-  type QaEvidenceSummaryJson,
-  type QaEvidenceSummaryEntry,
-} from "./evidence-summary.js";
-import type { QaProfileEvidencePlan } from "./profile-evidence-plan.js";
-import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
+import { type QaEvidenceSummaryJson, type QaEvidenceSummaryEntry } from "./evidence-summary.js";
+import { buildQaProfileScorecardEvidence as buildScorecard } from "./scorecard-evidence.js";
 import type { QaScorecardCategoryCoverageReport } from "./scorecard-taxonomy.js";
 
 function evidenceEntry(
@@ -58,46 +50,15 @@ function categoryInventory(coverageIds: string[]): QaScorecardCategoryCoverageRe
   };
 }
 
-async function buildQaProfileScorecardEvidence(params: {
+function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
   filters: { surface?: string; category?: string };
   categories: readonly QaScorecardCategoryCoverageReport[];
 }) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-scorecard-evidence-"));
-  const evidencePath = path.join(tempRoot, "qa-evidence-summary.json");
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence)}\n`, "utf8");
-  try {
-    const scorecard = await attachQaProfileScorecardEvidenceToFile({
-      evidencePath,
-      profile: "release",
-      profilePlan: {
-        profile: "release",
-        membership: [],
-        selected: [],
-        excluded: [],
-        expectedCells: [],
-        observedCells: [],
-        missingCells: [],
-        counts: {
-          membership: 0,
-          selected: 0,
-          excluded: 0,
-          expectedCells: 0,
-          observedCells: 0,
-          missingCells: 0,
-        },
-      } satisfies QaProfileEvidencePlan,
-      filters: params.filters,
-      categories: params.categories,
-    });
-    const writtenEvidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(evidencePath, "utf8")),
-    );
-    expect(writtenEvidence.profilePlan?.profile).toBe("release");
-    return { scorecard, writtenEvidence };
-  } finally {
-    await fs.rm(tempRoot, { recursive: true, force: true });
-  }
+  return {
+    scorecard: buildScorecard(params),
+    writtenEvidence: params.evidence,
+  };
 }
 
 describe("profile scorecard evidence", () => {

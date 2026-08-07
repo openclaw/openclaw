@@ -7,6 +7,7 @@ import type {
   QaLabServerHandle,
 } from "./lab-server.types.js";
 import type { QaProviderMode } from "./model-selection.js";
+import type { QaProfileRunControl } from "./profile-run-checkpoint.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapterFactory, QaTransportId } from "./qa-transport-registry.js";
@@ -17,7 +18,7 @@ import {
 } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
-import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
+import { persistQaSuiteScenarioEvidence, writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import {
   collectQaSuiteTransportPolicy,
   mapQaSuiteWithConcurrency,
@@ -69,6 +70,7 @@ export async function runQaRuntimeParitySuite(params: {
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
   writeEvidenceFile?: boolean;
+  profileRun?: QaProfileRunControl;
 }) {
   const ownsLab = !params.lab;
   const startLab = requireQaSuiteStartLab(params.startLab);
@@ -227,6 +229,13 @@ export async function runQaRuntimeParitySuite(params: {
           scenarioName: scenario.title,
           result: parity,
         });
+        await persistQaSuiteScenarioEvidence({
+          ...params,
+          channelDriver: transportFactoryResult.driver,
+          channelId: params.channelId ?? params.channelDriverSelection?.channel ?? transport.id,
+          scenarioDefinition: scenario,
+          scenarioResult: parityScenarioResult,
+        });
         liveScenarioOutcomes[index] = {
           id: scenario.id,
           name: scenario.title,
@@ -278,6 +287,7 @@ export async function runQaRuntimeParitySuite(params: {
             : undefined,
         runtimePair: params.runtimePair,
         writeEvidenceFile: params.writeEvidenceFile,
+        retryPhase: params.profileRun?.retryPhase,
       },
     );
     lab.setLatestReport({
@@ -311,12 +321,20 @@ export async function runQaRuntimeParitySuite(params: {
     runError = error;
     throw error;
   } finally {
-    const cleanupFailures = await runQaSuiteCleanupSteps([
-      ...(!parentTransportCleaned
-        ? [{ phase: "parent transport", run: () => transportFactoryResult.cleanupWithoutGateway() }]
-        : []),
-      ...(ownsLab ? [{ phase: "lab stop", run: () => lab.stop() }] : []),
-    ]);
+    const cleanupFailures = await runQaSuiteCleanupSteps(
+      [
+        ...(!parentTransportCleaned
+          ? [
+              {
+                phase: "parent transport",
+                run: () => transportFactoryResult.cleanupWithoutGateway(),
+              },
+            ]
+          : []),
+        ...(ownsLab ? [{ phase: "lab stop", run: () => lab.stop() }] : []),
+      ],
+      params.profileRun?.retryPhase,
+    );
     throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
   }
   if (!result) {
