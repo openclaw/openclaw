@@ -95,6 +95,29 @@ describe("session companion RPC", () => {
     );
   });
 
+  it("returns a retryable response while transcript context rebuilds", async () => {
+    const ask = vi.fn(async () => {
+      throw new SessionCompanionAskError(
+        "transcript-rebuilding",
+        "Session history is rebuilding. Try again shortly.",
+      );
+    });
+    const respond = await invoke(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "What happened?" },
+      { ask },
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { reason: "transcript-rebuilding" },
+      }),
+    );
+  });
+
   it("returns and validates per-session state", async () => {
     const state = vi.fn(() => ({
       exchanges: [{ question: "Why?", answer: "Because.", ts: 10 }],

@@ -2,14 +2,10 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../agents/agent-scope.js";
-import {
-  readBtwTranscriptMessages,
-  resolveBtwSessionTranscriptPath,
-} from "../agents/btw-transcript.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
-import { extractAssistantText, stripToolMessages } from "../agents/tools/chat-history-text.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveStorePath } from "../config/sessions.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, Usage } from "../llm/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -18,6 +14,7 @@ import {
   buildSessionCompanionRunConfig,
   SESSION_COMPANION_TOOLS,
 } from "./session-companion-policy.js";
+import { readSessionCompanionSeedMessages } from "./session-companion-seed.js";
 import {
   trimSessionCompanionExchanges,
   type SessionCompanionSeedMessage,
@@ -30,9 +27,6 @@ const companionLog = createSubsystemLogger("gateway/session-companion");
 
 const ASK_TIMEOUT_MS = 60_000;
 const ANSWER_MAX_CHARS = 1200;
-const SEED_MAX_MESSAGES = 40;
-const SEED_MAX_BYTES = 24 * 1024;
-const SEED_MESSAGE_MAX_CHARS = 4000;
 const DELTA_MAX_BYTES = 4 * 1024;
 const MAX_CONCURRENT_ASKS = 6;
 const ASK_RATE_WINDOW_MS = 60_000;
@@ -82,6 +76,7 @@ type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {
 type SessionCompanionAskErrorReason =
   | "busy"
   | "rate-limited"
+  | "transcript-rebuilding"
   | "utility-model-unavailable"
   | "unavailable";
 
@@ -109,75 +104,6 @@ function buildSystemPrompt(sessionKey: string): string {
   ].join(" ");
 }
 
-function normalizeSeedText(value: string): string {
-  return truncateUtf16Safe(
-    redactToolPayloadText(value).replace(/\s+/gu, " ").trim(),
-    SEED_MESSAGE_MAX_CHARS,
-  );
-}
-
-function extractUserText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return normalizeSeedText(content) || undefined;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((block) => {
-      if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
-        return [];
-      }
-      const blockText = (block as { text?: unknown }).text;
-      return typeof blockText === "string" ? [blockText] : [];
-    })
-    .join("\n");
-  return normalizeSeedText(text) || undefined;
-}
-
-function readMessageTimestamp(message: unknown): number {
-  if (!message || typeof message !== "object") {
-    return 0;
-  }
-  const value = (message as { timestamp?: unknown }).timestamp;
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
-}
-
-function sanitizeSeedMessages(messages: unknown[]): SessionCompanionSeedMessage[] {
-  const sanitized = stripToolMessages(messages)
-    .slice(-SEED_MAX_MESSAGES)
-    .flatMap((message): SessionCompanionSeedMessage[] => {
-      if (!message || typeof message !== "object") {
-        return [];
-      }
-      const role = (message as { role?: unknown }).role;
-      const text =
-        role === "assistant"
-          ? normalizeSeedText(extractAssistantText(message) ?? "")
-          : role === "user"
-            ? extractUserText(message)
-            : undefined;
-      return text && (role === "assistant" || role === "user")
-        ? [{ role, text, ts: readMessageTimestamp(message) }]
-        : [];
-    });
-  const selected: SessionCompanionSeedMessage[] = [];
-  let bytes = 2;
-  for (const message of sanitized.toReversed()) {
-    const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
-    if (bytes + messageBytes > SEED_MAX_BYTES) {
-      break;
-    }
-    selected.unshift(message);
-    bytes += messageBytes;
-  }
-  return selected;
-}
-
 async function defaultReadSeedMessages(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -188,21 +114,12 @@ async function defaultReadSeedMessages(params: {
   if (!sessionId) {
     return [];
   }
-  const sessionFile = resolveBtwSessionTranscriptPath({
+  return readSessionCompanionSeedMessages({
+    agentId: params.agentId,
     sessionId,
-    sessionEntry: loaded.entry,
     sessionKey: params.sessionKey,
     storePath: loaded.storePath,
   });
-  if (!sessionFile) {
-    return [];
-  }
-  const messages = await readBtwTranscriptMessages({
-    sessionFile,
-    sessionId,
-    sessionKey: params.sessionKey,
-  });
-  return sanitizeSeedMessages(messages);
 }
 
 const EMPTY_USAGE: Usage = {
@@ -517,6 +434,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         params.threads.delete(sessionKey);
       }
       companionLog.warn("session companion ask failed", { sessionKey, error });
+      if (isSessionTranscriptProjectionUnavailableError(error)) {
+        throw new SessionCompanionAskError(
+          "transcript-rebuilding",
+          "Session history is rebuilding. Try again shortly.",
+        );
+      }
       throw new SessionCompanionAskError(
         "unavailable",
         "The session companion could not answer right now.",

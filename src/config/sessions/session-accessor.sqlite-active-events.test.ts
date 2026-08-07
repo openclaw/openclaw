@@ -13,6 +13,7 @@ import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedContextMessageTailPage,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
@@ -303,8 +304,18 @@ describe("SQLite active transcript event projection", () => {
     });
 
     const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
+    const contextPage = readSessionTranscriptBoundedContextMessageTailPage(scope, {
+      maxBytes: 1_024,
+      maxMessages: 10,
+      offset: 0,
+    });
 
     expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
+    ]);
+    expect(contextPage.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
       "kept-user",
       "kept-assistant",
       "post-reset",
@@ -347,6 +358,64 @@ describe("SQLite active transcript event projection", () => {
     ]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
+  });
+
+  it("keeps transcript paging raw while model-context paging honors compaction", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "discarded",
+          parentId: null,
+          message: { role: "user", content: "discarded" },
+        },
+        {
+          eventId: "retained",
+          parentId: "discarded",
+          message: { role: "user", content: "retained" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "compaction",
+      parentId: "retained",
+      timestamp: "2026-07-22T00:00:00.000Z",
+      summary: "older context",
+      firstKeptEntryId: "retained",
+      tokensBefore: 10,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-compaction",
+          parentId: "compaction",
+          message: { role: "assistant", content: "new answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const transcriptPage = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: 1_024,
+      maxMessages: 10,
+      offset: 0,
+    });
+    const contextPage = readSessionTranscriptBoundedContextMessageTailPage(scope, {
+      maxBytes: 1_024,
+      maxMessages: 10,
+      offset: 0,
+    });
+
+    expect(transcriptPage.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "discarded",
+      "retained",
+      "post-compaction",
+    ]);
+    expect(contextPage.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "retained",
+      "post-compaction",
+    ]);
   });
 
   it("recomputes a cached reset window after a branch-changing message", async () => {

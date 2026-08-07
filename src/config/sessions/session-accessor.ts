@@ -222,6 +222,7 @@ export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedContextMessageTailPage,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,

@@ -83,7 +83,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(ErrorCodes.UNAVAILABLE, error.message, {
           details: { reason: error.reason },
-          retryable: error.reason === "rate-limited",
+          retryable: error.reason === "rate-limited" || error.reason === "transcript-rebuilding",
           ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
         }),
       );

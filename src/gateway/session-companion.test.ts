@@ -3,6 +3,7 @@ import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
 } from "../agents/tools/sessions-helpers.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
 import {
@@ -108,6 +109,27 @@ describe("session companion asks", () => {
         ts: 100,
       },
     ]);
+    harness.service.dispose();
+  });
+
+  it("does not run the model while transcript context is rebuilding", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness({
+      readSeedMessages: async () => {
+        throw new SessionTranscriptProjectionUnavailableError("companion-rebuild-test");
+      },
+    });
+
+    await expect(
+      harness.service.ask({
+        sessionKey: "agent:main:main",
+        question: "What happened?",
+        connId: "conn-1",
+      }),
+    ).rejects.toMatchObject({ reason: "transcript-rebuilding" });
+
+    expect(harness.run).not.toHaveBeenCalled();
+    expect(harness.service.state("agent:main:main")).toEqual({ exchanges: [] });
     harness.service.dispose();
   });
 

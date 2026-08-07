@@ -1,4 +1,5 @@
-// Reset boundaries project a logical message window without rewriting raw cursor positions.
+// Reset and model-context boundaries project logical windows without rewriting
+// raw cursor positions.
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -36,21 +37,23 @@ type ResetWindowMessageEvent = {
   seq: number;
 };
 
-type ResetMessageWindow = {
+type BoundaryMessageWindow = {
   generation: string | undefined;
   indexedSeq: number;
   keptMessagePositions: number[];
   postBoundaryMessagePosition: number;
 };
 
-type ResetMessageWindowCacheEntry = {
+type BoundaryMessageWindowCacheEntry = {
   generation: string | undefined;
   indexedSeq: number;
-  window: ResetMessageWindow | null;
+  window: BoundaryMessageWindow | null;
 };
 
-const resetMessageWindowCache = new Map<string, ResetMessageWindowCacheEntry>();
-const MAX_RESET_MESSAGE_WINDOW_CACHE = 64;
+type BoundaryWindowMode = "reset-only" | "context";
+
+const boundaryMessageWindowCache = new Map<string, BoundaryMessageWindowCacheEntry>();
+const MAX_BOUNDARY_MESSAGE_WINDOW_CACHE = 128;
 
 function getResetWindowKysely(database: OpenClawAgentDatabase) {
   return getNodeSqliteKysely<ResetWindowDatabase>(database.db);
@@ -105,8 +108,11 @@ function parseTranscriptEventType(eventJson: string): string | undefined {
   }
 }
 
-function resetMessageWindowCacheKey(projection: ResetWindowProjection): string {
-  return `${projection.database.path}\0${projection.resolved.sessionId}`;
+function boundaryMessageWindowCacheKey(
+  projection: ResetWindowProjection,
+  mode: BoundaryWindowMode,
+): string {
+  return `${projection.database.path}\0${projection.resolved.sessionId}\0${mode}`;
 }
 
 function readTranscriptGeneration(projection: ResetWindowProjection): string | undefined {
@@ -119,16 +125,17 @@ function readTranscriptGeneration(projection: ResetWindowProjection): string | u
   )?.generation;
 }
 
-function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
-  resetMessageWindowCache.delete(key);
-  resetMessageWindowCache.set(key, entry);
-  pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
+function cacheBoundaryMessageWindow(key: string, entry: BoundaryMessageWindowCacheEntry): void {
+  boundaryMessageWindowCache.delete(key);
+  boundaryMessageWindowCache.set(key, entry);
+  pruneMapToMaxSize(boundaryMessageWindowCache, MAX_BOUNDARY_MESSAGE_WINDOW_CACHE);
 }
 
-function findLatestResetMessageWindow(
+function findLatestBoundaryMessageWindow(
   projection: ResetWindowProjection,
   generation: string | undefined,
-): ResetMessageWindow | null {
+  mode: BoundaryWindowMode,
+): BoundaryMessageWindow | null {
   const db = getResetWindowKysely(projection.database);
   const nonMessageRows = executeSqliteQuerySync(
     projection.database.db,
@@ -148,11 +155,18 @@ function findLatestResetMessageWindow(
     const type = parseTranscriptEventType(row.event_json);
     return type === "reset" || type === "compaction";
   });
-  if (!latestBoundaryRow || parseTranscriptEventType(latestBoundaryRow.event_json) !== "reset") {
+  const boundaryType = latestBoundaryRow
+    ? parseTranscriptEventType(latestBoundaryRow.event_json)
+    : undefined;
+  if (
+    !latestBoundaryRow ||
+    (mode === "reset-only" && boundaryType !== "reset") ||
+    (boundaryType !== "reset" && boundaryType !== "compaction")
+  ) {
     return null;
   }
-  const resetRow = latestBoundaryRow;
-  const reset = JSON.parse(resetRow.event_json) as { firstKeptEntryId?: unknown };
+  const boundaryRow = latestBoundaryRow;
+  const boundary = JSON.parse(boundaryRow.event_json) as { firstKeptEntryId?: unknown };
   const postBoundaryMessagePosition =
     executeSqliteQueryTakeFirstSync(
       projection.database.db,
@@ -160,13 +174,13 @@ function findLatestResetMessageWindow(
         .selectFrom("session_transcript_active_events")
         .select("message_position")
         .where("session_id", "=", projection.resolved.sessionId)
-        .where("active_position", ">", resetRow.active_position)
+        .where("active_position", ">", boundaryRow.active_position)
         .where("message_position", "is not", null)
         .orderBy("active_position", "asc")
         .limit(1),
     )?.message_position ?? projection.state.activeMessageCount;
   let keptMessagePositions: number[] = [];
-  if (typeof reset.firstKeptEntryId === "string") {
+  if (typeof boundary.firstKeptEntryId === "string") {
     const firstKept = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
@@ -178,9 +192,9 @@ function findLatestResetMessageWindow(
         )
         .select("active.active_position")
         .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.event_id", "=", reset.firstKeptEntryId),
+        .where("identity.event_id", "=", boundary.firstKeptEntryId),
     );
-    if (firstKept && firstKept.active_position < resetRow.active_position) {
+    if (firstKept && firstKept.active_position < boundaryRow.active_position) {
       keptMessagePositions = executeSqliteQuerySync(
         projection.database.db,
         db
@@ -193,12 +207,15 @@ function findLatestResetMessageWindow(
           .select(["active.message_position", "event.event_json"])
           .where("active.session_id", "=", projection.resolved.sessionId)
           .where("active.active_position", ">=", firstKept.active_position)
-          .where("active.active_position", "<", resetRow.active_position)
+          .where("active.active_position", "<", boundaryRow.active_position)
           .where("active.message_position", "is not", null)
           .orderBy("active.active_position", "asc"),
       ).rows.flatMap((row) => {
         if (row.message_position === null) {
           return [];
+        }
+        if (boundaryType === "compaction") {
+          return [row.message_position];
         }
         try {
           const role = (JSON.parse(row.event_json) as { message?: { role?: unknown } }).message
@@ -218,17 +235,20 @@ function findLatestResetMessageWindow(
   };
 }
 
-function resolveResetMessageWindow(projection: ResetWindowProjection): ResetMessageWindow | null {
-  const key = resetMessageWindowCacheKey(projection);
-  const cached = resetMessageWindowCache.get(key);
+function resolveBoundaryMessageWindow(
+  projection: ResetWindowProjection,
+  mode: BoundaryWindowMode,
+): BoundaryMessageWindow | null {
+  const key = boundaryMessageWindowCacheKey(projection, mode);
+  const cached = boundaryMessageWindowCache.get(key);
   const generation = readTranscriptGeneration(projection);
   if (cached) {
     if (cached.generation === generation && cached.indexedSeq === projection.state.indexedSeq) {
       return cached.window;
     }
   }
-  const window = findLatestResetMessageWindow(projection, generation);
-  cacheResetMessageWindow(key, {
+  const window = findLatestBoundaryMessageWindow(projection, generation, mode);
+  cacheBoundaryMessageWindow(key, {
     generation,
     indexedSeq: projection.state.indexedSeq,
     window,
@@ -239,7 +259,25 @@ function resolveResetMessageWindow(projection: ResetWindowProjection): ResetMess
 export function resolveVisibleMessagePositions(
   projection: ResetWindowProjection,
 ): VisibleMessagePositions {
-  const window = resolveResetMessageWindow(projection);
+  const window = resolveBoundaryMessageWindow(projection, "reset-only");
+  return toVisibleMessagePositions(projection, window);
+}
+
+/**
+ * Mirrors buildSessionContext's latest-boundary cut for consumers that need
+ * model-visible messages rather than the transcript browser's reset-only view.
+ */
+export function resolveContextMessagePositions(
+  projection: ResetWindowProjection,
+): VisibleMessagePositions {
+  const window = resolveBoundaryMessageWindow(projection, "context");
+  return toVisibleMessagePositions(projection, window);
+}
+
+function toVisibleMessagePositions(
+  projection: ResetWindowProjection,
+  window: BoundaryMessageWindow | null,
+): VisibleMessagePositions {
   if (!window) {
     return { kept: [], postStart: 0, total: projection.state.activeMessageCount };
   }
@@ -281,15 +319,16 @@ export function readVisibleMessageRange(
 }
 
 /** Maps a logical visible-message range to its materialized message positions. */
-export function resolveVisibleMessagePositionRange(
+function resolveMessagePositionRange(
   projection: ResetWindowProjection,
   start: number,
   endExclusive: number,
+  resolvePositions: (projection: ResetWindowProjection) => VisibleMessagePositions,
 ): number[] {
   if (endExclusive <= start) {
     return [];
   }
-  const visible = resolveVisibleMessagePositions(projection);
+  const visible = resolvePositions(projection);
   const boundedStart = Math.min(Math.max(0, start), visible.total);
   const boundedEnd = Math.min(Math.max(boundedStart, endExclusive), visible.total);
   const keptEnd = Math.min(boundedEnd, visible.kept.length);
@@ -300,4 +339,32 @@ export function resolveVisibleMessagePositionRange(
     positions.push(visible.postStart + logical - visible.kept.length);
   }
   return positions;
+}
+
+/** Maps a logical transcript-visible range to its materialized message positions. */
+export function resolveVisibleMessagePositionRange(
+  projection: ResetWindowProjection,
+  start: number,
+  endExclusive: number,
+): number[] {
+  return resolveMessagePositionRange(
+    projection,
+    start,
+    endExclusive,
+    resolveVisibleMessagePositions,
+  );
+}
+
+/** Maps a logical model-context range to its materialized message positions. */
+export function resolveContextMessagePositionRange(
+  projection: ResetWindowProjection,
+  start: number,
+  endExclusive: number,
+): number[] {
+  return resolveMessagePositionRange(
+    projection,
+    start,
+    endExclusive,
+    resolveContextMessagePositions,
+  );
 }
