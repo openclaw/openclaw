@@ -1,5 +1,9 @@
 import type { FastMode } from "../shared/fast-mode.js";
 import type {
+  AgentExecutionPlacement,
+  AgentExecutionPlacementRequest,
+} from "./execution-backends.js";
+import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
@@ -29,6 +33,7 @@ export type SpawnSubagentParams = {
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
+  execution?: AgentExecutionPlacementRequest;
   attachments?: Array<{
     name: string;
     content: string;
@@ -76,6 +81,7 @@ export type SpawnSubagentResult = {
   resolvedProvider?: string;
   modelApplied?: boolean;
   error?: string;
+  execution?: AgentExecutionPlacement;
   attachments?: {
     count: number;
     totalBytes: number;

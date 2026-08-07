@@ -14,6 +14,10 @@ import {
 } from "../process/gateway-work-admission.js";
 import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import {
+  resolveAgentExecutionPlacement,
+  type AgentExecutionPlacement,
+} from "./execution-backends.js";
+import {
   runSpawnPipeline,
   type SpawnBackendAdapter,
   summarizeSpawnError,
@@ -144,7 +148,13 @@ export async function spawnSubagentDirect(
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
+  let executionPlacement: AgentExecutionPlacement | undefined;
   try {
+    const executionResult = resolveAgentExecutionPlacement({ cfg, request: params.execution });
+    if (!executionResult.ok) {
+      return { status: "error", error: executionResult.error };
+    }
+    executionPlacement = executionResult.execution;
     const childPlan = await resolveSubagentChildPlan({
       request: params,
       ctx,
@@ -518,6 +528,7 @@ export async function spawnSubagentDirect(
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
           retainAttachmentsOnKeep: retainOnSessionKeep,
+          executionPlacement,
         };
       },
     });
@@ -630,6 +641,7 @@ export async function spawnSubagentDirect(
         : acceptedNote,
       ...resolvedModelMetadata,
       modelApplied: resolvedModel ? modelApplied : undefined,
+      execution: executionPlacement,
       attachments: attachmentsReceipt,
     };
   } finally {

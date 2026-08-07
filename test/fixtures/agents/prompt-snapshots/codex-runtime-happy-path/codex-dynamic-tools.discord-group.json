@@ -54,6 +54,20 @@
           "cwd": {
             "type": "string"
           },
+          "execution": {
+            "description": "Execution placement request. Only process backends are executable in this release.",
+            "properties": {
+              "backend": {
+                "description": "Backend id; defaults to \"local\".",
+                "type": "string"
+              },
+              "profile": {
+                "description": "Optional backend profile id.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "label": {
             "description": "Short task title shown in UI lists; name the work, not the agent.",
             "type": "string"
@@ -101,7 +115,7 @@
             "type": "boolean"
           },
           "visible": {
-            "description": "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+            "description": "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit execution/mode/thread/thinking/lightContext/attachments/attachAs.",
             "type": "boolean"
           },
           "worktree": {
