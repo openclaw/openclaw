@@ -1,3 +1,4 @@
+export function decodeUtf8Tail(buffer: Uint8Array, truncated: boolean): string;
 export function tailText(text: string, maxBytes: number): string;
 export function readTextFileTail(file: string, maxBytes: number): string;
 export function readTextFileBounded(
