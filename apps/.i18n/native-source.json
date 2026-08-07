@@ -38187,7 +38187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 276,
+      "line": 280,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Legacy pane — this now lives in the Dashboard",
       "surface": "apple",
@@ -38195,7 +38195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 280,
+      "line": 284,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Open in Dashboard",
       "surface": "apple",
@@ -38203,7 +38203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 510,
+      "line": 514,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "General",
       "surface": "apple",
@@ -38211,7 +38211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 511,
+      "line": 515,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Connection",
       "surface": "apple",
@@ -38219,7 +38219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 512,
+      "line": 516,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Gateways",
       "surface": "apple",
@@ -38227,7 +38227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 513,
+      "line": 517,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Permissions",
       "surface": "apple",
@@ -38235,7 +38235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 514,
+      "line": 518,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -38243,7 +38243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 515,
+      "line": 519,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -38251,7 +38251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 516,
+      "line": 520,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Channels",
       "surface": "apple",
@@ -38259,7 +38259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 517,
+      "line": 521,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Skills",
       "surface": "apple",
@@ -38267,7 +38267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 518,
+      "line": 522,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -38275,7 +38275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 519,
+      "line": 523,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Exec Approvals",
       "surface": "apple",
@@ -38283,7 +38283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 520,
+      "line": 524,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Threads",
       "surface": "apple",
@@ -38291,7 +38291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 521,
+      "line": 525,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Instances",
       "surface": "apple",
@@ -38299,7 +38299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 522,
+      "line": 526,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Config",
       "surface": "apple",
@@ -38307,7 +38307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 523,
+      "line": 527,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "Debug",
       "surface": "apple",
@@ -38315,7 +38315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 524,
+      "line": 528,
       "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
       "source": "About",
       "surface": "apple",
