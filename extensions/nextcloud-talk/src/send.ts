@@ -1,10 +1,8 @@
 // Nextcloud Talk plugin module implements send behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
-import {
-  readProviderJsonResponse,
-  readResponseTextLimited,
-} from "openclaw/plugin-sdk/provider-http";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   FormatCapabilityProfile,
   renderMarkdownWithMarkers,
@@ -60,11 +58,17 @@ async function readNextcloudTalkErrorSnippet(
   opts?: { extraRedactions?: readonly string[] },
 ): Promise<string> {
   try {
-    // readResponseTextLimited caps the read at the byte budget and cancels the
+    // readResponseTextPrefix caps the read at the byte budget and cancels the
     // upstream stream once full, so a hostile endpoint cannot stream an
-    // unbounded body into memory. Collapse the bounded prefix locally to keep a
-    // short, log-safe error snippet (no new plugin SDK surface required).
-    let text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
+    // unbounded body into memory. Use the full result (not just .text) so we
+    // can detect truncation: an exact-value replacement below cannot match a
+    // secret that straddles the byte-cap boundary, so omit the snippet when
+    // the read was incomplete.
+    const prefix = await readResponseTextPrefix(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
+    if (prefix.truncated) {
+      return "";
+    }
+    let text = prefix.text;
     // Scrub plugin-generated secret values that a misbehaving upstream may
     // reflect in error bodies (e.g. the HMAC signature sent in
     // X-Nextcloud-Talk-Bot-Signature). Scrub before generic redaction so exact
