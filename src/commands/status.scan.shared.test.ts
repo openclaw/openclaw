@@ -251,6 +251,57 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbe?.error).toBe("missing scope: operator.read; warn");
   });
 
+  it("keeps unresolved local SecretRef probes eligible for the status RPC fallback", async () => {
+    const warning =
+      "gateway.auth.token SecretRef is unresolved in this command path; probing without configured auth credentials.";
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
+      auth: {},
+      warning,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: {},
+      opts: {},
+    });
+
+    const probeCall = readProbeCall();
+    expect(probeCall.auth).toEqual({});
+    const gatewayCall = readGatewayCall();
+    expect(gatewayCall.method).toBe("status");
+    expect(gatewayCall.token).toBeUndefined();
+    expect(gatewayCall.password).toBeUndefined();
+    expect(result.gatewayReachable).toBe(true);
+    expect(result.gatewayProbe).toMatchObject({
+      ok: true,
+      error: "timeout",
+      status: { sessions: 1 },
+      auth: { capability: "read_only" },
+    });
+    expect(result.gatewayProbeAuthWarning).toBe(warning);
+  });
+
   it("uses a bounded local status RPC fallback when the detail probe times out", async () => {
     mocks.resolveGatewayProbeTarget.mockReturnValue({
       mode: "local",
