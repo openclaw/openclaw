@@ -1,4 +1,5 @@
 import type { Model } from "../../../llm/types.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -31,6 +32,19 @@ export function resolveEmbeddedRunEffectiveModel(
     nativeModelOwned: boolean;
   },
 ) {
+  // Apply the session-selected agent's contextTokens cap to the embedded run's
+  // context budget. Without this the guard falls back to
+  // agents.defaults.contextTokens, so a per-agent cap is silently ignored by the
+  // mid-turn precheck, compaction, and effective model window (#118678).
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.runParams.sessionKey,
+    config: params.runParams.config,
+    agentId: params.runParams.agentId,
+  });
+  const agentContextTokens = resolveAgentConfig(
+    params.runParams.config ?? {},
+    sessionAgentId,
+  )?.contextTokens;
   return resolveEmbeddedRuntimeModelPolicy({
     cfg: params.runParams.config,
     provider: params.provider,
@@ -42,6 +56,7 @@ export function resolveEmbeddedRunEffectiveModel(
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
+    agentContextTokens,
   });
 }
 

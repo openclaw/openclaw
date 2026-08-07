@@ -157,9 +157,14 @@ export function formatContextWindowWarningMessage(params: {
     return base;
   }
   if (params.guard.source === "agentContextTokens") {
+    // The cap comes from the selected agent's contextTokens (either roster shape
+    // overrides defaults) or from agents.defaults.contextTokens. resolveAgentConfig
+    // reads both agents.list[] and agents.entries.*, so name both rather than
+    // misdirecting list-roster operators at an entries-only path.
     return (
-      `${base}; OpenClaw is capped by agents.defaults.contextTokens, so raise that cap ` +
-      `if you want to use more of the model context window`
+      `${base}; OpenClaw is capped by the agent's contextTokens setting ` +
+      `(agents.list[].contextTokens or agents.entries.<id>.contextTokens, else agents.defaults.contextTokens), ` +
+      `so raise that cap if you want to use more of the model context window`
     );
   }
   if (params.guard.source === "modelsConfig") {
@@ -187,7 +192,11 @@ export function formatContextWindowBlockMessage(params: {
     return base;
   }
   if (params.guard.source === "agentContextTokens") {
-    return `${base} OpenClaw is capped by agents.defaults.contextTokens. Raise that cap.`;
+    return (
+      `${base} OpenClaw is capped by the agent's contextTokens setting ` +
+      `(agents.list[].contextTokens or agents.entries.<id>.contextTokens, else agents.defaults.contextTokens). ` +
+      `Raise that cap.`
+    );
   }
   if (params.guard.source === "modelsConfig") {
     return (
