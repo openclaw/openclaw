@@ -226,10 +226,30 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
   if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
     return undefined;
   }
+  // AssistantMessage usage always carries a cost object whose totals default to
+  // zero, so a bare `total` cannot mark an explicit cost. Only a provider-billed
+  // total is authoritative (see applyProviderReportedUsageCost); adapter-default
+  // zeros fall through to the pricing-known estimate path.
+  if ((cost as { totalOrigin?: unknown }).totalOrigin !== "provider-billed") {
+    return undefined;
+  }
   return (
     readFiniteNonNegativeNumber((cost as { total?: unknown; totalUsd?: unknown }).totalUsd) ??
     readFiniteNonNegativeNumber((cost as { total?: unknown }).total)
   );
+}
+
+// Pricing provenance for runtime usage cost. Unknown pricing (no cost config
+// at all, or a placeholder-zero config marked pricingUnavailable at the
+// catalog boundary — e.g. codex models whose backend exposes no price) must
+// omit costUsd: reporting a confident $0 would silently blind budget/spike
+// safeguards. All-zero rates WITHOUT the marker (e.g. Ollama's explicit free
+// pricing, or user-configured zeros) are a known $0 and keep the established
+// costUsd: 0 signal. Session cost aggregation shares the same contract, and
+// the shared estimateUsageCost estimator independently honors the marker for
+// direct consumers.
+function isModelPricingKnown(cost: ReturnType<typeof resolveModelCostConfig>): boolean {
+  return cost !== undefined && cost !== null && cost.pricingUnavailable !== true;
 }
 
 function buildUsage(params: {
@@ -244,9 +264,12 @@ function buildUsage(params: {
     model: params.model,
     config: params.cfg,
   });
+  const explicitCostUsd = readExplicitCostUsd(params.rawUsage);
   const costUsd =
-    readExplicitCostUsd(params.rawUsage) ??
-    estimateUsageCost({ usage: params.normalized, cost: costConfig });
+    explicitCostUsd ??
+    (isModelPricingKnown(costConfig)
+      ? estimateUsageCost({ usage: params.normalized, cost: costConfig })
+      : undefined);
   return {
     ...(params.normalized?.input !== undefined ? { inputTokens: params.normalized.input } : {}),
     ...(params.normalized?.output !== undefined ? { outputTokens: params.normalized.output } : {}),
