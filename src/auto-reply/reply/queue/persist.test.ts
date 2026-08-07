@@ -318,6 +318,65 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     }
   });
 
+  it("defers summary-elision lifecycle completion until admission persistence succeeds", () => {
+    const tight: QueueSettings = {
+      mode: "steer",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const abandoned: string[] = [];
+    const settled: string[] = [];
+    const makeTracked = (prompt: string): FollowupRun => ({
+      ...makeFollowupRun(prompt),
+      turnAdoptionLifecycle: {
+        onAdopted: async () => undefined,
+        onAbandoned: () => {
+          abandoned.push(prompt);
+        },
+        onSettled: () => {
+          settled.push(prompt);
+        },
+      },
+    });
+
+    // With cap=1 summarize:
+    // 1st/2nd leave one line in summaryLines; 3rd elides the oldest source into
+    // summaryElisions; a 4th would exceed the elision cap and complete the oldest.
+    expect(enqueueFollowupRun(TEST_KEY, makeTracked("first"), tight, "none")).toBe(true);
+    expect(enqueueFollowupRun(TEST_KEY, makeTracked("second"), tight, "none")).toBe(true);
+    expect(enqueueFollowupRun(TEST_KEY, makeTracked("third"), tight, "none")).toBe(true);
+    const beforeFail = FOLLOWUP_QUEUES.get(TEST_KEY);
+    expect(beforeFail?.items.map((item) => item.prompt)).toEqual(["third"]);
+    expect(
+      beforeFail?.summaryElisions.reduce((count, entry) => count + entry.sources.length, 0),
+    ).toBe(1);
+    expect(beforeFail?.summaryElisions[0]?.sources[0]?.prompt).toBe("first");
+    expect(abandoned).toEqual([]);
+    expect(settled).toEqual([]);
+
+    const blocker = path.join(tmpDir, "not-a-directory");
+    fs.writeFileSync(blocker, "file");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+    try {
+      const admitted = enqueueFollowupRun(TEST_KEY, makeTracked("fourth"), tight, "none");
+      expect(admitted).toBe(false);
+    } finally {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
+    expect(restored?.items.map((item) => item.prompt)).toEqual(["third"]);
+    expect(
+      restored?.summaryElisions.reduce((count, entry) => count + entry.sources.length, 0),
+    ).toBe(1);
+    expect(restored?.summaryElisions[0]?.sources[0]?.prompt).toBe("first");
+    // Rejected admit settles itself; pre-existing summarized/"first" work must stay live.
+    expect(abandoned).toEqual(["fourth"]);
+    expect(settled).toEqual(["fourth"]);
+  });
+
   it("keeps in-flight items in SQLite until settle-after-success", () => {
     const queue = getFollowupQueue(TEST_KEY, SETTINGS);
     const item = makeFollowupRun("in flight");

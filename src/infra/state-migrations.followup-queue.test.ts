@@ -238,6 +238,99 @@ describe("legacy followup queue sidecar doctor migration", () => {
     expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
   });
 
+  it("retains the sidecar when queue keys collide under normalization", async () => {
+    const stateDir = await useStateDir();
+    const queueKey = "agent:main:dm:duplicate-key";
+    const makeEntry = (prompt: string) => [
+      queueKey,
+      {
+        items: [
+          {
+            prompt,
+            enqueuedAt: 1,
+            originatingChannel: "telegram",
+            originatingTo: "999",
+            run: makeRestorableRun({ sessionKey: queueKey }),
+          },
+        ],
+        mode: "steer",
+        lastEnqueuedAt: 1,
+        droppedCount: 0,
+        summaryLines: [],
+      },
+    ];
+    const sourcePath = await writeLegacySidecar(stateDir, {
+      version: 1,
+      entries: [makeEntry("first-copy"), makeEntry("second-copy")],
+    });
+
+    const detected = detectLegacyFollowupQueueSidecar({ stateDir });
+    const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
+
+    expect(result.warnings).toContain(
+      `Left followup queue sidecar in place because one or more entries had blank or duplicate normalized queue keys: ${sourcePath}`,
+    );
+    expect(result.changes).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
+  });
+
+  it("retains the sidecar when a queue key normalizes away as blank", async () => {
+    const stateDir = await useStateDir();
+    const queueKey = "agent:main:dm:valid-neighbor";
+    const sourcePath = await writeLegacySidecar(stateDir, {
+      version: 1,
+      entries: [
+        [
+          "   ",
+          {
+            items: [
+              {
+                prompt: "whitespace key work",
+                enqueuedAt: 1,
+                originatingChannel: "telegram",
+                originatingTo: "999",
+                run: makeRestorableRun({ sessionKey: queueKey }),
+              },
+            ],
+            mode: "steer",
+            lastEnqueuedAt: 1,
+            droppedCount: 0,
+            summaryLines: [],
+          },
+        ],
+        [
+          queueKey,
+          {
+            items: [
+              {
+                prompt: "neighbor work",
+                enqueuedAt: 2,
+                originatingChannel: "telegram",
+                originatingTo: "999",
+                run: makeRestorableRun({ sessionKey: queueKey }),
+              },
+            ],
+            mode: "steer",
+            lastEnqueuedAt: 2,
+            droppedCount: 0,
+            summaryLines: [],
+          },
+        ],
+      ],
+    });
+
+    const detected = detectLegacyFollowupQueueSidecar({ stateDir });
+    const result = await migrateLegacyFollowupQueueSidecar({ detected, stateDir });
+
+    expect(result.warnings).toContain(
+      `Left followup queue sidecar in place because one or more entries had blank or duplicate normalized queue keys: ${sourcePath}`,
+    );
+    expect(result.changes).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(loadFollowupQueueEntries(stateDir)).toStrictEqual([]);
+  });
+
   it("retains the sidecar when items are malformed rather than deleting as empty", async () => {
     const stateDir = await useStateDir();
     const sourcePath = await writeLegacySidecar(stateDir, {

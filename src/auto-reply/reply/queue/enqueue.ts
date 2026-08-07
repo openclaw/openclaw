@@ -224,7 +224,11 @@ export function enqueueFollowupRun(
             queue.activeSummarySources.add(compactSource);
           }
         }
-        trimSummaryElisionsToCap(queue);
+        // Defer irreversible lifecycle completion until SQLite admission succeeds;
+        // a failed write must restore summarized sources as live queued work.
+        deferredOverflowDrops.push(
+          ...trimSummaryElisionsToCap(queue, { deferLifecycleCompletion: true }),
+        );
       }
     }
   }

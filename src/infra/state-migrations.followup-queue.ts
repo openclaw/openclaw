@@ -1,6 +1,7 @@
 // Migrates the retired live-chat-followup-queues.json sidecar into shared SQLite state.
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   LEGACY_FOLLOWUP_QUEUE_STATE_FILENAME,
   canMigrateFollowupQueueEntryLosslessly,
@@ -59,14 +60,22 @@ export async function migrateLegacyFollowupQueueSidecar(params: {
   const jsonEntries = new Map<string, unknown>();
   let hasUnrestorableEntry = false;
   let hasMalformedTuple = false;
+  let hasInvalidOrDuplicateKey = false;
   for (const entry of entriesRaw) {
     if (!Array.isArray(entry) || entry.length < 2) {
       hasMalformedTuple = true;
       continue;
     }
-    const key = typeof entry[0] === "string" ? entry[0] : undefined;
+    // Match runtime restore: blank/whitespace keys normalize away and must not
+    // be imported under the raw string; duplicates overwrite in a Map and must
+    // not silently drop sidecar work when the file is deleted.
+    const key = normalizeOptionalString(typeof entry[0] === "string" ? entry[0] : undefined);
     if (!key) {
-      hasMalformedTuple = true;
+      hasInvalidOrDuplicateKey = true;
+      continue;
+    }
+    if (jsonEntries.has(key)) {
+      hasInvalidOrDuplicateKey = true;
       continue;
     }
     if (!canMigrateFollowupQueueEntryLosslessly(key, entry[1])) {
@@ -74,6 +83,13 @@ export async function migrateLegacyFollowupQueueSidecar(params: {
       continue;
     }
     jsonEntries.set(key, entry[1]);
+  }
+
+  if (hasInvalidOrDuplicateKey) {
+    warnings.push(
+      `Left followup queue sidecar in place because one or more entries had blank or duplicate normalized queue keys: ${sourcePath}`,
+    );
+    return { changes, warnings };
   }
 
   if (hasUnrestorableEntry || hasMalformedTuple) {

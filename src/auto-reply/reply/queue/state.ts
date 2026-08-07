@@ -70,7 +70,18 @@ type SummaryElisionCapState = Pick<
   "activeSummarySources" | "cap" | "evictedSummaryCount" | "summaryElisions"
 >;
 
-export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
+/**
+ * Trim overflow summary-elision sources down to the queue cap.
+ *
+ * By default, completes the lifecycle of each evicted source. Pass
+ * `deferLifecycleCompletion: true` when the caller needs atomic rollback across a
+ * later durable write — evicted sources are returned instead of completed.
+ */
+export function trimSummaryElisionsToCap(
+  queue: SummaryElisionCapState,
+  options?: { deferLifecycleCompletion?: boolean },
+): FollowupRun[] {
+  const deferredCompletions: FollowupRun[] = [];
   let sourceCount = queue.summaryElisions.reduce(
     (count, entry) =>
       count + entry.sources.filter((source) => !queue.activeSummarySources.has(source)).length,
@@ -91,7 +102,11 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
       if (source) {
-        completeFollowupRunLifecycle(source);
+        if (options?.deferLifecycleCompletion) {
+          deferredCompletions.push(source);
+        } else {
+          completeFollowupRunLifecycle(source);
+        }
       }
       if (entry.sources.length === 0) {
         queue.summaryElisions.splice(entryIndex, 1);
@@ -101,9 +116,10 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
     }
     if (!evicted) {
       // A deferred delivery temporarily retains at most one queue-cap-sized active set.
-      return;
+      return deferredCompletions;
     }
   }
+  return deferredCompletions;
 }
 
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
