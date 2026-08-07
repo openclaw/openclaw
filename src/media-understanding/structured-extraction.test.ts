@@ -11,7 +11,13 @@ vi.mock("./image-runtime.js", async (importOriginal) => ({
   describeImagesWithModel: mocks.describeImagesWithModel,
 }));
 
-import { extractStructuredWithImageModel } from "./structured-extraction.js";
+import { describeImagesWithModel } from "./image-runtime.js";
+import { createStructuredExtractionWithImageModel } from "./structured-extraction.js";
+
+// The hoisted mock above makes this import the mocked describeImagesWithModel,
+// so binding once at module scope stays valid across mockReset (same fn object).
+const extractStructuredWithImageModel =
+  createStructuredExtractionWithImageModel(describeImagesWithModel);
 
 function baseImageInput() {
   return {

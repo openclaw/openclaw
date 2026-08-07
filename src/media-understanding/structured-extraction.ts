@@ -13,7 +13,6 @@
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.ids.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { describeImagesWithModel } from "./image-runtime.js";
 import type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
@@ -133,17 +132,6 @@ export function createStructuredExtractionWithImageModel(
   describeImages: DescribeImages,
 ): (req: StructuredExtractionRequest) => Promise<StructuredExtractionResult> {
   return (req) => runStructuredExtraction(req, describeImages);
-}
-
-/**
- * Runs structured extraction through the generic model runtime. Mirrors the
- * bundled Codex provider's prompt-build + parse + validate flow, but reuses the
- * provider-agnostic image pipeline instead of a provider-specific transport.
- */
-export async function extractStructuredWithImageModel(
-  req: StructuredExtractionRequest,
-): Promise<StructuredExtractionResult> {
-  return await runStructuredExtraction(req, describeImagesWithModel);
 }
 
 async function runStructuredExtraction(
