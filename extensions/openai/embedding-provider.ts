@@ -1,6 +1,5 @@
 // Openai provider module implements model/runtime integration.
 import {
-  applyQueryInstructionTemplate,
   fetchRemoteEmbeddingVectors,
   resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
@@ -29,6 +28,21 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-large": 8192,
   "text-embedding-ada-002": 8191,
 };
+const QUERY_INSTRUCTION_TEMPLATES = [
+  {
+    prefix: "qwen3-embedding",
+    template:
+      "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:{query}",
+  },
+  {
+    prefix: "mxbai-embed-large",
+    template: "Represent this sentence for searching relevant passages: {query}",
+  },
+] as const;
+
+type OpenAiEmbeddingProviderCreateOptions = MemoryEmbeddingProviderCreateOptions & {
+  queryInstructionTemplate?: boolean;
+};
 
 function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
@@ -47,8 +61,31 @@ function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
   }
 }
 
+function normalizeTemplateMatchModel(model: string): string {
+  const normalizedModel = model.trim().toLowerCase();
+  const segments = normalizedModel.split("/").filter(Boolean);
+  return segments.at(-1) ?? normalizedModel;
+}
+
+function matchesTemplateModelAlias(model: string, prefix: string): boolean {
+  return (
+    model === prefix ||
+    model.startsWith(`${prefix}-`) ||
+    model.startsWith(`${prefix}:`) ||
+    model.includes(`-${prefix}`)
+  );
+}
+
+function applyQueryInstructionTemplate(model: string, queryText: string): string {
+  const normalizedModel = normalizeTemplateMatchModel(model);
+  const match = QUERY_INSTRUCTION_TEMPLATES.find(({ prefix }) =>
+    matchesTemplateModelAlias(normalizedModel, prefix),
+  );
+  return match ? match.template.replace("{query}", () => queryText) : queryText;
+}
+
 export async function createOpenAiEmbeddingProvider(
-  options: MemoryEmbeddingProviderCreateOptions,
+  options: OpenAiEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: OpenAiEmbeddingClient }> {
   const client = await resolveOpenAiEmbeddingClient(options);
   const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
@@ -108,7 +145,7 @@ export async function createOpenAiEmbeddingProvider(
 }
 
 async function resolveOpenAiEmbeddingClient(
-  options: MemoryEmbeddingProviderCreateOptions,
+  options: OpenAiEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
   const originalModel = options.model;
   const client = await resolveRemoteEmbeddingClient({

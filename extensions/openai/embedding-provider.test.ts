@@ -17,35 +17,19 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
-  applyQueryInstructionTemplate: (model: string, queryText: string): string => {
-    const normalizedModel = model.trim().toLowerCase().split("/").findLast(Boolean) ?? "";
-    if (
-      normalizedModel === "qwen3-embedding" ||
-      normalizedModel.startsWith("qwen3-embedding-") ||
-      normalizedModel.startsWith("qwen3-embedding:") ||
-      normalizedModel.includes("-qwen3-embedding")
-    ) {
-      return `Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:${queryText}`;
-    }
-    if (
-      normalizedModel === "mxbai-embed-large" ||
-      normalizedModel.startsWith("mxbai-embed-large-") ||
-      normalizedModel.startsWith("mxbai-embed-large:") ||
-      normalizedModel.includes("-mxbai-embed-large")
-    ) {
-      return `Represent this sentence for searching relevant passages: ${queryText}`;
-    }
-    return queryText;
-  },
   fetchRemoteEmbeddingVectors: mocks.fetchRemoteEmbeddingVectors,
   resolveRemoteEmbeddingClient: mocks.resolveRemoteEmbeddingClient,
 }));
 
 import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
+type OpenAiEmbeddingTestOptions = MemoryEmbeddingProviderCreateOptions & {
+  queryInstructionTemplate?: boolean;
+};
+
 function createOptions(
-  overrides: Partial<MemoryEmbeddingProviderCreateOptions> = {},
-): MemoryEmbeddingProviderCreateOptions {
+  overrides: Partial<OpenAiEmbeddingTestOptions> = {},
+): OpenAiEmbeddingTestOptions {
   return {
     config: {} as MemoryEmbeddingProviderCreateOptions["config"],
     provider: "openai",

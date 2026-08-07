@@ -1,10 +1,7 @@
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolvePositiveTimerTimeoutMs,

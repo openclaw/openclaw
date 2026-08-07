@@ -55,9 +55,13 @@ type OversizedStreamServer = {
 
 const servers: Array<{ close: () => Promise<void> }> = [];
 
+type OpenAICompatibleEmbeddingTestOptions = EmbeddingProviderCreateOptions & {
+  queryInstructionTemplate?: boolean;
+};
+
 function createOptions(
-  overrides: Partial<EmbeddingProviderCreateOptions> = {},
-): EmbeddingProviderCreateOptions {
+  overrides: Partial<OpenAICompatibleEmbeddingTestOptions> = {},
+): OpenAICompatibleEmbeddingTestOptions {
   return {
     config: {} as EmbeddingProviderCreateOptions["config"],
     provider: "openai-compatible",
