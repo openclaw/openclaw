@@ -207,11 +207,6 @@ final class RealtimeTalkSettingsModel {
     private var loadGeneration = 0
     private let loadConfig: () async -> [String: Any]
     private let loadCatalog: () async throws -> TalkCatalogResult
-    /// `talk.catalog` takes no parameters and resolves `configured` from the saved realtime
-    /// model, so its verdict only describes this selection. Recording it lets the card tell
-    /// "OpenAI is unusable" apart from "we have not asked about the model you just picked".
-    private var readinessModel: String?
-
     init() {
         self.loadConfig = { await ConfigStore.load() }
         self.loadCatalog = Self.defaultLoadCatalog
@@ -229,26 +224,17 @@ final class RealtimeTalkSettingsModel {
         self.availability == .ready || self.draft.explicitlyUsesOpenAI
     }
 
-    nonisolated static func canEnable(
-        availability: Availability,
-        draftModel: String,
-        draftEnabled: Bool,
-        readinessModel: String?) -> Bool
-    {
-        if availability == .ready || draftEnabled { return true }
-        // An OAuth-only GPT-Live user whose saved selection is a GA model gets configured=false,
-        // and blocking on that stopped them from ever switching to the model that would work.
-        // The Gateway still rejects an unusable session at talk.session.create.
-        guard availability == .needsOpenAIAccess, let readinessModel else { return false }
-        return readinessModel != draftModel
+    /// `talk.catalog` takes no parameters and resolves `configured` from the saved realtime
+    /// model, so readiness only ever describes the saved selection. Enabling is therefore gated
+    /// on that evaluated state rather than on a picker value the Gateway has not judged.
+    /// Switching models stays possible: Apply persists `model` while disabled, and the next
+    /// load evaluates readiness against the newly saved model.
+    nonisolated static func canEnable(availability: Availability, draftEnabled: Bool) -> Bool {
+        availability == .ready || draftEnabled
     }
 
     var canEnable: Bool {
-        Self.canEnable(
-            availability: self.availability,
-            draftModel: self.draft.model,
-            draftEnabled: self.draft.enabled,
-            readinessModel: self.readinessModel)
+        Self.canEnable(availability: self.availability, draftEnabled: self.draft.enabled)
     }
 
     func load() async {
@@ -264,7 +250,6 @@ final class RealtimeTalkSettingsModel {
             self.draft = draft
             guard let provider = RealtimeTalkSettingsConfig.openAIProvider(in: catalog) else {
                 self.availability = .unavailable("This Gateway does not expose the OpenAI realtime provider.")
-                self.readinessModel = nil
                 return
             }
             self.models = Self.options(current: draft.model, catalog: provider.models)
@@ -272,15 +257,12 @@ final class RealtimeTalkSettingsModel {
             guard provider.supportsGatewayRelayAgentConsult else {
                 self.availability = .unavailable(
                     "This Gateway's OpenAI realtime provider does not support relayed Talk sessions.")
-                self.readinessModel = nil
                 return
             }
-            self.readinessModel = draft.model
             self.availability = provider.configured ? .ready : .needsOpenAIAccess
         } catch {
             guard self.loadGeneration == generation else { return }
             self.draft = draft
-            self.readinessModel = nil
             self.availability = .unavailable("Could not verify realtime access: \(error.localizedDescription)")
         }
     }

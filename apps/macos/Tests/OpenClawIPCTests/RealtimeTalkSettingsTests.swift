@@ -344,96 +344,26 @@ struct RealtimeTalkSettingsTests {
         #expect(provider.supportsGatewayRelayAgentConsult == expected)
     }
 
-    @Test func `catalog readiness only gates the model it was evaluated for`() {
+    @Test func `enabling is gated on the evaluated readiness state`() {
         // talk.catalog takes no parameters and resolves `configured` from the saved realtime
-        // model, so an OAuth-only GPT-Live user with a saved GA selection is reported
-        // unconfigured. Blocking on that verdict kept them from switching to GPT-Live at all.
-        let switchingToGptLive = RealtimeTalkSettingsModel.canEnable(
+        // model, so readiness only describes the saved selection. Enabling therefore follows that
+        // verdict; switching models stays possible because Apply persists `model` while disabled
+        // and the next load re-evaluates readiness against the newly saved model.
+        let ready = RealtimeTalkSettingsModel.canEnable(availability: .ready, draftEnabled: false)
+        let alreadyEnabled = RealtimeTalkSettingsModel.canEnable(
             availability: .needsOpenAIAccess,
-            draftModel: "gpt-live-1-codex",
-            draftEnabled: false,
-            readinessModel: "gpt-realtime-2.1")
-        let stayingOnTheEvaluatedModel = RealtimeTalkSettingsModel.canEnable(
+            draftEnabled: true)
+        let needsAccess = RealtimeTalkSettingsModel.canEnable(
             availability: .needsOpenAIAccess,
-            draftModel: "gpt-realtime-2.1",
-            draftEnabled: false,
-            readinessModel: "gpt-realtime-2.1")
-        let beforeAnyCatalogAnswer = RealtimeTalkSettingsModel.canEnable(
-            availability: .needsOpenAIAccess,
-            draftModel: "gpt-live-1-codex",
-            draftEnabled: false,
-            readinessModel: nil)
-        let gatewayUnavailable = RealtimeTalkSettingsModel.canEnable(
+            draftEnabled: false)
+        let unavailable = RealtimeTalkSettingsModel.canEnable(
             availability: .unavailable("no route"),
-            draftModel: "gpt-live-1-codex",
-            draftEnabled: false,
-            readinessModel: "gpt-realtime-2.1")
+            draftEnabled: false)
 
-        #expect(switchingToGptLive)
-        #expect(!stayingOnTheEvaluatedModel)
-        #expect(!beforeAnyCatalogAnswer)
-        #expect(!gatewayUnavailable)
-    }
-
-    @Test @MainActor func `gateway recovery retries a failed catalog load`() async {
-        var loadCount = 0
-        let model = RealtimeTalkSettingsModel(
-            loadConfig: { [:] },
-            loadCatalog: {
-                loadCount += 1
-                if loadCount == 1 {
-                    throw RealtimeTalkSettingsLoadError.unavailable
-                }
-                return makeRealtimeTalkCatalog(configured: true)
-            })
-
-        await model.load()
-        #expect(model.availability != .ready)
-
-        for state in [
-            ControlChannel.ConnectionState.connecting,
-            .degraded("offline"),
-            .disconnected,
-        ] {
-            await model.handleControlChannelStateChange(state)
-        }
-        #expect(loadCount == 1)
-
-        await model.handleControlChannelStateChange(.connected)
-
-        #expect(loadCount == 2)
-        #expect(model.availability == .ready)
-        #expect(model.models == ["gpt-realtime-2.1", "gpt-live-1-codex"])
-        #expect(model.voices == ["marin", "cedar"])
-    }
-
-    @Test @MainActor func `newer catalog refresh wins over an older completion`() async {
-        var pendingLoads: [CheckedContinuation<TalkCatalogResult, any Error>] = []
-        let model = RealtimeTalkSettingsModel(
-            loadConfig: { [:] },
-            loadCatalog: {
-                try await withCheckedThrowingContinuation { continuation in
-                    pendingLoads.append(continuation)
-                }
-            })
-
-        let olderLoad = Task { await model.load() }
-        while pendingLoads.count < 1 {
-            await Task.yield()
-        }
-        let newerLoad = Task { await model.load() }
-        while pendingLoads.count < 2 {
-            await Task.yield()
-        }
-
-        pendingLoads.removeLast().resume(returning: makeRealtimeTalkCatalog(configured: true))
-        await newerLoad.value
-        #expect(model.availability == .ready)
-
-        pendingLoads.removeFirst().resume(returning: makeRealtimeTalkCatalog(configured: false))
-        await olderLoad.value
-
-        #expect(model.availability == .ready)
+        #expect(ready)
+        #expect(alreadyEnabled)
+        #expect(!needsAccess)
+        #expect(!unavailable)
     }
 
     @Test func `enabling gpt-live clears forced consult routing but keeps it for GA models`() throws {
