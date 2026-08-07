@@ -13,7 +13,7 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./chrome.executables.js";
 import {
-  getChromeWebSocketUrl,
+  getChromeWebSocketEndpoint,
   isChromeCdpOwnedByPid,
   isChromeCdpReady,
   isChromeReachable,
@@ -50,6 +50,12 @@ function jsonResponse(payload: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+async function getChromeWebSocketUrl(
+  ...args: Parameters<typeof getChromeWebSocketEndpoint>
+): Promise<string | null> {
+  return (await getChromeWebSocketEndpoint(...args))?.url ?? null;
 }
 
 async function withMockChromeCdpServer(params: {
@@ -288,6 +294,113 @@ describe("browser chrome helpers", () => {
       });
     }
   });
+
+  it("keeps trailing-slash discovery inside the guarded fetch path for HTTP endpoints", async () => {
+    const requests: string[] = [];
+    const server = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      if (req.url === "/json/version/") {
+        const addr = server.address() as AddressInfo;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/browser/trailing`,
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+      server.once("error", reject);
+    });
+
+    try {
+      const addr = server.address() as AddressInfo;
+      await expect(
+        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000, {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        }),
+      ).resolves.toBe(`ws://127.0.0.1:${addr.port}/devtools/browser/trailing`);
+      expect(requests).toEqual(["/json/version", "/json/version/"]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("does not retry trailing-slash discovery after a rate-limit response", async () => {
+    const requests: string[] = [];
+    const server = createServer((req, res) => {
+      requests.push(req.url ?? "");
+      if (req.url === "/json/version") {
+        res.writeHead(429);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/x" }));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+      server.once("error", reject);
+    });
+
+    try {
+      const addr = server.address() as AddressInfo;
+      await expect(
+        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000),
+      ).rejects.toThrow("Do NOT retry the browser tool");
+      expect(requests).toEqual(["/json/version"]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it.each([
+    { primaryStatus: 200, primaryBody: {} },
+    { primaryStatus: 404, primaryBody: undefined },
+  ])(
+    "does not swallow a trailing-slash rate limit after a $primaryStatus primary response",
+    async ({ primaryStatus, primaryBody }) => {
+      const requests: string[] = [];
+      const server = createServer((req, res) => {
+        requests.push(req.url ?? "");
+        if (req.url === "/json/version/") {
+          res.writeHead(429);
+          res.end();
+          return;
+        }
+        res.writeHead(primaryStatus, { "Content-Type": "application/json" });
+        res.end(primaryBody ? JSON.stringify(primaryBody) : undefined);
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+        server.once("error", reject);
+      });
+
+      try {
+        const addr = server.address() as AddressInfo;
+        await expect(
+          getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000),
+        ).rejects.toThrow("Do NOT retry the browser tool");
+        expect(requests).toEqual(["/json/version", "/json/version/"]);
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+    },
+  );
 
   it("reports cdpReady only when Browser.getVersion command succeeds", async () => {
     await withMockChromeCdpServer({
