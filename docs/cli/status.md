@@ -21,7 +21,7 @@ openclaw status --usage
 | `--deep`                | Runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal). Also enables the security audit.         |
 | `--usage`               | Prints normalized provider usage windows as `X% left`.                                                          |
 | `--json`                | Machine-readable output.                                                                                        |
-| `--timeout <ms>`        | Probe timeout in milliseconds.                                                                                  |
+| `--timeout <ms>`        | Maximum wait for the Gateway response, in milliseconds.                                                         |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
 
 Plain `openclaw status` stays on the fast read-only path and marks memory as
@@ -32,7 +32,8 @@ and `openclaw memory status --deep`.
 
 Without `--timeout`, `--deep` waits for a current Gateway's bounded live probes;
 older Gateways use a 10-second response timeout. An explicit timeout remains
-the per-probe deadline.
+the Gateway response deadline; the Gateway keeps its own bounded per-account
+probe deadline.
 
 ## Session and model resolution
 
