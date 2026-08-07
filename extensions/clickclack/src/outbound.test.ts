@@ -268,23 +268,21 @@ describe("sendClickClackText routing", () => {
     },
   );
 
-  it("keeps distinct inbound reply parts separate and stable", async () => {
-    for (const deliveryPartIndex of [0, 1, 1]) {
+  it("uses a different inbound reply nonce for a different source message", async () => {
+    for (const sourceMessageId of ["msg_1", "msg_2"]) {
       await sendClickClackInboundReply({
         cfg,
         accountId: "service",
         to: "channel:general",
-        text: `reply part ${deliveryPartIndex}`,
-        replyToId: "msg_1",
-        sourceMessageId: "msg_1",
-        deliveryPartIndex,
+        text: "model output",
+        replyToId: sourceMessageId,
+        sourceMessageId,
       });
     }
 
     const calls = createChannelMessage.mock.calls as unknown as MessageCreateCall[];
     const nonces = calls.map((call) => call[2].nonce);
     expect(nonces[0]).not.toBe(nonces[1]);
-    expect(nonces[2]).toBe(nonces[1]);
   });
 
   it("accepts a committed stable-nonce inbound reply without a response receipt", async () => {

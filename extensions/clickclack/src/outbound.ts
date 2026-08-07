@@ -229,16 +229,16 @@ export async function sendClickClackInboundReply(
   params: Omit<
     SendClickClackTextParams,
     "deliveryQueueId" | "deliveryPartIndex" | "onPlatformSendDispatch"
-  > & { sourceMessageId: string; deliveryPartIndex?: number },
+  > & { sourceMessageId: string },
 ): Promise<void> {
-  const { sourceMessageId, deliveryPartIndex = 0, ...sendParams } = params;
+  const { sourceMessageId, ...sendParams } = params;
   try {
     // ClickClack message ids are server-global. Keep the nonce stable even if
     // the local account name changes before the gateway replays this event.
     await sendClickClackText({
       ...sendParams,
       deliveryQueueId: `clickclack-inbound-reply:${sourceMessageId}`,
-      deliveryPartIndex,
+      deliveryPartIndex: 0,
     });
   } catch (error) {
     // The gateway advances its cursor only after this returns. An accepted

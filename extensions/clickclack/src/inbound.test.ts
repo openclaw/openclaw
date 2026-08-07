@@ -439,6 +439,18 @@ describe("handleClickClackInbound", () => {
 
   it("maps the authoritative message id to the agent run and correlates the final reply", async () => {
     const runtime = createRuntime();
+    runtime.channel.inbound.dispatch = vi.fn(
+      async (plan: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) => {
+        await plan.delivery.deliver({ text: "correlated reply" }, { kind: "final" });
+        return {
+          admission: { kind: "dispatch" },
+          dispatched: true,
+          ctxPayload: plan.ctxPayload,
+          routeSessionKey: plan.route.sessionKey,
+          dispatchResult: { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } },
+        };
+      },
+    ) as unknown as PluginRuntime["channel"]["inbound"]["dispatch"];
     setClickClackRuntime(runtime);
 
     await handleClickClackInbound({
@@ -454,16 +466,16 @@ describe("handleClickClackInbound", () => {
     const dispatchParams = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[0]?.[0];
     expect(dispatchParams?.replyOptions?.runId).toBe(`clickclack:${VALID_MESSAGE_ID}`);
 
-    await dispatchParams?.delivery.deliver({ text: "correlated reply" }, {} as never);
-
     expect(sendClickClackInboundReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         correlationId: "fakeco.case_2",
-        deliveryPartIndex: 0,
         replyToId: VALID_MESSAGE_ID,
         sourceMessageId: VALID_MESSAGE_ID,
         text: "correlated reply",
       }),
+    );
+    expect(sendClickClackInboundReplyMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "deliveryPartIndex",
     );
   });
 
@@ -485,7 +497,7 @@ describe("handleClickClackInbound", () => {
       throw new Error("expected ClickClack media durable delivery resolver");
     }
     const payload = { text: "artifact", mediaUrl: "/workspace/artifact.txt" };
-    expect(delivery.durable(payload, { kind: "final" } as never)).toEqual({
+    await expect(delivery.durable(payload, { kind: "final" } as never)).resolves.toEqual({
       to: "channel:chn_1",
       threadId: undefined,
       replyToId: VALID_MESSAGE_ID,

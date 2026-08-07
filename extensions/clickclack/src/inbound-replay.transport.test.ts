@@ -50,7 +50,7 @@ describe("ClickClack inbound replay transport", () => {
     vi.useRealTimers();
   });
 
-  it("keeps one visible agent reply after a committed response stalls and the event replays", async () => {
+  it("keeps one visible reply when replayed callbacks use different boundaries", async () => {
     const visibleMessages = new Map<string, string>();
     const requests: Array<{ body: string; nonce: string; status: number }> = [];
     let resolveFirstCommit: (() => void) | undefined;
@@ -122,11 +122,26 @@ describe("ClickClack inbound replay transport", () => {
         revoked: false,
       },
     } satisfies ClickClackInboundAccess;
-    const replies = ["first visible reply", "regenerated replay reply"];
+    const callbackPartCounts: number[] = [];
+    let dispatchAttempt = 0;
     const runtime = createPluginRuntimeMock();
     runtime.channel.inbound.dispatch = vi.fn(
       async (plan: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) => {
-        await plan.delivery.deliver({ text: replies.shift() ?? "" }, { kind: "final" });
+        const parts =
+          dispatchAttempt++ === 0
+            ? [
+                { text: "first visible block", kind: "block" as const },
+                { text: "first visible final", kind: "final" as const },
+              ]
+            : [{ text: "regenerated replay reply", kind: "final" as const }];
+        const requestsBeforeDispatch = requests.length;
+        for (const part of parts) {
+          await plan.delivery.deliver({ text: part.text }, { kind: part.kind });
+        }
+        // Text callbacks only assemble the reply. The transport send starts
+        // after dispatch has produced the complete logical response.
+        expect(requests).toHaveLength(requestsBeforeDispatch);
+        callbackPartCounts.push(parts.length);
         return {
           admission: { kind: "dispatch" },
           dispatched: true,
@@ -152,15 +167,17 @@ describe("ClickClack inbound replay transport", () => {
       expect(requests.map((request) => request.status)).toEqual([201, 400]);
       expect(new Set(requests.map((request) => request.nonce)).size).toBe(1);
       expect(requests.map((request) => request.body)).toEqual([
-        "first visible reply",
+        "first visible block\n\nfirst visible final",
         "regenerated replay reply",
       ]);
+      expect(callbackPartCounts).toEqual([2, 1]);
       expect(visibleMessages.size).toBe(1);
       console.info(
         "CLICKCLACK_REPLAY_PROOF",
         JSON.stringify({
           attempts: requests.length,
           statuses: requests.map((request) => request.status),
+          callbackParts: callbackPartCounts,
           uniqueNonces: new Set(requests.map((request) => request.nonce)).size,
           visibleMessages: visibleMessages.size,
           token: "[redacted]",
