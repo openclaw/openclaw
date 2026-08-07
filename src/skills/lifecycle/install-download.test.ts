@@ -13,7 +13,9 @@ import {
 } from "../test-support/install-test-mocks.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
-import { installDownloadSpec } from "./install-download.js";
+import { installDownloadSpec, installDownloadTesting } from "./install-download.js";
+
+const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -90,6 +92,7 @@ function mockArchiveResponse(buffer: Uint8Array): void {
       ok: true,
       status: 200,
       statusText: "OK",
+      headers: new Headers(),
       body: Readable.from([Buffer.from(buffer)]),
     },
     release: async () => undefined,
@@ -212,6 +215,132 @@ describe("installDownloadSpec extraction safety", () => {
     ).toBe("payload");
   });
 
+  it("rejects downloads whose advertised size exceeds the skill download limit", async () => {
+    const response = new Response("payload", {
+      status: 200,
+      headers: { "content-length": String(MAX_SKILL_DOWNLOAD_BYTES + 1) },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response,
+      release: async () => undefined,
+    });
+    const entry = buildEntry("oversized-download-header");
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/payload.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      stderr: `download too large: ${MAX_SKILL_DOWNLOAD_BYTES + 1} bytes (limit: ${MAX_SKILL_DOWNLOAD_BYTES} bytes)`,
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+    await expect(fileExists(path.join(toolsRoot, "runtime", "payload.bin"))).resolves.toBe(false);
+    await expect(fs.readdir(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("rejects malformed advertised sizes before reading the response body", async () => {
+    const response = new Response("payload", {
+      status: 200,
+      headers: { "content-length": "1e9" },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response,
+      release: async () => undefined,
+    });
+    const entry = buildEntry("malformed-download-header");
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/payload.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      stderr: "invalid content-length header: 1e9",
+    });
+    expect(cancel).toHaveBeenCalledOnce();
+    await expect(fileExists(path.join(toolsRoot, "runtime", "payload.bin"))).resolves.toBe(false);
+    await expect(fs.readdir(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toEqual(
+      [],
+    );
+  });
+
+  it("rejects headerless streamed overflow and removes the partial staging file", async () => {
+    const maxBytes = 8;
+    const partialChunk = Buffer.from("partial");
+    const overflowChunk = Buffer.from("!!");
+    const chunks = [partialChunk, overflowChunk];
+    let chunkIndex = 0;
+    const body = new Readable({
+      read() {
+        if (chunkIndex < chunks.length) {
+          this.push(chunks[chunkIndex++]);
+        }
+      },
+    });
+    const destroy = vi.spyOn(body, "destroy");
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: new Headers(),
+        body,
+      },
+      release: async () => undefined,
+    });
+    const entry = buildEntry("oversized-download-stream");
+    const toolsRoot = resolveSkillToolsRootDir(entry);
+
+    const result = await installDownloadTesting.installDownloadSpecWithLimit(
+      {
+        entry,
+        spec: {
+          kind: "download",
+          id: "dl",
+          url: "https://example.invalid/payload.bin",
+          extract: false,
+          targetDir: "runtime",
+        },
+        timeoutMs: 30_000,
+      },
+      maxBytes,
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      stderr: `download too large: ${partialChunk.byteLength + overflowChunk.byteLength} bytes (limit: ${maxBytes} bytes)`,
+    });
+    expect(destroy).toHaveBeenCalled();
+    expect(body.destroyed).toBe(true);
+    await expect(fileExists(path.join(toolsRoot, "runtime", "payload.bin"))).resolves.toBe(false);
+    await expect(fs.readdir(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toEqual(
+      [],
+    );
+  });
+
   it("cancels failed download response bodies before returning the error", async () => {
     const { stream, wasCanceled } = createCancelableBody();
     const release = vi.fn(async () => undefined);
@@ -256,6 +385,7 @@ describe("installDownloadSpec extraction safety", () => {
           ok: true,
           status: 200,
           statusText: "OK",
+          headers: new Headers(),
           body: Readable.from(
             (async function* () {
               yield Buffer.from("payload");

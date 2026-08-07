@@ -2,9 +2,10 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isWindowsDrivePath } from "../../infra/archive-path.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -18,6 +19,14 @@ import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
+
+const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+
+type InstallDownloadSpecParams = {
+  entry: SkillEntry;
+  spec: SkillInstallSpec;
+  timeoutMs: number;
+};
 
 const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 
@@ -39,6 +48,38 @@ async function cancelIgnoredResponseBody(response: Response): Promise<void> {
     return;
   }
   await Promise.resolve(cancel.call(body)).catch(() => undefined);
+}
+
+function formatDownloadTooLargeError(bytes: number, maxBytes: number): string {
+  return `download too large: ${bytes} bytes (limit: ${maxBytes} bytes)`;
+}
+
+async function assertDownloadResponseSize(response: Response, maxBytes: number): Promise<void> {
+  let contentLength: number | null;
+  try {
+    contentLength = parseMediaContentLength(response.headers.get("content-length"));
+  } catch (err) {
+    await cancelIgnoredResponseBody(response);
+    throw err;
+  }
+  if (contentLength !== null && contentLength > maxBytes) {
+    await cancelIgnoredResponseBody(response);
+    throw new Error(formatDownloadTooLargeError(contentLength, maxBytes));
+  }
+}
+
+function createDownloadSizeLimitTransform(maxBytes: number): Transform {
+  let downloadedBytes = 0;
+  return new Transform({
+    transform(chunk: Uint8Array, _encoding, callback) {
+      downloadedBytes += chunk.byteLength;
+      if (downloadedBytes > maxBytes) {
+        callback(new Error(formatDownloadTooLargeError(downloadedBytes, maxBytes)));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
 }
 
 function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
@@ -88,6 +129,7 @@ async function downloadFile(params: {
   rootDir: string;
   relativePath: string;
   timeoutMs: number;
+  maxBytes: number;
 }): Promise<{ bytes: number }> {
   const destPath = path.resolve(params.rootDir, params.relativePath);
   const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
@@ -107,12 +149,13 @@ async function downloadFile(params: {
       await cancelIgnoredResponseBody(response);
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
+    await assertDownloadResponseSize(response, params.maxBytes);
     const file = fs.createWriteStream(tempPath);
     const body = response.body as unknown;
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
+    await pipeline(readable, createDownloadSizeLimitTransform(params.maxBytes), file);
     const root = await fsRoot(params.rootDir);
     await root.copyIn(params.relativePath, tempPath);
     const stat = await fs.promises.stat(destPath);
@@ -123,11 +166,10 @@ async function downloadFile(params: {
   }
 }
 
-export async function installDownloadSpec(params: {
-  entry: SkillEntry;
-  spec: SkillInstallSpec;
-  timeoutMs: number;
-}): Promise<SkillInstallResult> {
+async function installDownloadSpecWithLimit(
+  params: InstallDownloadSpecParams,
+  maxBytes: number,
+): Promise<SkillInstallResult> {
   const { entry, spec, timeoutMs } = params;
   const root = resolveSkillToolsRootDir(entry);
   const url = spec.url?.trim();
@@ -200,6 +242,7 @@ export async function installDownloadSpec(params: {
       rootDir: canonicalRoot,
       relativePath: archiveRelativePath,
       timeoutMs,
+      maxBytes,
     });
     downloaded = result.bytes;
   } catch (err) {
@@ -259,3 +302,13 @@ export async function installDownloadSpec(params: {
     code: extractResult.code,
   };
 }
+
+export async function installDownloadSpec(
+  params: InstallDownloadSpecParams,
+): Promise<SkillInstallResult> {
+  return installDownloadSpecWithLimit(params, MAX_SKILL_DOWNLOAD_BYTES);
+}
+
+export const installDownloadTesting = {
+  installDownloadSpecWithLimit,
+};
