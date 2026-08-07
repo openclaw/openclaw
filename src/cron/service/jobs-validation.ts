@@ -304,19 +304,17 @@ type ChatDeliveryTargetFields = {
 };
 
 /** True when delivery names a chat route (channel/to/thread/account), not just mode/bestEffort. */
-export function hasConcreteChatDeliveryTarget(
-  delivery: ChatDeliveryTargetFields | undefined,
-): boolean {
+function hasConcreteChatDeliveryTarget(delivery: ChatDeliveryTargetFields | undefined): boolean {
   if (!delivery) {
     return false;
   }
-  return Boolean(
+  return (
     (typeof delivery.channel === "string" && delivery.channel.trim() !== "") ||
     (typeof delivery.to === "string" && delivery.to.trim() !== "") ||
     (delivery.threadId !== undefined &&
       delivery.threadId !== null &&
       String(delivery.threadId).trim() !== "") ||
-    (typeof delivery.accountId === "string" && delivery.accountId.trim() !== ""),
+    (typeof delivery.accountId === "string" && delivery.accountId.trim() !== "")
   );
 }
 
@@ -344,6 +342,38 @@ export function patchRequestsUnsupportedMainDelivery(
     return true;
   }
   return false;
+}
+
+/**
+ * Main-session delivery policy after merge: reject explicit unsupported chat
+ * patches, otherwise strip inherited announce/chat routing (retarget cleanup).
+ */
+export function applyMainSessionDeliveryPolicy(job: CronJob, patch: CronJobPatch): void {
+  if (
+    job.sessionTarget === "main" &&
+    job.delivery?.mode !== "webhook" &&
+    hasConcreteFailureDestination(job.delivery?.failureDestination)
+  ) {
+    throw new Error(
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+    );
+  }
+  if (job.sessionTarget !== "main" || job.delivery?.mode === "webhook") {
+    return;
+  }
+  // Fail closed only for explicit unsupported delivery patches. Retargeting
+  // an isolated announce job onto main without a delivery patch must still
+  // clear inherited chat routing (historical cleanup contract).
+  if (patchRequestsUnsupportedMainDelivery(patch.delivery)) {
+    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  }
+  // Strip inherited announce delivery and benign shells (bestEffort-only /
+  // empty failureDestination opt-outs) so those edits stay no-ops.
+  const failureDestination = job.delivery?.failureDestination;
+  job.delivery =
+    failureDestination && !hasConcreteFailureDestination(failureDestination)
+      ? { mode: "none", failureDestination }
+      : undefined;
 }
 
 export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {

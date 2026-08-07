@@ -43,8 +43,7 @@ import {
   assertStreamScheduleSupport,
   assertSupportedJobSpec,
   assertTriggerSupport,
-  hasConcreteFailureDestination,
-  patchRequestsUnsupportedMainDelivery,
+  applyMainSessionDeliveryPolicy,
 } from "./jobs-validation.js";
 import { normalizeOptionalAgentId, normalizeRequiredName } from "./normalize.js";
 import { mergeCronPayload } from "./payload-merge.js";
@@ -365,32 +364,7 @@ export function applyJobPatch(
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }
-  if (
-    job.sessionTarget === "main" &&
-    job.delivery?.mode !== "webhook" &&
-    hasConcreteFailureDestination(job.delivery?.failureDestination)
-  ) {
-    throw new Error(
-      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
-    );
-  }
-  if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
-    // Fail closed only for explicit unsupported delivery patches. Retargeting
-    // an isolated announce job onto main without a delivery patch must still
-    // clear inherited chat routing (historical cleanup contract).
-    if (patchRequestsUnsupportedMainDelivery(patch.delivery)) {
-      throw new Error(
-        'cron channel delivery config is only supported for sessionTarget="isolated"',
-      );
-    }
-    // Strip inherited announce delivery and benign shells (bestEffort-only /
-    // empty failureDestination opt-outs) so those edits stay no-ops.
-    const failureDestination = job.delivery?.failureDestination;
-    job.delivery =
-      failureDestination && !hasConcreteFailureDestination(failureDestination)
-        ? { mode: "none", failureDestination }
-        : undefined;
-  }
+  applyMainSessionDeliveryPolicy(job, patch);
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;
     // Runtime state patches may report execution progress, but the scheduler

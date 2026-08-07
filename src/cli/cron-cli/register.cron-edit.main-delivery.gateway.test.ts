@@ -159,7 +159,7 @@ describe("cron edit main delivery CLI→gateway", () => {
       ].join("\n"),
     );
     expect(update.ok).toBe(false);
-    expect(String(update.error?.message ?? "")).toContain(
+    expect(update.error?.message ?? "").toContain(
       'cron channel delivery config is only supported for sessionTarget="isolated"',
     );
 
@@ -182,7 +182,7 @@ describe("cron edit main delivery CLI→gateway", () => {
       ].join("\n"),
     );
     expect(completionUpdate.ok).toBe(false);
-    expect(String(completionUpdate.error?.message ?? "")).toContain(
+    expect(completionUpdate.error?.message ?? "").toContain(
       'cron channel delivery config is only supported for sessionTarget="isolated"',
     );
 

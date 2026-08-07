@@ -1164,7 +1164,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("keeps delivery updates valid for main jobs owned by an explicit default agent", async () => {
+  test("rejects chat delivery updates for main jobs owned by an explicit default agent", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-main-default-agent-delivery-",
       cronEnabled: false,
@@ -1208,9 +1208,10 @@ describe("gateway server cron", () => {
         },
       });
 
-      expect(updateRes.ok).toBe(true);
-      const updated = updateRes.payload as { delivery?: unknown } | undefined;
-      expect(updated?.delivery).toBeUndefined();
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message ?? "").toContain(
+        'cron channel delivery config is only supported for sessionTarget="isolated"',
+      );
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
@@ -1260,7 +1261,7 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("keeps delivery updates valid after gateway config changes the default agent", async () => {
+  test("rejects chat delivery updates after gateway config changes the default agent", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-main-default-agent-drift-",
       cronEnabled: false,
@@ -1322,10 +1323,10 @@ describe("gateway server cron", () => {
         },
       });
 
-      if (!updateRes.ok) {
-        throw new Error(updateRes.error?.message ?? "cron.update failed");
-      }
-      expect(updateRes.ok).toBe(true);
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message ?? "").toContain(
+        'cron channel delivery config is only supported for sessionTarget="isolated"',
+      );
     } finally {
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
