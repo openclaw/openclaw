@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
 import { createClickClackClient } from "./http-client.js";
-import { sendClickClackModelReply, sendClickClackText } from "./outbound.js";
+import { sendClickClackInboundReply } from "./outbound.js";
 import {
   createClickClackAgentProgressPublisher,
   type ClickClackItemEventPayload,
@@ -66,7 +66,7 @@ async function dispatchModelReply(params: {
       .warn(`[${params.account.accountId}] ClickClack model reply produced no sendable text`);
     return;
   }
-  await sendClickClackModelReply({
+  await sendClickClackInboundReply({
     cfg: params.cfg as CoreConfig,
     accountId: params.account.accountId,
     to: params.target,
@@ -222,6 +222,7 @@ export async function handleClickClackInbound(params: {
     },
   });
   const runId = resolveClickClackAgentRunId(message.id);
+  let replyDeliveryPartIndex = 0;
   const activityReplyOptions = {
     ...(activity
       ? {
@@ -274,7 +275,10 @@ export async function handleClickClackInbound(params: {
           if (!text.trim()) {
             return;
           }
-          await sendClickClackText({
+          // A replay starts this counter from zero, so repeated reply parts reuse
+          // their remote nonces while distinct parts in one run remain separate.
+          const deliveryPartIndex = replyDeliveryPartIndex++;
+          await sendClickClackInboundReply({
             cfg: params.config,
             accountId: params.account.accountId,
             to: target,
@@ -283,6 +287,8 @@ export async function handleClickClackInbound(params: {
             replyToId: message.id,
             provenance: turnProvenance,
             correlationId: params.correlationId,
+            sourceMessageId: message.id,
+            deliveryPartIndex,
           });
         },
         durable: (payload) => {

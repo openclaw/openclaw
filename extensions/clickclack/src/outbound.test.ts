@@ -2,11 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   reconcileClickClackUnknownSend,
+  sendClickClackInboundReply,
   sendClickClackMedia,
-  sendClickClackModelReply,
   sendClickClackText,
 } from "./outbound.js";
 import type { CoreConfig } from "./types.js";
+
+type MessageCreateCall = [destinationId: string, text: string, options: { nonce?: string }];
 
 const createChannelMessage = vi.hoisted(() => vi.fn(async () => ({ id: "msg_out" })));
 const createThreadReply = vi.hoisted(() => vi.fn(async () => ({ id: "msg_out" })));
@@ -204,46 +206,94 @@ describe("sendClickClackText routing", () => {
     );
   });
 
-  it("uses one source-stable nonce across regenerated model replies", async () => {
-    await sendClickClackModelReply({
-      cfg,
-      accountId: "service",
+  it.each([
+    {
+      name: "channel reply",
       to: "channel:general",
-      text: "first model output",
-      replyToId: "msg_1",
-      sourceMessageId: "msg_1",
-    });
-    await sendClickClackModelReply({
-      cfg,
-      accountId: "service",
+      threadId: undefined,
+      sendMock: createChannelMessage,
+      destinationId: "general",
+    },
+    {
+      name: "thread reply",
       to: "channel:general",
-      text: "different replay output",
-      replyToId: "msg_1",
-      sourceMessageId: "msg_1",
-    });
+      threadId: "msg_thread_root",
+      sendMock: createThreadReply,
+      destinationId: "msg_thread_root",
+    },
+    {
+      name: "direct reply",
+      to: "dm:usr_1",
+      threadId: undefined,
+      sendMock: createDirectMessage,
+      destinationId: "dm_1",
+    },
+  ])(
+    "uses one source-stable nonce across regenerated $name payloads",
+    async ({ to, threadId, sendMock, destinationId }) => {
+      await sendClickClackInboundReply({
+        cfg,
+        accountId: "service",
+        to,
+        text: "first model output",
+        threadId,
+        replyToId: "msg_1",
+        sourceMessageId: "msg_1",
+      });
+      await sendClickClackInboundReply({
+        cfg,
+        accountId: "service",
+        to,
+        text: "different replay output",
+        threadId,
+        replyToId: "msg_1",
+        sourceMessageId: "msg_1",
+      });
 
-    const nonce = "openclaw-text:b8e1b0a9daa9b9da866c685eccb8315bc711f4887aab5137a1373c251218ec29";
-    expect(createChannelMessage).toHaveBeenNthCalledWith(
-      1,
-      "general",
-      "first model output",
-      expect.objectContaining({ nonce }),
-    );
-    expect(createChannelMessage).toHaveBeenNthCalledWith(
-      2,
-      "general",
-      "different replay output",
-      expect.objectContaining({ nonce }),
-    );
+      const calls = sendMock.mock.calls as unknown as MessageCreateCall[];
+      const nonce = calls[0]?.[2].nonce;
+      expect(nonce).toMatch(/^openclaw-text:[0-9a-f]{64}$/u);
+      expect(sendMock).toHaveBeenNthCalledWith(
+        1,
+        destinationId,
+        "first model output",
+        expect.objectContaining({ nonce }),
+      );
+      expect(sendMock).toHaveBeenNthCalledWith(
+        2,
+        destinationId,
+        "different replay output",
+        expect.objectContaining({ nonce }),
+      );
+    },
+  );
+
+  it("keeps distinct inbound reply parts separate and stable", async () => {
+    for (const deliveryPartIndex of [0, 1, 1]) {
+      await sendClickClackInboundReply({
+        cfg,
+        accountId: "service",
+        to: "channel:general",
+        text: `reply part ${deliveryPartIndex}`,
+        replyToId: "msg_1",
+        sourceMessageId: "msg_1",
+        deliveryPartIndex,
+      });
+    }
+
+    const calls = createChannelMessage.mock.calls as unknown as MessageCreateCall[];
+    const nonces = calls.map((call) => call[2].nonce);
+    expect(nonces[0]).not.toBe(nonces[1]);
+    expect(nonces[2]).toBe(nonces[1]);
   });
 
-  it("accepts a committed stable-nonce model reply without a response receipt", async () => {
+  it("accepts a committed stable-nonce inbound reply without a response receipt", async () => {
     const error = new Error("request timed out after response headers");
     createChannelMessage.mockRejectedValueOnce(error);
     isClickClackCommittedMessageCreateError.mockReturnValueOnce(true);
 
     await expect(
-      sendClickClackModelReply({
+      sendClickClackInboundReply({
         cfg,
         accountId: "service",
         to: "channel:general",
@@ -256,12 +306,12 @@ describe("sendClickClackText routing", () => {
     expect(isClickClackCommittedMessageCreateError).toHaveBeenCalledWith(error);
   });
 
-  it("still rejects model reply failures without commit proof", async () => {
+  it("still rejects inbound reply failures without commit proof", async () => {
     const error = new Error("connection failed before response headers");
     createChannelMessage.mockRejectedValueOnce(error);
 
     await expect(
-      sendClickClackModelReply({
+      sendClickClackInboundReply({
         cfg,
         accountId: "service",
         to: "channel:general",

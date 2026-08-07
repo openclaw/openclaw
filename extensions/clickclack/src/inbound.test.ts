@@ -17,8 +17,7 @@ import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
-const sendClickClackTextMock = vi.hoisted(() => vi.fn());
-const sendClickClackModelReplyMock = vi.hoisted(() => vi.fn());
+const sendClickClackInboundReplyMock = vi.hoisted(() => vi.fn());
 const VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fav";
 const SECOND_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5faw";
 const THIRD_VALID_MESSAGE_ID = "msg_01arz3ndektsv4rrffq69g5fax";
@@ -36,8 +35,7 @@ type LlmCompleteMock = ReturnType<
 >;
 
 vi.mock("./outbound.js", () => ({
-  sendClickClackModelReply: sendClickClackModelReplyMock,
-  sendClickClackText: sendClickClackTextMock,
+  sendClickClackInboundReply: sendClickClackInboundReplyMock,
 }));
 
 function createRuntime(): PluginRuntime {
@@ -188,8 +186,7 @@ function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMe
 
 describe("handleClickClackInbound", () => {
   beforeEach(() => {
-    sendClickClackModelReplyMock.mockReset();
-    sendClickClackTextMock.mockReset();
+    sendClickClackInboundReplyMock.mockReset();
   });
 
   it("runs model-mode bot accounts without tools and posts the bot reply", async () => {
@@ -259,14 +256,13 @@ describe("handleClickClackInbound", () => {
     expect(completionRequest?.purpose).toBe("clickclack bot reply");
     expect(completionRequest?.messages).toEqual([{ role: "user", content: "hello bot" }]);
 
-    const sendRequest = sendClickClackModelReplyMock.mock.calls[0]?.[0];
+    const sendRequest = sendClickClackInboundReplyMock.mock.calls[0]?.[0];
     expect(sendRequest?.accountId).toBe("service");
     expect(sendRequest?.to).toBe("channel:chn_1");
     expect(sendRequest?.text).toBe("service bot online");
     expect(sendRequest?.replyToId).toBe("msg_1");
     expect(sendRequest?.correlationId).toBe("fakeco.case_1");
     expect(sendRequest?.sourceMessageId).toBe("msg_1");
-    expect(sendClickClackTextMock).not.toHaveBeenCalled();
   });
 
   it("uses the selected runtime model budget", async () => {
@@ -289,7 +285,7 @@ describe("handleClickClackInbound", () => {
 
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest).not.toHaveProperty("maxTokens");
-    expect(sendClickClackModelReplyMock).toHaveBeenCalledWith(
+    expect(sendClickClackInboundReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "service", text: "service bot online" }),
     );
   });
@@ -320,8 +316,7 @@ describe("handleClickClackInbound", () => {
       message: createMessage({ body: "hello bot" }),
     });
 
-    expect(sendClickClackModelReplyMock).not.toHaveBeenCalled();
-    expect(sendClickClackTextMock).not.toHaveBeenCalled();
+    expect(sendClickClackInboundReplyMock).not.toHaveBeenCalled();
     expect(runtime.logging.getChildLogger).toHaveBeenCalledWith({
       plugin: "clickclack",
       feature: "model-reply",
@@ -461,13 +456,79 @@ describe("handleClickClackInbound", () => {
 
     await dispatchParams?.delivery.deliver({ text: "correlated reply" }, {} as never);
 
-    expect(sendClickClackTextMock).toHaveBeenCalledWith(
+    expect(sendClickClackInboundReplyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         correlationId: "fakeco.case_2",
+        deliveryPartIndex: 0,
         replyToId: VALID_MESSAGE_ID,
+        sourceMessageId: VALID_MESSAGE_ID,
         text: "correlated reply",
       }),
     );
+  });
+
+  it.each([
+    {
+      name: "channel",
+      message: createMessage({ id: VALID_MESSAGE_ID, thread_root_id: VALID_MESSAGE_ID }),
+      to: "channel:chn_1",
+      threadId: undefined,
+    },
+    {
+      name: "thread",
+      message: createMessage({
+        id: VALID_MESSAGE_ID,
+        parent_message_id: "msg_parent",
+        thread_root_id: "msg_thread_root",
+      }),
+      to: "channel:chn_1",
+      threadId: "msg_thread_root",
+    },
+    {
+      name: "direct message",
+      message: createMessage({
+        id: VALID_MESSAGE_ID,
+        channel_id: undefined,
+        direct_conversation_id: "dm_1",
+        thread_root_id: VALID_MESSAGE_ID,
+      }),
+      to: "dm:usr_owner",
+      threadId: undefined,
+    },
+  ])("reuses stable agent reply ordinals after $name replay", async ({ message, to, threadId }) => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+
+    const dispatchOnce = async () => {
+      await handleClickClackInbound({
+        account: createAgentAccount(),
+        config: {} as CoreConfig,
+        message,
+      });
+      const calls = vi.mocked(runtime.channel.inbound.dispatch).mock.calls;
+      return calls.at(-1)?.[0].delivery;
+    };
+
+    const firstDelivery = await dispatchOnce();
+    await firstDelivery?.deliver({ text: "first part" }, { kind: "block" });
+    await firstDelivery?.deliver({ text: "final part" }, { kind: "final" });
+    const replayDelivery = await dispatchOnce();
+    await replayDelivery?.deliver({ text: "regenerated first part" }, { kind: "block" });
+
+    expect(sendClickClackInboundReplyMock.mock.calls.map(([call]) => call.deliveryPartIndex)).toEqual(
+      [0, 1, 0],
+    );
+    expect(sendClickClackInboundReplyMock).toHaveBeenCalledTimes(3);
+    for (const [call] of sendClickClackInboundReplyMock.mock.calls) {
+      expect(call).toEqual(
+        expect.objectContaining({
+          replyToId: VALID_MESSAGE_ID,
+          sourceMessageId: VALID_MESSAGE_ID,
+          threadId,
+          to,
+        }),
+      );
+    }
   });
 
   it("routes media replies through required durable delivery", async () => {
@@ -503,7 +564,7 @@ describe("handleClickClackInbound", () => {
     await expect(delivery?.deliver(payload, { kind: "final" } as never)).rejects.toThrow(
       "ClickClack media reply requires durable delivery",
     );
-    expect(sendClickClackTextMock).not.toHaveBeenCalled();
+    expect(sendClickClackInboundReplyMock).not.toHaveBeenCalled();
   });
 
   it("does not derive a run id from a noncanonical message id", async () => {

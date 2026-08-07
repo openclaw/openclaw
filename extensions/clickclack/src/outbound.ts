@@ -224,21 +224,21 @@ export async function sendClickClackText(
   return message.id;
 }
 
-/** Sends one retry-safe model-mode reply without requiring a delivery receipt. */
-export async function sendClickClackModelReply(
+/** Sends one retry-safe inbound reply without requiring a delivery receipt. */
+export async function sendClickClackInboundReply(
   params: Omit<
     SendClickClackTextParams,
     "deliveryQueueId" | "deliveryPartIndex" | "onPlatformSendDispatch"
-  > & { sourceMessageId: string },
+  > & { sourceMessageId: string; deliveryPartIndex?: number },
 ): Promise<void> {
-  const { sourceMessageId, ...sendParams } = params;
+  const { sourceMessageId, deliveryPartIndex = 0, ...sendParams } = params;
   try {
     // ClickClack message ids are server-global. Keep the nonce stable even if
     // the local account name changes before the gateway replays this event.
     await sendClickClackText({
       ...sendParams,
-      deliveryQueueId: `clickclack-model-reply:${sourceMessageId}`,
-      deliveryPartIndex: 0,
+      deliveryQueueId: `clickclack-inbound-reply:${sourceMessageId}`,
+      deliveryPartIndex,
     });
   } catch (error) {
     // The gateway advances its cursor only after this returns. An accepted
