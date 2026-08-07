@@ -419,6 +419,35 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(hostSchema?.enum).toEqual(["node"]);
   });
 
+  it("forwards nodeCwd into the node-only loopback exec tool (#112376)", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("exec"),
+      hoisted.makeTool("nodes"),
+    ]);
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+      includeNodeExecTool: true,
+      execOverrides: {
+        host: "node",
+        node: "worker-alpha",
+        nodeCwd: "/Users/demo/Projects/openclaw",
+        security: "full",
+        ask: "off",
+      },
+    });
+
+    expect(hoisted.createLazyExecToolMock).toHaveBeenCalledOnce();
+    expect(hoisted.createLazyExecToolMock.mock.calls[0]?.[0]).toMatchObject({
+      host: "node",
+      node: "worker-alpha",
+      nodeCwd: "/Users/demo/Projects/openclaw",
+    });
+  });
+
   it("omits all exec variants when host policy forbids node execution", () => {
     hoisted.createOpenClawToolsMock.mockReturnValueOnce([
       hoisted.makeTool("read"),

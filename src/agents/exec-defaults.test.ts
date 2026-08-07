@@ -328,4 +328,67 @@ describe("resolveExecDefaults", () => {
       }),
     ).toEqual({ canExec: false });
   });
+
+  it("does not seed nodeCwd from persistent tools.exec config (#112376)", () => {
+    const cfg = withDefaultAgent({
+      tools: {
+        exec: {
+          host: "node",
+          mode: "full",
+          node: "worker-a",
+          // Unsupported config key must not become a runtime cwd.
+          ...({ nodeCwd: "/Users/demo/Projects/openclaw" } as object),
+        },
+      },
+    });
+
+    expect(
+      resolveExecDefaults({
+        cfg,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      node: "worker-a",
+      nodeCwd: undefined,
+    });
+  });
+
+  it("binds session execCwd only while that node remains selected (#112376)", () => {
+    const cfg = withDefaultAgent({
+      tools: {
+        exec: {
+          host: "node",
+          mode: "full",
+          node: "worker-a",
+        },
+      },
+    });
+    const sessionEntry = {
+      execNode: "worker-a",
+      execCwd: "/Users/demo/Projects/openclaw",
+    } as SessionEntry;
+
+    expect(
+      resolveExecDefaults({
+        cfg,
+        sessionEntry,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      node: "worker-a",
+      nodeCwd: "/Users/demo/Projects/openclaw",
+    });
+
+    expect(
+      resolveExecDefaults({
+        cfg,
+        sessionEntry,
+        sandboxAvailable: false,
+        execOverrides: { node: "worker-b" },
+      }),
+    ).toMatchObject({
+      node: "worker-b",
+      nodeCwd: undefined,
+    });
+  });
 });

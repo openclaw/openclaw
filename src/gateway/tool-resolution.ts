@@ -369,6 +369,7 @@ export function resolveGatewayScopedTools(params: {
                 security: execDefaults.security,
                 ask: execDefaults.ask,
                 node: execDefaults.node,
+                ...(execDefaults.nodeCwd ? { nodeCwd: execDefaults.nodeCwd } : {}),
                 elevated: params.bashElevated,
               }
             : undefined,
@@ -408,6 +409,7 @@ export function resolveGatewayScopedTools(params: {
             ask: nodeExecDefaults.ask,
             trigger: params.trigger,
             node: nodeExecDefaults.node,
+            ...(nodeExecDefaults.nodeCwd ? { nodeCwd: nodeExecDefaults.nodeCwd } : {}),
             pathPrepend: execConfig?.pathPrepend,
             safeBins: execConfig?.safeBins,
             strictInlineEval: execConfig?.strictInlineEval,

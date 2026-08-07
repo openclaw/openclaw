@@ -29,9 +29,11 @@ function buildCliMcpExecOverrides(
   }
   const scopedOverrides = {
     ...(execOverrides.host !== undefined ? { host: execOverrides.host } : {}),
+    ...(execOverrides.mode !== undefined ? { mode: execOverrides.mode } : {}),
     ...(execOverrides.security !== undefined ? { security: execOverrides.security } : {}),
     ...(execOverrides.ask !== undefined ? { ask: execOverrides.ask } : {}),
     ...(execOverrides.node !== undefined ? { node: execOverrides.node } : {}),
+    ...(execOverrides.nodeCwd !== undefined ? { nodeCwd: execOverrides.nodeCwd } : {}),
   };
   return Object.keys(scopedOverrides).length > 0 ? scopedOverrides : undefined;
 }

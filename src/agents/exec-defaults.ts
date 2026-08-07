@@ -38,9 +38,11 @@ type ResolvedExecConfig = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
+  nodeCwd?: string;
 };
 
-export type ExecPolicyOverrides = Omit<ResolvedExecConfig, "mode">;
+/** Per-run exec overrides, including mode so `mode:auto` is not flattened away. */
+export type ExecPolicyOverrides = ResolvedExecConfig;
 
 // Layering keeps the most specific mode/security/ask while preserving policy
 // bounds from approvals and sandbox availability later in resolution.
@@ -146,6 +148,7 @@ export function resolveExecDefaults(params: {
   security: ExecSecurity;
   ask: ExecAsk;
   node?: string;
+  nodeCwd?: string;
   canRequestNode: boolean;
 } {
   const {
@@ -217,10 +220,45 @@ export function resolveExecDefaults(params: {
       params.sessionEntry?.execNode ??
       agentExec?.node ??
       globalExec?.node,
+    nodeCwd: resolveBoundNodeCwd({
+      selectedNode:
+        params.execOverrides?.node ??
+        params.sessionEntry?.execNode ??
+        agentExec?.node ??
+        globalExec?.node,
+      overrideNodeCwd: params.execOverrides?.nodeCwd,
+      sessionEntry: params.sessionEntry,
+    }),
     canRequestNode: isRequestedExecTargetAllowed({
       configuredTarget: host,
       requestedTarget: "node",
       sandboxAvailable,
     }),
   };
+}
+
+/**
+ * Resolve node working directory from runtime override or session state only.
+ * Do not seed nodeCwd from persistent `tools.exec` — that key is not part of
+ * the canonical ExecToolConfig contract (#112376).
+ */
+function resolveBoundNodeCwd(params: {
+  selectedNode?: string;
+  overrideNodeCwd?: string;
+  sessionEntry?: ExecSessionDefaults;
+}): string | undefined {
+  if (params.overrideNodeCwd) {
+    return params.overrideNodeCwd;
+  }
+  const selectedNode = params.selectedNode;
+  if (!selectedNode) {
+    return undefined;
+  }
+  if (
+    params.sessionEntry?.execNode === selectedNode &&
+    params.sessionEntry.execCwd
+  ) {
+    return params.sessionEntry.execCwd;
+  }
+  return undefined;
 }

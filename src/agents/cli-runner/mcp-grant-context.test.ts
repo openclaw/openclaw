@@ -67,3 +67,27 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant(overrides as Partial<RunCliAgentParams>).sourceReplyOnly).toBeUndefined();
   });
 });
+
+describe("buildCliMcpGrantContext execOverrides", () => {
+  it("serializes mode and nodeCwd for CLI loopback grants (#112376)", () => {
+    const context = buildGrant({
+      execOverrides: {
+        host: "node",
+        mode: "auto",
+        security: "allowlist",
+        ask: "on-miss",
+        node: "worker-alpha",
+        nodeCwd: "/Users/demo/Projects/openclaw",
+      },
+    });
+
+    expect(context.execOverrides).toEqual({
+      host: "node",
+      mode: "auto",
+      security: "allowlist",
+      ask: "on-miss",
+      node: "worker-alpha",
+      nodeCwd: "/Users/demo/Projects/openclaw",
+    });
+  });
+});

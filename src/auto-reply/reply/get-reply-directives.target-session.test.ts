@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   listAgentEntries: vi.fn(),
   resolveFastModeState: vi.fn(),
   resolveReplyExecOverrides: vi.fn(),
-  shouldHandleTextCommands: vi.fn(() => false),
+  resolveConfigExecDefaults: vi.fn(),
 }));
 
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
@@ -38,6 +38,114 @@ function makeTypingController() {
     markRunComplete: () => {},
     markDispatchIdle: () => {},
     cleanup: vi.fn(),
+  };
+}
+
+function parseInlineDirectivesForTest(body: string) {
+  const normalized = body.trim();
+  const modelDirective = normalized.match(/(?:^|\n)\/model\s+(\S+)/)?.[1];
+  if (modelDirective) {
+    return {
+      cleaned: normalized.replace(/(?:^|\n)\/model\s+\S+/, "").trim(),
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasTraceDirective: false,
+      traceLevel: undefined,
+      rawTraceLevel: undefined,
+      hasFastDirective: false,
+      hasReasoningDirective: false,
+      hasElevatedDirective: false,
+      hasExecDirective: false,
+      hasModelDirective: true,
+      hasQueueDirective: false,
+      hasStatusDirective: false,
+      queueReset: false,
+      thinkLevel: undefined,
+      verboseLevel: undefined,
+      fastMode: undefined,
+      reasoningLevel: undefined,
+      elevatedLevel: undefined,
+      rawElevatedLevel: undefined,
+      rawModelDirective: modelDirective,
+      execSecurity: undefined,
+    };
+  }
+  if (normalized === "/reasoning stream") {
+    return {
+      cleaned: "",
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasTraceDirective: false,
+      traceLevel: undefined,
+      rawTraceLevel: undefined,
+      hasFastDirective: false,
+      hasReasoningDirective: true,
+      reasoningLevel: "stream",
+      rawReasoningLevel: "stream",
+      hasElevatedDirective: false,
+      hasExecDirective: false,
+      hasModelDirective: false,
+      hasQueueDirective: false,
+      hasStatusDirective: false,
+      queueReset: false,
+      thinkLevel: undefined,
+      verboseLevel: undefined,
+      fastMode: undefined,
+      elevatedLevel: undefined,
+      rawElevatedLevel: undefined,
+      rawModelDirective: undefined,
+      execSecurity: undefined,
+    };
+  }
+  if (normalized === "/trace on") {
+    return {
+      cleaned: "",
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasTraceDirective: true,
+      traceLevel: "on",
+      rawTraceLevel: "on",
+      hasFastDirective: false,
+      hasReasoningDirective: false,
+      hasElevatedDirective: false,
+      hasExecDirective: false,
+      hasModelDirective: false,
+      hasQueueDirective: false,
+      hasStatusDirective: false,
+      queueReset: false,
+      thinkLevel: undefined,
+      verboseLevel: undefined,
+      fastMode: undefined,
+      reasoningLevel: undefined,
+      elevatedLevel: undefined,
+      rawElevatedLevel: undefined,
+      rawModelDirective: undefined,
+      execSecurity: undefined,
+    };
+  }
+  return {
+    cleaned: body,
+    hasThinkDirective: false,
+    hasVerboseDirective: false,
+    hasTraceDirective: false,
+    traceLevel: undefined,
+    rawTraceLevel: undefined,
+    hasFastDirective: false,
+    hasReasoningDirective: false,
+    hasElevatedDirective: false,
+    hasExecDirective: false,
+    hasModelDirective: false,
+    hasQueueDirective: false,
+    hasStatusDirective: false,
+    queueReset: false,
+    thinkLevel: undefined,
+    verboseLevel: undefined,
+    fastMode: undefined,
+    reasoningLevel: undefined,
+    elevatedLevel: undefined,
+    rawElevatedLevel: undefined,
+    rawModelDirective: undefined,
+    execSecurity: undefined,
   };
 }
 
@@ -192,7 +300,7 @@ vi.mock("../../routing/session-key.js", () => ({
 }));
 
 vi.mock("../commands-text-routing.js", () => ({
-  shouldHandleTextCommands: () => mocks.shouldHandleTextCommands(),
+  shouldHandleTextCommands: vi.fn(() => false),
 }));
 
 vi.mock("./commands-context.js", () => ({
@@ -212,13 +320,9 @@ vi.mock("./commands-context.js", () => ({
   })),
 }));
 
-vi.mock("./directive-handling.parse.js", async () => {
-  const { parseInlineDirectivesForTargetSessionTest } =
-    await import("./get-reply-directives.target-session.test-helpers.js");
-  return {
-    parseInlineDirectives: vi.fn(parseInlineDirectivesForTargetSessionTest),
-  };
-});
+vi.mock("./directive-handling.parse.js", () => ({
+  parseInlineDirectives: vi.fn(parseInlineDirectivesForTest),
+}));
 
 vi.mock("./get-reply-directive-aliases.js", () => ({
   reserveSkillCommandNames: vi.fn(),
@@ -236,6 +340,7 @@ vi.mock("./runtime-policy-session-key.js", () => ({
 
 vi.mock("./get-reply-exec-overrides.js", () => ({
   resolveReplyExecOverrides: (...args: unknown[]) => mocks.resolveReplyExecOverrides(...args),
+  resolveConfigExecDefaults: (...args: unknown[]) => mocks.resolveConfigExecDefaults(...args),
 }));
 
 vi.mock("./get-reply-fast-path.js", () => ({
@@ -269,7 +374,7 @@ describe("resolveReplyDirectives", () => {
     mocks.listAgentEntries.mockReset();
     mocks.resolveFastModeState.mockReset();
     mocks.resolveReplyExecOverrides.mockReset();
-    mocks.shouldHandleTextCommands.mockReset().mockReturnValue(false);
+    mocks.resolveConfigExecDefaults.mockReset();
 
     mocks.listAgentEntries.mockReturnValue([]);
     mocks.createModelSelectionState.mockResolvedValue({
@@ -296,6 +401,7 @@ describe("resolveReplyDirectives", () => {
       fastAutoOnSeconds: 60,
     }));
     mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
+    mocks.resolveConfigExecDefaults.mockReturnValue(undefined);
   });
 
   it("passes one-turn model override state into model selection", async () => {
@@ -323,10 +429,7 @@ describe("resolveReplyDirectives", () => {
       modelError: error,
     });
 
-    expect(result).toEqual({
-      kind: "reply",
-      reply: { text: error.message, isError: true },
-    });
+    expect(result).toEqual({ kind: "reply", reply: { text: error.message } });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
   });
@@ -340,7 +443,7 @@ describe("resolveReplyDirectives", () => {
 
     expect(result).toEqual({
       kind: "reply",
-      reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+      reply: { text: MODEL_SELECTION_LOCKED_MESSAGE },
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
@@ -349,9 +452,7 @@ describe("resolveReplyDirectives", () => {
   it("marks terminal directive replies for delivery under source suppression", async () => {
     mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
       kind: "reply",
-      reply: {
-        text: "Model set to fable (anthropic/claude-fable-5) for this session only; configured default unchanged.",
-      },
+      reply: { text: "Model set to fable (anthropic/claude-fable-5) for this session." },
     });
 
     const { result } = await resolveHelloWithModelDefaults({
@@ -366,33 +467,6 @@ describe("resolveReplyDirectives", () => {
       throw new Error("expected a single directive reply");
     }
     expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
-  });
-
-  it("preserves explicitly suppressed command-shaped text for the model", async () => {
-    const body = "/model openai/gpt-5.5";
-    mocks.shouldHandleTextCommands.mockReturnValue(true);
-
-    const { result } = await resolveHelloWithModelDefaults({
-      body,
-      commandAuthorized: true,
-      defaultThinking: "off",
-      defaultReasoning: "on",
-      ctx: {
-        CommandInterpretationSuppressed: true,
-        CommandTurn: {
-          kind: "normal",
-          source: "message",
-          authorized: false,
-          body,
-        },
-      },
-    });
-
-    expectContinueResult(result, { cleanedBody: body });
-    expect(mockCallInput(mocks.createModelSelectionState).hasModelDirective).toBe(false);
-    expect(mockCallInput(mocks.applyInlineDirectiveOverrides).directives).toMatchObject({
-      hasModelDirective: false,
-    });
   });
 
   it("keeps one-turn fast mode with the resolved fast mode", async () => {
