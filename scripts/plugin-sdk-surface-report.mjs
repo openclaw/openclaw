@@ -222,7 +222,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: auth-profile preservation decision for native model pickers.
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
-      4834,
+      // +1: QQBot 2.0.0 operator-approval Gateway client compatibility export.
+      4835,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -272,7 +273,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: auth-profile preservation decision for native model pickers.
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
-      2911,
+      // +1: QQBot 2.0.0 operator-approval Gateway client compatibility export.
+      2912,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

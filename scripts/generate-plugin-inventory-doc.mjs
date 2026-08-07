@@ -509,6 +509,39 @@ function collectPluginSourceEntries() {
   return entries;
 }
 
+function collectExternalPluginDocsInventoryEntries() {
+  const seed = readJson("scripts/lib/official-external-channel-seed.json");
+  const entries = [];
+  for (const entry of Array.isArray(seed.entries) ? seed.entries : []) {
+    const inventory = entry?.openclaw?.channelHostConfig?.docsInventory;
+    const packageMetadata = inventory?.package;
+    const manifest = inventory?.manifest;
+    if (!inventory) {
+      continue;
+    }
+    if (
+      typeof packageMetadata?.name !== "string" ||
+      typeof manifest?.id !== "string" ||
+      !entry?.openclaw?.channel
+    ) {
+      throw new Error("external plugin docs inventory metadata is incomplete");
+    }
+    entries.push({
+      dirName: manifest.id,
+      id: manifest.id,
+      manifest,
+      packageJson: {
+        ...packageMetadata,
+        openclaw: {
+          ...packageMetadata.openclaw,
+          channel: entry.openclaw.channel,
+        },
+      },
+    });
+  }
+  return entries;
+}
+
 function validatePluginCoverage(records, sourceEntries) {
   const expectedIds = sourceEntries
     .map((entry) => entry.id)
@@ -554,6 +587,27 @@ function collectPluginRecords() {
   }
 
   validatePluginCoverage(records, sourceEntries);
+  const sourceIds = new Set(sourceEntries.map((entry) => entry.id));
+  for (const {
+    dirName,
+    id,
+    manifest,
+    packageJson,
+  } of collectExternalPluginDocsInventoryEntries()) {
+    if (sourceIds.has(id)) {
+      continue;
+    }
+    records.push({
+      description: resolveDescription({ manifest, packageJson }),
+      docs: resolveDocs({ dirName, manifest, packageJson }),
+      id,
+      installRoute: resolveInstallRoute(packageJson, "external"),
+      name: humanizeId(id),
+      packageName: packageJson.name,
+      status: "external",
+      surface: resolvePluginSurface(manifest),
+    });
+  }
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 

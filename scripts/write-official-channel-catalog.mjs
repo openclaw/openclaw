@@ -161,6 +161,24 @@ function setUniqueCatalogEntry(entriesByChannelId, entry, owner) {
   entriesByChannelId.set(channelKey, { entry, owner });
 }
 
+function stripSeedOnlyDocsMetadata(entry) {
+  const hostConfig = isRecord(entry?.openclaw?.channelHostConfig)
+    ? entry.openclaw.channelHostConfig
+    : null;
+  if (!hostConfig || !("docsInventory" in hostConfig)) {
+    return entry;
+  }
+  const runtimeHostConfig = { ...hostConfig };
+  delete runtimeHostConfig.docsInventory;
+  return {
+    ...entry,
+    openclaw: {
+      ...entry.openclaw,
+      channelHostConfig: runtimeHostConfig,
+    },
+  };
+}
+
 /**
  * Collects publishable channel catalog entries from bundled and external channels.
  * @internal Directly tested script implementation detail.
@@ -173,7 +191,7 @@ export function buildOfficialChannelCatalog(params = {}) {
     : []) {
     setUniqueCatalogEntry(
       seedEntriesByChannelId,
-      entry,
+      stripSeedOnlyDocsMetadata(entry),
       `scripts/lib/official-external-channel-seed.json package "${trimString(entry?.name)}"`,
     );
   }
@@ -231,6 +249,9 @@ export function checkOfficialChannelCatalogSource(params = {}) {
 
 function toChannelDocsEntry(entry, sourceOverride) {
   const channel = isRecord(entry?.openclaw?.channel) ? entry.openclaw.channel : null;
+  const hostConfig = isRecord(entry?.openclaw?.channelHostConfig)
+    ? entry.openclaw.channelHostConfig
+    : null;
   const exposure = channel && isRecord(channel.exposure) ? channel.exposure : null;
   if (!channel || exposure?.docs === false) {
     return null;
@@ -240,7 +261,7 @@ function toChannelDocsEntry(entry, sourceOverride) {
     return null;
   }
   const docsPath = trimString(channel.docsPath) || `/channels/${id}`;
-  const source = sourceOverride ?? trimString(entry.source);
+  const source = sourceOverride ?? (trimString(hostConfig?.docsSource) || trimString(entry.source));
   return {
     id,
     docsPath,
