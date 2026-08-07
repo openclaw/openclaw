@@ -435,6 +435,8 @@ export type ChannelTurnLogEvent = {
   sessionKey?: string;
   admission?: ChannelTurnAdmission["kind"];
   reason?: string;
+  /** Dispatch-owned outcome detail attributing the reason, e.g. "skipped:duplicate". */
+  cause?: string;
   error?: unknown;
 };
 

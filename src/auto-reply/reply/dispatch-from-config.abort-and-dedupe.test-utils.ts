@@ -1306,6 +1306,31 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
+  it("attributes the processed outcome on completed and duplicate returns", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550123",
+      AccountId: "default",
+      MessageSid: "msg-duplicate-attributed",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    const [first, duplicate] = await dispatchTwiceWithFreshDispatchers({
+      ctx,
+      cfg,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(first.processedOutcome).toEqual({ outcome: "completed" });
+    // The duplicate skip queues nothing; its result must name the branch so the
+    // kernel's zero-count warning is attributable to a benign dedupe hit.
+    expect(duplicate.processedOutcome).toEqual({ outcome: "skipped", reason: "duplicate" });
+  });
+
   it("keeps message-tool-only delivery mode on duplicate inbound returns", async () => {
     setNoAbort();
     const cfg = {

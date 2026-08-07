@@ -13,6 +13,7 @@ import { prepareDispatchOperation } from "./dispatch-from-config.prepare-operati
 import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
+  DispatchProcessedNote,
 } from "./dispatch-from-config.types.js";
 import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import "./dispatch-from-config.events.js";
@@ -24,8 +25,14 @@ export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
+  // Every terminal branch records its processed outcome; the result mirrors the
+  // last note so consumers can attribute a dispatch that queued no payloads.
+  const processedNote: { current?: DispatchProcessedNote } = {};
   try {
-    const result = await dispatchReplyFromConfigInner(params, messageAuditTerminal);
+    const inner = await dispatchReplyFromConfigInner(params, messageAuditTerminal, processedNote);
+    const result = processedNote.current
+      ? { ...inner, processedOutcome: processedNote.current }
+      : inner;
     messageAuditTerminal?.finishSuccess(result);
     return result;
   } catch (error) {
@@ -37,8 +44,9 @@ export async function dispatchReplyFromConfig(
 async function dispatchReplyFromConfigInner(
   params: DispatchFromConfigParams,
   messageAuditTerminal: ReturnType<typeof createInboundMessageAuditTerminal>,
+  processedNote: { current?: DispatchProcessedNote },
 ): Promise<DispatchFromConfigResult> {
-  const gathered = await gatherDispatchRequest(params, messageAuditTerminal);
+  const gathered = await gatherDispatchRequest(params, messageAuditTerminal, processedNote);
   if (gathered.status === "complete") {
     return gathered.result;
   }

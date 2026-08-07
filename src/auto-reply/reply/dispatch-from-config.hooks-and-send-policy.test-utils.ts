@@ -437,7 +437,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed" },
+    });
   });
 
   it.each([
@@ -489,6 +493,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
       deliberateSilentTerminalReply: true,
+      processedOutcome: { outcome: "completed" },
     });
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
@@ -585,6 +590,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed" },
     });
   });
 
@@ -622,6 +628,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 0 },
       noVisibleReplyFallbackDelivered: true,
+      processedOutcome: { outcome: "completed" },
     });
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
@@ -688,6 +695,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed" },
     });
   });
 
@@ -843,6 +851,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed" },
     });
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
@@ -1873,6 +1882,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         queuedFinal: false,
         counts: { tool: 0, block: 0, final: 0 },
         sourceReplyDeliveryMode: "message_tool_only",
+        ...(params.expectPluginReplyDelivered ? { observedReplyDelivery: true } : {}),
+        processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
       });
       expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
@@ -1958,6 +1969,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
       sourceReplyDeliveryMode: "message_tool_only",
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-fallback-no-handler" },
     });
     const claimCall = firstMockCall(
       hookMocks.runner.runInboundClaimForPluginOutcome,

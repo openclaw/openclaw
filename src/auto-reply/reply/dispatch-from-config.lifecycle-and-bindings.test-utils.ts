@@ -87,7 +87,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed" },
+    });
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     const [event, hookContext] = firstMockCall(
       hookMocks.runner.runMessageReceived,
@@ -803,7 +807,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as
@@ -911,7 +919,11 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     expect(resolveInboundConversation).toHaveBeenCalledTimes(1);
     const [, event, context] = firstMockCall(
       hookMocks.runner.runInboundClaimForPluginOutcome,
@@ -1554,7 +1566,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     expect(order).toEqual(["stage", "claim"]);
     expect(ctx.media).toEqual([
       expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
@@ -1799,7 +1815,11 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "discord",
@@ -1889,7 +1909,11 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "skipped", reason: "reply_operation_aborted" },
+    });
     expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
@@ -1977,7 +2001,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed" },
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-1");
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
@@ -2037,7 +2065,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      processedOutcome: { outcome: "completed", reason: "plugin-bound-handled" },
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-unknown-slash");
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",

@@ -16,15 +16,10 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
+  DispatchProcessedOptions,
+  DispatchProcessedOutcome,
 } from "./dispatch-from-config.types.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
-
-export type DispatchProcessedOutcome = "completed" | "skipped" | "error";
-
-export type DispatchProcessedOptions = {
-  reason?: string;
-  error?: string;
-};
 
 function resolveCompletedInboundAuditReason(
   reason: string | undefined,

@@ -225,6 +225,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
       sendPolicyDenied: true,
+      processedOutcome: { outcome: "completed" },
     });
   });
 
