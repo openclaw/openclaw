@@ -313,10 +313,11 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
-  it("skips tool call extraction for assistant messages with stopReason 'error'", () => {
-    // When an assistant message has stopReason: "error", its tool_use blocks may be
-    // incomplete/malformed. We should NOT create synthetic tool_results for them,
-    // as this causes API 400 errors: "unexpected tool_use_id found in tool_result blocks"
+  it("strips dangling tool calls from errored assistant messages instead of leaving them", () => {
+    // When an assistant message has stopReason: "error", its unanswered tool_use blocks
+    // must not survive replay: an unmatched tool_use causes provider 400 errors
+    // ("unexpected tool_use_id found in tool_result blocks") that brick the session.
+    // The turn here is tool-call-only, so after stripping it becomes empty and is dropped.
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -330,15 +331,15 @@ describe("sanitizeToolUseResultPairing", () => {
 
     // Should NOT add synthetic tool results for errored messages
     expect(result.added).toHaveLength(0);
-    // The assistant message should be passed through unchanged
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
-    expect(result.messages).toHaveLength(2);
+    // The dangling errored turn is dropped; only the user turn survives.
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
   });
 
-  it("skips tool call extraction for assistant messages with stopReason 'aborted'", () => {
+  it("strips dangling tool calls from aborted assistant messages instead of leaving them", () => {
     // When a request is aborted mid-stream, the assistant message may have incomplete
-    // tool_use blocks (with partialJson). We should NOT create synthetic tool_results.
+    // tool_use blocks (with partialJson). We should NOT create synthetic tool_results,
+    // and the unanswered tool call must be stripped so replay stays provider-safe.
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -352,10 +353,9 @@ describe("sanitizeToolUseResultPairing", () => {
 
     // Should NOT add synthetic tool results for aborted messages
     expect(result.added).toHaveLength(0);
-    // Messages should be passed through without synthetic insertions
-    expect(result.messages).toHaveLength(2);
-    expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
+    // The dangling aborted turn is dropped; only the user turn survives.
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
   });
 
   it("still repairs tool results for normal assistant messages with stopReason 'toolUse'", () => {
@@ -420,6 +420,164 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
+  });
+});
+
+describe("repairToolUseResultPairing stream-poison sanitization", () => {
+  // A stream that errors after partial accumulation persists an assistant turn whose
+  // stopReason is flipped to "error"/"aborted" but whose content still holds the blocks
+  // streamed so far: signed-but-empty thinking blocks and tool calls with no matching
+  // tool result. Replaying those blocks makes the provider reject the whole transcript
+  // (HTTP 400) and silently bricks the session. Repair must strip the poison blocks while
+  // keeping real text so the error context survives, and must never emit an empty-content
+  // assistant turn (which providers also reject). These four cases mirror the four poison
+  // signatures observed in the field.
+
+  const toolCallBlock = (id: string) =>
+    ({ type: "toolCall", id, name: "read", arguments: { path: "/x" } }) as const;
+  const textBlock = (text: string) => ({ type: "text", text }) as const;
+  const emptyThinkingBlock = () => ({ type: "thinking", thinking: "" }) as const;
+
+  function assistantContent(message: AgentMessage | undefined) {
+    if (!message || message.role !== "assistant" || !Array.isArray(message.content)) {
+      return [] as Array<{ type?: unknown }>;
+    }
+    return message.content as Array<{ type?: unknown }>;
+  }
+
+  it("signature 1 (empty-thinking): drops empty signed thinking, keeps text, no synthetic", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "start" },
+      {
+        role: "assistant",
+        content: [emptyThinkingBlock(), textBlock("partial answer before the stream died")],
+        stopReason: "error",
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages).toHaveLength(2);
+    const content = assistantContent(result.messages[1]);
+    // Empty thinking is stripped; real text survives.
+    expect(content.some((b) => b.type === "thinking")).toBe(false);
+    expect(content).toEqual([textBlock("partial answer before the stream died")]);
+  });
+
+  it("signature 2 (dangling toolCall): drops unanswered tool call, keeps text", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "start" },
+      {
+        role: "assistant",
+        content: [textBlock("let me look"), toolCallBlock("call_dangling")],
+        stopReason: "error",
+      },
+      { role: "user", content: "next turn" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    // No synthetic tool result is fabricated for the errored turn.
+    expect(result.added).toHaveLength(0);
+    const content = assistantContent(result.messages[1]);
+    // The unanswered tool call is removed; text stays.
+    expect(content.some((b) => (b as { id?: unknown }).id === "call_dangling")).toBe(false);
+    expect(content).toEqual([textBlock("let me look")]);
+    // No orphan tool result is left behind for the provider to choke on.
+    expect(result.messages.some((m) => m.role === "toolResult")).toBe(false);
+  });
+
+  it("signature 2b (dangling toolCall): keeps an answered tool call alongside a dangling one", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          textBlock("working"),
+          toolCallBlock("call_answered"),
+          { type: "toolCall", id: "call_dangling", name: "list", arguments: {} },
+        ],
+        stopReason: "error",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_answered",
+        toolName: "read",
+        content: [{ type: "text", text: "file body" }],
+        isError: false,
+      },
+      { role: "user", content: "continue" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    const content = assistantContent(result.messages[0]);
+    // Answered call is preserved (it has a matching result); dangling call is dropped.
+    expect(content.some((b) => (b as { id?: unknown }).id === "call_answered")).toBe(true);
+    expect(content.some((b) => (b as { id?: unknown }).id === "call_dangling")).toBe(false);
+    // The matching tool result stays paired right after the assistant turn.
+    expect(result.messages[1]?.role).toBe("toolResult");
+    expect(result.added).toHaveLength(0);
+  });
+
+  it("signature 3 (empty-error turn): drops an errored turn with only poison content", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "start" },
+      {
+        role: "assistant",
+        content: [emptyThinkingBlock(), toolCallBlock("call_only")],
+        stopReason: "error",
+      },
+      { role: "user", content: "recovered" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    // The whole errored turn was pure poison (empty thinking + dangling call), so it is
+    // dropped rather than emitted as an empty-content assistant turn.
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages.every((m) => m.role === "user")).toBe(true);
+  });
+
+  it("signature 4 (orphan toolResult): a poison turn does not strand its own result", () => {
+    // The dangling call is stripped from the errored turn, and its now-orphaned result
+    // must not be pushed into the transcript (which would 400 as an unmatched result).
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [textBlock("trying"), toolCallBlock("call_orphan")],
+        stopReason: "aborted",
+      },
+      { role: "user", content: "next" },
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      erroredAssistantResultPolicy: "drop",
+    });
+
+    const content = assistantContent(result.messages[0]);
+    expect(content).toEqual([textBlock("trying")]);
+    expect(result.messages.some((m) => m.role === "toolResult")).toBe(false);
+    expect(result.added).toHaveLength(0);
+  });
+
+  it("leaves clean (non-errored) turns untouched", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [textBlock("here"), toolCallBlock("call_ok")],
+        stopReason: "toolUse",
+      },
+      { role: "user", content: "after" },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    // Normal turns still get a synthetic missing result and keep their tool call.
+    expect(result.added).toHaveLength(1);
+    const content = assistantContent(result.messages[0]);
+    expect(content.some((b) => (b as { id?: unknown }).id === "call_ok")).toBe(true);
   });
 });
 
