@@ -1,6 +1,6 @@
 // Comfy tests cover image generation provider plugin behavior.
 import type { LookupAddress } from "node:dns";
-import { truncate, writeFile } from "node:fs/promises";
+import { readFile, truncate, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -15,6 +15,7 @@ import {
   parseComfyJsonBody,
 } from "./test-helpers.js";
 import { setComfyFetchGuardForTesting } from "./test-support.js";
+import { readComfyWorkflowFile } from "./workflow-file.js";
 
 const PREVIOUS_COMFY_WORKFLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 // Matches ComfyUI's default --max-upload-size; used as the opt-in cap fixture.
@@ -578,6 +579,21 @@ describe("comfy image-generation provider", () => {
         }),
       ).rejects.toThrow(/Unexpected end of JSON input|Unexpected token/);
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps unconfigured workflowPath reads on the legacy direct UTF-8 path", async () => {
+    await withTempDir("openclaw-comfy-workflow-", async (tempRoot) => {
+      const workflowPath = path.join(tempRoot, "legacy-direct-read.json");
+      const workflow = JSON.stringify({
+        "6": { class_type: "CLIPTextEncode", inputs: { text: "" } },
+        "9": { class_type: "SaveImage", inputs: {} },
+      });
+      await writeFile(workflowPath, workflow, "utf8");
+
+      await expect(readComfyWorkflowFile(workflowPath, undefined)).resolves.toBe(
+        await readFile(workflowPath, "utf8"),
+      );
     });
   });
 
