@@ -7,9 +7,11 @@ import {
 } from "./provider-registry.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+const resolvePluginCapabilityProviderMock = vi.hoisted(() => vi.fn());
 const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProvider: resolvePluginCapabilityProviderMock,
   resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
 }));
 
@@ -33,6 +35,8 @@ function requireMediaProvider(
 
 describe("media-understanding provider registry", () => {
   beforeEach(() => {
+    resolvePluginCapabilityProviderMock.mockReset();
+    resolvePluginCapabilityProviderMock.mockReturnValue(undefined);
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
   });
@@ -109,7 +113,9 @@ describe("media-understanding provider registry", () => {
     const provider = requireMediaProvider(registry, "opencode");
 
     const result = await provider.extractStructured?.({
-      input: [{ type: "image", buffer: Buffer.from("bytes"), fileName: "a.png", mime: "image/png" }],
+      input: [
+        { type: "image", buffer: Buffer.from("bytes"), fileName: "a.png", mime: "image/png" },
+      ],
       instructions: "Extract JSON.",
       provider: "opencode",
       model: "gpt-5-nano",
@@ -155,6 +161,75 @@ describe("media-understanding provider registry", () => {
     const registry = buildMediaUnderstandingRegistry();
 
     expect(requireMediaProvider(registry, "gemini").id).toBe("google");
+  });
+
+  it("resolves the requested provider by id when another provider is already active", () => {
+    // The mixed-active regression (#119773): a warm gateway keeps another media
+    // provider active, Logbook's visionModel names anthropic, and anthropic is
+    // in neither the active set nor tools.media.models -- it must still load.
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+    resolvePluginCapabilityProviderMock.mockReturnValue(
+      createMediaProvider({ id: "anthropic", capabilities: ["image"], describeImages }),
+    );
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "anthropic");
+
+    const anthropic = requireMediaProvider(registry, "anthropic");
+    expect(anthropic.describeImages).toBe(describeImages);
+    expect(anthropic.extractStructured).toBeTypeOf("function");
+    expect(requireMediaProvider(registry, "openai").id).toBe("openai");
+    expect(resolvePluginCapabilityProviderMock).toHaveBeenCalledWith({
+      key: "mediaUnderstandingProviders",
+      providerId: "anthropic",
+      cfg: undefined,
+    });
+  });
+
+  it("does not re-resolve a requested provider already registered under an alias", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "google", capabilities: ["image"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "gemini");
+
+    expect(requireMediaProvider(registry, "gemini").id).toBe("google");
+    expect(resolvePluginCapabilityProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers the resolved provider's own hooks over a config-derived image entry", () => {
+    // Mirrors the cold path's ordering: plugin providers land before config
+    // synthetics, so a provider's request-transforming describeImages survives.
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+    resolvePluginCapabilityProviderMock.mockReturnValue(
+      createMediaProvider({ id: "anthropic", capabilities: ["image"], describeImages }),
+    );
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: { models: [{ id: "claude-sonnet-5", input: ["text", "image"] }] },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg, undefined, "anthropic");
+
+    expect(requireMediaProvider(registry, "anthropic").describeImages).toBe(describeImages);
+  });
+
+  it("leaves an unresolvable requested provider out of the registry", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "anthropic");
+
+    expect(getMediaUnderstandingProvider("anthropic", registry)).toBeUndefined();
   });
 
   it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
