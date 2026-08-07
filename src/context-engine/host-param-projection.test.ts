@@ -369,13 +369,13 @@ describe("context-engine host parameter projection", () => {
     await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    const message = warnSpy.mock.calls[0]?.[0] ?? "";
-    expect(message).toContain("context-engine-legacy-host-param-default");
-    expect(message).toContain(engineId);
-    expect(message).toContain("sessionKey");
-    expect(message).toContain("runtimeSettings");
-    expect(message).toContain("2026-08-12");
-    expect(message).toContain("info.acceptedHostParams");
+    const warningMessage = warnSpy.mock.calls[0]?.[0] ?? "";
+    expect(warningMessage).toContain("context-engine-legacy-host-param-default");
+    expect(warningMessage).toContain(engineId);
+    expect(warningMessage).toContain("sessionKey");
+    expect(warningMessage).toContain("runtimeSettings");
+    expect(warningMessage).toContain("2026-08-12");
+    expect(warningMessage).toContain("info.acceptedHostParams");
   });
 
   it("does not warn for engines that declare acceptedHostParams", async () => {
