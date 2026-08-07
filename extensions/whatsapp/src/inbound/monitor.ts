@@ -53,6 +53,8 @@ type MonitorWebInboxOptions = {
   appendReplyWindow?: WhatsAppAppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
+  /** Optional per-message debounce window override. */
+  resolveDebounceMs?: (msg: AdmittedWebInboundCallbackMessage) => number | undefined;
   /** Optional shared socket reference so reply closures can follow reconnects. */
   socketRef?: { current: WASocket | null };
   /** Whether send retries should wait for a reconnect. */
@@ -77,11 +79,12 @@ type MonitorWebInboxOptions = {
 
 type AttachWebInboxToSocketOptions = Omit<
   MonitorWebInboxOptions,
-  "onMessage" | "shouldDebounce" | "socketTiming"
+  "onMessage" | "shouldDebounce" | "resolveDebounceMs" | "socketTiming"
 > & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
   onMessage: (msg: WebInboundMessageInput) => Promise<void>;
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
 };
 
 export async function attachWebInboxToSocket(
@@ -134,6 +137,7 @@ export async function attachWebInboxToSocket(
     debounceMs: options.debounceMs,
     appendReplyWindow: options.appendReplyWindow,
     shouldDebounce: options.shouldDebounce,
+    resolveDebounceMs: options.resolveDebounceMs,
     onPendingWorkChanged: options.onPendingWorkChanged,
     durableInboundQueue:
       options.durableInboundQueue ?? createWhatsAppDurableInboundQueue(options.accountId),
@@ -203,6 +207,9 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     },
     shouldDebounce: options.shouldDebounce
       ? (msg) => options.shouldDebounce?.(normalizeAdmittedWebInboundMessage(msg)) ?? true
+      : undefined,
+    resolveDebounceMs: options.resolveDebounceMs
+      ? (msg) => options.resolveDebounceMs?.(normalizeAdmittedWebInboundMessage(msg))
       : undefined,
     socketTiming,
     sock,

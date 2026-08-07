@@ -11,6 +11,7 @@ import type { AdmittedWebInboundCallbackMessage, WebInboundMessageInput } from "
 export type WhatsAppQueuedInboundMessage = AdmittedWebInboundCallbackMessage & {
   debounceKey?: string;
   debounceKeyTracked?: boolean;
+  resolvedDebounceMs?: number;
   turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
   readReceipt?: WhatsAppReadReceiptTarget;
   receiveOrder?: number;
@@ -20,6 +21,7 @@ export function createWhatsAppInboundMessageDebouncer(options: {
   debounceMs?: number;
   onMessage: (msg: WebInboundMessageInput) => Promise<void>;
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
   markRead: (target: WhatsAppReadReceiptTarget | undefined) => Promise<void>;
   onPendingWorkChanged: () => void;
   onError: (error: unknown) => void;
@@ -52,6 +54,16 @@ export function createWhatsAppInboundMessageDebouncer(options: {
   };
   const shouldDebounce = (msg: AdmittedWebInboundCallbackMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
+  const resolveDebounceMs = (msg: AdmittedWebInboundCallbackMessage): number => {
+    const queued = msg as WhatsAppQueuedInboundMessage;
+    if (typeof queued.resolvedDebounceMs === "number") {
+      return queued.resolvedDebounceMs;
+    }
+    const resolved = options.resolveDebounceMs?.(msg);
+    return typeof resolved === "number" && Number.isFinite(resolved)
+      ? Math.max(0, Math.trunc(resolved))
+      : debounceMs;
+  };
   const trackKey = (key: string) => {
     pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1);
   };
@@ -74,8 +86,10 @@ export function createWhatsAppInboundMessageDebouncer(options: {
 
   const debouncer = createInboundDebouncer<WhatsAppQueuedInboundMessage>({
     debounceMs,
+    serializeImmediate: true,
     buildKey: (msg) => msg.debounceKey ?? buildKey(msg),
     shouldDebounce,
+    resolveDebounceMs,
     onFlush: (entries, createFlush) => {
       for (const entry of entries) {
         releaseKey(entry);
@@ -159,8 +173,12 @@ export function createWhatsAppInboundMessageDebouncer(options: {
   const enqueue = async (message: WhatsAppQueuedInboundMessage) => {
     const key = buildKey(message);
     if (key) {
+      const debounceWindowMs = resolveDebounceMs(message);
       message.debounceKey = key;
-      if (debounceMs > 0 && shouldDebounce(message)) {
+      message.resolvedDebounceMs = debounceWindowMs;
+      // Only positive windows create pending timer work. Every message still
+      // enters the debouncer below, where zero flushes and serializes the key.
+      if (debounceWindowMs > 0 && shouldDebounce(message)) {
         message.debounceKeyTracked = true;
         trackKey(key);
         options.onPendingWorkChanged();

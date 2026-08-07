@@ -101,6 +101,8 @@ type WhatsAppMessageDeliveryOptions = {
   appendReplyWindow?: WhatsAppAppendReplyWindow;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  /** Optional per-message debounce window override. */
+  resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
   onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
   durableInboundQueue?: WhatsAppDurableInboundQueue;
 };
@@ -197,6 +199,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     debounceMs: options.debounceMs,
     onMessage: options.onMessage,
     shouldDebounce: options.shouldDebounce,
+    resolveDebounceMs: options.resolveDebounceMs,
     markRead: maybeMarkInboundAsRead,
     onPendingWorkChanged: publishPendingWorkState,
     onError: (error) => {
