@@ -116,7 +116,7 @@ async function probeZaiChatCompletions(params: {
         onOverflow: ({ maxBytes }) =>
           new Error(`Z.AI probe error body exceeded size limit (${maxBytes} bytes)`),
       });
-      const json = JSON.parse(new TextDecoder().decode(bytes)) as {
+      const json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as {
         error?: { code?: unknown; message?: unknown };
         code?: unknown;
         msg?: unknown;
