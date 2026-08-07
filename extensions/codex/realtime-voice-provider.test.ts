@@ -132,6 +132,12 @@ describe("Codex realtime voice provider", () => {
       supportsToolCalls: false,
       handlesInputAudioBargeIn: true,
     });
+    expect(
+      provider.resolveConfig?.({
+        rawConfig: { model: "gpt-realtime-2.1", version: "v1", voice: "verse" },
+        cfg: {} as never,
+      }),
+    ).toEqual({ model: "gpt-realtime-2.1", version: "v1", voice: "verse" });
   });
 
   it("runs the existing bound session and adapts telephony audio", async () => {
