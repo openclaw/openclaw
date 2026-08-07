@@ -18,6 +18,7 @@ import {
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
+import { HEARTBEAT_SENDER_SENTINEL } from "./targets.js";
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
@@ -25,6 +26,12 @@ export function resolveImplicitMessageActionTarget(
   for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
     const target = normalizeOptionalString(value);
     if (!target) {
+      continue;
+    }
+    // Defense in depth for isolated heartbeat turns: the runner may still
+    // surface the non-deliverable "heartbeat" sentinel in tool context even
+    // when the owning run forgot requireExplicitMessageTarget.
+    if (target === HEARTBEAT_SENDER_SENTINEL) {
       continue;
     }
     // A session can arrive bare or wrapped as a channel target; neither is

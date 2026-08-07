@@ -22,6 +22,11 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
 } from "../../utils/message-channel.js";
+
+// Non-deliverable placeholder when resolveHeartbeatSenderId has no real target.
+// Heartbeat turns put this in From/To; message-action normalization must not
+// treat it as a deliverable implicit recipient (see #103519).
+export const HEARTBEAT_SENDER_SENTINEL = "heartbeat";
 import {
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
@@ -504,7 +509,7 @@ function resolveHeartbeatSenderId(params: {
 
   const allowList = mapAllowFromEntries(allowFrom).filter((entry) => entry && entry !== "*");
   if (allowFrom.includes("*")) {
-    return candidates[0] ?? "heartbeat";
+    return candidates[0] ?? HEARTBEAT_SENDER_SENTINEL;
   }
   if (candidates.length > 0 && allowList.length > 0) {
     const matched = candidates.find((candidate) => allowList.includes(candidate));
@@ -518,7 +523,7 @@ function resolveHeartbeatSenderId(params: {
   if (allowList.length > 0) {
     return allowList[0];
   }
-  return candidates[0] ?? "heartbeat";
+  return candidates[0] ?? HEARTBEAT_SENDER_SENTINEL;
 }
 
 /** Resolves the sender id/allow-list context used for heartbeat sends. */
