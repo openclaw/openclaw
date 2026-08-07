@@ -734,6 +734,27 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         }),
     },
     {
+      name: "fetch body",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          body: terminalThinkingSignatureError,
+        }),
+    },
+    {
+      name: "structured wrapper detail",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          detail: terminalThinkingSignatureError,
+        }),
+    },
+    {
+      name: "fetch responseBody",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          responseBody: terminalThinkingSignatureError,
+        }),
+    },
+    {
       name: "cyclic cause graph",
       createError: () => {
         const root = new Error(genericizedProviderError) as Error & { cause?: unknown };
@@ -932,6 +953,27 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       rateLimitError,
     );
     expect(callCount).toBe(1);
+  });
+
+  it("does not retry non-thinking errors carried in body, detail, or responseBody", async () => {
+    const nonThinking = "rate limit exceeded";
+    for (const carrier of ["body", "detail", "responseBody"] as const) {
+      const providerError = Object.assign(new Error(genericizedProviderError), {
+        [carrier]: nonThinking,
+      });
+      let callCount = 0;
+      const wrapped = wrapAnthropicStreamWithRecovery(
+        (() => {
+          callCount += 1;
+          return Promise.reject(providerError);
+        }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+        { id: "test-session" },
+      );
+      await expect(wrapped({} as never, { messages: [] } as never, {} as never)).rejects.toBe(
+        providerError,
+      );
+      expect(callCount).toBe(1);
+    }
   });
 
   it("allows each provider call to recover once", async () => {
