@@ -12,6 +12,10 @@ import {
 } from "../infra/tailscale.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import { prepareMcpAppChannelOrigin } from "./mcp-app-channel-origin.js";
+import {
+  clearGatewayTailscaleIngressMode,
+  setGatewayTailscaleIngressMode,
+} from "./tailscale-ingress-state.js";
 
 export async function startGatewayTailscaleExposure(params: {
   tailscaleMode: "off" | "serve" | "funnel";
@@ -29,6 +33,7 @@ export async function startGatewayTailscaleExposure(params: {
     params.tailscaleMode === "serve" ? params.serviceName?.trim() || undefined : undefined;
   let effectiveMode = params.tailscaleMode;
   let preservedFunnel = false;
+  let ingressModeRegistered = false;
   let clearPublishedOrigin: (() => void) | undefined;
 
   try {
@@ -85,15 +90,20 @@ export async function startGatewayTailscaleExposure(params: {
     } else if (!preservedFunnel) {
       params.logTailscale.info(`${params.tailscaleMode} enabled`);
     }
+    setGatewayTailscaleIngressMode(params.port, effectiveMode);
+    ingressModeRegistered = true;
   } catch (err) {
     params.logTailscale.warn(`${params.tailscaleMode} failed: ${formatErrorMessage(err)}`);
   }
 
-  if (!params.resetOnExit && !clearPublishedOrigin) {
+  if (!ingressModeRegistered && !params.resetOnExit && !clearPublishedOrigin) {
     return null;
   }
 
   return async () => {
+    if (ingressModeRegistered) {
+      clearGatewayTailscaleIngressMode(params.port);
+    }
     clearPublishedOrigin?.();
     if (!params.resetOnExit || preservedFunnel) {
       return;

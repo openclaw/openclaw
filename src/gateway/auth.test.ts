@@ -4,7 +4,11 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
-import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  createAuthRateLimiter,
+  type AuthRateLimiter,
+} from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
@@ -15,6 +19,7 @@ import {
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
+import { prepareGatewayIngressAttribution } from "./ingress-attribution.js";
 
 function createLimiterSpy(): AuthRateLimiter & {
   check: ReturnType<typeof vi.fn>;
@@ -67,6 +72,17 @@ function createTailscaleWhois() {
   return async () => ({ login: "peter@github", name: "Peter" });
 }
 
+async function prepareTailscaleServe(
+  req: TailscaleForwardedRequest,
+  tailscaleWhois = createTailscaleWhois(),
+) {
+  return await prepareGatewayIngressAttribution({
+    req,
+    tailscaleMode: "serve",
+    tailscaleWhois,
+  });
+}
+
 function createAvatarBrowserOriginPolicy(
   req: TailscaleForwardedRequest,
   allowedOrigins: string[] = [],
@@ -109,11 +125,16 @@ describe("gateway auth", () => {
     expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
   }) {
     const req = createTailscaleForwardedReq();
+    const ingressAttribution = await prepareGatewayIngressAttribution({
+      req,
+      tailscaleMode: "serve",
+      tailscaleWhois: createTailscaleWhois(),
+    });
     const res = await params.authorize({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
-      tailscaleWhois: createTailscaleWhois(),
       req,
+      ingressAttribution,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
     });
     expect(res.ok).toBe(params.expected.ok);
@@ -479,11 +500,17 @@ describe("gateway auth", () => {
   });
 
   it("does not allow tailscale identity to satisfy token mode auth by default", async () => {
+    const req = createTailscaleForwardedReq();
+    const ingressAttribution = await prepareGatewayIngressAttribution({
+      req,
+      tailscaleMode: "serve",
+      tailscaleWhois: createTailscaleWhois(),
+    });
     const res = await authorizeHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
-      tailscaleWhois: createTailscaleWhois(),
-      req: createTailscaleForwardedReq(),
+      req,
+      ingressAttribution,
     });
 
     expect(res.ok).toBe(false);
@@ -491,11 +518,18 @@ describe("gateway auth", () => {
   });
 
   it("allows tailscale identity when header auth is explicitly enabled", async () => {
+    const req = createTailscaleForwardedReq();
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
+    const ingressAttribution = await prepareGatewayIngressAttribution({
+      req,
+      tailscaleMode: "serve",
+      tailscaleWhois,
+    });
     const res = await authorizeWsControlUiGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
-      tailscaleWhois: createTailscaleWhois(),
-      req: createTailscaleForwardedReq(),
+      req,
+      ingressAttribution,
     });
 
     expect(res.ok).toBe(true);
@@ -506,36 +540,133 @@ describe("gateway auth", () => {
       name: "Peter",
       profilePic: "https://avatars.example.test/peter.png",
     });
+    expect(tailscaleWhois).toHaveBeenCalledOnce();
+  });
+
+  it("does not infer Tailscale identity from raw headers without prepared provenance", async () => {
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      req: createTailscaleForwardedReq(),
+    });
+
+    expect(res).toMatchObject({ ok: false, reason: "token_missing" });
+  });
+
+  it("falls through to normal auth when lazy Tailscale identity lookup fails", async () => {
+    const req = createTailscaleForwardedReq();
+    const tailscaleWhois = vi.fn(async () => {
+      throw new Error("WhoIs unavailable");
+    });
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
+
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      req,
+      ingressAttribution,
+    });
+
+    expect(res).toMatchObject({ ok: false, reason: "token_missing" });
+    expect(tailscaleWhois).toHaveBeenCalledOnce();
+  });
+
+  it("rejects unattributable proxy ingress before checking credentials", async () => {
+    const limiter = createLimiterSpy();
+    const req = {
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: { "x-forwarded-for": "198.51.100.10" },
+    } as never;
+    const ingressAttribution = await prepareGatewayIngressAttribution({ req });
+    const res = await authorizeHttpGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "secret" },
+      req,
+      ingressAttribution,
+      rateLimiter: limiter,
+    });
+
+    expect(res).toEqual({ ok: false, reason: "proxy_attribution_required" });
+    expect(limiter.check).not.toHaveBeenCalled();
+    expect(limiter.reset).not.toHaveBeenCalled();
+  });
+
+  it("preserves a caller-selected browser-origin limiter key with prepared ingress", async () => {
+    const limiter = createAuthRateLimiter({ maxAttempts: 1, pruneIntervalMs: 0 });
+    const req = {
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: {},
+    } as never;
+    const ingressAttribution = await prepareGatewayIngressAttribution({ req });
+
+    const result = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      req,
+      ingressAttribution,
+      clientIp: "browser-origin:https://hostile.example",
+      rateLimiter: limiter,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "token_mismatch" });
+    expect(
+      limiter.check("browser-origin:https://hostile.example", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET)
+        .allowed,
+    ).toBe(false);
+    expect(
+      limiter.check("browser-origin:https://control.example", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET)
+        .allowed,
+    ).toBe(true);
+    limiter.dispose();
+  });
+
+  it("verifies Serve identity before an unrelated limiter bucket", async () => {
+    const limiter = createLimiterSpy();
+    limiter.check.mockReturnValue({ allowed: false, remaining: 0, retryAfterMs: 60_000 });
+    const req = createTailscaleForwardedReq();
+    const ingressAttribution = await prepareTailscaleServe(req);
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      req,
+      ingressAttribution,
+      rateLimiter: limiter,
+    });
+
+    expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter@github" });
+    expect(limiter.check).not.toHaveBeenCalled();
   });
 
   it("allows an origin-less same-origin image through the profile avatar surface", async () => {
     const limiter = createLimiterSpy();
     const req = createTailscaleForwardedReq();
+    const ingressAttribution = await prepareTailscaleServe(req);
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
-      tailscaleWhois: createTailscaleWhois(),
       req,
+      ingressAttribution,
       rateLimiter: limiter,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
     });
 
     expect(res).toMatchObject({ ok: true, method: "tailscale", user: "peter@github" });
-    expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-    expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+    expect(limiter.check).not.toHaveBeenCalled();
+    expect(limiter.reset).not.toHaveBeenCalled();
   });
 
-  it("rejects a cross-origin page before verifying Tailscale avatar identity", async () => {
+  it("rejects a cross-origin page after preparing Tailscale identity", async () => {
     const req = createTailscaleForwardedReq();
     req.headers.origin = "https://evil.example";
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
 
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
-      tailscaleWhois,
       req,
+      ingressAttribution,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["https://control.example.com"]),
     });
 
@@ -548,12 +679,13 @@ describe("gateway auth", () => {
     req.headers.origin = "https://evil.example";
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
 
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
-      tailscaleWhois,
       req,
+      ingressAttribution,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["*"]),
     });
 
@@ -566,12 +698,13 @@ describe("gateway auth", () => {
     req.headers.origin = "https://control.example.com";
     req.headers["sec-fetch-site"] = "cross-site";
     const tailscaleWhois = vi.fn(createTailscaleWhois());
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
 
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
-      tailscaleWhois,
       req,
+      ingressAttribution,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["https://control.example.com"]),
     });
 
@@ -589,12 +722,13 @@ describe("gateway auth", () => {
         req.headers["sec-fetch-site"] = fetchSite;
       }
       const tailscaleWhois = vi.fn(createTailscaleWhois());
+      const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
 
       const res = await authorizeUserProfileAvatarHttpGatewayConnect({
         auth: { mode: "token", token: "secret", allowTailscale: true },
         connectAuth: null,
-        tailscaleWhois,
         req,
+        ingressAttribution,
         browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
       });
 
@@ -633,16 +767,27 @@ describe("gateway auth", () => {
   ])("rejects $name on the profile avatar HTTP surface", async ({ mutate, whois }) => {
     const req = createTailscaleForwardedReq();
     mutate(req);
+    const ingressAttribution = await prepareGatewayIngressAttribution({
+      req,
+      tailscaleMode: "serve",
+      tailscaleWhois: whois,
+    });
 
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
-      tailscaleWhois: whois,
       req,
+      ingressAttribution,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req),
     });
 
-    expect(res).toMatchObject({ ok: false, reason: "token_missing" });
+    expect(res).toMatchObject({
+      ok: false,
+      reason:
+        ingressAttribution.kind === "direct-remote" || ingressAttribution.kind === "tailscale-serve"
+          ? "token_missing"
+          : "proxy_attribution_required",
+    });
   });
 
   it.each([
@@ -657,59 +802,41 @@ describe("gateway auth", () => {
       method: "password",
     },
   ])("keeps $method auth on the profile avatar HTTP surface", async (testCase) => {
+    const limiter = createLimiterSpy();
     const req = createTailscaleForwardedReq();
     req.headers.origin = "https://evil.example";
     req.headers["sec-fetch-site"] = "cross-site";
+    const tailscaleWhois = vi.fn(createTailscaleWhois());
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
     const res = await authorizeUserProfileAvatarHttpGatewayConnect({
       ...testCase,
       req,
+      ingressAttribution,
+      rateLimiter: limiter,
       browserOriginPolicy: createAvatarBrowserOriginPolicy(req, ["*"]),
     });
 
     expect(res).toMatchObject({ ok: true, method: testCase.method });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
+    expect(limiter.reset).not.toHaveBeenCalled();
   });
 
-  it("serializes async auth attempts per rate-limit key", async () => {
-    const limiter = createAuthRateLimiter({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: false,
+  it("keeps explicit token auth independent of disabled Tailscale identity lookup", async () => {
+    const req = createTailscaleForwardedReq();
+    const tailscaleWhois = vi.fn(async () => {
+      throw new Error("WhoIs unavailable");
     });
-    let releaseWhois: (() => void) | undefined;
-    const whoisGate = new Promise<void>((resolve) => {
-      releaseWhois = resolve;
+    const ingressAttribution = await prepareTailscaleServe(req, tailscaleWhois);
+
+    const res = await authorizeWsControlUiGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "secret" },
+      req,
+      ingressAttribution,
     });
-    let whoisCalls = 0;
-    const tailscaleWhois = async () => {
-      whoisCalls += 1;
-      await whoisGate;
-      return null;
-    };
 
-    const baseParams = {
-      auth: { mode: "token" as const, token: "secret", allowTailscale: true },
-      connectAuth: { token: "wrong" },
-      tailscaleWhois,
-      req: createTailscaleForwardedReq(),
-      trustedProxies: ["127.0.0.1"],
-      rateLimiter: limiter,
-    };
-
-    const first = authorizeWsControlUiGatewayConnect(baseParams);
-    const second = authorizeWsControlUiGatewayConnect(baseParams);
-
-    if (!releaseWhois) {
-      throw new Error("Expected Tailscale whois release callback to be initialized");
-    }
-    releaseWhois();
-
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    expect(firstResult.ok).toBe(false);
-    expect(firstResult.reason).toBe("token_mismatch");
-    expect(secondResult.ok).toBe(false);
-    expect(secondResult.reason).toBe("rate_limited");
-    expect(whoisCalls).toBe(0);
+    expect(res).toMatchObject({ ok: true, method: "token" });
+    expect(tailscaleWhois).not.toHaveBeenCalled();
   });
 
   it("keeps tailscale header auth disabled on HTTP auth wrapper", async () => {

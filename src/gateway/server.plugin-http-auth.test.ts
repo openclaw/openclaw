@@ -22,6 +22,10 @@ import {
 } from "./server-http.test-harness.js";
 import { createTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import {
+  clearGatewayTailscaleIngressMode,
+  setGatewayTailscaleIngressMode,
+} from "./tailscale-ingress-state.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -210,6 +214,47 @@ describe("gateway plugin HTTP auth boundary", () => {
         await expectHealthzProbeReserved({ server, handlePluginRequest });
       },
     });
+  });
+
+  test("passes the prepared managed-ingress client identity to plugin routes", async () => {
+    const observedClientIps: Array<string | undefined> = [];
+    const handlePluginRequest = vi.fn(
+      async (
+        _req: IncomingMessage,
+        res: ServerResponse,
+        _pathContext: unknown,
+        dispatchContext: { gatewayRequestClientIp?: string } | undefined,
+      ) => {
+        observedClientIps.push(dispatchContext?.gatewayRequestClientIp);
+        res.statusCode = 200;
+        res.end("ok");
+        return true;
+      },
+    );
+    const req = createRequest({
+      path: "/plugin-route",
+      headers: {
+        "x-forwarded-for": "100.64.0.9",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "gateway.example.test",
+        "tailscale-funnel-request": "?1",
+      },
+    });
+    Object.assign(req.socket, { localPort: 18789 });
+
+    setGatewayTailscaleIngressMode(18789, "funnel");
+    try {
+      const server = createTestGatewayServer({
+        resolvedAuth: AUTH_NONE,
+        overrides: { handlePluginRequest },
+      });
+      const response = createResponse();
+      await dispatchRequest(server, req, response.res);
+      expect(response.res.statusCode).toBe(200);
+      expect(observedClientIps).toEqual(["100.64.0.9"]);
+    } finally {
+      clearGatewayTailscaleIngressMode(18789);
+    }
   });
 
   test("rejects non-GET/HEAD methods on probe routes", async () => {

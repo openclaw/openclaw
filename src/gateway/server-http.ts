@@ -47,7 +47,13 @@ import {
   sendGatewayAuthFailure,
   setDefaultSecurityHeaders,
 } from "./http-common.js";
-import { resolveRequestClientIp } from "./net.js";
+import {
+  prepareGatewayIngressAttribution,
+  PROXY_ATTRIBUTION_GUIDANCE,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
+  type GatewayIngressAttribution,
+  type GatewayIngressAttributionDiagnostics,
+} from "./ingress-attribution.js";
 import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
@@ -182,6 +188,8 @@ async function handleGatewayProbeRequest(
   resolvedAuth: ResolvedGatewayAuth,
   trustedProxies: string[],
   allowRealIpFallback: boolean,
+  rateLimiter: AuthRateLimiter | undefined,
+  ingressAttribution: GatewayIngressAttribution | undefined,
   getReadiness?: ReadinessChecker,
 ): Promise<boolean> {
   const status = classifyGatewayProbePath(requestPath);
@@ -206,7 +214,9 @@ async function handleGatewayProbeRequest(
   if (status === "ready" && getReadiness) {
     // Readiness details expose subsystem names, so only local direct or authenticated
     // callers receive them; unauthenticated remote probes get the aggregate boolean.
-    let includeDetails = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
+    let includeDetails =
+      ingressAttribution?.kind === "direct-local" ||
+      (!ingressAttribution && isLocalDirectRequest(req, trustedProxies, allowRealIpFallback));
     if (!includeDetails && resolvedAuth.mode !== "none") {
       const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
       const bearerToken = getBearerToken(req);
@@ -217,6 +227,8 @@ async function handleGatewayProbeRequest(
           req,
           trustedProxies,
           allowRealIpFallback,
+          rateLimiter,
+          ingressAttribution,
           browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
         })
       ).ok;
@@ -257,6 +269,25 @@ function writeUpgradeAuthFailure(
       [
         "HTTP/1.1 429 Too Many Requests",
         ...(retryAfterSeconds ? [`Retry-After: ${retryAfterSeconds}`] : []),
+        "Content-Type: application/json; charset=utf-8",
+        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
+        "Connection: close",
+        "",
+        body,
+      ].join("\r\n"),
+    );
+    return;
+  }
+  if (auth.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    const body = JSON.stringify({
+      error: {
+        message: `Proxy client attribution is required. ${PROXY_ATTRIBUTION_GUIDANCE}`,
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
+    socket.write(
+      [
+        "HTTP/1.1 403 Forbidden",
         "Content-Type: application/json; charset=utf-8",
         `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
         "Connection: close",
@@ -330,6 +361,7 @@ export function createGatewayHttpServer(opts: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  ingressAttributionDiagnostics?: GatewayIngressAttributionDiagnostics;
   getReadiness?: ReadinessChecker;
   getRuntimeConfig?: () => OpenClawConfig;
   isStartupPluginRuntimeReady?: () => boolean;
@@ -404,6 +436,8 @@ export function createGatewayHttpServer(opts: {
           getResolvedAuth(),
           [],
           false,
+          undefined,
+          undefined,
           getReadiness,
         );
         return;
@@ -412,6 +446,18 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadGatewayConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const resolvedAuthValue = getResolvedAuth();
+      const ingressAttribution = await prepareGatewayIngressAttribution({
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+        allowVerifiedExternalServe: resolvedAuthValue.allowTailscale,
+      });
+      opts.ingressAttributionDiagnostics?.observe(ingressAttribution, req);
+      if (ingressAttribution.kind === "unattributable-proxy") {
+        sendGatewayAuthFailure(res, { ok: false, reason: ingressAttribution.reason });
+        return;
+      }
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -425,12 +471,12 @@ export function createGatewayHttpServer(opts: {
       const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
-      const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
         trustedProxies,
         allowRealIpFallback,
         rateLimiter,
+        ingressAttribution,
       };
       const controlUiRouteOptions = {
         basePath: controlUiBasePath,
@@ -455,6 +501,8 @@ export function createGatewayHttpServer(opts: {
               resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
+              rateLimiter,
+              ingressAttribution,
               getReadiness,
             ),
         },
@@ -588,6 +636,7 @@ export function createGatewayHttpServer(opts: {
           capability: scopedNodeCapability.capability,
           malformedScopedPath: scopedNodeCapability.malformedScopedPath,
           rateLimiter,
+          ingressAttribution,
         });
         if (!ok.ok) {
           sendGatewayAuthFailure(res, ok);
@@ -634,7 +683,6 @@ export function createGatewayHttpServer(opts: {
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
       if (handlePluginRequest) {
-        const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
         let pluginGatewayAuthSatisfied = false;
         let pluginGatewayRequestAuth: AuthorizedGatewayHttpRequest | undefined;
         let pluginRequestOperatorScopes: string[] | undefined;
@@ -681,7 +729,7 @@ export function createGatewayHttpServer(opts: {
                 gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
                 gatewayRequestAuth: pluginGatewayRequestAuth,
                 gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
-                gatewayRequestClientIp: requestClientIp,
+                gatewayRequestClientIp: ingressAttribution.clientIp,
               }),
           },
         );
@@ -815,6 +863,7 @@ export function attachGatewayUpgradeHandler(opts: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  ingressAttributionDiagnostics?: GatewayIngressAttributionDiagnostics;
   /** Optional logger for error diagnostics. */
   log?: { warn: (msg: string) => void };
 }) {
@@ -836,7 +885,19 @@ export function attachGatewayUpgradeHandler(opts: {
       const configSnapshot = getRuntimeConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
-      const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      const resolvedAuthLocal = getResolvedAuth();
+      const ingressAttribution = await prepareGatewayIngressAttribution({
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+        allowVerifiedExternalServe: resolvedAuthLocal.allowTailscale,
+      });
+      opts.ingressAttributionDiagnostics?.observe(ingressAttribution, req);
+      if (ingressAttribution.kind === "unattributable-proxy") {
+        writeUpgradeAuthFailure(socket, { ok: false, reason: ingressAttribution.reason });
+        socket.destroy();
+        return;
+      }
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
@@ -846,7 +907,6 @@ export function attachGatewayUpgradeHandler(opts: {
       if (scopedNodeCapability.rewrittenUrl) {
         req.url = scopedNodeCapability.rewrittenUrl;
       }
-      const resolvedAuthLocal = getResolvedAuth();
       const requestPath = scopedNodeCapability.pathname;
       const pathContext = resolvePluginRoutePathContext(requestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
@@ -864,6 +924,7 @@ export function attachGatewayUpgradeHandler(opts: {
           capability: scopedNodeCapability.capability,
           malformedScopedPath: scopedNodeCapability.malformedScopedPath,
           rateLimiter,
+          ingressAttribution,
         });
         if (!ok.ok) {
           writeUpgradeAuthFailure(socket, ok);
@@ -889,6 +950,7 @@ export function attachGatewayUpgradeHandler(opts: {
             trustedProxies,
             allowRealIpFallback,
             rateLimiter,
+            ingressAttribution,
             cfg: configSnapshot,
           });
           if (!authCheck.ok) {
@@ -910,7 +972,7 @@ export function attachGatewayUpgradeHandler(opts: {
             gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
             gatewayRequestAuth: pluginGatewayRequestAuth,
             gatewayRequestOperatorScopes: pluginGatewayRequestOperatorScopes,
-            gatewayRequestClientIp: requestClientIp,
+            gatewayRequestClientIp: ingressAttribution.clientIp,
           })
         ) {
           return;
@@ -926,7 +988,7 @@ export function attachGatewayUpgradeHandler(opts: {
           head,
           wss,
           preauthConnectionBudget,
-          preauthBudgetKey: requestClientIp,
+          preauthBudgetKey: ingressAttribution.rateLimit.subject.key,
           ingressName: "Gateway",
         });
       } catch {

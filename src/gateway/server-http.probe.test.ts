@@ -14,6 +14,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ChannelManager } from "./server-channels.js";
 import {
   AUTH_TOKEN,
@@ -563,6 +564,32 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("fails closed with guidance for unattributable proxied readiness", async () => {
+    await withGatewayServer({
+      prefix: "probe-unattributable-proxy",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        getReadiness: () => ({ ready: true, failing: [], uptimeMs: 45_000 }),
+      },
+      run: async (server) => {
+        const { res, getBody } = await sendGatewayRequest(server, {
+          path: "/ready",
+          headers: { "x-forwarded-for": "198.51.100.10" },
+          authorization: "Bearer test-token",
+        });
+
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(getBody())).toEqual({
+          error: {
+            message:
+              "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+            type: "proxy_attribution_required",
+          },
+        });
+      },
+    });
+  });
+
   it("returns only readiness state for unauthenticated remote /ready requests", async () => {
     const getReadiness: ReadinessChecker = () => ({
       ready: false,
@@ -611,6 +638,38 @@ describe("gateway probe endpoints", () => {
           ready: false,
           failing: ["discord", "telegram"],
           uptimeMs: 8_000,
+        });
+      },
+    });
+  });
+
+  it("rate-limits repeated remote readiness credential failures", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+    });
+    await withGatewayServer({
+      prefix: "probe-remote-rate-limit",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        rateLimiter,
+        getReadiness: () => ({ ready: false, failing: ["telegram"], uptimeMs: 8_000 }),
+      },
+      run: async (server) => {
+        const request = (authorization: string) =>
+          sendGatewayRequest(server, {
+            path: "/ready",
+            remoteAddress: "10.0.0.8",
+            host: "gateway.test",
+            authorization,
+          });
+
+        expect(JSON.parse((await request("Bearer wrong-token")).getBody())).toEqual({
+          ready: false,
+        });
+        expect(JSON.parse((await request("Bearer test-token")).getBody())).toEqual({
+          ready: false,
         });
       },
     });

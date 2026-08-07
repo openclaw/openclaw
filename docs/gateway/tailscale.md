@@ -110,6 +110,33 @@ openclaw gateway --tailscale funnel --auth password
 
 When `tailscale.mode: "serve"` and `gateway.auth.allowTailscale` is `true`, Control UI/WebSocket auth can use Tailscale identity headers (`tailscale-user-login`) instead of a token/password. OpenClaw verifies the header by resolving the request's `x-forwarded-for` address via the local Tailscale daemon (`tailscale whois`) and matching it to the header login before accepting it. A request only qualifies for this path when it arrives from loopback carrying Tailscale's `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` headers.
 
+Serve attribution is prepared before authentication rate limiting.
+OpenClaw-managed or explicitly preserved Funnel retains its required
+shared-password authentication.
+
+Managed Serve shared-secret attempts use one non-exempt, non-resetting
+proxy-peer bucket until tokenless identity is verified. This degraded fallback
+prevents unverified forwarded addresses from selecting limiter keys, at the
+cost that failures from one client can temporarily lock shared-secret attempts
+for other clients on the route. Verified tokenless Serve identity remains
+independent of that shared-secret lockout.
+
+Tagged Serve clients omit the user identity header. They remain eligible for
+shared-secret authentication through the managed-route bucket, but cannot use
+tokenless identity authentication.
+
+Managed Funnel uses the same stable, non-resetting proxy-peer bucket rather
+than selecting a password limiter key from forwarded headers. Repeated failures
+from one Funnel client can therefore temporarily lock password attempts for
+other Funnel clients.
+
+Separately configured Serve requires both explicit
+`gateway.auth.allowTailscale: true` and a narrow `gateway.trustedProxies` entry
+for its loopback peer. OpenClaw then requires the complete Serve proxy-header
+set and a WhoIs login match. Configure that edge to overwrite or safely rebuild
+the forwarded chain. Other proxy-shaped loopback traffic without explicit trust
+or an OpenClaw-managed Tailscale route is rejected.
+
 This tokenless flow assumes the gateway host is trusted. If untrusted local code may run on the same host, set `gateway.auth.allowTailscale: false` and require token/password auth instead.
 
 Scope of the bypass:

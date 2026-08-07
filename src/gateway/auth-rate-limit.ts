@@ -79,11 +79,19 @@ export interface RateLimitCheckResult {
   retryAfterMs: number;
 }
 
+/** Prepared limiter identity and exemption policy from the owning ingress boundary. */
+export type AuthRateLimitSubject = {
+  key: string;
+  exemption: "configured-loopback" | "none";
+};
+
+type AuthRateLimitInput = string | undefined | AuthRateLimitSubject;
+
 export interface AuthRateLimiter {
   /** Check whether `ip` is currently allowed to attempt authentication. */
-  check(ip: string | undefined, scope?: string): RateLimitCheckResult;
+  check(ip: AuthRateLimitInput, scope?: string): RateLimitCheckResult;
   /** Record a failed authentication attempt for `ip`. */
-  recordFailure(ip: string | undefined, scope?: string): void;
+  recordFailure(ip: AuthRateLimitInput, scope?: string): void;
   /**
    * Record a failed attempt and await any loopback penalty delay.
    *
@@ -93,9 +101,9 @@ export interface AuthRateLimiter {
    * peer stall the operator's own correct-credential CLI, which loopback must
    * never do. Fan-out from loopback is out of scope for this limiter by design.
    */
-  recordFailureAndDelay(ip: string | undefined, scope?: string): Promise<void>;
+  recordFailureAndDelay(ip: AuthRateLimitInput, scope?: string): Promise<void>;
   /** Reset the rate-limit state for `ip` (e.g. after a successful login). */
-  reset(ip: string | undefined, scope?: string): void;
+  reset(ip: AuthRateLimitInput, scope?: string): void;
   /** Return the current number of tracked IPs (useful for diagnostics). */
   size(): number;
   /** Remove expired entries and release memory. */
@@ -188,15 +196,23 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   function resolveKey(
-    rawIp: string | undefined,
+    rawIp: AuthRateLimitInput,
     rawScope: string | undefined,
   ): {
     key: string;
     ip: string;
+    exempt: boolean;
   } {
-    const ip = normalizeIp(rawIp);
+    const prepared = typeof rawIp === "object" && rawIp !== null ? rawIp : undefined;
+    const ip = normalizeIp(prepared?.key ?? (typeof rawIp === "string" ? rawIp : undefined));
     const scope = normalizeScope(rawScope);
-    return { key: `${scope}:${ip}`, ip };
+    return {
+      key: `${scope}:${ip}`,
+      ip,
+      exempt: prepared
+        ? prepared.exemption === "configured-loopback" && isExempt(ip)
+        : isExempt(ip),
+    };
   }
 
   function isExempt(ip: string): boolean {
@@ -209,9 +225,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     entry.attempts = entry.attempts.filter((ts) => ts > cutoff);
   }
 
-  function check(rawIp: string | undefined, rawScope?: string): RateLimitCheckResult {
-    const { key, ip } = resolveKey(rawIp, rawScope);
-    if (isExempt(ip)) {
+  function check(rawIp: AuthRateLimitInput, rawScope?: string): RateLimitCheckResult {
+    const { key, exempt } = resolveKey(rawIp, rawScope);
+    if (exempt) {
       return { allowed: true, remaining: maxAttempts, retryAfterMs: 0 };
     }
 
@@ -246,9 +262,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     return { allowed: remaining > 0, remaining, retryAfterMs: 0 };
   }
 
-  function recordFailure(rawIp: string | undefined, rawScope?: string): void {
-    const { key, ip } = resolveKey(rawIp, rawScope);
-    const exempt = isExempt(ip);
+  function recordFailure(rawIp: AuthRateLimitInput, rawScope?: string): void {
+    const { key, exempt } = resolveKey(rawIp, rawScope);
 
     const now = Date.now();
     let entry = entries.get(key);
@@ -281,12 +296,12 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   }
 
   async function recordFailureAndDelay(
-    rawIp: string | undefined,
+    rawIp: AuthRateLimitInput,
     rawScope?: string,
   ): Promise<void> {
-    const { key, ip } = resolveKey(rawIp, rawScope);
+    const { key, exempt } = resolveKey(rawIp, rawScope);
     recordFailure(rawIp, rawScope);
-    if (!isExempt(ip)) {
+    if (!exempt) {
       return;
     }
 
@@ -344,7 +359,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     }
   }
 
-  function reset(rawIp: string | undefined, rawScope?: string): void {
+  function reset(rawIp: AuthRateLimitInput, rawScope?: string): void {
     const { key } = resolveKey(rawIp, rawScope);
     entries.delete(key);
     loopbackPenaltyUntil.delete(key);

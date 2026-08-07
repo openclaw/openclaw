@@ -6,6 +6,7 @@ import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
+  type AuthRateLimitSubject,
 } from "../../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
@@ -13,6 +14,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
+import type { GatewayIngressAttribution } from "../../ingress-attribution.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 
 type HandshakeConnectAuth = {
@@ -64,7 +66,8 @@ type ResolveConnectAuthDecisionParams = {
   role: string;
   scopes: string[];
   rateLimiter?: AuthRateLimiter;
-  clientIp?: string;
+  clientIp?: string | AuthRateLimitSubject;
+  resetSharedSecretOnSuccess?: boolean;
   verifyBootstrapToken: (params: {
     deviceId: string;
     publicKey: string;
@@ -130,8 +133,9 @@ export async function resolveConnectAuthState(params: {
   req: IncomingMessage;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
+  ingressAttribution: GatewayIngressAttribution;
   rateLimiter?: AuthRateLimiter;
-  clientIp?: string;
+  clientIp?: string | AuthRateLimitSubject;
 }): Promise<ConnectAuthState> {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
@@ -147,6 +151,7 @@ export async function resolveConnectAuthState(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
+    ingressAttribution: params.ingressAttribution,
     rateLimiter: sharedAuthProvided ? params.rateLimiter : undefined,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -160,6 +165,7 @@ export async function resolveConnectAuthState(params: {
       req: params.req,
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
+      ingressAttribution: params.ingressAttribution,
       // Shared-auth probe only; rate-limit side effects are handled in the
       // primary auth flow (or deferred for device-token candidates).
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -311,7 +317,7 @@ async function resolveConnectAuthDecisionCore(
         deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
       }
       params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-      if (params.state.sharedAuthProvided) {
+      if (params.state.sharedAuthProvided && params.resetSharedSecretOnSuccess !== false) {
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
       }
     } else {

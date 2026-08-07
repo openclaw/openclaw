@@ -60,6 +60,8 @@ export function formatGatewayAuthFailureMessage(params: {
       return "unauthorized: tailscale identity mismatch (use Tailscale Serve auth or gateway token/password)";
     case "rate_limited":
       return "unauthorized: too many failed authentication attempts (retry later)";
+    case "proxy_attribution_required":
+      return "unauthorized: proxy client attribution is required (configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers)";
     case "device_token_mismatch":
       return "unauthorized: device token mismatch (rotate/reissue device token)";
     case "scope_mismatch":

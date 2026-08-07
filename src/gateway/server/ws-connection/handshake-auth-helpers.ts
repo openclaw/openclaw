@@ -6,7 +6,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { verifyDeviceSignature } from "../../../infra/device-identity.js";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import type { AuthRateLimiter, AuthRateLimitSubject } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
 import {
@@ -30,7 +30,7 @@ type PairingLocalityKind =
 type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
   enforceOriginCheckForAnyClient: boolean;
-  rateLimitClientIp: string | undefined;
+  rateLimitClientIp: string | undefined | AuthRateLimitSubject;
   authRateLimiter?: AuthRateLimiter;
 };
 
@@ -68,6 +68,7 @@ function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
 export function resolveHandshakeBrowserSecurityContext(params: {
   requestOrigin?: string;
   clientIp: string | undefined;
+  rateLimitSubject?: AuthRateLimitSubject;
   rateLimiter?: AuthRateLimiter;
   browserRateLimiter?: AuthRateLimiter;
 }): HandshakeBrowserSecurityContext {
@@ -78,9 +79,12 @@ export function resolveHandshakeBrowserSecurityContext(params: {
     hasBrowserOriginHeader,
     enforceOriginCheckForAnyClient: hasBrowserOriginHeader,
     rateLimitClientIp:
-      hasBrowserOriginHeader && isLoopbackAddress(params.clientIp)
+      hasBrowserOriginHeader &&
+      (params.rateLimitSubject
+        ? params.rateLimitSubject.exemption === "configured-loopback"
+        : isLoopbackAddress(params.clientIp))
         ? resolveBrowserOriginRateLimitKey(params.requestOrigin)
-        : params.clientIp,
+        : (params.rateLimitSubject ?? params.clientIp),
     authRateLimiter:
       hasBrowserOriginHeader && params.browserRateLimiter
         ? params.browserRateLimiter

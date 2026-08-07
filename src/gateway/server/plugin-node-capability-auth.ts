@@ -7,6 +7,7 @@ import {
   type ResolvedGatewayAuth,
 } from "../auth.js";
 import { getBearerToken, resolveHttpBrowserOriginPolicy } from "../http-auth-utils.js";
+import type { GatewayIngressAttribution } from "../ingress-attribution.js";
 import {
   hasAuthorizedPluginNodeCapability,
   type PluginNodeCapabilitySurface,
@@ -26,6 +27,7 @@ export async function authorizePluginNodeCapabilityRequest(params: {
   capability?: string;
   malformedScopedPath?: boolean;
   rateLimiter?: AuthRateLimiter;
+  ingressAttribution?: GatewayIngressAttribution;
 }): Promise<GatewayAuthResult> {
   const {
     req,
@@ -54,9 +56,13 @@ export async function authorizePluginNodeCapabilityRequest(params: {
       trustedProxies,
       allowRealIpFallback,
       rateLimiter,
+      ingressAttribution: params.ingressAttribution,
       browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
     });
     if (authResult.ok) {
+      return authResult;
+    }
+    if (authResult.reason === "proxy_attribution_required") {
       return authResult;
     }
     lastAuthFailure = authResult;

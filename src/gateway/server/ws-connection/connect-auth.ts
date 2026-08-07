@@ -71,6 +71,7 @@ export async function authenticateGatewayConnect(
     configSnapshot,
     trustedProxies,
     allowRealIpFallback,
+    ingressAttribution,
     peerLabel,
     hasProxyHeaders,
     isLocalClient,
@@ -124,6 +125,7 @@ export async function authenticateGatewayConnect(
     req: upgradeReq,
     trustedProxies,
     allowRealIpFallback,
+    ingressAttribution,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
   });
@@ -357,6 +359,10 @@ export async function authenticateGatewayConnect(
     scopes,
     rateLimiter: authRateLimiter,
     clientIp: browserRateLimitClientIp,
+    resetSharedSecretOnSuccess:
+      ingressAttribution.kind === "unattributable-proxy"
+        ? true
+        : ingressAttribution.rateLimit.resetOnSuccess,
     async verifyBootstrapToken({
       deviceId,
       publicKey,

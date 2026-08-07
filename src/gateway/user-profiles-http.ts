@@ -18,6 +18,7 @@ import {
   authorizeScopedUserProfileAvatarHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
+import type { GatewayIngressAttribution } from "./ingress-attribution.js";
 import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
@@ -291,6 +292,7 @@ export async function handleUserProfileAvatarHttpRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    ingressAttribution?: GatewayIngressAttribution;
     fetchImpl?: typeof globalThis.fetch;
     nowMs?: () => number;
   },
@@ -325,6 +327,7 @@ export async function handleUserProfileAvatarHttpRequest(
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
+    ingressAttribution: opts.ingressAttribution,
     operatorMethod: "users.list",
     resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });

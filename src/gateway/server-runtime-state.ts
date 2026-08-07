@@ -21,6 +21,7 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
+import { createGatewayIngressAttributionDiagnostics } from "./ingress-attribution.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import type {
@@ -302,6 +303,9 @@ export async function createGatewayRuntimeState(params: {
   const httpServers: HttpServer[] = [];
   const gatewayHttpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
+  const ingressAttributionDiagnostics = createGatewayIngressAttributionDiagnostics({
+    warn: params.log.warn,
+  });
   for (const _ of bindHosts) {
     const httpServer = createGatewayHttpServer({
       clients,
@@ -321,6 +325,7 @@ export async function createGatewayRuntimeState(params: {
       resolvedAuth: params.resolvedAuth,
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
+      ingressAttributionDiagnostics,
       getReadiness: params.getReadiness,
       getRuntimeConfig: loadRuntimeConfig,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
@@ -339,6 +344,7 @@ export async function createGatewayRuntimeState(params: {
       resolvedAuth: params.resolvedAuth,
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
+      ingressAttributionDiagnostics,
       log: params.log,
     });
     gatewayHttpServers.push(httpServer);

@@ -268,6 +268,7 @@ export function registerAuthModesSuite(): void {
           gateway: {
             auth: testState.gatewayAuth,
             controlUi: testState.gatewayControlUi,
+            trustedProxies: ["127.0.0.1"],
           },
         },
         afterWrite: { mode: "auto" },

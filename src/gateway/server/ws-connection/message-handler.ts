@@ -32,6 +32,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
+import { prepareGatewayIngressAttribution } from "../../ingress-attribution.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -112,6 +113,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   const configSnapshot = getRuntimeConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
   const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+  const ingressAttributionPromise = prepareGatewayIngressAttribution({
+    req: upgradeReq,
+    trustedProxies,
+    allowRealIpFallback,
+    allowVerifiedExternalServe: params.getResolvedAuth().allowTailscale,
+  });
   const clientIp = resolveClientIp({
     remoteAddr,
     forwardedFor,
@@ -163,18 +170,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     handler: params,
     isWebchatConnect,
   });
-  const browserSecurity = resolveHandshakeBrowserSecurityContext({
-    requestOrigin,
-    clientIp,
-    rateLimiter,
-    browserRateLimiter,
-  });
-  const {
-    hasBrowserOriginHeader,
-    enforceOriginCheckForAnyClient,
-    rateLimitClientIp: browserRateLimitClientIp,
-    authRateLimiter,
-  } = browserSecurity;
   const runDetachedConnectWork = (run: () => Promise<void>, onError: (error: unknown) => void) => {
     // Connect-triggered mutations outlive hello-ok. Give each tail its own
     // root lease so suspension cannot report ready while one is still active.
@@ -323,6 +318,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
 
+        const ingressAttribution = await ingressAttributionPromise;
+        const browserSecurity = resolveHandshakeBrowserSecurityContext({
+          requestOrigin,
+          clientIp,
+          rateLimitSubject:
+            ingressAttribution.kind === "unattributable-proxy"
+              ? undefined
+              : ingressAttribution.rateLimit.subject,
+          rateLimiter,
+          browserRateLimiter,
+        });
+        const {
+          hasBrowserOriginHeader,
+          enforceOriginCheckForAnyClient,
+          rateLimitClientIp: browserRateLimitClientIp,
+          authRateLimiter,
+        } = browserSecurity;
         const frame = parsed;
         const connectParams = frame.params as ConnectParams;
         const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
@@ -360,6 +372,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           configSnapshot,
           trustedProxies,
           allowRealIpFallback,
+          ingressAttribution,
           peerLabel,
           hasProxyHeaders,
           isLocalClient,

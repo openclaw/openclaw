@@ -9,8 +9,9 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeviceAuthToken } from "../../../infra/device-pairing.types.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import type { AuthRateLimiter, AuthRateLimitSubject } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayIngressAttribution } from "../../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
@@ -86,6 +87,7 @@ export type GatewayConnectPhaseContext = {
   configSnapshot: OpenClawConfig;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
+  ingressAttribution: GatewayIngressAttribution;
   peerLabel: string;
   hasProxyHeaders: boolean;
   isLocalClient: boolean;
@@ -93,7 +95,7 @@ export type GatewayConnectPhaseContext = {
   reportedClientIpSource: NodePairingAutoApproveClientIpSource;
   hasBrowserOriginHeader: boolean;
   enforceOriginCheckForAnyClient: boolean;
-  browserRateLimitClientIp?: string;
+  browserRateLimitClientIp?: string | AuthRateLimitSubject;
   authRateLimiter?: AuthRateLimiter;
   clientLabel: string;
   clientMeta: Record<string, unknown>;

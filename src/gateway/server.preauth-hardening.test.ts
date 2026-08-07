@@ -11,6 +11,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admission.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { buildRateLimitIdentityKey } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import {
@@ -25,6 +26,10 @@ import {
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
+import {
+  clearGatewayTailscaleIngressMode,
+  setGatewayTailscaleIngressMode,
+} from "./tailscale-ingress-state.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
@@ -62,7 +67,10 @@ function setGatewayAuthNoneForTest() {
   });
 }
 
-async function requestUpgradeRejection(port: number): Promise<{ status: number; body: string }> {
+async function requestUpgradeRejection(
+  port: number,
+  headers?: Record<string, string>,
+): Promise<{ status: number; body: string }> {
   return await new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = http.request({
       host: "127.0.0.1",
@@ -73,6 +81,7 @@ async function requestUpgradeRejection(port: number): Promise<{ status: number; 
         Upgrade: "websocket",
         "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
         "Sec-WebSocket-Version": "13",
+        ...headers,
       },
     });
     req.once("upgrade", (_res, socket) => {
@@ -86,6 +95,47 @@ async function requestUpgradeRejection(port: number): Promise<{ status: number; 
     req.end();
   });
 }
+
+it("returns proxy remediation for unattributable WebSocket upgrades", async () => {
+  const clients = new Set<GatewayWsClient>();
+  const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+  const httpServer = createGatewayHttpServer({
+    clients,
+    controlUiEnabled: false,
+    controlUiBasePath: "/__control__",
+    openAiChatCompletionsEnabled: false,
+    openResponsesEnabled: false,
+    handleHooksRequest: async () => false,
+    resolvedAuth,
+  });
+  const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+  attachGatewayUpgradeHandler({ httpServer, wss, clients, resolvedAuth });
+
+  await new Promise<void>((resolve) => {
+    httpServer.listen(0, "127.0.0.1", resolve);
+  });
+  const address = httpServer.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  try {
+    const response = await requestUpgradeRejection(port, {
+      "X-Forwarded-For": "198.51.100.10",
+      "X-Forwarded-Proto": "https",
+      "X-Forwarded-Host": "gateway.example.test",
+    });
+    expect(response.status).toBe(403);
+    expect(JSON.parse(response.body)).toMatchObject({
+      error: {
+        type: "proxy_attribution_required",
+        message: expect.stringContaining("gateway.trustedProxies"),
+      },
+    });
+  } finally {
+    wss.close();
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
 
 async function expectIdlePreauthSocketClose() {
   const harness = await createGatewaySuiteHarness({
@@ -192,6 +242,62 @@ describe("gateway pre-auth hardening", () => {
       wss.close();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("keys managed proxy pre-auth admission by the prepared peer bucket", async () => {
+    const clients = new Set<GatewayWsClient>();
+    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+    const observedKeys: Array<string | undefined> = [];
+    const httpServer = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "/__control__",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => false,
+      resolvedAuth,
+    });
+    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    wss.on("connection", () => {});
+    attachGatewayUpgradeHandler({
+      httpServer,
+      wss,
+      clients,
+      preauthConnectionBudget: {
+        acquire: (key) => {
+          observedKeys.push(key);
+          return false;
+        },
+        release: () => {},
+      },
+      resolvedAuth,
+    });
+
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    setGatewayTailscaleIngressMode(port, "funnel");
+    try {
+      await expect(
+        requestUpgradeRejection(port, {
+          "X-Forwarded-For": "100.64.0.9",
+          "X-Forwarded-Proto": "https",
+          "X-Forwarded-Host": "gateway.example.test",
+          "Tailscale-Funnel-Request": "?1",
+        }),
+      ).resolves.toMatchObject({ status: 503 });
+      expect(observedKeys).toEqual([
+        buildRateLimitIdentityKey("managed-tailscale-proxy", "127.0.0.1"),
+      ]);
+    } finally {
+      clearGatewayTailscaleIngressMode(port);
+      wss.close();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
       });
     }
   });

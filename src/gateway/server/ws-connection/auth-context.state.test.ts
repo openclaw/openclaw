@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayIngressAttribution } from "../../ingress-attribution.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 
 type ResolveConnectAuthStateParams = Parameters<typeof resolveConnectAuthState>[0];
@@ -13,6 +14,22 @@ type TestRateLimiter = AuthRateLimiter & {
 };
 
 const CLIENT_IP = "203.0.113.20";
+
+function attributedIngress(
+  kind: "direct-local" | "direct-remote",
+  clientIp: string,
+): GatewayIngressAttribution {
+  const localDirect = kind === "direct-local";
+  return {
+    kind,
+    clientIp,
+    localDirect,
+    rateLimit: {
+      subject: { key: clientIp, exemption: localDirect ? "configured-loopback" : "none" },
+      resetOnSuccess: true,
+    },
+  };
+}
 
 function createLimiter(params?: { allowed?: boolean; retryAfterMs?: number }): TestRateLimiter {
   const allowed = params?.allowed ?? true;
@@ -55,6 +72,7 @@ async function resolveTokenAuthState(params: {
     } as never,
     trustedProxies: [],
     allowRealIpFallback: false,
+    ingressAttribution: attributedIngress("direct-remote", CLIENT_IP),
     rateLimiter: params.rateLimiter,
     clientIp: CLIENT_IP,
   });
@@ -109,6 +127,7 @@ describe("resolveConnectAuthDecision", () => {
       } as never,
       trustedProxies: [],
       allowRealIpFallback: false,
+      ingressAttribution: attributedIngress("direct-local", "127.0.0.1"),
       rateLimiter: createLimiter(),
       clientIp: "127.0.0.1",
     });
@@ -145,5 +164,32 @@ describe("resolveConnectAuthDecision", () => {
     });
 
     expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "shared-secret");
+  });
+
+  it("does not reset a non-resetting shared-secret bucket after device-token fallback", async () => {
+    const rateLimiter = createLimiter();
+    await resolveConnectAuthDecision({
+      state: {
+        authResult: { ok: false, reason: "token_mismatch" },
+        authOk: false,
+        authMethod: "token",
+        sharedAuthOk: false,
+        sharedAuthProvided: true,
+        deviceTokenCandidate: "device-token",
+        deviceTokenCandidateSource: "explicit-device-token",
+      },
+      hasDeviceIdentity: true,
+      deviceId: "dev-1",
+      publicKey: "pub-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      verifyBootstrapToken: async () => ({ ok: false, reason: "bootstrap_token_invalid" }),
+      verifyDeviceToken: async () => ({ ok: true }),
+      rateLimiter,
+      clientIp: CLIENT_IP,
+      resetSharedSecretOnSuccess: false,
+    });
+
+    expect(rateLimiter.reset).not.toHaveBeenCalledWith(CLIENT_IP, "shared-secret");
   });
 });
