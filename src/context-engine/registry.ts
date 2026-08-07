@@ -55,9 +55,61 @@ type ResolvedContextEngineMetadata = {
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
-const legacyHostParamDefaultRemoveAfter = getPluginCompatRecord(
+const legacyHostParamDefaultRecord = getPluginCompatRecord(
   "context-engine-legacy-host-param-default",
-).removeAfter;
+);
+const legacyHostParamDefaultRemoveAfter = legacyHostParamDefaultRecord.removeAfter;
+
+// Process-deduplicated warning set: resolveContextEngine is called per embedded run
+// (run-loop.ts) and per compaction, so without dedup an undeclared engine would log on every
+// resolve. WeakSet lets the entry disappear with the engine; resolveGlobalSingleton shares one
+// set across duplicated dist chunks. Reset on process restart is acceptable — one warning per
+// engine per process matches the "once per engine at resolve time" contract.
+const LEGACY_HOST_PARAM_DEFAULT_WARNED = resolveGlobalSingleton<WeakSet<ContextEngine>>(
+  Symbol.for("openclaw.contextEngineLegacyHostParamDefaultWarned"),
+  () => new WeakSet(),
+);
+
+function isLegacyHostParamDefaultWindowOpen(): boolean {
+  return (
+    legacyHostParamDefaultRemoveAfter !== undefined &&
+    new Date().toISOString().slice(0, 10) <= legacyHostParamDefaultRemoveAfter
+  );
+}
+
+function formatLegacyHostParamDefaultDiagnostic(params: {
+  engineId: string;
+  owner?: string;
+}): string {
+  const withheld = [...CONTEXT_ENGINE_HOST_PARAMS].toSorted().join(", ");
+  const removeAfter = legacyHostParamDefaultRemoveAfter ?? "a future breaking release";
+  const ownerSuffix = params.owner ? ` owner=${sanitizeForLog(params.owner)}` : "";
+  return (
+    `[context-engine] Context engine "${sanitizeForLog(params.engineId)}"${ownerSuffix} does not declare ` +
+    `info.acceptedHostParams; host params [${withheld}] are withheld during the legacy compatibility window ` +
+    `(${legacyHostParamDefaultRecord.code}). Declare info.acceptedHostParams to receive full params. ` +
+    `This default will be removed after ${removeAfter}.`
+  );
+}
+
+function warnUndeclaredHostParamsOnce(
+  engine: ContextEngine,
+  metadata: ResolvedContextEngineMetadata,
+): void {
+  // The behavior (projection) is accepted per #115948/#119311; this only makes the trade audible,
+  // as the compat record's warningStarts/diagnostics fields already promise.
+  if (engine.info.acceptedHostParams !== undefined) {
+    return;
+  }
+  if (!isLegacyHostParamDefaultWindowOpen()) {
+    return;
+  }
+  if (LEGACY_HOST_PARAM_DEFAULT_WARNED.has(engine)) {
+    return;
+  }
+  LEGACY_HOST_PARAM_DEFAULT_WARNED.add(engine);
+  console.warn(formatLegacyHostParamDefaultDiagnostic(metadata));
+}
 
 function projectContextEngineHostParams(
   engine: ContextEngine,
@@ -65,9 +117,7 @@ function projectContextEngineHostParams(
 ): Record<string, unknown> {
   // Removal(2026-08-12): undeclared engines get full params.
   // Contract: context-engine-legacy-host-param-default.
-  const useLegacyDefault =
-    legacyHostParamDefaultRemoveAfter !== undefined &&
-    new Date().toISOString().slice(0, 10) <= legacyHostParamDefaultRemoveAfter;
+  const useLegacyDefault = isLegacyHostParamDefaultWindowOpen();
   const accepted = engine.info.acceptedHostParams ?? (useLegacyDefault ? [] : undefined);
   if (!accepted) {
     return params;
@@ -102,6 +152,7 @@ function wrapContextEngineHostParamProjection(
       },
     },
   );
+  warnUndeclaredHostParamsOnce(engine, metadata);
   resolvedEngineMetadata.set(wrapped, metadata);
   return wrapped;
 }
@@ -208,6 +259,7 @@ function wrapResolvedContextEngine(
       },
     },
   );
+  warnUndeclaredHostParamsOnce(engine, metadata);
   resolvedEngineMetadata.set(wrapped, metadata);
   return wrapped;
 }

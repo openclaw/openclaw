@@ -85,6 +85,8 @@ describe("context-engine host parameter projection", () => {
   beforeEach(() => {
     registerLegacyContextEngine();
     resetContextEngineRuntimeQuarantineForTests();
+    // Silence the legacy host-param diagnostic by default; tests that assert on it re-spy.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -356,5 +358,77 @@ describe("context-engine host parameter projection", () => {
       { sessionId: "session-1", messages: [message] },
       { sessionId: "session-2", messages: [message] },
     ]);
+  });
+
+  it("warns once when an undeclared engine is resolved during the legacy window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [] });
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = warnSpy.mock.calls[0]?.[0] ?? "";
+    expect(message).toContain("context-engine-legacy-host-param-default");
+    expect(message).toContain(engineId);
+    expect(message).toContain("sessionKey");
+    expect(message).toContain("runtimeSettings");
+    expect(message).toContain("2026-08-12");
+    expect(message).toContain("info.acceptedHostParams");
+  });
+
+  it("does not warn for engines that declare acceptedHostParams", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engineId = registerProbeEngine({
+      acceptedHostParams: ["sessionKey", "prompt", "runtimeSettings"],
+      assembleCalls: [],
+      compactCalls: [],
+    });
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for undeclared engines after the legacy window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-13T00:00:00Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [] });
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates the warning across repeated resolves of the same engine instance", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const assemble = vi.fn<ContextEngine["assemble"]>(async (params) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+    class SingletonProbeEngine implements ContextEngine {
+      readonly info = { id: "singleton-probe", name: "Singleton Probe" };
+      async ingest() {
+        return { ingested: true };
+      }
+      assemble = assemble;
+      async compact() {
+        return { ok: true, compacted: false };
+      }
+    }
+    const engineId = `singleton-probe-${++engineCounter}`;
+    const sharedEngine = new SingletonProbeEngine();
+    registerContextEngineForOwner(engineId, () => sharedEngine, `test:${engineId}`);
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });
