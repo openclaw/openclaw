@@ -42,6 +42,7 @@ import {
 } from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
+  verifyLiveOpenClawOwnedAcpxWrapper,
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
@@ -260,6 +261,7 @@ function createResetAwareSessionStore(
     leaseStore?: AcpxProcessLeaseStore;
     launchScope?: AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>;
     wrapperRoot?: string;
+    processDeps?: AcpxProcessCleanupDeps;
   },
 ): ResetAwareSessionStore {
   const freshSessionKeys = new Set<string>();
@@ -274,14 +276,52 @@ function createResetAwareSessionStore(
       if (!record || !params?.leaseStore || !params.gatewayInstanceId) {
         return record;
       }
+      const recordPid = readRecordAgentPid(record);
+      if (
+        recordPid &&
+        (
+          await verifyLiveOpenClawOwnedAcpxWrapper({
+            pid: recordPid,
+            wrapperRoot: params.wrapperRoot,
+            expectedCommand: readRecordAgentCommand(record),
+            deps: params.processDeps,
+          })
+        ).kind === "dead"
+      ) {
+        // The wrapper process that owned this session is gone (or the PID has
+        // been reused by a different process). Treat the stored session as
+        // fresh so we do not try to resume a dead process, which can hang the
+        // gateway after a restart (#109285).
+        return undefined;
+      }
       const sessionName = readSessionRecordName(record) || normalized;
       const lease = selectCurrentSessionLease({
         leases: await params.leaseStore.listOpen(params.gatewayInstanceId),
         sessionKeys: [sessionName, normalized],
-        rootPid: readRecordAgentPid(record),
+        rootPid: recordPid,
       });
       if (!lease) {
         return record;
+      }
+      // Defensive: the lease might still be open but its process has died or
+      // the PID has been reused by a non-OpenClaw process (e.g. gateway
+      // crash). Treat as fresh. Pending leases (rootPid 0) have not been
+      // claimed by a process yet, and unavailable process inspection is not
+      // proof of death, so neither resets the stored session.
+      if (
+        lease.rootPid > 0 &&
+        (
+          await verifyLiveOpenClawOwnedAcpxWrapper({
+            pid: lease.rootPid,
+            wrapperRoot: lease.wrapperRoot ?? params.wrapperRoot,
+            expectedCommand: readRecordAgentCommand(record),
+            expectedLeaseId: lease.leaseId,
+            expectedGatewayInstanceId: lease.gatewayInstanceId,
+            deps: params.processDeps,
+          })
+        ).kind === "dead"
+      ) {
+        return undefined;
       }
       return withOpenClawLeaseSessionMetadata(record, {
         openclawLeaseId: lease.leaseId,
@@ -827,6 +867,7 @@ export class AcpxRuntime implements AcpRuntime {
       leaseStore: this.processLeaseStore,
       launchScope: this.launchLeaseScope,
       wrapperRoot: this.wrapperRoot,
+      processDeps: this.processCleanupDeps,
     });
     this.agentRegistry = options.agentRegistry;
     this.scopedAgentRegistry = createModelScopedAgentRegistry({

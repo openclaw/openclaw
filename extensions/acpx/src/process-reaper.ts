@@ -329,6 +329,84 @@ async function terminatePids(
   return terminated;
 }
 
+export type AcpxProcessWrapperVerification =
+  | { kind: "live" }
+  | { kind: "dead" }
+  | { kind: "unavailable" };
+
+/** Verify whether a PID currently maps to a live, OpenClaw-owned ACPX wrapper
+ * process matching the expected wrapper root, stored command, and lease
+ * identity (#109285 PID-reuse hardening).
+ *
+ * - `live`: the PID maps to a matching OpenClaw-owned wrapper.
+ * - `dead`: ownership is disproven (the PID is missing from a populated
+ *   process table, or the process does not match). Callers may treat the
+ *   stored session as fresh.
+ * - `unavailable`: process inspection could not run (unsupported platform,
+ *   empty process table, or listing error). Absence from the table is not
+ *   proof of death, so callers should preserve the stored session. */
+export async function verifyLiveOpenClawOwnedAcpxWrapper(params: {
+  pid: number;
+  wrapperRoot?: string;
+  expectedCommand?: string;
+  expectedLeaseId?: string;
+  expectedGatewayInstanceId?: string;
+  deps?: AcpxProcessCleanupDeps;
+}): Promise<AcpxProcessWrapperVerification> {
+  if (!params.pid || params.pid <= 0 || params.pid === process.pid) {
+    return { kind: "dead" };
+  }
+  let processes: AcpxProcessInfo[];
+  try {
+    processes = await (params.deps?.listProcesses ?? listPlatformProcesses)();
+  } catch {
+    return { kind: "unavailable" };
+  }
+  if (processes.length === 0) {
+    // No process table is exposed (e.g. Windows returns an empty table). A PID
+    // missing from the table is not proof that the process died.
+    return { kind: "unavailable" };
+  }
+  const proc = processes.find((processInfo) => processInfo.pid === params.pid);
+  if (!proc) {
+    return { kind: "dead" };
+  }
+  const liveCommand = proc.command;
+  const liveCommandWasGeneratedWrapper = commandMentionsGeneratedWrapper(
+    normalizePathLike(liveCommand),
+  );
+  const storedCommandWasGeneratedWrapper = commandMentionsGeneratedWrapper(
+    normalizePathLike(params.expectedCommand ?? ""),
+  );
+  if (!liveCommandWasGeneratedWrapper && storedCommandWasGeneratedWrapper) {
+    return { kind: "dead" };
+  }
+  if (
+    !liveCommandWasGeneratedWrapper &&
+    !commandsReferToSameRootCommand(liveCommand, params.expectedCommand)
+  ) {
+    return { kind: "dead" };
+  }
+  if (
+    !isOpenClawOwnedAcpxProcessCommand({
+      command: liveCommand,
+      wrapperRoot: params.wrapperRoot,
+    })
+  ) {
+    return { kind: "dead" };
+  }
+  if (
+    !liveCommandMatchesLeaseIdentity({
+      command: liveCommand,
+      expectedLeaseId: params.expectedLeaseId,
+      expectedGatewayInstanceId: params.expectedGatewayInstanceId,
+    })
+  ) {
+    return { kind: "dead" };
+  }
+  return { kind: "live" };
+}
+
 /** Terminate one validated OpenClaw-owned ACPX wrapper process tree. */
 export async function cleanupOpenClawOwnedAcpxProcessTree(params: {
   rootPid?: number;
