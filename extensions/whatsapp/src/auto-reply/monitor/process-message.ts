@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements process message behavior.
+import { resolveAgentIdentity } from "openclaw/plugin-sdk/agent-runtime";
 import {
   logAckFailure,
   removeAckReactionHandleAfterReply,
@@ -36,6 +37,7 @@ import {
 } from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
+import { renderAgentFacingMentionText } from "../mentions.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import type { EchoTracker } from "./echo.js";
@@ -294,9 +296,16 @@ export async function processMessage(params: {
   // (used by features such as tts.auto: "inbound") still sees this as an
   // audio message. The transcript and transcribed media index are also stored on
   // context so downstream media understanding does not transcribe it again.
+  const bodyForAgent =
+    audioTranscript ??
+    renderAgentFacingMentionText({
+      msg: params.msg,
+      identityName: resolveAgentIdentity(params.cfg, params.route.agentId)?.name,
+      authDir: account.authDir,
+    });
   const msgForAgent: AdmittedWebInboundMessage =
-    audioTranscript !== undefined
-      ? { ...params.msg, payload: { ...params.msg.payload, body: audioTranscript } }
+    bodyForAgent !== params.msg.payload.body
+      ? { ...params.msg, payload: { ...params.msg.payload, body: bodyForAgent } }
       : params.msg;
   const visibleReplyTo = resolveVisibleWhatsAppReplyContext({
     msg: params.msg,
