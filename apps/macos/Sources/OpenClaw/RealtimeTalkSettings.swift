@@ -242,15 +242,17 @@ struct RealtimeTalkSettingsSection: View {
             if self.model.showsConfiguration {
                 SettingsCardToggleRow(
                     title: "Use realtime conversation",
-                    subtitle: "Stream speech continuously while OpenClaw keeps agent tools " +
-                        "and computer actions available.",
+                    subtitle: .verbatim(
+                        "Stream speech continuously while OpenClaw keeps agent tools " +
+                            "and computer actions available."),
                     binding: self.$model.draft.enabled)
                     .disabled(!self.model.canEnable)
 
                 SettingsCardRow(
                     title: "Voice model",
-                    subtitle: "GPT-Live uses ChatGPT/Codex OAuth when available; " +
-                        "GA realtime models may require Platform API access.")
+                    subtitle: .verbatim(
+                        "GPT-Live uses ChatGPT/Codex OAuth when available; " +
+                            "GA realtime models may require Platform API access."))
                 {
                     Picker("Voice model", selection: self.$model.draft.model) {
                         ForEach(self.model.models, id: \.self) { model in
