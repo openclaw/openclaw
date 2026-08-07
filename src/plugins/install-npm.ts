@@ -230,6 +230,8 @@ export async function installPluginFromNpmSpec(
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
+          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
           logger,
           mode: policyMode,
           packageName: parsedSpec.name,
@@ -249,6 +251,7 @@ export async function installPluginFromNpmSpec(
 
   const result = await installPluginFromManagedNpmRoot({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     packageName: parsedSpec.name,

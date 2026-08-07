@@ -175,10 +175,17 @@ directories. Symlinks and insecure paths are rejected.
 The policy receives one JSON object on stdin with `protocolVersion: 1`,
 `openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
 optional structured `source`, structured `origin`, and `request`. It must
-write one JSON object on stdout: `{ "protocolVersion": 1, "decision": "allow" }`
-or `{ "protocolVersion": 1, "decision": "block", "reason": "..." }`. Non-zero
-exit, timeout, malformed JSON, missing fields, or unsupported protocol
-versions fail closed.
+write one JSON object on stdout with an `allow`, `warn`, or `block` decision.
+`warn` and `block` require a non-empty `reason`; every decision may include a
+`findings` array. A warning stops the install before commit. Interactive CLI
+plugin and skill commands ask the operator to type the target name using the
+same `install anyway` or `update anyway` copy as suspicious ClawHub releases,
+then run policy again before continuing. Declined and non-interactive commands
+may be rerun with `--dangerously-force-unsafe-install` after review.
+Gateway-backed and automatic installs remain
+blocked on warnings because they have no operator-confirmation flow. A `block`, non-zero
+exit, timeout, malformed JSON, missing field, or unsupported protocol version
+always fails closed.
 
 OpenClaw does not execute install policy during normal Gateway startup.
 Installs and updates fail closed when policy is enabled but unavailable.

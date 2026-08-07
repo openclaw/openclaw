@@ -94,6 +94,7 @@ function buildHookInstallForwardParams(params: HookInstallForwardParams): HookIn
   return {
     config: params.config,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     hooksDir: params.hooksDir,
     timeoutMs: params.timeoutMs,

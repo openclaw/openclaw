@@ -250,7 +250,7 @@ describe("plugins cli update", () => {
     }
   });
 
-  it("shows the deprecated unsafe install flag in update help", () => {
+  it("documents the install policy warning acknowledgement in update help", () => {
     const program = new Command();
     registerPluginsCli(program);
 
@@ -259,9 +259,9 @@ describe("plugins cli update", () => {
     const helpText = updateCommand?.helpInformation() ?? "";
 
     expect(helpText).toContain("--dangerously-force-unsafe-install");
-    expect(helpText).toContain("Deprecated no-op");
+    expect(helpText).toContain("Acknowledge");
     expect(helpText).toContain("security.installPolicy");
-    expect(helpText).toContain("may still block");
+    expect(helpText).toMatch(/blocks and failures remain\s+terminal/u);
   });
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {
@@ -411,11 +411,17 @@ describe("plugins cli update", () => {
       ],
     });
 
-    await runPluginsCommand(["plugins", "update", "demo-hooks"]);
+    await runPluginsCommand([
+      "plugins",
+      "update",
+      "demo-hooks",
+      "--dangerously-force-unsafe-install",
+    ]);
 
     const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacks);
     expect(hookUpdateParams.config).toEqual({ ...cfg, plugins: { installs: {} } });
     expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
+    expect(hookUpdateParams.dangerouslyForceUnsafeInstall).toBe(true);
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
     expect(replaceConfigFile).toHaveBeenCalledWith(
@@ -1259,13 +1265,6 @@ describe("plugins cli update", () => {
     expect(updateParams.config).toEqual(config);
     expect(updateParams.pluginIds).toEqual(["openclaw-codex-app-server"]);
     expect(updateParams.dangerouslyForceUnsafeInstall).toBe(true);
-    expect(
-      runtimeLogs.some((message) =>
-        message.includes(
-          "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates",
-        ),
-      ),
-    ).toBe(true);
   });
 
   it.each([
@@ -1453,6 +1452,23 @@ describe("plugins cli update", () => {
     expect(updateParams.dryRun).toBe(true);
     expect(updateParams.acknowledgeClawHubRisk).not.toBe(true);
     expect(updateParams.onClawHubRisk).toBeUndefined();
+    expect(updateParams.onInstallPolicyWarning).toBeUndefined();
+  });
+
+  it("passes an install-policy warning prompt to interactive plugin updates", async () => {
+    setTty(true);
+    const config = createTrackedPluginConfig({
+      pluginId: "openclaw-codex-app-server",
+      spec: "openclaw-codex-app-server",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({ config, changed: false, outcomes: [] });
+
+    await runPluginsCommand(["plugins", "update", "openclaw-codex-app-server"]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.onInstallPolicyWarning).toEqual(expect.any(Function));
   });
 
   it("writes updated config when updater reports changes", async () => {

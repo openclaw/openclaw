@@ -102,6 +102,7 @@ export async function scanInstalledPackageDependencyTree(params: {
   dependencyScanRootDir?: string;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageDir: string;
   pluginId: string;
   requestKind?: PluginInstallRequestKind;
@@ -135,8 +136,10 @@ export async function scanFileInstallSource(
 /** Runs npm install policy checks before package install side effects. */
 export async function preflightPluginNpmInstallPolicy(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageName: string;
   pluginId?: string;
   requestedSpecifier?: string;
@@ -151,8 +154,10 @@ export async function preflightPluginNpmInstallPolicy(params: {
 /** Runs git install policy checks before plugin install side effects. */
 export async function preflightPluginGitInstallPolicy(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   pluginId: string;
   requestedSpecifier?: string;
   source?: InstallPolicySource;
@@ -165,13 +170,15 @@ export async function preflightPluginGitInstallPolicy(params: {
 /** Evaluates shared install policy for skill-managed dependency installs. */
 export async function evaluateSkillInstallPolicy(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   installId: string;
   installSpec?: SkillInstallSpecMetadata;
   logger: InstallScanLogger;
+  mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;
   source?: InstallPolicySource;
-  mode?: "install" | "update";
   skillName: string;
   sourceDir: string;
 }): Promise<InstallSecurityScanResult | undefined> {

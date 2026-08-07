@@ -65,6 +65,7 @@ import type {
 import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
+import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -640,6 +641,11 @@ export function registerSkillsCli(program: Command) {
       "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
+    .option(
+      "--dangerously-force-unsafe-install",
+      "Acknowledge security.installPolicy warnings; blocks and failures remain terminal",
+      false,
+    )
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
@@ -656,6 +662,7 @@ export function registerSkillsCli(program: Command) {
           forceInstall?: boolean;
           acknowledgeClawhubRisk?: boolean;
           acknowledgeClawHubRisk?: boolean;
+          dangerouslyForceUnsafeInstall?: boolean;
           global?: boolean;
           agent?: string;
           as?: string;
@@ -663,10 +670,11 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
-          if (!workspaceDir) {
+          const target = resolveClawHubTargetWorkspace(command, opts);
+          if (!target) {
             return;
           }
+          const { config, workspaceDir } = target;
           if (slug.trim().startsWith("skills-sh/")) {
             defaultRuntime.error(`Invalid skills.sh skill reference: ${slug}`);
             defaultRuntime.exit(1);
@@ -683,6 +691,10 @@ export function registerSkillsCli(program: Command) {
               spec: slug,
               slug: opts.as,
               force: Boolean(opts.force),
+              config,
+              ...resolveInstallPolicyWarningAcknowledgementCliOptions({
+                dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+              }),
               logger: {
                 info: (message) => defaultRuntime.log(message),
                 warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
@@ -715,6 +727,10 @@ export function registerSkillsCli(program: Command) {
             slug,
             version: opts.version,
             force: Boolean(opts.force),
+            config,
+            ...resolveInstallPolicyWarningAcknowledgementCliOptions({
+              dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+            }),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
             ...resolveSkillClawHubRiskOptions(
               opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
@@ -755,6 +771,11 @@ export function registerSkillsCli(program: Command) {
       "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
+    .option(
+      "--dangerously-force-unsafe-install",
+      "Acknowledge security.installPolicy warnings; blocks and failures remain terminal",
+      false,
+    )
     .option("--global", "Update skills in the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .action(
@@ -765,6 +786,7 @@ export function registerSkillsCli(program: Command) {
           forceInstall?: boolean;
           acknowledgeClawhubRisk?: boolean;
           acknowledgeClawHubRisk?: boolean;
+          dangerouslyForceUnsafeInstall?: boolean;
           global?: boolean;
           agent?: string;
         },
@@ -794,6 +816,9 @@ export function registerSkillsCli(program: Command) {
             workspaceDir: target.workspaceDir,
             slug,
             ...(opts.forceInstall ? { forceInstall: true } : {}),
+            ...resolveInstallPolicyWarningAcknowledgementCliOptions({
+              dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+            }),
             ...resolveSkillClawHubRiskOptions(
               opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
               "updating",

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { z } from "zod";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -118,12 +119,18 @@ type InstallPolicyRequest = {
 };
 
 type InstallPolicyResult =
-  | { blocked?: undefined; findings?: InstallPolicyFinding[] }
+  | { blocked?: undefined; warning?: undefined; findings?: InstallPolicyFinding[] }
+  | {
+      blocked?: undefined;
+      warning: { reason: string };
+      findings?: InstallPolicyFinding[];
+    }
   | {
       blocked: {
         code: "security_scan_blocked" | "security_scan_failed";
         reason: string;
       };
+      warning?: undefined;
       findings?: InstallPolicyFinding[];
     };
 
@@ -346,6 +353,44 @@ function truncateText(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `${truncateUtf16Safe(value, maxChars)}...`;
 }
 
+const installPolicyResponseEnvelopeSchema = z.object({
+  protocolVersion: z.literal(1),
+  decision: z.enum(["allow", "warn", "block"]),
+  reason: z.unknown().optional(),
+  findings: z.array(z.unknown()).optional().catch(undefined),
+});
+
+const installPolicyReasonSchema = z.string().trim().min(1);
+
+const findingTextSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((value) => truncateText(value, MAX_FINDING_TEXT_CHARS));
+
+const optionalFindingTextSchema = findingTextSchema.optional().catch(undefined);
+
+const installPolicyFindingSchema = z
+  .object({
+    ruleId: findingTextSchema,
+    severity: z.enum(["info", "warn", "critical"]),
+    message: findingTextSchema,
+    file: optionalFindingTextSchema,
+    line: z
+      .number()
+      .finite()
+      .transform((value) => Math.max(1, Math.floor(value)))
+      .optional()
+      .catch(undefined),
+    evidence: optionalFindingTextSchema,
+  })
+  .transform(({ evidence, file, line, ...finding }) => ({
+    ...finding,
+    ...(file ? { file } : {}),
+    ...(line !== undefined ? { line } : {}),
+    ...(evidence ? { evidence } : {}),
+  }));
+
 function createPolicyChildEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   void sourceEnv;
   return {};
@@ -377,6 +422,13 @@ function blockedByPolicy(reason: string, findings?: InstallPolicyFinding[]): Ins
       reason: `blocked by install policy: ${truncateText(reason, MAX_REASON_CHARS)}`,
     },
     ...(findings && findings.length > 0 ? { findings } : {}),
+  };
+}
+
+function warnedByPolicy(reason: string, findings?: InstallPolicyFinding[]): InstallPolicyResult {
+  return {
+    warning: { reason: truncateText(reason, MAX_REASON_CHARS) },
+    ...(findings?.length ? { findings } : {}),
   };
 }
 
@@ -475,34 +527,18 @@ export async function validateInstallPolicyStatic(
 }
 
 function normalizeFinding(value: unknown): InstallPolicyFinding | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
+  const parsed = installPolicyFindingSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function formatPolicyResponseEnvelopeError(error: z.ZodError): string {
+  if (error.issues.some((issue) => issue.path.length === 0)) {
+    return "policy response must be a JSON object";
   }
-  const record = value as Record<string, unknown>;
-  const ruleId = typeof record.ruleId === "string" ? record.ruleId.trim() : "";
-  const severity = record.severity;
-  const file = typeof record.file === "string" ? record.file.trim() : "";
-  const lineNumber =
-    typeof record.line === "number" && Number.isFinite(record.line)
-      ? Math.max(1, Math.floor(record.line))
-      : undefined;
-  const message = typeof record.message === "string" ? record.message.trim() : "";
-  if (
-    !ruleId ||
-    !message ||
-    (severity !== "info" && severity !== "warn" && severity !== "critical")
-  ) {
-    return null;
+  if (error.issues.some((issue) => issue.path[0] === "protocolVersion")) {
+    return "policy response protocolVersion must be 1";
   }
-  const evidence = typeof record.evidence === "string" ? record.evidence.trim() : "";
-  return {
-    ruleId: truncateText(ruleId, MAX_FINDING_TEXT_CHARS),
-    severity,
-    message: truncateText(message, MAX_FINDING_TEXT_CHARS),
-    ...(file ? { file: truncateText(file, MAX_FINDING_TEXT_CHARS) } : {}),
-    ...(lineNumber ? { line: lineNumber } : {}),
-    ...(evidence ? { evidence: truncateText(evidence, MAX_FINDING_TEXT_CHARS) } : {}),
-  };
+  return 'policy response decision must be "allow", "warn", or "block"';
 }
 
 function parsePolicyResponse(stdout: string): InstallPolicyResult {
@@ -517,29 +553,27 @@ function parsePolicyResponse(stdout: string): InstallPolicyResult {
   } catch (err) {
     return blockedByFailure(`policy command returned invalid JSON (${formatErrorMessage(err)})`);
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return blockedByFailure("policy response must be a JSON object");
+  const response = installPolicyResponseEnvelopeSchema.safeParse(parsed);
+  if (!response.success) {
+    return blockedByFailure(formatPolicyResponseEnvelopeError(response.error));
   }
-  const record = parsed as Record<string, unknown>;
-  if (record.protocolVersion !== 1) {
-    return blockedByFailure("policy response protocolVersion must be 1");
-  }
-  const decision = record.decision;
-  if (decision !== "allow" && decision !== "block") {
-    return blockedByFailure('policy response decision must be "allow" or "block"');
-  }
-  const findings = Array.isArray(record.findings)
-    ? record.findings.slice(0, MAX_FINDINGS).map(normalizeFinding).filter(Boolean)
-    : [];
-  const normalizedFindings = findings as InstallPolicyFinding[];
-  if (decision === "allow") {
+  const normalizedFindings = (response.data.findings ?? [])
+    .slice(0, MAX_FINDINGS)
+    .map(normalizeFinding)
+    .filter((finding): finding is InstallPolicyFinding => finding !== null);
+  if (response.data.decision === "allow") {
     return normalizedFindings.length > 0 ? { findings: normalizedFindings } : {};
   }
-  const reason = typeof record.reason === "string" ? record.reason.trim() : "";
-  if (!reason) {
-    return blockedByFailure('policy response decision "block" requires a non-empty reason');
+  const reason = installPolicyReasonSchema.safeParse(response.data.reason);
+  if (!reason.success) {
+    return blockedByFailure(
+      `policy response decision "${response.data.decision}" requires a non-empty reason`,
+    );
   }
-  return blockedByPolicy(reason, normalizedFindings);
+  if (response.data.decision === "warn") {
+    return warnedByPolicy(reason.data, normalizedFindings);
+  }
+  return blockedByPolicy(reason.data, normalizedFindings);
 }
 
 export async function runInstallPolicy(params: {
@@ -555,7 +589,7 @@ export async function runInstallPolicy(params: {
   const decisionContext = formatDecisionContext(params.request);
   const logBlocked = (result: InstallPolicyResult): InstallPolicyResult => {
     if (result.blocked) {
-      params.logger?.warn?.(`Install policy ${decisionContext}: ${result.blocked.reason}`);
+      params.logger?.debug?.(`Install policy ${decisionContext}: ${result.blocked.reason}`);
     }
     return result;
   };
@@ -663,6 +697,10 @@ export async function runInstallPolicy(params: {
   const parsed = parsePolicyResponse(result.stdout);
   if (parsed.blocked) {
     return logBlocked(parsed);
+  }
+  if (parsed.warning) {
+    params.logger?.debug?.(`Install policy ${decisionContext}: warned`);
+    return parsed;
   }
   params.logger?.debug?.(`Install policy ${decisionContext}: allowed`);
   return parsed;

@@ -35,11 +35,13 @@ openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install @owner/<slug> --force
 openclaw skills install @owner/<slug> --force-install
 openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
+openclaw skills install @owner/<slug> --dangerously-force-unsafe-install
 openclaw skills install @owner/<slug> --agent <id>
 openclaw skills install @owner/<slug> --global
 openclaw skills update @owner/<slug>
 openclaw skills update @owner/<slug> --force-install
 openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
+openclaw skills update @owner/<slug> --dangerously-force-unsafe-install
 openclaw skills update @owner/<slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
@@ -97,6 +99,13 @@ installs only.
 
 Gateway-backed skill dependency installs triggered from onboarding or Skills
 settings use the separate `skills.install` request path instead.
+
+When `security.installPolicy` returns `warn` in an interactive terminal,
+OpenClaw prints the reason and findings, then asks `type: '<skill>' to install
+anyway` (or `update anyway`). A matching answer evaluates the staged skill
+again before continuing. Declined and non-interactive commands stop before
+commit; after review, rerun with `--dangerously-force-unsafe-install`. `block`
+and policy failures remain terminal.
 
 Notes:
 
