@@ -37,6 +37,7 @@ import {
   createLocationMessage,
   createQuickReplyItems,
   getUserDisplayName,
+  logLineChannelQuota,
   pushMessagesLine,
   replyMessageLine,
   showLoadingAnimation,
@@ -433,6 +434,10 @@ export async function monitorLineProvider(
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
   statusSink?.(channelReadyPatch());
+
+  // One-time quota visibility at startup (non-blocking): logs plan tier and
+  // monthly push usage so exhausted quotas surface in logs before push fails.
+  void logLineChannelQuota({ cfg: config, accountId: resolvedAccountId });
 
   let stopped = false;
   let stopPromise: Promise<void> | undefined;
