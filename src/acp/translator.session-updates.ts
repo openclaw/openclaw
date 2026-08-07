@@ -139,14 +139,12 @@ export class AcpTranslatorSessionUpdates {
     update: SessionUpdate;
     record?: boolean;
     waitForDelivery?: boolean;
+    deferDelivery?: boolean;
+    deliveryGuard?: () => boolean;
   }): Promise<void> {
     if (this.stopped) {
       return;
     }
-    const delivery = this.options.connection.sessionUpdate({
-      sessionId: params.sessionId,
-      update: params.update,
-    });
     const recording =
       params.record && params.sessionKey
         ? this.recordLedgerUpdate({
@@ -157,25 +155,56 @@ export class AcpTranslatorSessionUpdates {
             update: params.update,
           })
         : undefined;
-    if (params.waitForDelivery === false) {
-      void delivery.catch((err: unknown) => {
-        this.options.log(`session update delivery failed for ${params.sessionId}: ${String(err)}`);
-      });
-    } else {
-      await delivery;
-    }
+    // Record the ledger before any delivery so follow-up reads see the
+    // snapshot even when delivery is deferred past the RPC result.
     await recording;
+    const deliver = () => {
+      const delivery = this.options.connection.sessionUpdate({
+        sessionId: params.sessionId,
+        update: params.update,
+      });
+      if (params.waitForDelivery === false) {
+        void delivery.catch((err: unknown) => {
+          this.options.log(
+            `session update delivery failed for ${params.sessionId}: ${String(err)}`,
+          );
+        });
+      } else {
+        return delivery;
+      }
+      return undefined;
+    };
+    if (params.deferDelivery) {
+      // Defer only notification delivery past the response-write boundary
+      // so the RPC result reaches the client first. The ledger write above
+      // already completed synchronously relative to the caller. The optional
+      // deliveryGuard suppresses stale notifications when closeSession won
+      // the race between the RPC result and the zero-delay callback.
+      setTimeout(() => {
+        if (this.stopped) {
+          return;
+        }
+        if (params.deliveryGuard && !params.deliveryGuard()) {
+          return;
+        }
+        deliver();
+      }, 0);
+      return;
+    }
+    await deliver();
   }
 
   async sendAvailableCommands(
     session: AcpTranslatorSessionRef,
-    options: { record: boolean },
+    options: { record: boolean; deferDelivery?: boolean; deliveryGuard?: () => boolean },
   ): Promise<void> {
     await this.emit({
       sessionId: session.sessionId,
       sessionKey: session.sessionKey,
       ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
       record: options.record,
+      deferDelivery: options.deferDelivery,
+      deliveryGuard: options.deliveryGuard,
       update: {
         sessionUpdate: "available_commands_update",
         availableCommands: await this.options.getAvailableCommands(),
