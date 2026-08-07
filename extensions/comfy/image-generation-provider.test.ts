@@ -620,7 +620,7 @@ describe("comfy image-generation provider", () => {
             outputNodeId: "9",
           }),
         }),
-      ).rejects.toThrow("raise plugins.entries.comfy.config.workflowFileMaxBytes");
+      ).rejects.toThrow(/models\.providers\.comfy/);
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     });
   });

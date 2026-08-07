@@ -41,6 +41,6 @@ export async function readComfyWorkflowFile(
 
 function workflowFileTooLargeError(filePath: string, maxBytes: number): Error {
   return new Error(
-    `Comfy workflow at ${filePath} exceeds ${maxBytes} bytes; raise plugins.entries.comfy.config.workflowFileMaxBytes only when the downstream Comfy service accepts the larger serialized prompt request`,
+    `Comfy workflow at ${filePath} exceeds ${maxBytes} bytes; raise the workflowFileMaxBytes setting in the active Comfy configuration root (plugins.entries.comfy.config for plugin configurations, models.providers.comfy for legacy provider configurations) only when the downstream Comfy service accepts the larger serialized prompt request`,
   );
 }
