@@ -191,7 +191,10 @@ function listExternalRepoBundledPluginManifestDirs(): string[] | null {
 }
 
 function listGitRepoBundledPluginManifestFiles(): string[] | null {
-  return listGitTrackedFiles({ repoRoot, pathspecs: "extensions/*/openclaw.plugin.json" });
+  return listGitTrackedFiles({
+    repoRoot,
+    pathspecs: "extensions/*/openclaw.plugin.json",
+  });
 }
 
 function listFindRepoBundledPluginManifestFiles(): string[] | null {
@@ -407,8 +410,14 @@ describe("bundled plugin metadata", () => {
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
     const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
-    expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
-    expect(discord?.setupSource).toEqual({ source: "./setup-entry.ts", built: "setup-entry.js" });
+    expect(discord?.source).toEqual({
+      source: "./index.ts",
+      built: "index.js",
+    });
+    expect(discord?.setupSource).toEqual({
+      source: "./setup-entry.ts",
+      built: "setup-entry.js",
+    });
     expectArtifactPresence(discord?.publicSurfaceArtifacts, {
       contains: ["api.js", "runtime-api.js", "session-key-api.js"],
       excludes: ["test-api.js"],
@@ -880,7 +889,10 @@ describe("bundled plugin metadata", () => {
       configSchema: { type: "object" },
       channelConfigs: {
         alpha: {
-          schema: { type: "object", properties: { stale: { type: "boolean" } } },
+          schema: {
+            type: "object",
+            properties: { stale: { type: "boolean" } },
+          },
           label: "Manifest Label",
           uiHints: {
             "channels.alpha.explicitOnly": {
@@ -895,7 +907,9 @@ describe("bundled plugin metadata", () => {
       "export {};\n",
       "utf8",
     );
-    fs.mkdirSync(path.join(tempRoot, "extensions", "alpha", "src"), { recursive: true });
+    fs.mkdirSync(path.join(tempRoot, "extensions", "alpha", "src"), {
+      recursive: true,
+    });
     fs.writeFileSync(
       path.join(tempRoot, "extensions", "alpha", "src", "config-schema.js"),
       [
@@ -1000,7 +1014,10 @@ describe("bundled plugin metadata", () => {
       channels: ["alpha"],
       channelConfigs: {
         alpha: {
-          schema: { type: "object", properties: { stale: { type: "boolean" } } },
+          schema: {
+            type: "object",
+            properties: { stale: { type: "boolean" } },
+          },
           uiHints: {
             "channels.alpha.explicitOnly": {
               help: "manifest hint",
@@ -1076,7 +1093,10 @@ describe("bundled plugin metadata", () => {
       channels: ["alpha"],
       channelConfigs: {
         alpha: {
-          schema: { type: "object", properties: { manifest: { type: "boolean" } } },
+          schema: {
+            type: "object",
+            properties: { manifest: { type: "boolean" } },
+          },
         },
       },
     });

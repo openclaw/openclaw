@@ -14,6 +14,7 @@ Keep `/Users/steipete/openclaw` a read-only-to-the-agent deployment mirror: clea
 - Escalate only irreversible or materially risky security, privacy, auth, destructive migration/data-loss, protocol-version, credential-rotation, dependency patch/override, or product choices.
 - Diagnose ordinary update, runtime, app, CI, test, and release-validation failures; fix them through a focused PR; prove exact head; land with `scripts/pr`.
 - Never edit, stash, reset, clean, or create a branch in the live mirror.
+- Treat `package.json`, `pnpm-workspace.yaml`, and `pnpm-lock.yaml` as immutable deployment inputs. Never run `pnpm link`, `npm link`, or another command that can write them in the live mirror. `pnpm link .` is known to add self-referential `openclaw: link:` entries and can leave the manifests and lockfile inconsistent when interrupted. Install dependencies only with `pnpm install --frozen-lockfile`; on any manifest or lockfile change, stop without destructively repairing the mirror.
 
 ## Fast Update And Maintenance
 
