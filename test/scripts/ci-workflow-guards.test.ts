@@ -5230,6 +5230,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "persist-credentials": false,
       },
     });
+    const trustedRunnerFiles = String(trustedRunnerStep.with?.["sparse-checkout"])
+      .trim()
+      .split("\n");
+    expect(trustedRunnerFiles).toEqual([
+      "scripts/ci-run-node-test-shard.mjs",
+      "scripts/lib/direct-run.mjs",
+      "scripts/lib/local-heavy-check-runtime.mjs",
+      "scripts/lib/numeric-options.mjs",
+    ]);
     expect(existsSync("scripts/ci-run-node-test-shard.mjs")).toBe(true);
   });
 

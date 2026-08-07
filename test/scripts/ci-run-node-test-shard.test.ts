@@ -16,6 +16,7 @@ import {
   buildChildEnv,
   clonePersistentCacheSlots,
   pruneFsModuleCache,
+  resolvePlanConcurrency,
   resolveShardChildCommand,
   resolveShardPlans,
   runShardPlans,
@@ -36,6 +37,17 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mjs", () => {
+  it("resolves strict plan concurrency from the environment", () => {
+    expect(resolvePlanConcurrency({})).toBe(2);
+    expect(resolvePlanConcurrency({ OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "  " })).toBe(2);
+    expect(resolvePlanConcurrency({ OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: " 3 " })).toBe(3);
+    for (const raw of ["0", "01", "-1", "1.5", "1e3", "NaN", "Infinity", "9007199254740992"]) {
+      expect(() => resolvePlanConcurrency({ OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: raw })).toThrow(
+        `invalid OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${raw}`,
+      );
+    }
+  });
+
   it("launches the child runner directly with Node", () => {
     expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node")).toEqual({
       command: "/runtime/node",
@@ -151,6 +163,53 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(peakActive).toBeLessThanOrEqual(2);
     expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1, 1.5, 2 ** 53])(
+    "rejects invalid programmatic concurrency %s before runner or cache work",
+    async (concurrency) => {
+      const scratchDir = makeScratchDir();
+      const persistentRoot = path.join(makeScratchDir(), "persistent");
+      const seed = path.join(persistentRoot, "vitest-cache-0");
+      mkdirSync(seed, { recursive: true });
+      writeFileSync(path.join(seed, "transform"), "cached", "utf8");
+      let runs = 0;
+
+      await expect(
+        runShardPlans([{ kind: "group", name: "one", plan: { configs: ["one.config.ts"] } }], {
+          concurrency,
+          env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
+          runChild: async () => {
+            runs += 1;
+            return 0;
+          },
+          scratchDir,
+        }),
+      ).rejects.toThrow("Shard plan concurrency must be a positive safe integer");
+
+      expect(runs).toBe(0);
+      expect(existsSync(path.join(persistentRoot, "vitest-cache-1"))).toBe(false);
+    },
+  );
+
+  it("caps workers to the available plans", async () => {
+    const scratchDir = makeScratchDir();
+    let runs = 0;
+    const exitCode = await runShardPlans(
+      [{ kind: "group", name: "one", plan: { configs: ["one.config.ts"] } }],
+      {
+        concurrency: Number.MAX_SAFE_INTEGER,
+        env: {},
+        runChild: async () => {
+          runs += 1;
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(runs).toBe(1);
   });
 
   it("runs per-config groups serially through one persistent cache slot", async () => {

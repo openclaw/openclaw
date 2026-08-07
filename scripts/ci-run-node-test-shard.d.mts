@@ -25,6 +25,8 @@ export type FsModuleCachePruneResult = {
 
 export function resolveShardPlans(env?: Record<string, string | undefined>): ShardPlan[];
 
+export function resolvePlanConcurrency(env?: Record<string, string | undefined>): number;
+
 export function buildChildEnv(
   entry: ShardPlan,
   baseEnv: Record<string, string | undefined>,

@@ -18,11 +18,13 @@ import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 
 // Two concurrent plans halve the serial tail of packed jobs. Children run with
 // inner test-projects parallelism 1 so a job never exceeds two Vitest runs;
 // stacking outer and inner parallelism oversubscribes the 4 vCPU runner class.
 const PLAN_CONCURRENCY = 2;
+const PLAN_CONCURRENCY_ENV_KEY = "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
 const NODE_COMPILE_CACHE_PATH_ENV_KEY = "NODE_COMPILE_CACHE";
@@ -67,6 +69,10 @@ export function resolveShardPlans(env = process.env) {
     name: plan.shard_name ?? plan.configs?.[0] ?? "group",
     plan,
   }));
+}
+
+export function resolvePlanConcurrency(env = process.env) {
+  return readPositiveEnvInt(PLAN_CONCURRENCY_ENV_KEY, env, PLAN_CONCURRENCY);
 }
 
 export function buildChildEnv(entry, baseEnv, scratchDir, index, options = {}) {
@@ -254,9 +260,13 @@ function runChild(args, childEnv, label) {
 }
 
 export async function runShardPlans(plans, options = {}) {
+  const requestedConcurrency = options.concurrency ?? PLAN_CONCURRENCY;
+  if (!Number.isSafeInteger(requestedConcurrency) || requestedConcurrency < 1) {
+    throw new Error("Shard plan concurrency must be a positive safe integer");
+  }
+  const concurrency = Math.min(requestedConcurrency, Math.max(1, plans.length));
   const baseEnv = options.env ?? process.env;
   const vitestExtraArgs = parseJsonEnv(baseEnv, VITEST_EXTRA_ARGS_ENV_KEY, []);
-  const concurrency = Math.max(1, options.concurrency ?? PLAN_CONCURRENCY);
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
@@ -331,7 +341,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plans = resolveShardPlans();
   // Bins holding spawn/signal-timing suites are marked planConcurrency 1 by
   // the planner; overlapping them with a sibling Vitest run causes flakes.
-  const planConcurrency = Number(process.env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY) || undefined;
+  const planConcurrency = resolvePlanConcurrency();
   const releaseLock = acquireLocalHeavyCheckLockSync({
     cwd: process.cwd(),
     env: process.env,

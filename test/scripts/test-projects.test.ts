@@ -1705,6 +1705,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/direct-run.mjs": [
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/direct-run-entrypoints.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
       "scripts/lib/npm-verify-exec.ts": ["test/scripts/npm-verify-exec.test.ts"],
       "scripts/lib/plugin-npm-runtime-build.mjs": [
