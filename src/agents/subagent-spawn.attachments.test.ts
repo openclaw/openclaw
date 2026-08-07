@@ -176,10 +176,137 @@ describe("spawnSubagentDirect filename validation", () => {
       const targetAttachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
       expect(fs.existsSync(explicitAttachmentsRoot)).toBe(true);
       expect(fs.existsSync(targetAttachmentsRoot)).toBe(false);
+      if (process.platform !== "win32") {
+        const [receiptDir] = fs.readdirSync(explicitAttachmentsRoot);
+        expect(receiptDir).toBeTypeOf("string");
+        if (!receiptDir) {
+          throw new Error("missing attachment receipt directory");
+        }
+        for (const privateDir of [
+          path.join(explicitWorkspaceDir, ".openclaw"),
+          explicitAttachmentsRoot,
+          path.join(explicitAttachmentsRoot, receiptDir),
+        ]) {
+          expect(fs.statSync(privateDir).mode & 0o777).toBe(0o700);
+        }
+      }
     } finally {
       fs.rmSync(explicitWorkspaceDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects attachments from a sandbox with a writable host workspace", async () => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: {
+        defaults: {
+          workspace: workspaceDirOverride,
+          sandbox: { mode: "all", workspaceAccess: "rw" },
+        },
+      },
+    });
+    const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true }),
+    });
+
+    const result = await sandboxedSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result).toEqual({
+      status: "forbidden",
+      error: expect.stringContaining("workspaceAccess=rw"),
+    });
+    expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw"))).toBe(false);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps attachments available to a read-only sandbox workspace", async () => {
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: {
+        defaults: {
+          workspace: workspaceDirOverride,
+          sandbox: { mode: "all", workspaceAccess: "ro" },
+        },
+      },
+    });
+    const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true }),
+    });
+
+    const result = await sandboxedSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw", "attachments"))).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32").each(["metadata", "attachments"] as const)(
+    "rejects a symlinked %s directory without writing outside the workspace",
+    async (linkedComponent) => {
+      const externalDir = fs.mkdtempSync(
+        path.join(
+          os.tmpdir(),
+          `openclaw-subagent-attachment-external-${process.pid}-${Date.now()}-`,
+        ),
+      );
+      fs.writeFileSync(path.join(externalDir, "sentinel.txt"), "unchanged", "utf8");
+      try {
+        const metadataDir = path.join(workspaceDirOverride, ".openclaw");
+        if (linkedComponent === "metadata") {
+          fs.symlinkSync(externalDir, metadataDir, "dir");
+        } else {
+          fs.mkdirSync(metadataDir, { recursive: true });
+          fs.symlinkSync(externalDir, path.join(metadataDir, "attachments"), "dir");
+        }
+
+        const result = await spawnWithName("file.txt");
+
+        expect(result.status).toBe("error");
+        expect(fs.readdirSync(externalDir)).toEqual(["sentinel.txt"]);
+        expect(fs.readFileSync(path.join(externalDir, "sentinel.txt"), "utf8")).toBe("unchanged");
+      } finally {
+        fs.rmSync(externalDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "materializes attachments through a configured workspace symlink",
+    async () => {
+      const workspaceTarget = workspaceDirOverride;
+      const workspaceAlias = `${workspaceTarget}-link`;
+      fs.symlinkSync(workspaceTarget, workspaceAlias, "dir");
+      workspaceDirOverride = workspaceAlias;
+      configOverride = createSubagentSpawnTestConfig(workspaceAlias);
+      try {
+        const result = await spawnWithName("file.txt");
+
+        expect(result.status).toBe("accepted");
+        const attachmentsRoot = path.join(workspaceTarget, ".openclaw", "attachments");
+        expect(fs.readdirSync(attachmentsRoot)).toHaveLength(1);
+      } finally {
+        workspaceDirOverride = workspaceTarget;
+        fs.unlinkSync(workspaceAlias);
+      }
+    },
+  );
 
   it("normalizes explicit cwd before materializing native subagent attachments", async () => {
     const homeDir = fs.mkdtempSync(

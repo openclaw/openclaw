@@ -3,8 +3,6 @@
  *
  * Handles frozen result caps, orphan detection, timing persistence, and announce retry logging.
  */
-import fsSync, { promises as fs } from "node:fs";
-import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -14,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { defaultRuntime } from "../runtime.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
+import { removeSubagentAttachmentsDir } from "./subagent-attachments.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -181,115 +180,65 @@ export async function persistSubagentSessionTiming(
   );
 }
 
-// Attachment cleanup must stay within the recorded root even if paths were
-// symlinks. Compare real paths before removing anything recursively.
-function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
-  const rootWithSep = params.rootPath.endsWith(path.sep)
-    ? params.rootPath
-    : `${params.rootPath}${path.sep}`;
-  return params.childPath.startsWith(rootWithSep);
-}
-
 /** Best-effort async removal for a subagent attachment directory. */
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return true;
   }
-
-  const resolveReal = async (targetPath: string): Promise<string | null> => {
-    try {
-      return await fs.realpath(targetPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  try {
-    const [rootReal, dirReal] = await Promise.all([
-      resolveReal(entry.attachmentsRootDir),
-      resolveReal(entry.attachmentsDir),
-    ]);
-    if (!dirReal) {
-      return true;
-    }
-
-    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
-    const dirBase = dirReal;
-    if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
-      return false;
-    }
-    await fs.rm(dirBase, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
-  }
+  return await removeSubagentAttachmentsDir({
+    rootDir: entry.attachmentsRootDir,
+    absDir: entry.attachmentsDir,
+  });
 }
 
-function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
-  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
-    return;
-  }
-
-  const resolveReal = (targetPath: string): string | null => {
-    try {
-      return fsSync.realpathSync.native(targetPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  try {
-    const rootReal = resolveReal(entry.attachmentsRootDir);
-    const dirReal = resolveReal(entry.attachmentsDir);
-    if (!dirReal) {
-      return;
-    }
-
-    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
-    if (!isResolvedChildPath({ childPath: dirReal, rootPath: rootBase })) {
-      return;
-    }
-    fsSync.rmSync(dirReal, { recursive: true, force: true });
-  } catch {
-    // best effort
-  }
+function shouldDeleteAttachments(entry: SubagentRunRecord): boolean {
+  return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
 }
 
-/** Marks an orphaned registry run finished, cleans attachments, and removes it. */
-export function reconcileOrphanedRun(params: {
+function removeOrphanedRun(params: {
   runId: string;
   entry: SubagentRunRecord;
   reason: SubagentRunOrphanReason;
   source: "restore" | "resume";
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
-}) {
-  const shouldDeleteAttachments =
-    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
-  if (shouldDeleteAttachments) {
-    safeRemoveAttachmentsDirSync(params.entry);
-  }
-  const removed = params.runs.delete(params.runId);
-  params.resumedRuns.delete(params.runId);
-  if (!removed) {
+}): boolean {
+  if (params.runs.get(params.runId) !== params.entry) {
     return false;
   }
+  params.runs.delete(params.runId);
+  params.resumedRuns.delete(params.runId);
   defaultRuntime.log(
     `[warn] Subagent orphan run pruned source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
   );
   return true;
 }
 
+/** Marks an orphaned registry run finished, cleans attachments, and removes it. */
+export async function reconcileOrphanedRun(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: SubagentRunOrphanReason;
+  source: "restore" | "resume";
+  runs: Map<string, SubagentRunRecord>;
+  resumedRuns: Set<string>;
+}): Promise<boolean> {
+  if (params.runs.get(params.runId) !== params.entry) {
+    return false;
+  }
+  if (shouldDeleteAttachments(params.entry) && !(await safeRemoveAttachmentsDir(params.entry))) {
+    return false;
+  }
+  // Cleanup can yield. Recheck the authoritative row before deleting so a
+  // replacement lifecycle owner cannot be removed by stale orphan work.
+  return removeOrphanedRun(params);
+}
+
 /** Reconciles orphaned runs found when restoring persisted subagent registry state. */
 export function reconcileOrphanedRestoredRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
+  deferredCleanupRunIds?: Set<string>;
 }) {
   const now = Date.now();
   let changed = false;
@@ -322,7 +271,17 @@ export function reconcileOrphanedRestoredRuns(params: {
       continue;
     }
     if (
-      reconcileOrphanedRun({
+      shouldDeleteAttachments(entry) &&
+      Boolean(entry.attachmentsDir) &&
+      Boolean(entry.attachmentsRootDir)
+    ) {
+      // The synchronous restore entry point cannot safely remove directory trees.
+      // Keep the durable row for resume/sweeper cleanup instead of dropping its owner.
+      params.deferredCleanupRunIds?.add(runId);
+      continue;
+    }
+    if (
+      removeOrphanedRun({
         runId,
         entry,
         reason: orphanReason,

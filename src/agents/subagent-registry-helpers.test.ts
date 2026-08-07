@@ -1,6 +1,9 @@
 // Subagent registry helper tests cover orphan reconciliation and compact logging
 // for announce delivery give-up paths.
 import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -219,30 +222,67 @@ describe("reconcileOrphanedRestoredRuns", () => {
 });
 
 describe("safeRemoveAttachmentsDir", () => {
-  it("reports non-ENOENT realpath failures instead of treating cleanup as complete", async () => {
-    const realpathSpy = vi
-      .spyOn(fs, "realpath")
-      .mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" }));
-
-    await expect(
-      safeRemoveAttachmentsDir(
-        createRunEntry({
-          attachmentsDir: "/tmp/openclaw-child-attachments",
-          attachmentsRootDir: "/tmp/openclaw-attachments",
-        }),
-      ),
-    ).resolves.toBe(false);
-
-    realpathSpy.mockRestore();
+  it("refuses a recorded directory outside its attachment root", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-cleanup-"));
+    const rootDir = path.join(tempDir, "root");
+    const outsideDir = path.join(tempDir, "outside");
+    await fs.mkdir(rootDir);
+    await fs.mkdir(outsideDir);
+    await fs.writeFile(path.join(outsideDir, "sentinel.txt"), "unchanged");
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({
+            attachmentsDir: outsideDir,
+            attachmentsRootDir: rootDir,
+          }),
+        ),
+      ).resolves.toBe(false);
+      await expect(fs.readFile(path.join(outsideDir, "sentinel.txt"), "utf8")).resolves.toBe(
+        "unchanged",
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not recursively remove through a symlink inside the attachment root",
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-symlink-"));
+      const rootDir = path.join(tempDir, "root");
+      const outsideDir = path.join(tempDir, "outside");
+      const linkedDir = path.join(rootDir, "receipt");
+      await fs.mkdir(rootDir);
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(outsideDir, "sentinel.txt"), "unchanged");
+      await fs.symlink(outsideDir, linkedDir, "dir");
+      try {
+        await expect(
+          safeRemoveAttachmentsDir(
+            createRunEntry({
+              attachmentsDir: linkedDir,
+              attachmentsRootDir: rootDir,
+            }),
+          ),
+        ).resolves.toBe(false);
+        await expect(fs.readFile(path.join(outsideDir, "sentinel.txt"), "utf8")).resolves.toBe(
+          "unchanged",
+        );
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("reconcileOrphanedRun", () => {
   afterEach(() => {
     vi.useRealTimers();
+    __setFsSafeTestHooksForTest(undefined);
   });
 
-  it("removes orphaned runs without publishing a discarded terminal projection", () => {
+  it("removes orphaned runs without publishing a discarded terminal projection", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(4_000);
     const entry = createRunEntry();
@@ -250,7 +290,7 @@ describe("reconcileOrphanedRun", () => {
     const resumedRuns = new Set([entry.runId]);
 
     expect(
-      reconcileOrphanedRun({
+      await reconcileOrphanedRun({
         runId: entry.runId,
         entry,
         reason: "missing-session-id",
@@ -263,6 +303,59 @@ describe("reconcileOrphanedRun", () => {
     expect(entry.execution).toEqual({ status: "running", startedAt: 1_000 });
     expect(runs.has(entry.runId)).toBe(false);
     expect(resumedRuns.has(entry.runId)).toBe(false);
+  });
+
+  it("keeps the orphan row until rooted attachment cleanup settles", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-owner-"));
+    const attachmentsDir = path.join(rootDir, "receipt");
+    await fs.mkdir(attachmentsDir);
+    await fs.writeFile(path.join(attachmentsDir, "attachment.txt"), "private");
+    const entry = createRunEntry({
+      cleanup: "delete",
+      attachmentsRootDir: rootDir,
+      attachmentsDir,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const resumedRuns = new Set([entry.runId]);
+    let releaseRemoval!: () => void;
+    const removalReleased = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    let cleanupStarted!: () => void;
+    const cleanupStartedPromise = new Promise<void>((resolve) => {
+      cleanupStarted = resolve;
+    });
+    let blocked = false;
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation: async (operation) => {
+        if (operation !== "remove" || blocked) {
+          return;
+        }
+        blocked = true;
+        cleanupStarted();
+        await removalReleased;
+      },
+    });
+    try {
+      const reconciliation = reconcileOrphanedRun({
+        runId: entry.runId,
+        entry,
+        reason: "missing-session-id",
+        source: "resume",
+        runs,
+        resumedRuns,
+      });
+
+      await cleanupStartedPromise;
+      expect(runs.get(entry.runId)).toBe(entry);
+      releaseRemoval();
+      await expect(reconciliation).resolves.toBe(true);
+      expect(runs.has(entry.runId)).toBe(false);
+      expect(resumedRuns.has(entry.runId)).toBe(false);
+    } finally {
+      releaseRemoval();
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
   });
 });
 

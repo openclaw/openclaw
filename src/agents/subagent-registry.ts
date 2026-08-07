@@ -107,6 +107,9 @@ export function scheduleSubagentRegistrySweep(params?: { delayMs?: number }) {
 }
 
 const resumedRuns = new Set<string>();
+// Rooted cleanup can outlive its registry row. Track the exact claimant so a
+// stale completion cannot release or strand a replacement with the same id.
+const orphanReconciliationClaims = new Map<string, SubagentRunRecord>();
 
 const completionRuntime = createSubagentRegistryCompletionRuntime({
   runs: subagentRuns,
@@ -222,6 +225,59 @@ function finalizeResumedAnnounceGiveUpInBackground(
   });
 }
 
+function reconcileOrphanedRunInBackground(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: NonNullable<ReturnType<typeof resolveSubagentRunOrphanReason>>;
+}) {
+  orphanReconciliationClaims.set(params.runId, params.entry);
+  resumedRuns.add(params.runId);
+  void runWithGatewayIndependentRootWorkAdmission(async () => {
+    const removed = await reconcileOrphanedRun({
+      ...params,
+      source: "resume",
+      runs: subagentRuns,
+      resumedRuns,
+    });
+    if (removed) {
+      if (orphanReconciliationClaims.get(params.runId) === params.entry) {
+        orphanReconciliationClaims.delete(params.runId);
+      }
+      persistSubagentRuns(params.runId);
+      return;
+    }
+    if (releaseOrphanReconciliationClaim(params.runId, params.entry)) {
+      if (subagentRuns.get(params.runId) !== params.entry) {
+        resumeSubagentRun(params.runId);
+        return;
+      }
+      scheduleSubagentRegistrySweep();
+    }
+  }).catch((error: unknown) => {
+    log.warn("failed to reconcile orphaned subagent attachments", {
+      runId: params.runId,
+      childSessionKey: params.entry.childSessionKey,
+      error,
+    });
+    if (releaseOrphanReconciliationClaim(params.runId, params.entry)) {
+      if (subagentRuns.get(params.runId) !== params.entry) {
+        resumeSubagentRun(params.runId);
+        return;
+      }
+      scheduleSubagentRegistrySweep({ delayMs: GATEWAY_ADMISSION_RETRY_DELAY_MS });
+    }
+  });
+}
+
+function releaseOrphanReconciliationClaim(runId: string, entry: SubagentRunRecord): boolean {
+  if (orphanReconciliationClaims.get(runId) !== entry) {
+    return false;
+  }
+  orphanReconciliationClaims.delete(runId);
+  resumedRuns.delete(runId);
+  return true;
+}
+
 export function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) {
     return;
@@ -288,18 +344,7 @@ export function resumeSubagentRun(runId: string) {
     }
     const orphanReason = resolveSubagentRunOrphanReason({ entry });
     if (orphanReason) {
-      if (
-        reconcileOrphanedRun({
-          runId,
-          entry,
-          reason: orphanReason,
-          source: "resume",
-          runs: subagentRuns,
-          resumedRuns,
-        })
-      ) {
-        persistSubagentRuns(runId);
-      }
+      reconcileOrphanedRunInBackground({ runId, entry, reason: orphanReason });
       return;
     }
     if (contextCleanup.suppressAnnounceForSteerRestart(entry)) {
@@ -483,6 +528,7 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumeRetryTimers.clear();
   subagentRuns.clear();
   resumedRuns.clear();
+  orphanReconciliationClaims.clear();
   pendingLifecycle.clearAll();
   resetSubagentRegistryRuntimeLoadersForTests();
   contextCleanup.reset();
