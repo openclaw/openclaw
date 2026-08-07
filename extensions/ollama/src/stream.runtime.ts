@@ -882,16 +882,27 @@ export async function* parseNdjsonStream(
         if (!trimmed) {
           continue;
         }
+        let parsed: OllamaChatResponse;
         try {
-          yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
+          parsed = parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
         } catch {
           log.warn(`Skipping malformed NDJSON line: ${truncateUtf16Safe(trimmed, 120)}`);
+          continue;
         }
+        if (parsed.done) {
+          // The production consumer exits the generator on the terminal
+          // record, so finalize the fatal decoder before exposing it: a
+          // partial UTF-8 sequence buffered by the continuing stream decode
+          // must reject the stream instead of completing successfully.
+          decoder.decode();
+        }
+        yield parsed;
       }
     }
 
     // Finalize the fatal decoder so a terminal partial UTF-8 sequence
-    // (buffered by the continuing stream decode) rejects the stream at EOF.
+    // (buffered by the continuing stream decode) rejects the stream at EOF
+    // when the generator is drained without a terminal record.
     buffer += decoder.decode();
 
     if (buffer.trim()) {
