@@ -104,10 +104,7 @@ describe("ClickClack atomic inbound reply replay", () => {
             await plan.delivery.deliver({ text: "first part" }, { kind: "block" });
             await plan.delivery.deliver({ text: "final part" }, { kind: "final" });
           } else {
-            await plan.delivery.deliver(
-              { text: "regenerated combined output" },
-              { kind: "final" },
-            );
+            await plan.delivery.deliver({ text: "regenerated combined output" }, { kind: "final" });
           }
           return {
             admission: { kind: "dispatch" },
