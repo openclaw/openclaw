@@ -1,5 +1,10 @@
 // Shared filesystem helpers for plugin doctor legacy-state migrations.
 import fs from "node:fs/promises";
+import { readRegularFile } from "../infra/fs-safe.js";
+
+/** Bound the existing-archive byte comparison so a huge prior snapshot cannot
+ * force an unbounded allocation during a later migration. */
+const ARCHIVE_COMPARE_MAX_BYTES = 64 * 1024 * 1024;
 
 /** True when the legacy-state path exists and is a regular file. */
 export async function legacyStateFileExists(filePath: string): Promise<boolean> {
@@ -28,16 +33,22 @@ export async function archiveLegacyStateSource(params: {
       // Import commits before archival, so an existing archive must converge
       // instead of re-warning every startup (#102749): identical bytes already
       // preserve the snapshot; differing bytes archive under a free suffix.
-      const [sourceBytes, archiveBytes] = await Promise.all([
-        fs.readFile(params.filePath),
-        fs.readFile(archivedPath),
+      const [sourceStat, archiveStat] = await Promise.all([
+        fs.stat(params.filePath),
+        fs.stat(archivedPath),
       ]);
-      if (sourceBytes.equals(archiveBytes)) {
-        await fs.rm(params.filePath, { force: true });
-        params.changes.push(
-          `Removed already-archived ${params.label} legacy source ${params.filePath}`,
-        );
-        return;
+      if (sourceStat.size === archiveStat.size && sourceStat.size <= ARCHIVE_COMPARE_MAX_BYTES) {
+        const [sourceResult, archiveResult] = await Promise.all([
+          readRegularFile({ filePath: params.filePath, maxBytes: ARCHIVE_COMPARE_MAX_BYTES }),
+          readRegularFile({ filePath: archivedPath, maxBytes: ARCHIVE_COMPARE_MAX_BYTES }),
+        ]);
+        if (sourceResult.buffer.equals(archiveResult.buffer)) {
+          await fs.rm(params.filePath, { force: true });
+          params.changes.push(
+            `Removed already-archived ${params.label} legacy source ${params.filePath}`,
+          );
+          return;
+        }
       }
       const nextArchivePath = await firstFreeArchivePath(params.filePath);
       await fs.rename(params.filePath, nextArchivePath);

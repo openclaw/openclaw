@@ -57,6 +57,20 @@ describe("archiveLegacyStateSource", () => {
     await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe("{}");
   });
 
+  it("archives under a free suffix without reading an oversized existing archive", async () => {
+    const filePath = path.join(dir, "state.json");
+    await fs.writeFile(filePath, `{"newer":true}`);
+    await fs.writeFile(`${filePath}.migrated`, Buffer.alloc(64 * 1024 * 1024 + 1));
+    const changes: string[] = [];
+    const warnings: string[] = [];
+
+    await archiveLegacyStateSource({ filePath, label: "test state", changes, warnings });
+
+    expect(warnings).toEqual([]);
+    expect(changes).toEqual([`Archived test state legacy source -> ${filePath}.migrated.2`]);
+    await expect(fs.readFile(`${filePath}.migrated.2`, "utf8")).resolves.toBe(`{"newer":true}`);
+  });
+
   it("keeps a failed archive as a warning", async () => {
     const filePath = path.join(dir, "missing.json");
     const changes: string[] = [];
