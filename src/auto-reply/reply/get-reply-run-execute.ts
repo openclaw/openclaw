@@ -190,7 +190,18 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
   const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
-  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
+  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])].map(
+    (fact) => {
+      if (fact.originalPath) {
+        const { originalPath, workspaceDir, ...rest } = fact;
+        return {
+          ...rest,
+          path: originalPath,
+        };
+      }
+      return fact;
+    },
+  );
   const mediaImageLayout = buildPersistedMediaImageLayout({
     ctx,
     media: userTurnMediaForPersistence,
