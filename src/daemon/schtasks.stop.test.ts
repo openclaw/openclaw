@@ -72,6 +72,8 @@ const GATEWAY_PORT = 18789;
 const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
 const INSTALLED_GATEWAY_COMMAND_LINE =
   '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789';
+const GATEWAY_PID = 4242;
+const RESTART_CALLER_PID = 5151;
 
 function pushSuccessfulSchtasksResponses(count: number) {
   for (let i = 0; i < count; i += 1) {
@@ -128,6 +130,62 @@ function setTaskStateProbeResult(state: number) {
     status: 0,
     signal: null,
   });
+}
+
+function mockWindowsRestartProcessTree(options: { callerDescendsFromGateway: boolean }) {
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  vi.spyOn(process, "pid", "get").mockReturnValue(RESTART_CALLER_PID);
+  let gatewayAlive = true;
+  spawnSync.mockImplementation((command, _args) => {
+    if (command.toLowerCase().endsWith("taskkill.exe")) {
+      gatewayAlive = false;
+      return {
+        pid: 0,
+        output: [null, "", ""],
+        stdout: "",
+        stderr: "",
+        status: 0,
+        signal: null,
+      };
+    }
+    const processes = [
+      ...(gatewayAlive
+        ? [
+            {
+              ProcessId: GATEWAY_PID,
+              ParentProcessId: 100,
+              CommandLine: INSTALLED_GATEWAY_COMMAND_LINE,
+            },
+          ]
+        : []),
+      {
+        ProcessId: 5050,
+        ParentProcessId: options.callerDescendsFromGateway ? GATEWAY_PID : 3131,
+        CommandLine: "cmd.exe /d /s /c openclaw gateway restart",
+      },
+      {
+        ProcessId: RESTART_CALLER_PID,
+        ParentProcessId: 5050,
+        CommandLine: "node.exe openclaw gateway restart",
+      },
+      { ProcessId: 9999, ParentProcessId: RESTART_CALLER_PID, CommandLine: "powershell.exe" },
+    ];
+    const output = JSON.stringify(processes);
+    return {
+      pid: 0,
+      output: [null, output, ""],
+      stdout: output,
+      stderr: "",
+      status: 0,
+      signal: null,
+    };
+  });
+}
+
+function windowsTaskkillCalls(): Array<readonly string[] | undefined> {
+  return spawnSync.mock.calls
+    .filter(([command]) => command.toLowerCase().endsWith("taskkill.exe"))
+    .map(([, args]) => args);
 }
 
 async function withPreparedGatewayTask(
@@ -706,6 +764,81 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
       ]);
+    });
+  });
+
+  it("preserves a gateway-descended restart caller until the task relaunches", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
+      const startupEntry = path.join(
+        expectDefined(env.APPDATA, "env.APPDATA test invariant"),
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Startup",
+        "OpenClaw Gateway.cmd",
+      );
+      await fs.mkdir(path.dirname(startupEntry), { recursive: true });
+      await fs.writeFile(startupEntry, "@echo off\r\n", "utf8");
+      mockWindowsRestartProcessTree({ callerDescendsFromGateway: true });
+      pushSuccessfulSchtasksResponses(5);
+      const runningTaskResponse = {
+        ...SUCCESS_RESPONSE,
+        stdout: "Status: Running\r\nLast Run Result: 0x41301\r\n",
+      };
+      schtasksResponses.push(runningTaskResponse, { ...SUCCESS_RESPONSE }, runningTaskResponse);
+      inspectPortUsage
+        .mockResolvedValueOnce(
+          busyPortUsage(GATEWAY_PID, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
+        )
+        .mockResolvedValueOnce(freePortUsage());
+
+      await expect(restartScheduledTask({ env, stdout, onMutation })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expect(windowsTaskkillCalls()).toEqual([]);
+      expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(schtasksCalls).toContainEqual(["/End", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-restart" });
+      await expect(fs.access(startupEntry)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("retains verified tree cleanup for an external restart caller", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      mockWindowsRestartProcessTree({ callerDescendsFromGateway: false });
+      pushSuccessfulSchtasksResponses(4);
+      inspectPortUsage.mockResolvedValue(freePortUsage());
+
+      await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expect(windowsTaskkillCalls()).toEqual([["/T", "/PID", String(GATEWAY_PID)]]);
+      expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
+  it("fails visibly when /End does not release a gateway-descended caller's port", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
+      mockWindowsRestartProcessTree({ callerDescendsFromGateway: true });
+      pushSuccessfulSchtasksResponses(3);
+      inspectPortUsage.mockResolvedValue(
+        busyPortUsage(GATEWAY_PID, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
+      );
+
+      await expect(restartScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+        `gateway port ${GATEWAY_PORT} is still busy before restart`,
+      );
+
+      expect(windowsTaskkillCalls()).toEqual([]);
+      expect(inspectPortUsage).toHaveBeenCalledTimes(20);
+      expect(schtasksCalls).not.toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      expect(onMutation).not.toHaveBeenCalledWith({ mode: "schtasks-restart" });
     });
   });
 

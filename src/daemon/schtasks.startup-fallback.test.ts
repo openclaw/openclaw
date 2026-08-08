@@ -132,7 +132,7 @@ async function writeNodeScript(env: Record<string, string>, port = "18789") {
 }
 
 const NODE_PROCESS_QUERY =
-  "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
+  "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress";
 
 function makeNodeServiceEnv(env: Record<string, string>): Record<string, string> {
   return {
@@ -1518,7 +1518,7 @@ describe("Windows startup fallback", () => {
           command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
           )
         ) {
           return {
@@ -1588,7 +1588,7 @@ describe("Windows startup fallback", () => {
           command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
           )
         ) {
           return {
@@ -1741,7 +1741,7 @@ describe("Windows startup fallback", () => {
           command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
           )
         ) {
           return {

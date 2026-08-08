@@ -18,8 +18,13 @@ import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-t
 
 type WindowsProcessSnapshotEntry = {
   ProcessId?: number;
+  ParentProcessId?: number;
   CommandLine?: string | null;
 };
+
+// Process trees are shallow in practice; cap the walk so corrupt or cyclic CIM data
+// cannot make restart ownership checks unbounded.
+const MAX_PROCESS_ANCESTOR_DEPTH = 32;
 
 export function resolveScheduledTaskCommandPort(
   env: GatewayServiceEnv,
@@ -60,6 +65,41 @@ function matchesInstalledProgramArguments(
 function getSnapshotProcessId(entry: WindowsProcessSnapshotEntry): number | null {
   const pid = entry.ProcessId;
   return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function getSnapshotParentProcessId(entry: WindowsProcessSnapshotEntry): number | null {
+  const pid = entry.ParentProcessId;
+  return typeof pid === "number" && Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function isProcessDescendantOf(
+  entries: WindowsProcessSnapshotEntry[],
+  processId: number,
+  ancestorPid: number,
+): boolean {
+  const entriesByPid = new Map(
+    entries.flatMap((entry) => {
+      const pid = getSnapshotProcessId(entry);
+      return pid ? [[pid, entry] as const] : [];
+    }),
+  );
+  const visited = new Set<number>();
+  let currentPid = processId;
+  for (let depth = 0; depth < MAX_PROCESS_ANCESTOR_DEPTH; depth += 1) {
+    if (visited.has(currentPid)) {
+      return false;
+    }
+    visited.add(currentPid);
+    const parentPid = getSnapshotParentProcessId(entriesByPid.get(currentPid) ?? {});
+    if (!parentPid) {
+      return false;
+    }
+    if (parentPid === ancestorPid) {
+      return true;
+    }
+    currentPid = parentPid;
+  }
+  return false;
 }
 
 export function findInstalledProcessPid(
@@ -204,6 +244,31 @@ export async function resolveScheduledTaskOwnedGatewayPids(
     }
   }
   return Array.from(ownedPids);
+}
+
+export async function isCurrentProcessDescendantOfScheduledTaskGateway(
+  env: GatewayServiceEnv,
+  context: { port: number | null },
+): Promise<boolean> {
+  if (process.platform !== "win32" || !context.port) {
+    return false;
+  }
+  const command = await readScheduledTaskCommand(env).catch(() => null);
+  const installedArguments = command?.programArguments;
+  if (!installedArguments?.length) {
+    return false;
+  }
+  const snapshot = readWindowsProcessSnapshot();
+  if (!snapshot) {
+    return false;
+  }
+  const gatewayPid = findInstalledProcessPid(
+    snapshot,
+    context.port,
+    installedArguments,
+    () => true,
+  );
+  return gatewayPid ? isProcessDescendantOf(snapshot, process.pid, gatewayPid) : false;
 }
 
 export async function resolveListenerBackedScheduledTaskRuntime(
@@ -359,7 +424,7 @@ export function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | nu
     [
       "-NoProfile",
       "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
     ],
     { encoding: "utf8", timeout: 5_000, windowsHide: true },
   );

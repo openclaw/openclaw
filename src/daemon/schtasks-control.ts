@@ -11,6 +11,7 @@ import {
 } from "./schtasks-layout.js";
 import {
   findInstalledProcessPid,
+  isCurrentProcessDescendantOfScheduledTaskGateway,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
   resolveScheduledTaskCommandPort,
@@ -334,22 +335,32 @@ export async function restartRegisteredScheduledTask(params: {
   onRunMutation?: () => void;
 }): Promise<GatewayServiceRestartResult> {
   const taskName = resolveTaskName(params.env);
-  const end = await execSchtasks(["/End", "/TN", taskName]);
-  if (end.code === 0) {
-    params.onEndMutation?.();
-  }
   const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
   const restartContext = manageGatewayPort
     ? await resolveScheduledTaskGatewayContext(params.env)
     : null;
   const restartPort = restartContext?.port ?? null;
+  // Capture ancestry before /End removes the verified gateway entry. Tree-killing that
+  // ancestor would kill the invoking CLI before it can relaunch the task.
+  const preserveCurrentProcess =
+    params.mode.kind === "standard" &&
+    restartContext !== null &&
+    (await isCurrentProcessDescendantOfScheduledTaskGateway(params.env, restartContext));
+  const end = await execSchtasks(["/End", "/TN", taskName]);
+  if (end.code === 0) {
+    params.onEndMutation?.();
+  }
   if (params.mode.kind === "standard") {
     if (manageGatewayPort) {
-      await terminateScheduledTaskGatewayListeners(params.env, restartContext ?? undefined);
+      if (!preserveCurrentProcess) {
+        await terminateScheduledTaskGatewayListeners(params.env, restartContext ?? undefined);
+      }
     } else {
       await terminateScheduledTaskNodeHost(params.env);
     }
-    await terminateInstalledStartupRuntime(params.env);
+    if (!preserveCurrentProcess) {
+      await terminateInstalledStartupRuntime(params.env);
+    }
   } else {
     const replacementRuntime = await resolveFallbackRuntime(params.env, undefined, "control");
     if (replacementRuntime.status === "unknown") {
