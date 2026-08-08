@@ -32,6 +32,14 @@ type ParsedMediaOutputSegment =
 type SplitMediaFromOutputOptions = {
   extractMarkdownImages?: boolean;
   extractMediaDirectives?: boolean;
+  /**
+   * Invoked when a `MEDIA:` token is skipped because it sits inside a fenced
+   * code block (see #41966). Callers running in a Node context can pass a
+   * logger here to surface the otherwise-silent skip. Left undefined by
+   * default so this module stays free of Node-only logger imports and remains
+   * safe to bundle into the browser UI.
+   */
+  onFencedMediaTokenSkipped?: (line: string) => void;
 };
 
 const FILE_URL_PREFIX_RE = /^file:\/\//i;
@@ -523,6 +531,7 @@ export function splitMediaFromOutput(
   }
   const extractMarkdownImages = options.extractMarkdownImages === true;
   const extractMediaDirectives = options.extractMediaDirectives !== false;
+  const onFencedMediaTokenSkipped = options.onFencedMediaTokenSkipped;
   const mayContainMediaToken = extractMediaDirectives && /media:/i.test(trimmedRaw);
   const mayContainMarkdownImage = extractMarkdownImages && /!\[[^\]]*]\(/.test(trimmedRaw);
   const mayContainAudioTag = trimmedRaw.includes("[[");
@@ -561,6 +570,18 @@ export function splitMediaFromOutput(
   for (const line of lines) {
     // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
     if (fenceSpans.some((span) => lineOffset >= span.start && lineOffset < span.end)) {
+      // Notify the caller so the silent-failure mode is at least observable
+      // (fixes #41966 — MEDIA tokens in code fences are otherwise silently ignored).
+      // Only signal when media-directive extraction is enabled. Callers that keep
+      // this function active for other features (e.g. markdown images) with
+      // extractMediaDirectives: false must not create a warning path (#41966).
+      if (
+        extractMediaDirectives &&
+        onFencedMediaTokenSkipped &&
+        line.trimStart().toUpperCase().startsWith("MEDIA:")
+      ) {
+        onFencedMediaTokenSkipped(line);
+      }
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
