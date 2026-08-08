@@ -1,7 +1,6 @@
 // Voice Call plugin module implements cli behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -65,13 +64,179 @@ const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
 const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
+/** Cap diagnostic CLI reads to avoid loading oversized JSONL logs into memory. */
+const VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES = 1_000_000;
+const VOICE_CALL_CLI_JSONL_READ_CHUNK_BYTES = 64 * 1024;
 
 function writeStdoutLine(...values: unknown[]): void {
   process.stdout.write(`${format(...values)}\n`);
 }
 
+function writeStderrLine(...values: unknown[]): void {
+  process.stderr.write(`${format(...values)}\n`);
+}
+
 function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+type JsonlFileIdentity = {
+  dev: number;
+  ino: number;
+};
+
+function getJsonlFileIdentity(stat: fs.Stats): JsonlFileIdentity {
+  return { dev: stat.dev, ino: stat.ino };
+}
+
+function isSameJsonlFileIdentity(left: JsonlFileIdentity, right: JsonlFileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+/** Read complete JSONL records from at most `maxBytes` at the end of `filePath`. */
+function readJsonlTailSync(
+  filePath: string,
+  maxBytes: number,
+): {
+  text: string;
+  bytes: Buffer;
+  end: number;
+  identity: JsonlFileIdentity;
+  droppedLeadingBytes: number;
+} {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const stat = fs.fstatSync(fd);
+    const identity = getJsonlFileIdentity(stat);
+    const start = Math.max(0, stat.size - maxBytes);
+    const length = stat.size - start;
+    if (length === 0) {
+      return { text: "", bytes: Buffer.alloc(0), end: stat.size, identity, droppedLeadingBytes: 0 };
+    }
+    let startsAtRecordBoundary = start === 0;
+    if (start > 0) {
+      const prefix = Buffer.alloc(1);
+      startsAtRecordBoundary = fs.readSync(fd, prefix, 0, 1, start - 1) === 1 && prefix[0] === 0x0a;
+    }
+    const buf = Buffer.alloc(length);
+    let bytesRead = 0;
+    while (bytesRead < length) {
+      const read = fs.readSync(fd, buf, bytesRead, length - bytesRead, start + bytesRead);
+      if (read === 0) {
+        break;
+      }
+      bytesRead += read;
+    }
+    let bytes = buf.subarray(0, bytesRead);
+    let droppedLeadingBytes = 0;
+    if (!startsAtRecordBoundary) {
+      const firstNewline = bytes.indexOf(0x0a);
+      if (firstNewline === -1) {
+        droppedLeadingBytes = bytes.length;
+        bytes = Buffer.alloc(0);
+      } else {
+        droppedLeadingBytes = firstNewline + 1;
+        bytes = bytes.subarray(firstNewline + 1);
+      }
+    }
+    return {
+      text: bytes.toString("utf8"),
+      bytes,
+      end: start + bytesRead,
+      identity,
+      droppedLeadingBytes,
+    };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function warnJsonlCappedLeadingOmission(droppedLeadingBytes: number, filePath: string): void {
+  if (droppedLeadingBytes > 0) {
+    writeStderrLine(
+      "voicecall: skipped %d bytes of a partial JSONL record at the start of the capped read (%s)",
+      droppedLeadingBytes,
+      filePath,
+    );
+  }
+}
+
+function warnJsonlFollowDiscard(filePath: string): void {
+  writeStderrLine(
+    "voicecall: discarding a JSONL record larger than %d bytes while following %s",
+    VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES,
+    filePath,
+  );
+}
+
+type JsonlFollowState = {
+  pending: Buffer;
+  discardUntilNewline: boolean;
+  identity: JsonlFileIdentity;
+};
+
+function readJsonlFollowRangeSync(params: {
+  filePath: string;
+  start: number;
+  state: JsonlFollowState;
+  onLine: (line: string) => void;
+}): number {
+  const fd = fs.openSync(params.filePath, "r");
+  const chunk = Buffer.alloc(VOICE_CALL_CLI_JSONL_READ_CHUNK_BYTES);
+  let position = params.start;
+  const appendPending = (fragment: Buffer): void => {
+    if (params.state.discardUntilNewline || fragment.length === 0) {
+      return;
+    }
+    if (params.state.pending.length + fragment.length > VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES) {
+      params.state.pending = Buffer.alloc(0);
+      params.state.discardUntilNewline = true;
+      warnJsonlFollowDiscard(params.filePath);
+      return;
+    }
+    // Retain raw bytes so UTF-8 code points split across read chunks decode only after completion.
+    params.state.pending =
+      params.state.pending.length === 0
+        ? Buffer.from(fragment)
+        : Buffer.concat([params.state.pending, fragment]);
+  };
+  try {
+    const stat = fs.fstatSync(fd);
+    const identity = getJsonlFileIdentity(stat);
+    if (!isSameJsonlFileIdentity(params.state.identity, identity) || stat.size < position) {
+      position = 0;
+      params.state.pending = Buffer.alloc(0);
+      params.state.discardUntilNewline = false;
+    }
+    params.state.identity = identity;
+
+    while (position < stat.size) {
+      const requested = Math.min(chunk.length, stat.size - position);
+      const bytesRead = fs.readSync(fd, chunk, 0, requested, position);
+      if (bytesRead === 0) {
+        break;
+      }
+      let cursor = 0;
+      for (;;) {
+        const newline = chunk.indexOf(0x0a, cursor);
+        if (newline === -1 || newline >= bytesRead) {
+          appendPending(chunk.subarray(cursor, bytesRead));
+          break;
+        }
+        appendPending(chunk.subarray(cursor, newline));
+        if (!params.state.discardUntilNewline && params.state.pending.length > 0) {
+          params.onLine(params.state.pending.toString("utf8"));
+        }
+        params.state.pending = Buffer.alloc(0);
+        params.state.discardUntilNewline = false;
+        cursor = newline + 1;
+      }
+      position += bytesRead;
+    }
+    return position;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function parseVoiceCallIntOption(
@@ -767,17 +932,29 @@ export function registerVoiceCallCli(params: {
       };
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const initial = fs.readFileSync(file);
-        let decoder = new StringDecoder("utf8");
-        const initialLines = decoder.write(initial).split("\n");
-        let pendingLine = initialLines.pop() ?? "";
-        const lines = initialLines.filter(Boolean);
+        const {
+          bytes: initial,
+          end,
+          identity,
+          droppedLeadingBytes,
+        } = readJsonlTailSync(file, VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES);
+        warnJsonlCappedLeadingOmission(droppedLeadingBytes, file);
+        const finalNewline = initial.lastIndexOf(0x0a);
+        const completeInitial =
+          finalNewline === -1 ? Buffer.alloc(0) : initial.subarray(0, finalNewline + 1);
+        const pending = finalNewline === -1 ? initial : initial.subarray(finalNewline + 1);
+        const lines = completeInitial.toString("utf8").split("\n").filter(Boolean);
         for (const line of lines.slice(Math.max(0, lines.length - since))) {
           writeStdoutLine(line);
         }
 
-        let offset = initial.length;
-        let lastObservedSize = initial.length;
+        let offset = end;
+        let lastObservedSize = end;
+        const followState: JsonlFollowState = {
+          pending: Buffer.from(pending),
+          discardUntilNewline: false,
+          identity,
+        };
         for (;;) {
           try {
             const stat = fs.statSync(file);
@@ -785,26 +962,20 @@ export function registerVoiceCallCli(params: {
             // compare observed sizes so copytruncate also clears buffered text.
             if (stat.size < lastObservedSize) {
               offset = 0;
-              decoder = new StringDecoder("utf8");
-              pendingLine = "";
+              followState.pending = Buffer.alloc(0);
+              followState.discardUntilNewline = false;
             }
             lastObservedSize = stat.size;
-            if (stat.size > offset) {
-              const fd = fs.openSync(file, "r");
-              try {
-                const buf = Buffer.alloc(stat.size - offset);
-                const bytesRead = fs.readSync(fd, buf, 0, buf.length, offset);
-                offset += bytesRead;
-                const text = decoder.write(buf.subarray(0, bytesRead));
-                const completeLines = `${pendingLine}${text}`.split("\n");
-                pendingLine = completeLines.pop() ?? "";
-                for (const line of completeLines.filter(Boolean)) {
+            offset = readJsonlFollowRangeSync({
+              filePath: file,
+              start: offset,
+              state: followState,
+              onLine: (line) => {
+                if (line) {
                   writeStdoutLine(line);
                 }
-              } finally {
-                fs.closeSync(fd);
-              }
-            }
+              },
+            });
           } catch {
             // ignore and retry
           }
@@ -825,7 +996,11 @@ export function registerVoiceCallCli(params: {
       const last = parseVoiceCallIntOption(options.last, "--last", { min: 1 });
 
       if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        const content = fs.readFileSync(file, "utf8");
+        const { text: content, droppedLeadingBytes } = readJsonlTailSync(
+          file,
+          VOICE_CALL_CLI_MAX_JSONL_TAIL_BYTES,
+        );
+        warnJsonlCappedLeadingOmission(droppedLeadingBytes, file);
         const calls = content
           .split("\n")
           .filter(Boolean)
