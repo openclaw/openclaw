@@ -55,10 +55,38 @@ export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const OLLAMA_TERMINAL_TAIL_MAX_BYTES = 256 * 1024;
+const OLLAMA_TERMINAL_TAIL_DEADLINE_MS = 2_000;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
+
+function findNewlineEnd(value: Uint8Array, lineIndex: number): number | undefined {
+  let remaining = lineIndex;
+  for (let offset = 0; offset < value.byteLength; offset += 1) {
+    if (value[offset] !== 0x0a) {
+      continue;
+    }
+    if (remaining === 0) {
+      return offset + 1;
+    }
+    remaining -= 1;
+  }
+  return undefined;
+}
+
+function countTerminalTrailingWhitespaceBytes(value: Uint8Array, terminalLineEnd: number): number {
+  let count = 0;
+  for (let offset = terminalLineEnd - 2; offset >= 0; offset -= 1) {
+    const byte = value[offset];
+    if (byte !== 0x20 && byte !== 0x09 && byte !== 0x0d) {
+      break;
+    }
+    count += 1;
+  }
+  return count;
+}
 
 type OllamaStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
@@ -863,34 +891,121 @@ export function buildAssistantMessage(
 export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): AsyncGenerator<OllamaChatResponse> {
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
   let pendingRecordBytes = 0;
+  let terminalRecord: OllamaChatResponse | undefined;
+  let terminalTailBytes = 0;
+  let terminalTailDeadline: number | undefined;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = terminalRecord
+        ? await readWithTerminalTailDeadline(reader, terminalTailDeadline)
+        : await reader.read();
       if (done) {
         break;
       }
-      pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
+      let nextPendingRecordBytes = pendingRecordBytes;
+      let recordCapError: Error | undefined;
+      if (!terminalRecord) {
+        try {
+          nextPendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
+        } catch (error) {
+          // A terminal record and a large newline-free tail can share one
+          // transport read. Defer the cap decision until the terminal line
+          // is identified so the tail uses its own bounded policy.
+          recordCapError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+      if (terminalRecord) {
+        // A terminal record was already parsed; the remaining body bytes only
+        // need fatal UTF-8 validation before the completion is exposed.
+        decoder.decode(value, { stream: true });
+        terminalTailBytes += value.byteLength;
+        if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
+          // Bound the post-terminal validation drain: a peer that keeps
+          // sending valid trailing bytes must not withhold completion forever.
+          break;
+        }
+        continue;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
-      for (const line of lines) {
+      const parsedRecords: OllamaChatResponse[] = [];
+      let terminalFound = false;
+      for (const [lineIndex, line] of lines.entries()) {
         const trimmed = line.trim();
         if (!trimmed) {
           continue;
         }
+        let parsed: OllamaChatResponse;
         try {
-          yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
+          parsed = parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
         } catch {
           log.warn(`Skipping malformed NDJSON line: ${truncateUtf16Safe(trimmed, 120)}`);
+          continue;
         }
+        if (parsed.done) {
+          const terminalLineEnd = findNewlineEnd(value, lineIndex);
+          if (terminalLineEnd === undefined) {
+            throw new Error("Ollama terminal record was not newline-terminated");
+          }
+          const terminalTrailingBytes = countTerminalTrailingWhitespaceBytes(
+            value,
+            terminalLineEnd,
+          );
+          const terminalTailStart = terminalLineEnd - terminalTrailingBytes - 1;
+          pendingRecordBytes = checkNdjsonRecordCap(
+            value.subarray(0, terminalTailStart),
+            pendingRecordBytes,
+          );
+          // Hold the terminal record until the whole response body has been
+          // read and fatal-decoded: the production consumer exits on the
+          // terminal record, so malformed bytes in later transport chunks
+          // would otherwise complete successfully without validation.
+          terminalRecord = parsed;
+          terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
+          terminalTailBytes += value.byteLength - terminalTailStart;
+          buffer = "";
+          terminalFound = true;
+          if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
+            // The terminal-containing read can already carry enough valid tail
+            // bytes to satisfy the bounded validation window.
+            break;
+          }
+          break;
+        }
+        parsedRecords.push(parsed);
+      }
+
+      if (terminalFound) {
+        for (const parsed of parsedRecords) {
+          yield parsed;
+        }
+        if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
+          break;
+        }
+        continue;
+      }
+      if (recordCapError) {
+        throw recordCapError;
+      }
+      pendingRecordBytes = nextPendingRecordBytes;
+      for (const parsed of parsedRecords) {
+        yield parsed;
       }
     }
 
-    if (buffer.trim()) {
+    // Finalize the fatal decoder so a terminal partial UTF-8 sequence
+    // (buffered by the continuing stream decode) rejects the stream at EOF
+    // when the generator is drained without a terminal record.
+    buffer += decoder.decode();
+
+    if (terminalRecord) {
+      yield terminalRecord;
+    } else if (buffer.trim()) {
       try {
         yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
       } catch {
@@ -902,6 +1017,29 @@ export async function* parseNdjsonStream(
     // must not stall releaseLock() and keep the reader locked.
     void reader.cancel().catch(() => undefined);
     reader.releaseLock();
+  }
+}
+
+async function readWithTerminalTailDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  deadline: number | undefined,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const remainingMs = deadline === undefined ? 0 : deadline - Date.now();
+  if (remainingMs <= 0) {
+    return { done: true as const, value: undefined };
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+        timeout = setTimeout(() => resolve({ done: true as const, value: undefined }), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
   }
 }
 
