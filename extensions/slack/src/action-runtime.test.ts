@@ -64,14 +64,14 @@ describe("handleSlackAction", () => {
     } as OpenClawConfig;
   }
 
-  it("keeps unsupported actions unavailable for an enterprise org account", async () => {
+  it("keeps pin reads unavailable for an enterprise org account", async () => {
     await expect(
       handleSlackAction(
-        { action: "readMessages", channelId: "C123" },
+        { action: "listPins", channelId: "C123" },
         slackConfig({ enterpriseOrgInstall: true }),
       ),
     ).rejects.toThrow(/unavailable for Enterprise Grid org installs/);
-    expect(readSlackMessages).not.toHaveBeenCalled();
+    expect(listSlackPins).not.toHaveBeenCalled();
   });
 
   it("reads the current requester from the trusted Enterprise Grid workspace", async () => {
@@ -209,6 +209,60 @@ describe("handleSlackAction", () => {
       cfg,
       teamId: "T123",
     });
+  });
+
+  it("scopes Enterprise Grid history, file, reaction, and emoji reads to the trusted workspace", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    const context = {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    };
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    listSlackReactions.mockResolvedValueOnce([]);
+    downloadSlackFile.mockResolvedValueOnce(null);
+    listSlackEmojis.mockResolvedValueOnce({ ok: true, emoji: { openai: "url" } });
+
+    await handleSlackAction({ action: "readMessages", channelId: "C123" }, cfg, context);
+    await handleSlackAction(
+      { action: "reactions", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "downloadFile", channelId: "C123", fileId: "F123" },
+      cfg,
+      context,
+    );
+    await handleSlackAction({ action: "emojiList" }, cfg, context);
+
+    expect(readSlackMessages).toHaveBeenCalledWith(
+      "C123",
+      expect.objectContaining({ cfg, teamId: "T123" }),
+    );
+    expect(listSlackReactions).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(downloadSlackFile).toHaveBeenCalledWith(
+      "F123",
+      expect.objectContaining({ cfg, teamId: "T123", channelId: "C123" }),
+    );
+    expect(listSlackEmojis).toHaveBeenCalledWith({ cfg, teamId: "T123" });
+  });
+
+  it.each([
+    { name: "history", params: { action: "readMessages", channelId: "C123" } },
+    {
+      name: "reactions",
+      params: { action: "reactions", channelId: "C123", messageId: "123.456" },
+    },
+    { name: "file", params: { action: "downloadFile", channelId: "C123", fileId: "F123" } },
+    { name: "emoji", params: { action: "emojiList" } },
+  ])("rejects a bare Enterprise Grid $name read without trusted context", async ({ params }) => {
+    await expect(
+      handleSlackAction(params, slackConfig({ enterpriseOrgInstall: true })),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
   });
 
   it.each([

@@ -46,10 +46,14 @@ const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const enterpriseGridActionTools = new Set([
   "deleteMessage",
+  "downloadFile",
   "editMessage",
+  "emojiList",
   "memberInfo",
   "pinMessage",
   "react",
+  "reactions",
+  "readMessages",
   "sendMessage",
   "unpinMessage",
   "uploadFile",
@@ -908,8 +912,10 @@ export async function handleSlackAction(
         return jsonResult({ ok: true });
       }
       case "readMessages": {
-        const channelId = resolveChannelId();
-        await assertReadTargetAllowed(channelId);
+        const target = resolveChannelTarget();
+        const { channelId } = target;
+        await assertReadTargetAllowed(target);
+        const scopedReadOpts = target.teamId ? { ...readOpts, teamId: target.teamId } : readOpts;
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
         });
@@ -918,7 +924,7 @@ export async function handleSlackAction(
         const threadId = readStringParam(params, "threadId");
         const messageId = readStringParam(params, "messageId");
         const result = await slackActionRuntime.readSlackMessages(channelId, {
-          ...readOpts,
+          ...scopedReadOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
@@ -950,16 +956,18 @@ export async function handleSlackAction(
             "Slack file download requires channelId or to so the read target can be authorized.",
           );
         }
-        const channelId = resolveSlackChannelId(channelTarget);
-        await assertReadTargetAllowed(channelId);
+        const target = resolveSlackActionChannelTarget(account, channelTarget, context);
+        const { channelId } = target;
+        await assertReadTargetAllowed(target);
         const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
         const readToken = resolveSlackOperationToken(account, "read");
+        const scopedReadOpts = target.teamId ? { ...readOpts, teamId: target.teamId } : readOpts;
         const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
-          ...readOpts,
-          ...(readToken && !readOpts?.token ? { token: readToken } : {}),
+          ...scopedReadOpts,
+          ...(readToken && !scopedReadOpts?.token ? { token: readToken } : {}),
           maxBytes,
           channelId,
           threadId: threadId ?? undefined,
@@ -1073,8 +1081,13 @@ export async function handleSlackAction(
     const limit = readPositiveIntegerParam(params, "limit", {
       message: "limit must be a positive integer.",
     });
-    const result = readOpts
-      ? await slackActionRuntime.listSlackEmojis(readOpts)
+    const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
+    if (account.config.enterpriseOrgInstall === true) {
+      assertSlackDirectSendAllowed(account, teamId);
+    }
+    const scopedReadOpts = teamId ? { ...readOpts, teamId } : readOpts;
+    const result = scopedReadOpts
+      ? await slackActionRuntime.listSlackEmojis(scopedReadOpts)
       : await slackActionRuntime.listSlackEmojis();
     if (limit != null && limit > 0 && result.emoji != null) {
       const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
