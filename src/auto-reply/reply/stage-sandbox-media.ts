@@ -6,12 +6,19 @@ import { fileURLToPath } from "node:url";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
+import {
+  ensureSandboxWorkspaceForSession,
+  resolveSandboxConfigForAgent,
+  resolveSandboxContext,
+  type SandboxFsBridge,
+} from "../../agents/sandbox.js";
+import { REMOTE_BRIDGE_GATEWAY_STAGING } from "../../agents/sandbox/remote-fs-bridge.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
+import { root as fsRoot, readLocalFileSafely, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
@@ -64,6 +71,14 @@ export async function stageSandboxMedia(params: {
         sessionKey,
         workspaceDir,
       });
+  // Remote-canonical backends (ssh/openshell) stage through the backend
+  // filesystem bridge. Local backends must NOT be provisioned here: resolving
+  // the full sandbox context constructs the backend and can create/start a
+  // Docker runtime before the attachment has been acknowledged.
+  const remoteSandboxFsBridge =
+    forceRemoteCache || !sandbox
+      ? null
+      : await resolveRemoteSandboxFsBridge({ config: cfg, sessionKey, workspaceDir });
 
   // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy).
   // Managed local inbound refs are already in OpenClaw's media store; when no sandbox is
@@ -124,12 +139,22 @@ export async function stageSandboxMedia(params: {
         });
       } else {
         const copySource = await fs.realpath(source.physicalPath).catch(() => source.physicalPath);
-        await stageLocalFileIntoRoot({
-          sourcePath: copySource,
-          rootDir: effectiveWorkspaceDir,
-          relativeDestPath: relativeDest,
-          maxBytes: STAGED_MEDIA_MAX_BYTES,
-        });
+        const remoteBridge = remoteSandboxFsBridge;
+        if (remoteBridge) {
+          await stageFileIntoRemoteSandboxBridge({
+            bridge: remoteBridge,
+            sourcePath: copySource,
+            relativeDestPath: toPosixRelativePath(relativeDest),
+            maxBytes: STAGED_MEDIA_MAX_BYTES,
+          });
+        } else {
+          await stageLocalFileIntoRoot({
+            sourcePath: copySource,
+            rootDir: effectiveWorkspaceDir,
+            relativeDestPath: relativeDest,
+            maxBytes: STAGED_MEDIA_MAX_BYTES,
+          });
+        }
       }
     } catch (err) {
       if (err instanceof FsSafeError && err.code === "too-large") {
@@ -261,6 +286,83 @@ async function stageLocalFileIntoRoot(params: {
   const root = await fsRoot(params.rootDir);
   await root.copyIn(params.relativeDestPath, params.sourcePath, {
     maxBytes: params.maxBytes,
+  });
+}
+
+/**
+ * SSH/openshell backends keep the remote workspace canonical after the initial
+ * seed, so inbound media must be written through the remote filesystem bridge
+ * instead of host-local copy helpers. Docker and other host-mounted backends
+ * keep the existing local copy path.
+ */
+async function resolveRemoteSandboxFsBridge(params: {
+  config: OpenClawConfig;
+  sessionKey: string;
+  workspaceDir: string;
+}): Promise<SandboxFsBridge | null> {
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const resolvedConfig = resolveSandboxConfigForAgent(params.config, agentId);
+  if (resolvedConfig.backend !== "ssh" && resolvedConfig.backend !== "openshell") {
+    return null;
+  }
+  const context = await resolveSandboxContext({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+  });
+  if (!context?.fsBridge) {
+    return null;
+  }
+  if (resolvedConfig.backend === "openshell") {
+    // OpenShell defaults to locally canonical mirror mode; only its explicit
+    // remote mode owns a remote workspace. Mirror workspaces must stay local
+    // so staging never triggers mirror sync/provisioning before the
+    // attachment has been acknowledged.
+    const mode = (context.backend as { mode?: string } | undefined)?.mode;
+    if (mode !== "remote") {
+      return null;
+    }
+  }
+  return context.fsBridge;
+}
+
+/**
+ * Private gateway-staging call shape: the remote shell bridge accepts an
+ * unforgeable core capability that is intentionally not part of the public
+ * SandboxFsBridge surface. Only this staging path may request it.
+ */
+type RemoteGatewayStagingBridge = SandboxFsBridge & {
+  writeFile(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+    gatewayStaging?: typeof REMOTE_BRIDGE_GATEWAY_STAGING;
+  }): Promise<void>;
+};
+
+async function stageFileIntoRemoteSandboxBridge(params: {
+  bridge: SandboxFsBridge;
+  sourcePath: string;
+  relativeDestPath: string;
+  maxBytes?: number;
+}): Promise<void> {
+  // Pinned bounded read: the source is opened and read under the byte cap so
+  // growth or replacement after a metadata check cannot bypass the limit.
+  const { buffer: data } = await readLocalFileSafely({
+    filePath: params.sourcePath,
+    maxBytes: params.maxBytes,
+  });
+  await (params.bridge as RemoteGatewayStagingBridge).writeFile({
+    filePath: params.relativeDestPath,
+    data,
+    mkdir: true,
+    gatewayStaging: REMOTE_BRIDGE_GATEWAY_STAGING,
   });
 }
 

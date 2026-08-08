@@ -13,6 +13,8 @@ import {
 
 const sandboxMocks = vi.hoisted(() => ({
   ensureSandboxWorkspaceForSession: vi.fn(),
+  resolveSandboxConfigForAgent: vi.fn(),
+  resolveSandboxContext: vi.fn(),
 }));
 const processExecMocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(),
@@ -47,6 +49,7 @@ function createRemoteStageParams(home: string): {
 } {
   const sessionKey = "agent:main:main";
   vi.mocked(sandboxMocks.ensureSandboxWorkspaceForSession).mockResolvedValue(null);
+  vi.mocked(sandboxMocks.resolveSandboxConfigForAgent).mockReturnValue({ backend: "docker" });
   mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots.mockReturnValue([
     "/Users/demo/Library/Messages/Attachments",
   ]);
