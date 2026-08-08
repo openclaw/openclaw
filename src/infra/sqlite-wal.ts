@@ -232,6 +232,11 @@ function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJourn
   if (normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized)) {
     return "rollback";
   }
+  // virtiofs (Docker Desktop / OrbStack host<->guest bind mounts) cannot
+  // guarantee WAL's shared-memory/locking coherence across the VM boundary.
+  if (normalized === "virtiofs") {
+    return "rollback";
+  }
   if (normalized === "fuse.sshfs") {
     return "unsupported";
   }
@@ -317,6 +322,10 @@ function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPo
   } catch {
     return combineMountEntryJournalPolicies(mountLookupPaths);
   }
+  // virtiofs (Docker Desktop / OrbStack host<->guest bind mounts) reports
+  // FUSE_SUPER_MAGIC via statfs, which is shared with ordinary FUSE mounts and
+  // cannot be distinguished by magic alone. Let it fall through to the
+  // mountinfo fallback, which classifies fsType "virtiofs" as rollback (issue #120549).
   return combineMountEntryJournalPolicies(mountLookupPaths);
 }
 

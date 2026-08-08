@@ -289,6 +289,53 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
+  it("uses rollback journaling for virtiofs mountinfo entries (Docker Desktop / OrbStack bind mounts)", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-virtiofs-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      // virtiofs reports FUSE_SUPER_MAGIC (0x65735546) via statfs, shared with
+      // ordinary FUSE mounts, so it cannot be classified by magic alone. The
+      // classifier must fall through to /proc/self/mountinfo and match fsType.
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x65735546));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${tempDir} rw,relatime - virtiofs /path/on/host rw\n`,
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not roll back ordinary FUSE mounts that statfs reports as FUSE_SUPER_MAGIC", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-fuse-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      // Same FUSE_SUPER_MAGIC as virtiofs, but the mountinfo fsType is a plain
+      // non-network FUSE mount -> must stay on WAL (regression guard).
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x65735546));
+      vi.spyOn(fs, "readFileSync").mockReturnValue(
+        `42 12 0:41 / ${tempDir} rw,relatime - fuse none rw\n`,
+      );
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["exec"]).toHaveBeenCalledWith("PRAGMA journal_mode = WAL;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses fuse.sshfs mountinfo entries", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-sshfs-"));
     try {
