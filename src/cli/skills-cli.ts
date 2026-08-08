@@ -180,7 +180,10 @@ async function loadGatewaySkillsStatusReport(
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
-  } catch {
+  } catch (err) {
+    if (resolved.config.gateway?.mode === "remote") {
+      throw err;
+    }
     return null;
   }
 }

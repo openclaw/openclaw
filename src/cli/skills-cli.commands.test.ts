@@ -1418,6 +1418,86 @@ describe("skills cli commands", () => {
     expect(output.missingRequirements).toEqual([]);
   });
 
+  const skillStatusCommandCases = [
+    { surface: "list", argv: ["skills", "list"] },
+    { surface: "info", argv: ["skills", "info", "calendar"] },
+    { surface: "check", argv: ["skills", "check"] },
+  ] as const;
+
+  const gatewayFailureCases = [
+    {
+      condition: "the remote URL is missing",
+      gateway: { mode: "remote" as const },
+      error: "gateway remote mode misconfigured: gateway.remote.url missing",
+    },
+    {
+      condition: "the configured remote gateway is unreachable",
+      gateway: {
+        mode: "remote" as const,
+        remote: { url: "ws://127.0.0.1:65535" },
+      },
+      error: "gateway closed (1006): no close reason",
+    },
+  ] as const;
+
+  for (const { condition, gateway, error } of gatewayFailureCases) {
+    it.each(
+      skillStatusCommandCases.flatMap(({ surface, argv }) => [
+        { surface, argv, output: "human" },
+        { surface, argv: [...argv, "--json"], output: "JSON" },
+      ]),
+    )("fails $surface $output output when " + condition, async ({ argv }) => {
+      loadConfigMock.mockReturnValue({ gateway });
+      callGatewayMock.mockRejectedValue(new Error(error));
+
+      await expect(runCommand([...argv])).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toEqual([`Error: ${error}`]);
+      expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+      expect(runtimeStdout).toEqual([]);
+    });
+
+    it("fails the default skills command when " + condition, async () => {
+      loadConfigMock.mockReturnValue({ gateway });
+      callGatewayMock.mockRejectedValue(new Error(error));
+
+      await expect(runCommand(["skills"])).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toEqual([`Error: ${error}`]);
+      expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+      expect(runtimeStdout).toEqual([]);
+    });
+  }
+
+  it.each(
+    skillStatusCommandCases.flatMap(({ surface, argv }) => [
+      { surface, argv, output: "human" },
+      { surface, argv: [...argv, "--json"], output: "JSON" },
+    ]),
+  )("preserves offline local gateway fallback for $surface $output output", async ({ argv }) => {
+    loadConfigMock.mockReturnValue({ gateway: { mode: "local" } });
+    callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
+
+    await runCommand([...argv]);
+
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([]);
+    expect(runtimeStdout).toHaveLength(1);
+  });
+
+  it("preserves offline local gateway fallback for the default skills command", async () => {
+    loadConfigMock.mockReturnValue({ gateway: { mode: "local" } });
+    callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
+
+    await runCommand(["skills"]);
+
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([]);
+    expect(runtimeStdout).toHaveLength(1);
+  });
+
   it.each([
     ["list", ["skills", "list", "--agent", "writer", "--json"]],
     ["info", ["skills", "info", "calendar", "--agent", "writer", "--json"]],
