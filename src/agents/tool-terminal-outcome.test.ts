@@ -98,6 +98,27 @@ describe("tool terminal outcome observer", () => {
     });
   });
 
+  it("records the redacted command from authoritative adjusted exec arguments", () => {
+    const runId = "run-adjusted-exec";
+    const toolCallId = "call-adjusted-exec";
+    const secret = "sk-proj-ABCDEFGHIJKLMNOP1234567890abcdefghij";
+    adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), {
+      command: `python3 adjusted.py --token ${secret}`,
+    });
+
+    const resolution = createToolTerminalObserver(runId)({
+      toolCallId,
+      toolName: "exec",
+      arguments: { command: "python3 original.py" },
+      outcome: "failure",
+      failure: { error: "Command exited with code 1" },
+    });
+
+    expect(resolution.lastToolError?.commandExcerpt).toContain("python3 adjusted.py");
+    expect(resolution.lastToolError?.commandExcerpt).not.toContain("original.py");
+    expect(resolution.lastToolError?.commandExcerpt).not.toContain(secret);
+  });
+
   it("uses settled pre-execution evidence after active tracking is released", () => {
     const runId = "run-3";
     const toolCallId = "call-blocked";

@@ -2195,6 +2195,38 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(payloads[0]?.text).toBe(warning);
   });
 
+  it("uses the executed command for cron failures with default progress detail", async () => {
+    const { ctx } = createTestContext();
+    const command =
+      "mkdir -p ~/.openclaw/workspace/.tmp && cd ~/.openclaw/workspace && jq . missing.json | sed 's/x/y/'";
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-cron-default-detail",
+      args: { command },
+      isError: true,
+      result: {
+        error: "Command exited with code 1",
+        content: [{ type: "text", text: "Command exited with code 1" }],
+        details: { status: "failed", exitCode: 1 },
+      },
+    });
+
+    expect(ctx.state.lastToolError?.meta).not.toContain(command);
+    expect(ctx.state.lastToolError?.commandExcerpt).toBe(command);
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      isCronTrigger: true,
+      sessionKey: "agent:main:cron:job-1:run:run-1",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe(`⚠️ 🛠️ Exec failed: \`${command}\` (exit 1)`);
+  });
+
   it("records structured error codes for failed tool results", async () => {
     const { ctx } = createTestContext();
 

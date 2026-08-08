@@ -928,6 +928,33 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).not.toContain("`run python3");
   });
 
+  it("uses the recorded command excerpt only for cron exec warnings", () => {
+    const lastToolError = {
+      toolName: "exec",
+      meta: "create folder /tmp/a → run then set → run jq",
+      commandExcerpt: "mkdir -p /tmp/a && jq . missing.json",
+      error: "Command exited with code 1",
+    };
+    const cronPayloads = buildPayloads({
+      lastToolError,
+      isCronTrigger: true,
+      toolResultFormat: "markdown",
+    });
+    const interactivePayloads = buildPayloads({
+      lastToolError,
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(cronPayloads, {
+      text: "⚠️ 🛠️ Exec failed: `mkdir -p /tmp/a && jq . missing.json` (exit 1)",
+      isError: true,
+    });
+    expectSinglePayloadSummary(interactivePayloads, {
+      text: "⚠️ 🛠️ Exec failed: `create folder /tmp/a → run then set → run jq` (exit 1)",
+      isError: true,
+    });
+  });
+
   it.each([
     {
       title: "prefers raw exec metadata when tool progress detail includes it",

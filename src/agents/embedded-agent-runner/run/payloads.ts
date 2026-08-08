@@ -183,13 +183,17 @@ function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary):
 function formatToolErrorWarningText(params: {
   lastToolError: ToolErrorSummary;
   includeDetails: boolean;
+  preferExecCommandExcerpt: boolean;
   useMarkdown: boolean;
 }): string {
   if (isExecLikeToolName(params.lastToolError.toolName)) {
     const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
       markdown: params.useMarkdown,
     });
-    const subject = formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown);
+    const subject =
+      params.preferExecCommandExcerpt && params.lastToolError.commandExcerpt
+        ? maybeWrapInlineCode(params.lastToolError.commandExcerpt, params.useMarkdown)
+        : formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown);
     const conciseExitSuffix = params.includeDetails
       ? ""
       : formatConciseExecExitSuffix(params.lastToolError.error);
@@ -803,6 +807,8 @@ export function buildEmbeddedRunPayloads(params: {
       const warningText = formatToolErrorWarningText({
         lastToolError: params.lastToolError,
         includeDetails: warningPolicy.includeDetails,
+        preferExecCommandExcerpt:
+          params.isCronTrigger === true || isCronSessionKey(params.sessionKey),
         useMarkdown,
       });
       const normalizedWarning = normalizeTextForComparison(warningText);

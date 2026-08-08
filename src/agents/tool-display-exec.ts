@@ -591,6 +591,16 @@ function compactRawCommand(raw: string, maxLength = 120): string {
   return `${sliceUtf16Safe(oneLine, 0, half)}…${sliceUtf16Safe(oneLine, -(maxLength - 1 - half))}`;
 }
 
+/** Returns the bounded, redacted command that reached an exec-like tool. */
+export function resolveExecCommandExcerpt(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+  const raw = typeof record.command === "string" ? record.command.trim() : undefined;
+  return raw ? compactRawCommand(unwrapShellWrapper(raw)) : undefined;
+}
+
 export type ToolDetailMode = "explain" | "raw";
 
 export function resolveExecDetail(
