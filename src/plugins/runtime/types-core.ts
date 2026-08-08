@@ -295,7 +295,10 @@ export type LlmCompleteResult = {
 };
 
 type RuntimeRunEmbeddedAgent = (
-  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  params: Omit<
+    import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+    "admittedRunContext" | "preparedRunAdmission"
+  >,
 ) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */

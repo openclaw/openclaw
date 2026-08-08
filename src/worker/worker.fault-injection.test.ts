@@ -13,6 +13,7 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
@@ -341,6 +342,8 @@ class ComposedGatewayHarness {
       },
       assignment: {
         runId: params.runId ?? RUN_ID,
+        operationalRunInstance: createOperationalRunInstanceRef(params.runId ?? RUN_ID),
+        agentRuntimeIdentityToken: "test-agent-runtime-token",
         turnId: "fault-turn",
         prompt: "fault injection",
         workspaceDir: this.root,

@@ -13,6 +13,10 @@ import {
 import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -777,7 +781,17 @@ export async function tryDispatchAcpReply(params: {
     }
 
     turnDispatched = true;
+    const admittedRunContext = await prepareAgentRunAdmission({
+      cfg: params.cfg,
+      operationalRunInstance: createOperationalRunInstanceRef(requestId),
+      facts: {
+        runId: requestId,
+        agentId: acpAgentId,
+        ingress: { kind: "acp", boundary: "auto-reply.acp", state: "present" },
+      },
+    }).admit("acp");
     await acpManager.runTurn({
+      admittedRunContext,
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
       provenance: classifySessionStateActor({

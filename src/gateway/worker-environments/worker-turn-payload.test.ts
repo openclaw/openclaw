@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { assertSupportedTurn } from "./worker-turn-payload.js";
 
@@ -6,6 +7,7 @@ describe("assertSupportedTurn", () => {
   it("accepts scheduled authority for the worker launch envelope", () => {
     expect(
       assertSupportedTurn({
+        admittedRunContext: createTestAdmittedRunContext("run-1"),
         sessionId: "session-1",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp/workspace",

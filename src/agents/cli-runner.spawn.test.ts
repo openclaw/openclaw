@@ -29,6 +29,7 @@ import {
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
@@ -706,6 +707,7 @@ describe("runCliAgent spawn path", () => {
     };
     const context: PreparedCliRunContext = {
       params: {
+        admittedRunContext: createTestAdmittedRunContext("run-no-tools-disabled"),
         sessionId: "s1",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",

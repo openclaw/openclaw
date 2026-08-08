@@ -1,11 +1,19 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { AdmittedRunContext, OperationalRunInstanceRef } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import type { AnyAgentTool } from "./common.js";
 
 type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
+  operationalRunInstance?: OperationalRunInstanceRef;
+  /** Exact host-resolved owner of this individual approval request. */
+  approvalOwnerPluginId?: string;
+  /** Opaque already-signed identity used only by isolated worker transports. */
+  signedAgentRuntimeIdentityToken?: string;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Host-signed capability for the scheduled run's existing self-management surface. */
   cronSelfManagementJobId?: string;
   // Trusted run context, carried separately from model-authored tool arguments.
@@ -28,6 +36,37 @@ type GatewayToolCallerSource = {
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
 
+type AdmittedGatewayToolCallerParams = {
+  admittedRunContext: AdmittedRunContext;
+  agentId?: string;
+  sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+};
+
+/** Builds host-owned Gateway authority from the exact admitted execution. */
+export function createAdmittedGatewayToolCallerIdentity(
+  params: AdmittedGatewayToolCallerParams,
+): GatewayToolCallerIdentity | undefined {
+  const agentId = params.agentId?.trim();
+  const sessionKey = params.sessionKey?.trim();
+  if (!agentId || !sessionKey) {
+    return undefined;
+  }
+  return {
+    agentId,
+    sessionKey,
+    operationalRunInstance: params.admittedRunContext.operationalRunInstance,
+    executionIdentityToken: params.admittedRunContext.executionIdentityToken,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
+  };
+}
+
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
 }
@@ -39,26 +78,57 @@ export async function withGatewayToolCallerIdentity<T>(
   if (!identity?.agentId?.trim() || !identity.sessionKey?.trim()) {
     return await run();
   }
+  const inherited = gatewayToolCallerStorage.getStore();
+  // The admitted outer host owns execution authority. Nested tool wrappers may
+  // narrow approval/cron scope, but cannot replace the run or its provenance.
+  const operationalRunInstance =
+    inherited?.operationalRunInstance ?? identity.operationalRunInstance;
+  const signedAgentRuntimeIdentityToken =
+    inherited?.signedAgentRuntimeIdentityToken ?? identity.signedAgentRuntimeIdentityToken?.trim();
+  const executionIdentityToken =
+    inherited?.executionIdentityToken ?? identity.executionIdentityToken;
+  const turnSourceChannel = inherited?.turnSourceChannel ?? identity.turnSourceChannel?.trim();
+  const turnSourceTo = inherited?.turnSourceTo ?? identity.turnSourceTo?.trim();
+  const turnSourceAccountId =
+    inherited?.turnSourceAccountId ?? identity.turnSourceAccountId?.trim();
+  const turnSourceThreadId = inherited?.turnSourceThreadId ?? identity.turnSourceThreadId;
   return await gatewayToolCallerStorage.run(
     {
-      agentId: identity.agentId.trim(),
-      sessionKey: identity.sessionKey.trim(),
+      agentId: inherited?.agentId ?? identity.agentId.trim(),
+      sessionKey: inherited?.sessionKey ?? identity.sessionKey.trim(),
+      ...(operationalRunInstance ? { operationalRunInstance } : {}),
+      ...(identity.approvalOwnerPluginId?.trim()
+        ? { approvalOwnerPluginId: identity.approvalOwnerPluginId.trim() }
+        : inherited?.approvalOwnerPluginId
+          ? { approvalOwnerPluginId: inherited.approvalOwnerPluginId }
+          : {}),
+      ...(signedAgentRuntimeIdentityToken ? { signedAgentRuntimeIdentityToken } : {}),
       ...(identity.cronSelfManagementJobId?.trim()
         ? { cronSelfManagementJobId: identity.cronSelfManagementJobId.trim() }
-        : {}),
-      ...(identity.turnSourceChannel?.trim()
-        ? { turnSourceChannel: identity.turnSourceChannel.trim() }
-        : {}),
-      ...(identity.turnSourceTo?.trim() ? { turnSourceTo: identity.turnSourceTo.trim() } : {}),
-      ...(identity.turnSourceAccountId?.trim()
-        ? { turnSourceAccountId: identity.turnSourceAccountId.trim() }
-        : {}),
-      ...(identity.turnSourceThreadId !== undefined
-        ? { turnSourceThreadId: identity.turnSourceThreadId }
-        : {}),
+        : inherited?.cronSelfManagementJobId
+          ? { cronSelfManagementJobId: inherited.cronSelfManagementJobId }
+          : {}),
+      ...(executionIdentityToken ? { executionIdentityToken } : {}),
+      ...(turnSourceChannel ? { turnSourceChannel } : {}),
+      ...(turnSourceTo ? { turnSourceTo } : {}),
+      ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
+      ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
     },
     run,
   );
+}
+
+/** Narrows one host-owned approval call to the exact registered policy/harness owner. */
+export async function withGatewayToolApprovalOwner<T>(
+  pluginId: string | undefined,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const identity = gatewayToolCallerStorage.getStore();
+  const approvalOwnerPluginId = pluginId?.trim();
+  if (!identity || !approvalOwnerPluginId) {
+    return await run();
+  }
+  return await withGatewayToolCallerIdentity({ ...identity, approvalOwnerPluginId }, run);
 }
 
 export function wrapToolWithGatewayCallerIdentity(

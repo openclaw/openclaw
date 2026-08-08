@@ -237,7 +237,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
-  const allTools = createOpenClawCodingTools({
+  const unboundTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {
@@ -338,6 +338,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     isTurnTainted: params.isTurnTainted,
     allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
   });
+  const allTools = params.hostCapabilities.bindToolSurface(unboundTools);
   const codexScopedTools = addCodexMessageToolOnlyFinalControl(
     allTools,
     params.sourceReplyDeliveryMode,

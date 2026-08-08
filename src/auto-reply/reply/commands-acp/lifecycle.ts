@@ -19,6 +19,10 @@ import {
   resolveAcpSpawnRuntimePolicyError,
   resolveRuntimeCwdForAcpSpawn,
 } from "../../../agents/acp-spawn.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../../agents/admitted-run-context.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
@@ -28,6 +32,7 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpBindingLabelNoun,
@@ -386,8 +391,18 @@ async function runAcpSteer(params: {
 }): Promise<string> {
   const acpManager = getAcpSessionManager();
   let output = "";
+  const admittedRunContext = await prepareAgentRunAdmission({
+    cfg: params.cfg,
+    operationalRunInstance: createOperationalRunInstanceRef(params.requestId),
+    facts: {
+      runId: params.requestId,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      ingress: { kind: "acp", boundary: "acp.command.steer", state: "present" },
+    },
+  }).admit("acp");
 
   await acpManager.runTurn({
+    admittedRunContext,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     provenance: "agent",

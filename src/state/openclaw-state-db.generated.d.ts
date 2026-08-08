@@ -982,6 +982,12 @@ export interface OperatorApprovals {
   updated_at_ms: number;
 }
 
+export interface OperatorApprovalExecutionIdentities {
+  approval_id: string;
+  source_context_id: string;
+  source_execution_id: string;
+}
+
 export interface OutboundMediaProvenance {
   created_at_ms: number;
   kind: string;
@@ -1630,6 +1636,7 @@ export interface DB {
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
   operator_approvals: OperatorApprovals;
+  operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
   outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;

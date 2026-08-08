@@ -3,13 +3,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
+import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  configureExecutionIdentityAdmissionSink,
+  type ExecutionIdentityAdmissionWork,
+} from "../../audit/execution-identity-admission.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   type AgentEventPayload,
@@ -37,6 +50,7 @@ import {
   parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
+import { verifyAgentRuntimeIdentityToken } from "../agent-runtime-identity-token.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import {
   createWorkerSessionPlacementStore,
@@ -67,6 +81,7 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("worker turn launcher", () => {
+  let cleanupAdmissionSink: (() => void) | undefined;
   it("rejects a transcript target without a session incarnation", () => {
     expect(() =>
       resolveWorkerTurnTranscriptTarget({
@@ -143,6 +158,8 @@ describe("worker turn launcher", () => {
   });
 
   afterEach(async () => {
+    cleanupAdmissionSink?.();
+    cleanupAdmissionSink = undefined;
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -256,7 +273,7 @@ describe("worker turn launcher", () => {
       bootstrapReceipt: {
         bundleHash: BUNDLE_HASH,
         openclawVersion: "2026.7.2",
-        protocolFeatures: [],
+        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
       },
       ownerEpoch: OWNER_EPOCH,
       teardownTerminalState: null,
@@ -315,8 +332,29 @@ describe("worker turn launcher", () => {
     };
   }
 
-  function turn(runId = "run-worker-turn") {
+  function turn(runId = "run-worker-turn", executionIdentity = false) {
+    const config = {
+      ...(executionIdentity
+        ? { logging: { audit: { enabled: true, executionIdentity: true } } }
+        : {}),
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-test": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    };
     return {
+      preparedRunAdmission: prepareAgentRunAdmission({
+        cfg: config,
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "worker", boundary: "test.worker-turn", state: "present" },
+        },
+      }),
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -328,15 +366,7 @@ describe("worker turn launcher", () => {
       runId,
       provider: "openai",
       model: "gpt-test",
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-test": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
-      },
+      config,
     };
   }
 
@@ -578,7 +608,45 @@ describe("worker turn launcher", () => {
     },
   );
 
+  it("rejects a reused worker bundle without execution context before launch", async () => {
+    seedActivePlacement();
+    const oldEnvironment = attachedEnvironment();
+    oldEnvironment.bootstrapReceipt = {
+      ...oldEnvironment.bootstrapReceipt!,
+      protocolFeatures: [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => oldEnvironment),
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-old-worker",
+        },
+        turn("run-old-worker"),
+        runLocal,
+      ),
+    ).rejects.toThrow("reprovision the worker before launch");
+
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+    expect(environments.startTunnel).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+  });
+
   it("reports keep-local workspace conflicts and releases its claim", async () => {
+    let admissionWork: ExecutionIdentityAdmissionWork | undefined;
+    cleanupAdmissionSink = configureExecutionIdentityAdmissionSink((work) => {
+      admissionWork = work;
+      return true;
+    });
     const initialized = await runCommandWithTimeout(["git", "-C", root, "init", "--quiet"], {
       timeoutMs: 10_000,
     });
@@ -720,7 +788,7 @@ describe("worker turn launcher", () => {
         runId: "run-worker-turn",
       },
       {
-        ...turn(),
+        ...turn("run-worker-turn", true),
         workspaceDir: path.join(root, "stale-caller-workspace"),
         transcriptPrompt: "Canonical transcript request",
         onAgentEvent,
@@ -763,6 +831,19 @@ describe("worker turn launcher", () => {
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.version).toBe(2);
+    const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
+      descriptor?.assignment.agentRuntimeIdentityToken,
+    );
+    expect(verifiedRuntimeIdentity?.operationalRunInstance).toEqual(
+      descriptor?.assignment.operationalRunInstance,
+    );
+    expect(verifiedRuntimeIdentity?.executionIdentity?.runId).toBe("run-worker-turn");
+    expect(admissionWork?.kind).toBe("capture");
+    if (admissionWork?.kind === "capture") {
+      expect(admissionWork.envelope.runtimeInstanceId).toBe(ENVIRONMENT_ID);
+    }
+    expect(verifiedRuntimeIdentity).not.toHaveProperty("approvalOwnerPluginId");
+    expect(descriptor?.assignment).not.toHaveProperty("admittedRunContext");
     expect(descriptor?.assignment.toolAuthority.allowedToolNames).toEqual([
       "read",
       "write",
@@ -902,6 +983,14 @@ describe("worker turn launcher", () => {
     );
 
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
+    const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
+      descriptor?.assignment.agentRuntimeIdentityToken,
+    );
+    expect(verifiedRuntimeIdentity?.operationalRunInstance).toEqual(
+      descriptor?.assignment.operationalRunInstance,
+    );
+    expect(verifiedRuntimeIdentity).not.toHaveProperty("executionIdentity");
+    expect(verifiedRuntimeIdentity).not.toHaveProperty("approvalOwnerPluginId");
     expect(descriptor?.assignment.initialMessages).toMatchObject([
       { role: "user" },
       { role: "assistant" },
@@ -2005,7 +2094,11 @@ describe("worker turn launcher", () => {
     const admissionAt = registeredAt + 30 * 60 * 1000 + 1;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     let lifecycleGeneration = getAgentEventLifecycleGeneration();
-    let params = { ...turn(runId), lifecycleGeneration, trigger: "user" as const };
+    let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+      ...turn(runId),
+      lifecycleGeneration,
+      trigger: "user",
+    };
     registerAgentRunContext(runId, { lifecycleGeneration, registeredAt, sessionKey: SESSION_KEY });
 
     const remoteStarted = createDeferred();
@@ -2088,7 +2181,11 @@ describe("worker turn launcher", () => {
     const registeredAt = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     let lifecycleGeneration = getAgentEventLifecycleGeneration();
-    let params = { ...turn(runId), lifecycleGeneration, trigger: "user" as const };
+    let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+      ...turn(runId),
+      lifecycleGeneration,
+      trigger: "user",
+    };
     registerAgentRunContext(runId, { lifecycleGeneration, registeredAt, sessionKey: SESSION_KEY });
 
     const workspaceResolutionStarted = createDeferred();

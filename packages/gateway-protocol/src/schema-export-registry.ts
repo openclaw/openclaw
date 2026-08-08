@@ -49,6 +49,7 @@ export {
   WorkerTranscriptCommitResponseFrameSchema,
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
