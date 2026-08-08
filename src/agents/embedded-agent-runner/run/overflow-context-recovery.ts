@@ -26,6 +26,7 @@ import {
   type EmbeddedRunCompactionRecoveryInput,
 } from "./compaction-runtime.js";
 import { createCompactionDiagId } from "./helpers.js";
+import { attemptRecoveryMemoryFlush } from "./recovery-memory-flush.js";
 import {
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
@@ -161,6 +162,30 @@ export async function recoverEmbeddedRunOverflow(
     log.warn(
       `context overflow detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${input.provider}/${input.modelId}`,
     );
+    // Bounded overflow checkpointing: before recovery compaction, run the
+    // configured silent memory flush only when a maintenance turn is
+    // demonstrably admissible. Otherwise compact unchanged and log the skip
+    // reason so durable-note loss is no longer completely silent.
+    if (input.state.overflowCompactionAttempts === 1) {
+      const recoveryFlush = await attemptRecoveryMemoryFlush({
+        runParams,
+        sessionKey: input.resolvedSessionKey,
+        agentId: input.sessionAgentId,
+        provider: input.provider,
+        modelId: input.modelId,
+        observedOverflowTokens: overflowTokenCountForCompaction,
+        contextTokenBudget: input.contextTokenBudget,
+        messagesSnapshot: input.attempt.messagesSnapshot,
+        abortSignal: runParams.abortSignal,
+        getActiveSession: input.getActiveSession,
+      });
+      if (recoveryFlush.action === "flushed") {
+        log.info(
+          `[context-overflow-diag] memory flush checkpoint completed before compaction ` +
+            `diagId=${overflowDiagId} sessionKey=${runParams.sessionKey ?? input.sessionAgentId}`,
+        );
+      }
+    }
     let compactResult: CompactResult;
     let previousSessionId: string | undefined;
     await input.runOwnsCompactionBeforeHook("overflow recovery");

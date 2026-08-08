@@ -53,7 +53,7 @@ import type { TrustedSubagentCompletionHandoff } from "../../subagent-announce-h
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
-import type { BlockReplyFlushContext } from "../types.js";
+import type { BlockReplyFlushContext, EmbeddedAgentRunResult } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
@@ -248,6 +248,24 @@ export type RunEmbeddedAgentParams = {
   toolProgressDetail?: ToolProgressDetailMode;
   /** If true, suppress tool error warning payloads for this run (including mutating tools). */
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+  /**
+   * True for internal bounded maintenance turns (e.g. recovery-path memory
+   * flush) that must never re-enter overflow/timeout compaction recovery.
+   * Recovery stays fully disabled for the run, so a rejected turn surfaces
+   * instead of recursing or rotating the session mid-recovery.
+   */
+  suppressCompactionRecovery?: boolean;
+  /**
+   * Optional executor for the bounded recovery-path memory flush maintenance
+   * turn. Defaulted at the shared `runEmbeddedAgent` boundary via
+   * `applyEmbeddedRunRecoveryFlushExecutor` (run-orchestrator.ts), which lives
+   * outside the embedded-runner module graph: recovery must not import the
+   * runner orchestrator (that would create a runtime import cycle), so the
+   * turn is injected as a callback. Callers may still override it. When absent
+   * (e.g. a non-embedded caller), the recovery path skips the checkpoint and
+   * records the skip reason (visibility instead of silence).
+   */
+  runRecoveryMemoryFlushTurn?: (params: RunEmbeddedAgentParams) => Promise<EmbeddedAgentRunResult>;
   /** Bootstrap context mode for workspace file injection. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */

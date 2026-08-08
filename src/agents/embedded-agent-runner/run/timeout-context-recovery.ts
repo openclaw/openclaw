@@ -6,6 +6,7 @@ import {
   type EmbeddedRunCompactionRecoveryInput,
 } from "./compaction-runtime.js";
 import { createCompactionDiagId } from "./helpers.js";
+import { attemptRecoveryMemoryFlush } from "./recovery-memory-flush.js";
 
 const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
 
@@ -56,6 +57,29 @@ export async function recoverEmbeddedRunTimeout(
     `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
       `attempting compaction before retry (attempt ${input.state.timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
   );
+  // The timeout-recovery compaction path has the same pre-compaction checkpoint
+  // gap as overflow recovery: flush only when a maintenance turn is
+  // demonstrably admissible, otherwise compact unchanged with a logged skip.
+  if (input.state.timeoutCompactionAttempts === 1) {
+    const recoveryFlush = await attemptRecoveryMemoryFlush({
+      runParams: input.runParams,
+      sessionKey: input.resolvedSessionKey,
+      agentId: input.sessionAgentId,
+      provider: input.provider,
+      modelId: input.modelId,
+      observedOverflowTokens: lastTurnPromptTokens,
+      contextTokenBudget: input.contextTokenBudget,
+      messagesSnapshot: input.attempt.messagesSnapshot,
+      abortSignal: input.runParams.abortSignal,
+      getActiveSession: input.getActiveSession,
+    });
+    if (recoveryFlush.action === "flushed") {
+      log.info(
+        `[timeout-compaction] memory flush checkpoint completed before compaction ` +
+          `diagId=${timeoutDiagId} sessionKey=${input.runParams.sessionKey ?? input.sessionAgentId}`,
+      );
+    }
+  }
   let timeoutCompactResult: Awaited<ReturnType<typeof input.contextEngine.compact>>;
   await input.runOwnsCompactionBeforeHook("timeout recovery");
   try {
