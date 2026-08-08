@@ -671,13 +671,62 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
-  it("runs tasks notify subcommand with lookup and policy forwarding", async () => {
-    await runCli(["tasks", "notify", "run-123", "state_changes"]);
+  it.each(["done_only", "state_changes", "silent"])(
+    "runs tasks notify subcommand with %s policy forwarding",
+    async (notify) => {
+      await runCli(["tasks", "notify", "run-123", notify]);
 
-    expectCommandOptions(tasksNotifyCommand, {
-      lookup: "run-123",
-      notify: "state_changes",
+      expectCommandOptions(tasksNotifyCommand, {
+        lookup: "run-123",
+        notify,
+      });
+    },
+  );
+
+  it("rejects an invalid tasks notify policy before pre-action and the task handler", async () => {
+    const writeErr = vi.fn();
+    const preAction = vi.fn();
+    const program = new Command();
+    program.configureOutput({ writeErr });
+    program.exitOverride();
+    program.hook("preAction", preAction);
+    registerStatusHealthSessionsCommands(program);
+
+    await expect(
+      program.parseAsync(["tasks", "notify", "autoqa-no-state-mutation", "verbose"], {
+        from: "user",
+      }),
+    ).rejects.toMatchObject({
+      code: "commander.invalidArgument",
+      exitCode: 1,
     });
+
+    expect(writeErr).toHaveBeenCalledWith(
+      expect.stringContaining("Allowed choices are done_only, state_changes, silent."),
+    );
+    expect(preAction).not.toHaveBeenCalled();
+    expect(tasksNotifyCommand).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { args: ["tasks", "notify"], argument: "lookup" },
+    { args: ["tasks", "notify", "run-123"], argument: "notify" },
+  ])("rejects tasks notify with a missing $argument argument", async ({ args }) => {
+    const preAction = vi.fn();
+    const program = new Command();
+    program.configureOutput({ writeErr: vi.fn() });
+    program.exitOverride();
+    program.hook("preAction", preAction);
+    registerStatusHealthSessionsCommands(program);
+
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toMatchObject({
+      code: "commander.missingArgument",
+      exitCode: 1,
+    });
+
+    expect(preAction).not.toHaveBeenCalled();
+    expect(tasksNotifyCommand).not.toHaveBeenCalled();
   });
 
   it("runs tasks cancel subcommand with lookup forwarding", async () => {

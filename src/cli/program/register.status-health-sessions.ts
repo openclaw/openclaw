@@ -1,5 +1,5 @@
 // Status, health, sessions, commitments, and task/flow command registration.
-import type { Command } from "commander";
+import { Argument, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { setVerbose } from "../../globals.js";
@@ -801,7 +801,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("notify")
     .description("Set task notify policy")
     .argument("<lookup>", "Task id, run id, or session key")
-    .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
+    .addArgument(
+      new Argument("<notify>", "Notify policy (done_only, state_changes, silent)").choices([
+        "done_only",
+        "state_changes",
+        "silent",
+      ]),
+    )
     .action(async (lookup, notify) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { tasksNotifyCommand } = await loadTasksCommands();
