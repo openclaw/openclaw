@@ -1,3 +1,4 @@
+import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 // Matrix tests cover replies plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
@@ -536,5 +537,134 @@ describe("deliverMatrixReplies", () => {
     expect(sendCall(0)[0]).toBe("room:6");
     expect(sendCall(0)[1]).toBe("caption");
     expect(sendOptions(0).mediaUrl).toBe("https://example.com/a.jpg");
+  });
+});
+
+describe("deliverMatrixReplies presentation controls", () => {
+  const cfg = { channels: { matrix: {} } };
+  const runtimeStub = {
+    config: { current: () => ({}) },
+    channel: {
+      text: {
+        resolveMarkdownTableMode: () => "code",
+        convertMarkdownTables: (text: string) => text,
+        resolveChunkMode: () => "length",
+        chunkMarkdownTextWithMode: (text: string) => [text],
+      },
+    },
+    logging: { shouldLogVerbose: () => false },
+  } as unknown as PluginRuntime;
+  const errorMock = vi.fn();
+  const runtimeEnv: RuntimeEnv = {
+    log: vi.fn(),
+    error: errorMock,
+  } as unknown as RuntimeEnv;
+
+  const buttonPresentation: MessagePresentation = {
+    title: "FY25 outlook",
+    blocks: [{ type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] }],
+  };
+
+  function presentationContent(index: number) {
+    const extraContent = sendOptions(index).extraContent;
+    if (!extraContent || typeof extraContent !== "object") {
+      return undefined;
+    }
+    return (extraContent as Record<string, unknown>)["com.openclaw.presentation"] as
+      | Record<string, unknown>
+      | undefined;
+  }
+
+  const delivery = {
+    cfg,
+    roomId: "room:1",
+    client: {} as MatrixClient,
+    runtime: runtimeEnv,
+    textLimit: 4000,
+    replyToMode: "off" as const,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    nextMessageId = 0;
+    sendMessageMatrixMock.mockReset().mockImplementation(resolveMockMatrixSend);
+    setMatrixRuntime(runtimeStub);
+    chunkMatrixTextMock.mockReset().mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+      chunks: text ? [text] : [],
+    }));
+  });
+
+  it("encodes presentation controls onto the delivered event", async () => {
+    await deliverMatrixReplies({
+      ...delivery,
+      replies: [{ text: "Quarterly results", presentation: buttonPresentation }],
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    const presentation = presentationContent(0);
+    expect(presentation).toBeDefined();
+    expect(presentation?.version).toBe(1);
+    expect(presentation?.type).toBe("message.presentation");
+    expect(presentation?.blocks).toEqual(buttonPresentation.blocks);
+  });
+
+  it("delivers a controls-only reply instead of dropping it as missing text", async () => {
+    await deliverMatrixReplies({
+      ...delivery,
+      replies: [{ presentation: buttonPresentation }],
+    });
+
+    expect(errorMock).not.toHaveBeenCalledWith("matrix reply missing text/media");
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(presentationContent(0)).toBeDefined();
+  });
+
+  it("attaches controls to the first chunk only", async () => {
+    chunkMatrixTextMock.mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 10,
+      fitsInSingleEvent: false,
+      chunks: text.split("|"),
+    }));
+
+    await deliverMatrixReplies({
+      ...delivery,
+      replies: [{ text: "part-a|part-b", presentation: buttonPresentation }],
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
+    expect(presentationContent(0)).toBeDefined();
+    expect(sendOptions(1).extraContent).toBeUndefined();
+  });
+
+  it("does not duplicate authored fallback text when presentationTextMode=fallback", async () => {
+    await deliverMatrixReplies({
+      ...delivery,
+      replies: [
+        {
+          text: "Ready to deploy?",
+          presentation: {
+            blocks: [{ type: "text", text: "Ready to deploy?" }],
+          } satisfies MessagePresentation,
+          presentationTextMode: "fallback" as const,
+        },
+      ],
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    const body = String(sendCall(0)[1]);
+    expect(body.match(/Ready to deploy\?/g)).toHaveLength(1);
+  });
+
+  it("leaves replies without presentation unchanged", async () => {
+    await deliverMatrixReplies({ ...delivery, replies: [{ text: "plain" }] });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendOptions(0).extraContent).toBeUndefined();
   });
 });
