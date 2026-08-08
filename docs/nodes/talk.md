@@ -40,6 +40,47 @@ stopping Talk releases the camera and microphone tracks.
 - Replies are written to WebChat (same as typing).
 - **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.
 
+## Realtime Talk over the Gateway relay (macOS)
+
+macOS defaults to the native path above: Apple Speech recognition, Gateway chat, and `talk.speak`
+playback. It switches to a streamed realtime session only when `talk.realtime` selects all three
+of these together:
+
+| Key         | Required value  |
+| ----------- | --------------- |
+| `mode`      | `realtime`      |
+| `transport` | `gateway-relay` |
+| `brain`     | `agent-consult` |
+
+Any other combination — including a partially set one — keeps the native path. The **Voice & Talk**
+settings page writes all three when you turn on **Use realtime conversation**, so hand-editing is
+only needed for configurations the card does not offer.
+
+The Gateway must also advertise `gateway-relay` and `agent-consult` for the selected provider in
+`talk.catalog`, or the card reports realtime as unsupported instead of saving a session that
+cannot start. GPT-Live models additionally reject `consultRouting: force-agent-consult`, because
+GPT-Live delegates to the agent natively; selecting a GPT-Live model clears that key.
+
+Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the controls are
+hidden and the Talk runtime returns before startup.
+
+The Gateway reports readiness for the model already saved in `talk.realtime`, so changing models
+uses two Apply steps. First turn off **Use realtime conversation**, choose the model, and click
+**Apply**. After the catalog reload reports that saved model as ready, turn realtime conversation
+back on and click **Apply** again. This prevents a readiness result for one model from enabling a
+different model whose credentials have not been verified.
+
+### When realtime cannot start
+
+Talk never silently sits idle. If the relay fails to start — no Gateway route, rejected
+credentials, or an unsupported model — the failure is logged, the overlay shows the reason, and
+Talk falls back to the native speech path for that session.
+
+Once a session is running, a dropped relay reconnects on a bounded retry schedule (roughly 0.5 s
+then 2 s). If those attempts are exhausted, the overlay reports
+`Realtime disconnected repeatedly — using native speech` and the next start bypasses realtime.
+Losing the microphone mid-session closes the relay and takes the same route.
+
 ## Voice directives in replies
 
 The assistant can prefix a reply with a single JSON line to control voice:

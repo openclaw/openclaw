@@ -12,6 +12,7 @@ import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.
 import {
   renderTalk,
   selectedTalkProviderOption,
+  selectedTalkProviderRejectsTransport,
   talkProviderConfigKeys,
   type TalkCatalogState,
   type TalkRealtimeProviderOption,
@@ -196,11 +197,17 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     const runtimeConfig = this.context.runtimeConfig;
     if (model !== null) {
       runtimeConfig.patchForm(["talk", "realtime", "model"], model);
-      // GPT-Live is WebRTC-only; a configured relay or provider-websocket
-      // transport would make the just-picked model fail at session create, so
-      // clearing it lets the default client-owned WebRTC path apply.
-      const transport = this.liveSelection().transport;
-      if (isTalkGptLiveModel(model) && transport && transport !== "webrtc") {
+      // GPT-Live once required client-owned WebRTC, but the OpenAI provider now also
+      // advertises gateway-relay, which the native macOS relay path depends on. Clear
+      // only a transport the catalog says the selected provider cannot serve, so this
+      // picker stops deleting a selector another client still needs.
+      const selection = this.liveSelection();
+      const transport = selection.transport;
+      if (
+        isTalkGptLiveModel(model) &&
+        transport &&
+        selectedTalkProviderRejectsTransport(this.catalog, selection, transport)
+      ) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
       }
       return;

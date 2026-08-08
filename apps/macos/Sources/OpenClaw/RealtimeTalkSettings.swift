@@ -1,0 +1,451 @@
+import AppKit
+import Observation
+import OpenClawKit
+import OpenClawProtocol
+import SwiftUI
+
+struct RealtimeTalkSettingsDraft: Equatable {
+    var enabled: Bool
+    var model: String
+    var voice: String
+    var explicitlyUsesOpenAI: Bool
+
+    static let defaults = RealtimeTalkSettingsDraft(
+        enabled: false,
+        model: "gpt-realtime-2.1",
+        voice: "marin",
+        explicitlyUsesOpenAI: false)
+}
+
+struct RealtimeTalkProviderDescriptor: Equatable {
+    let configured: Bool
+    let models: [String]
+    let voices: [String]
+    let transports: [String]
+    let brains: [String]
+
+    /// This card only ever writes `gateway-relay` + `agent-consult`, so readiness means the Gateway
+    /// declared that exact pair for OpenAI -- `configured` alone would enable a setting the
+    /// realtime session cannot launch.
+    var supportsGatewayRelayAgentConsult: Bool {
+        self.transports.contains { $0.caseInsensitiveCompare("gateway-relay") == .orderedSame } &&
+            self.brains.contains { $0.caseInsensitiveCompare("agent-consult") == .orderedSame }
+    }
+}
+
+enum RealtimeTalkSettingsConfig {
+    static func parse(_ root: [String: Any]) -> RealtimeTalkSettingsDraft {
+        let talk = root["talk"] as? [String: Any]
+        let realtime = talk?["realtime"] as? [String: Any]
+        let providers = realtime?["providers"] as? [String: Any]
+        let openAI = Self.dictionary(in: providers, matching: "openai")
+        let provider = Self.string(realtime?["provider"])
+        let selectedProvider = provider ?? Self.onlyProviderKey(in: providers)
+        let selectsOpenAI = selectedProvider?.caseInsensitiveCompare("openai") == .orderedSame
+        let model = (selectsOpenAI ? Self.string(realtime?["model"]) : nil)
+            ?? Self.string(openAI?["model"])
+            ?? RealtimeTalkSettingsDraft.defaults.model
+        let voice = (selectsOpenAI ? Self.string(realtime?["speakerVoice"]) : nil)
+            ?? (selectsOpenAI ? Self.string(realtime?["voice"]) : nil)
+            ?? Self.string(openAI?["speakerVoice"])
+            ?? Self.string(openAI?["voice"])
+            ?? RealtimeTalkSettingsDraft.defaults.voice
+        let explicitlyUsesOpenAI = selectsOpenAI || openAI != nil
+        let enabled = selectsOpenAI &&
+            Self.string(realtime?["mode"])?.caseInsensitiveCompare("realtime") == .orderedSame &&
+            Self.string(realtime?["transport"])?.caseInsensitiveCompare("gateway-relay") == .orderedSame &&
+            Self.string(realtime?["brain"])?.caseInsensitiveCompare("agent-consult") == .orderedSame
+
+        return RealtimeTalkSettingsDraft(
+            enabled: enabled,
+            model: model,
+            voice: voice,
+            explicitlyUsesOpenAI: explicitlyUsesOpenAI)
+    }
+
+    static func applying(_ draft: RealtimeTalkSettingsDraft, to root: [String: Any]) -> [String: Any] {
+        var result = root
+        var talk = result["talk"] as? [String: Any] ?? [:]
+        var realtime = talk["realtime"] as? [String: Any] ?? [:]
+        let explicitProvider = Self.string(realtime["provider"])
+        let selectedProvider = explicitProvider ?? Self.onlyProviderKey(in: realtime["providers"] as? [String: Any])
+        let selectsOpenAI = selectedProvider?.caseInsensitiveCompare("openai") == .orderedSame
+        // Captured before any mutation: it decides whether the pre-save state was the exact
+        // triple this card manages, and therefore whether clearing those keys is ours to do.
+        let managedRelayBeforeApply = Self.selectsManagedRelay(realtime)
+
+        Self.persistOpenAIOptions(draft, in: &realtime)
+
+        if draft.enabled {
+            realtime["provider"] = "openai"
+            realtime["model"] = draft.model
+            realtime["speakerVoice"] = draft.voice
+            realtime["mode"] = "realtime"
+            realtime["transport"] = "gateway-relay"
+            realtime["brain"] = "agent-consult"
+            // GPT-Live delegates to the agent natively, so the provider rejects a gateway-relay
+            // launch that also forces consult routing. Saving both would persist an "enabled"
+            // state that can never create a Talk session; GA realtime models keep their routing.
+            if Self.isGptLiveModel(draft.model),
+               Self.string(realtime["consultRouting"])?
+                   .caseInsensitiveCompare("force-agent-consult") == .orderedSame
+            {
+                realtime.removeValue(forKey: "consultRouting")
+            }
+        } else if selectsOpenAI {
+            realtime["provider"] = "openai"
+            realtime["model"] = draft.model
+            realtime["speakerVoice"] = draft.voice
+            // Clear only the selectors this card itself writes. Any non-relay OpenAI setup --
+            // WebRTC, for example -- also parses as disabled here, and dropping its `mode` would
+            // leave a working configuration the card never owned in a broken half-state.
+            if managedRelayBeforeApply {
+                realtime.removeValue(forKey: "mode")
+                realtime.removeValue(forKey: "transport")
+                realtime.removeValue(forKey: "brain")
+            }
+        } else if explicitProvider == nil, let selectedProvider {
+            // Adding the OpenAI entry turns an inferred single-provider map into a multi-provider
+            // map. Preserve the previously inferred selection explicitly so the schema stays valid.
+            realtime["provider"] = selectedProvider
+        }
+
+        talk["realtime"] = realtime
+        result["talk"] = talk
+        return result
+    }
+
+    static func openAIProvider(in catalog: TalkCatalogResult) -> RealtimeTalkProviderDescriptor? {
+        guard let providers = catalog.realtime["providers"]?.arrayValue else { return nil }
+        for rawProvider in providers {
+            guard let provider = rawProvider.dictionaryValue,
+                  provider["id"]?.stringValue?.caseInsensitiveCompare("openai") == .orderedSame
+            else {
+                continue
+            }
+            return RealtimeTalkProviderDescriptor(
+                configured: provider["configured"]?.boolValue ?? false,
+                models: Self.strings(provider["models"]),
+                voices: Self.strings(provider["voices"]),
+                transports: Self.strings(provider["transports"]),
+                brains: Self.strings(provider["brains"]))
+        }
+        return nil
+    }
+
+    private static func strings(_ value: AnyCodable?) -> [String] {
+        value?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
+    /// The exact selector triple this card writes, matching the `enabled` derivation in `parse`.
+    private static func selectsManagedRelay(_ realtime: [String: Any]) -> Bool {
+        self.string(realtime["mode"])?.caseInsensitiveCompare("realtime") == .orderedSame &&
+            self.string(realtime["transport"])?
+            .caseInsensitiveCompare("gateway-relay") == .orderedSame &&
+            self.string(realtime["brain"])?.caseInsensitiveCompare("agent-consult") == .orderedSame
+    }
+
+    /// Mirrors the provider's own GPT-Live check (`isOpenAIGptLiveModel`), which keys off the
+    /// `gpt-live` model-id prefix rather than an enumerated list.
+    static func isGptLiveModel(_ model: String) -> Bool {
+        let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "gpt-live" || normalized.hasPrefix("gpt-live-")
+    }
+
+    private static func string(_ value: Any?) -> String? {
+        let string = value as? String
+        let trimmed = string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func onlyProviderKey(in providers: [String: Any]?) -> String? {
+        guard let providers, providers.count == 1 else { return nil }
+        return providers.keys.first
+    }
+
+    private static func persistOpenAIOptions(
+        _ draft: RealtimeTalkSettingsDraft,
+        in realtime: inout [String: Any])
+    {
+        var providers = realtime["providers"] as? [String: Any] ?? [:]
+        let existingKey = providers.keys.first {
+            $0.caseInsensitiveCompare("openai") == .orderedSame
+        }
+        var openAI = existingKey.flatMap { providers[$0] as? [String: Any] } ?? [:]
+        openAI["model"] = draft.model
+        openAI["speakerVoice"] = draft.voice
+        if let existingKey, existingKey != "openai" {
+            providers.removeValue(forKey: existingKey)
+        }
+        providers["openai"] = openAI
+        realtime["providers"] = providers
+    }
+
+    private static func dictionary(in values: [String: Any]?, matching expected: String) -> [String: Any]? {
+        values?.first { key, _ in
+            key.caseInsensitiveCompare(expected) == .orderedSame
+        }?.value as? [String: Any]
+    }
+}
+
+@MainActor
+@Observable
+final class RealtimeTalkSettingsModel {
+    enum Availability: Equatable {
+        case loading
+        case ready(model: String)
+        case needsOpenAIAccess
+        case unavailable(String)
+    }
+
+    var draft = RealtimeTalkSettingsDraft.defaults
+    var availability: Availability = .loading
+    var models = [RealtimeTalkSettingsDraft.defaults.model]
+    var voices = ["marin", "cedar", "alloy"]
+    var isSaving = false
+    var saveMessage: String?
+    private var loadGeneration = 0
+    private let loadConfig: () async -> [String: Any]
+    private let loadCatalog: () async throws -> TalkCatalogResult
+    init() {
+        self.loadConfig = { await ConfigStore.load() }
+        self.loadCatalog = Self.defaultLoadCatalog
+    }
+
+    init(
+        loadConfig: @escaping () async -> [String: Any],
+        loadCatalog: @escaping () async throws -> TalkCatalogResult)
+    {
+        self.loadConfig = loadConfig
+        self.loadCatalog = loadCatalog
+    }
+
+    var showsConfiguration: Bool {
+        if case .ready = self.availability {
+            return true
+        }
+        return self.draft.explicitlyUsesOpenAI
+    }
+
+    /// `talk.catalog` takes no parameters and resolves `configured` from the saved realtime
+    /// model, so readiness only ever describes the saved selection. Enabling is therefore gated
+    /// on that evaluated state rather than on a picker value the Gateway has not judged.
+    /// Switching models stays possible: Apply persists `model` while disabled, and the next
+    /// load evaluates readiness against the newly saved model.
+    nonisolated static func canEnable(availability: Availability, draftModel: String) -> Bool {
+        guard case let .ready(model) = availability else { return false }
+        return model == draftModel
+    }
+
+    var canEnable: Bool {
+        Self.canEnable(availability: self.availability, draftModel: self.draft.model)
+    }
+
+    var canApply: Bool {
+        !self.isSaving && (!self.draft.enabled || self.canEnable)
+    }
+
+    func load() async {
+        await self.refresh(reloadDraft: true)
+    }
+
+    func refreshAvailability() async {
+        await self.refresh(reloadDraft: false)
+    }
+
+    private func refresh(reloadDraft: Bool) async {
+        self.loadGeneration &+= 1
+        let generation = self.loadGeneration
+        self.availability = .loading
+        let root = await self.loadConfig()
+        let savedDraft = RealtimeTalkSettingsConfig.parse(root)
+
+        do {
+            let catalog = try await self.loadCatalog()
+            guard self.loadGeneration == generation else { return }
+            if reloadDraft {
+                self.draft = savedDraft
+            }
+            guard let provider = RealtimeTalkSettingsConfig.openAIProvider(in: catalog) else {
+                self.availability = .unavailable("This Gateway does not expose the OpenAI realtime provider.")
+                return
+            }
+            self.models = Self.options(current: self.draft.model, catalog: provider.models)
+            self.voices = Self.options(current: self.draft.voice, catalog: provider.voices)
+            guard provider.supportsGatewayRelayAgentConsult else {
+                self.availability = .unavailable(
+                    "This Gateway's OpenAI realtime provider does not support relayed Talk sessions.")
+                return
+            }
+            self.availability = provider.configured ? .ready(model: savedDraft.model) : .needsOpenAIAccess
+        } catch {
+            guard self.loadGeneration == generation else { return }
+            if reloadDraft {
+                self.draft = savedDraft
+            }
+            self.availability = .unavailable("Could not verify realtime access: \(error.localizedDescription)")
+        }
+    }
+
+    func handleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
+        guard state == .connected else { return }
+        await self.refreshAvailability()
+    }
+
+    func save() async {
+        guard self.canApply else { return }
+        self.isSaving = true
+        self.saveMessage = nil
+        defer { self.isSaving = false }
+
+        do {
+            let root = await ConfigStore.load()
+            try await ConfigStore.save(RealtimeTalkSettingsConfig.applying(self.draft, to: root))
+            self.draft.explicitlyUsesOpenAI = true
+            self.saveMessage = self.draft.enabled ? "OpenAI realtime Talk enabled." : "Realtime Talk disabled."
+            await self.load()
+        } catch {
+            self.saveMessage = error.localizedDescription
+        }
+    }
+
+    private static func defaultLoadCatalog() async throws -> TalkCatalogResult {
+        let data = try await GatewayConnection.shared.requestRaw(
+            method: "talk.catalog",
+            params: [:],
+            timeoutMs: 8000)
+        return try JSONDecoder().decode(TalkCatalogResult.self, from: data)
+    }
+
+    private static func options(current: String, catalog: [String]) -> [String] {
+        var options = catalog
+        if !options.contains(current) {
+            options.insert(current, at: 0)
+        }
+        return options
+    }
+}
+
+struct RealtimeTalkSettingsSection: View {
+    let isActive: Bool
+    @State private var model = RealtimeTalkSettingsModel()
+
+    var body: some View {
+        SettingsCardGroup("OpenAI Realtime / GPT-Live") {
+            SettingsCardRow(
+                title: .verbatim(self.statusTitle),
+                subtitle: .verbatim(self.statusSubtitle),
+                showsDivider: self.model.showsConfiguration)
+            {
+                self.statusAccessory
+            }
+
+            if self.model.showsConfiguration {
+                SettingsCardToggleRow(
+                    title: "Use realtime conversation",
+                    subtitle: .verbatim(
+                        "Stream speech continuously while OpenClaw keeps agent tools " +
+                            "and computer actions available."),
+                    binding: self.$model.draft.enabled)
+                    .disabled(!self.model.canEnable && !self.model.draft.enabled)
+
+                SettingsCardRow(
+                    title: "Voice model",
+                    subtitle: .verbatim(
+                        "GPT-Live uses ChatGPT/Codex OAuth when available; " +
+                            "GA realtime models may require Platform API access."))
+                {
+                    Picker("Voice model", selection: self.$model.draft.model) {
+                        ForEach(self.model.models, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 230)
+                }
+
+                SettingsCardRow(title: "Assistant voice", subtitle: "Marin and Cedar are recommended.") {
+                    Picker("Assistant voice", selection: self.$model.draft.voice) {
+                        ForEach(self.model.voices, id: \.self) { voice in
+                            Text(voice.capitalized).tag(voice)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 230)
+                }
+
+                SettingsCardRow(
+                    title: "Apply realtime settings",
+                    subtitle: self.model.saveMessage.map(SettingsTextValue.verbatim),
+                    showsDivider: false)
+                {
+                    Button(self.model.isSaving ? "Saving…" : "Apply") {
+                        Task { await self.model.save() }
+                    }
+                    .disabled(!self.model.canApply)
+                }
+            }
+        }
+        .task(id: self.isActive) {
+            guard self.isActive else { return }
+            await self.model.load()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openclawConfigDidChange)) { _ in
+            guard self.isActive else { return }
+            Task { await self.model.load() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .controlChannelStateDidChange)) { _ in
+            guard self.isActive else { return }
+            Task {
+                await self.model.handleControlChannelStateChange(ControlChannel.shared.state)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            guard self.isActive else { return }
+            Task { await self.model.refreshAvailability() }
+        }
+    }
+
+    private var statusTitle: String {
+        switch self.model.availability {
+        case .loading: "Checking Gateway…"
+        case .ready: "OpenAI realtime is available"
+        case .needsOpenAIAccess: "Connect OpenAI to enable realtime"
+        case .unavailable: "Realtime availability is unverified"
+        }
+    }
+
+    private var statusSubtitle: String {
+        switch self.model.availability {
+        case .loading:
+            "Reading the Gateway Talk catalog."
+        case .ready:
+            "The Gateway reports that OpenAI realtime access is ready for this configuration."
+        case .needsOpenAIAccess:
+            "Use an OpenClaw OpenAI login or Platform API key. " +
+                "An existing Codex CLI login is not imported automatically."
+        case let .unavailable(message):
+            message
+        }
+    }
+
+    @ViewBuilder
+    private var statusAccessory: some View {
+        switch self.model.availability {
+        case .loading:
+            ProgressView().controlSize(.small)
+        case .ready:
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .needsOpenAIAccess:
+            Button("Open Talk Settings…") {
+                Task { @MainActor in
+                    await DashboardManager.shared.show(atPath: DashboardRouteMap.talkSettingsPath)
+                }
+            }
+        case .unavailable:
+            Button("Retry") {
+                Task { await self.model.refreshAvailability() }
+            }
+        }
+    }
+}

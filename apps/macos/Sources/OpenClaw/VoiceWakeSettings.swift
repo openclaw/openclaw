@@ -159,6 +159,11 @@ struct VoiceWakeSettings: View {
                 self.voiceSummaryPanel
 
                 if voiceWakeSupported {
+                    // The Talk runtime returns before startup on unsupported macOS, so the card
+                    // must not be reachable there -- it could otherwise save and report realtime
+                    // as enabled on a machine where Talk can never start.
+                    RealtimeTalkSettingsSection(isActive: self.isActive)
+
                     SettingsCardGroup("Activation") {
                         SettingsCardToggleRow(
                             title: "Enable Voice Wake",
