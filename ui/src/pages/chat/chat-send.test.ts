@@ -7889,6 +7889,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.text).toBe("/steer tighten the plan");
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+    expect(host.chatQueue[0]?.steerTargetRunId).toBe("run-1");
   });
 
   it("steers a queued message into the active run without replacing run tracking", async () => {
@@ -7942,6 +7943,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
     expect(host.chatQueue[0]?.sendRunId).toBe(idempotencyKey);
+    expect(host.chatQueue[0]?.steerTargetRunId).toBe("run-1");
   });
 
   it("steers a queued message when only the session row reports an active run", async () => {
@@ -7986,6 +7988,7 @@ describe("handleSendChat", () => {
         kind: "steered",
         pendingRunId: "steer-run",
         sendRunId: payload.idempotencyKey,
+        steerTargetRunId: "active-run",
         text: original.text,
       }),
     ]);
@@ -8829,14 +8832,23 @@ describe("handleSendChat", () => {
       const steering = steerQueuedChatMessage(host, original.id);
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       expect(host.chatQueue).toHaveLength(1);
-      expect(host.chatQueue[0]?.pendingRunId).toBe("active-run");
+      expect(host.chatQueue[0]).toMatchObject({
+        pendingRunId: "active-run",
+        steerTargetRunId: "active-run",
+      });
       expect(peer.chatQueue).toHaveLength(1);
-      expect(peer.chatQueue[0]?.sendState).toBe("steering");
+      expect(peer.chatQueue[0]).toMatchObject({
+        sendState: "steering",
+        steerTargetRunId: "active-run",
+      });
       await steerQueuedChatMessage(peer, original.id);
       expect(request).toHaveBeenCalledTimes(1);
       stopLatePeer = subscribeChatOutboxProjection(latePeer);
       expect(latePeer.chatQueue).toHaveLength(1);
-      expect(latePeer.chatQueue[0]?.sendState).toBe("steering");
+      expect(latePeer.chatQueue[0]).toMatchObject({
+        sendState: "steering",
+        steerTargetRunId: "active-run",
+      });
       await retryQueuedChatMessage(peer, original.id);
       expect(request).toHaveBeenCalledTimes(1);
       expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue[0]?.sendState).toBe(
