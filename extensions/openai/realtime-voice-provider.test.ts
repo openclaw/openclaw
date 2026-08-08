@@ -469,7 +469,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(
       internalApi.resolveBrowserSessionCapabilities({
         providerConfig: { model: "gpt-realtime-2.1" },
-        model: "gpt-live-1-codex",
+        model: "gpt-live-1-boulder-alpha",
       }),
     ).toMatchObject({
       transports: ["webrtc", "gateway-relay"],
@@ -480,7 +480,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(
       internalApi.resolveGatewayRelayCapabilities({
         providerConfig: { model: "gpt-realtime-2.1" },
-        model: "gpt-live-1-codex",
+        model: "gpt-live-1-boulder-alpha",
       }),
     ).toMatchObject({
       transports: ["webrtc", "gateway-relay"],
@@ -622,11 +622,17 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(options?.headers?.Authorization).toBe("Bearer sk-env");
   });
 
-  it("uses OpenAI API-key auth profiles", async () => {
+  it("uses agent-scoped OpenAI API-key auth profiles", async () => {
     resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("sk-profile"); // pragma: allowlist secret
     const provider = buildOpenAIRealtimeVoiceProvider();
+    const cfg = {
+      agents: {
+        list: [{ id: "voice", agentDir: "/tmp/openclaw-agent-voice" }],
+      },
+    } as never;
     const bridge = provider.createBridge({
-      cfg: {} as never,
+      cfg,
+      agentId: "voice",
       providerConfig: { model: "gpt-realtime-2" },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
@@ -640,7 +646,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       [
         {
           provider: "openai",
-          cfg: {},
+          cfg,
+          agentDir: "/tmp/openclaw-agent-voice",
           profileTypes: ["api_key"],
           includeExternalCliAuth: false,
         },
@@ -945,14 +952,75 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("routes an explicit unlisted gpt-live alias without advertising it as ready", async () => {
-    const oauthToken = createTestJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
+  it("scopes GPT-Live availability and browser auth to the selected agent", async () => {
+    isProviderAuthProfileConfiguredMock.mockReturnValue(true);
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValue("sk-profile"); // pragma: allowlist secret
+    const createBrowserSession = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "quicksilver-token",
+      offerUrl: "/plugins/openai/realtime/calls",
+    }));
+    const provider = buildOpenAIRealtimeVoiceProvider({
+      quicksilverBrowserSessionBroker: {
+        capabilities: { handlesAgentConsult: true as const },
+        createBrowserSession,
+        cancelBrowserSession: vi.fn(),
+      },
     });
-    resolveProviderAuthProfileApiKeyMock.mockImplementation(
-      async ({ profileTypes }: { profileTypes?: readonly string[] }) =>
-        profileTypes?.includes("oauth") ? oauthToken : undefined,
+    const cfg = {
+      agents: {
+        list: [{ id: "voice", agentDir: "/tmp/openclaw-agent-voice" }],
+      },
+    } as never;
+    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
+    const providerConfig = { model: "gpt-live-1-boulder-alpha" };
+
+    expect(internalApi.isBrowserSessionConfigured({ cfg, providerConfig, agentId: "voice" })).toBe(
+      true,
     );
+    expect(internalApi.isGatewayRelayConfigured({ cfg, providerConfig, agentId: "voice" })).toBe(
+      true,
+    );
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenNthCalledWith(1, {
+      provider: "openai",
+      cfg,
+      agentDir: "/tmp/openclaw-agent-voice",
+      profileTypes: ["api_key"],
+      includeExternalCliAuth: false,
+    });
+    expect(isProviderAuthProfileConfiguredMock).toHaveBeenNthCalledWith(2, {
+      provider: "openai",
+      cfg,
+      agentDir: "/tmp/openclaw-agent-voice",
+      profileTypes: ["api_key"],
+      includeExternalCliAuth: false,
+    });
+
+    await provider.createBrowserSession?.({
+      cfg,
+      providerConfig,
+      model: "gpt-live-1-boulder-alpha",
+      agentId: "voice",
+      workspaceDir: "/tmp/openclaw-agent-workspace",
+      initialItems: [],
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    } as never);
+
+    expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith({
+      provider: "openai",
+      cfg,
+      agentDir: "/tmp/openclaw-agent-voice",
+      profileTypes: ["api_key"],
+      includeExternalCliAuth: false,
+    });
+    expect(createBrowserSession).toHaveBeenCalledWith(expect.any(Object), {
+      type: "api-key",
+      token: "sk-profile", // pragma: allowlist secret
+    });
+  });
+
+  it("does not advertise unsupported aliases or OAuth-only GPT-Live", async () => {
     isProviderAuthProfileConfiguredMock.mockImplementation(
       ({ profileTypes }: { profileTypes?: readonly string[] }) =>
         profileTypes?.includes("oauth") === true,
@@ -976,15 +1044,6 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       },
     });
     const cfg = { agents: { defaults: {} } } as never;
-    const request = {
-      cfg,
-      providerConfig: {},
-      model: "gpt-live-1-mini",
-      agentId: "main",
-      workspaceDir: "/tmp/openclaw-agent-workspace",
-      initialItems: [],
-      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-    };
 
     expect(provider.isConfigured({ cfg, providerConfig: { model: "gpt-live-1-mini" } })).toBe(
       false,
@@ -1017,35 +1076,6 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
         cfg,
-        providerConfig: { model: "gpt-realtime-2.1", apiKey: "sk-platform" },
-        agentId: "main",
-      }),
-    ).toBeUndefined();
-    expect(
-      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
-        cfg,
-        providerConfig: {
-          model: "gpt-realtime-2.1",
-          apiKey: "sk-platform",
-          azureEndpoint: "https://example.openai.azure.com",
-        },
-        agentId: "main",
-      }),
-    ).toBeUndefined();
-    expect(
-      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
-        cfg,
-        providerConfig: {
-          model: "gpt-live-1-codex",
-          apiKey: "sk-platform",
-          azureEndpoint: "https://example.openai.azure.com",
-        },
-        agentId: "main",
-      }),
-    ).toBe(false);
-    expect(
-      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
-        cfg,
         providerConfig: { model: "gpt-live-1-mini", apiKey: "sk-platform" },
         agentId: "main",
       }),
@@ -1060,42 +1090,38 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
         cfg,
-        providerConfig: { model: "gpt-live-1-codex" },
+        providerConfig: { model: "gpt-live-1-boulder-alpha" },
         agentId: "main",
       }),
-    ).toBe(true);
-    expect(
-      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
-        cfg,
-        providerConfig: { model: "gpt-live-1-codex" },
-        agentId: "voice-agent",
-      }),
-    ).toBe(true);
-    expect(isProviderAuthProfileConfiguredMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: expect.stringContaining("voice-agent"),
-        profileTypes: ["oauth"],
-      }),
-    );
+    ).toBe(false);
     expect(
       readInternalRealtimeVoiceProviderApi(provider).isBrowserSessionConfigured({
         cfg,
-        providerConfig: { model: "gpt-live-1-codex" },
+        providerConfig: { model: "gpt-live-1-boulder-alpha" },
+        agentId: "main",
+      }),
+    ).toBe(false);
+    expect(
+      readInternalRealtimeVoiceProviderApi(provider).isGatewayRelayConfigured({
+        cfg,
+        providerConfig: { model: "gpt-live-1-boulder-alpha", apiKey: "sk-platform" },
         agentId: "main",
       }),
     ).toBe(true);
-    await provider.createBrowserSession?.(request);
-    expect(createBrowserSession).toHaveBeenCalledWith(expect.objectContaining(request), {
-      type: "oauth",
-      token: oauthToken,
-      accountId: "account-123",
-    });
-    expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        profileTypes: ["oauth"],
-        includeExternalCliAuth: false,
-      }),
+    await expect(
+      provider.createBrowserSession?.({
+        cfg,
+        providerConfig: {},
+        model: "gpt-live-1-mini",
+        agentId: "main",
+        workspaceDir: "/tmp/openclaw-agent-workspace",
+        initialItems: [],
+        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+      } as never),
+    ).rejects.toThrow("GPT-Live Talk requires an OpenAI Platform API key");
+    expect(createBrowserSession).not.toHaveBeenCalled();
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ profileTypes: ["oauth"] }),
     );
   });
 
@@ -1117,7 +1143,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     ).toBeUndefined();
   });
 
-  it("prefers ChatGPT OAuth over Platform auth for gpt-live", async () => {
+  it("uses Platform auth without consulting ChatGPT OAuth for gpt-live", async () => {
     const oauthToken = createTestJwt({
       "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
     });
@@ -1141,7 +1167,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     await provider.createBrowserSession?.({
       providerConfig: { apiKey: "sk-platform" }, // pragma: allowlist secret
-      model: "gpt-live-1-codex",
+      model: "gpt-live-1-boulder-alpha",
       agentId: "main",
       workspaceDir: "/tmp/openclaw-agent-workspace",
       initialItems: [],
@@ -1149,10 +1175,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     } as never);
 
     expect(createBrowserSession).toHaveBeenCalledWith(expect.any(Object), {
-      type: "oauth",
-      token: oauthToken,
-      accountId: "account-123",
+      type: "api-key",
+      token: "sk-platform", // pragma: allowlist secret
     });
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ profileTypes: ["oauth"] }),
+    );
   });
 
   it("keeps Platform precedence for GA realtime when OAuth is also available", async () => {
@@ -1325,7 +1353,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(quicksilverRequest.instructions).toMatch(/Always address the caller as Captain\.$/);
   });
 
-  it("explains both gpt-live authentication options when neither is available", async () => {
+  it("requires Platform access for gpt-live when no API key is available", async () => {
     const createBrowserSession = vi.fn();
     const provider = buildOpenAIRealtimeVoiceProvider({
       quicksilverBrowserSessionBroker: {
@@ -1345,9 +1373,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         providerConfig: {},
         model: "gpt-live-1",
       }),
-    ).rejects.toThrow(
-      "GPT-Live Talk requires either an OpenAI Platform API key or a ChatGPT OAuth subscription profile",
-    );
+    ).rejects.toThrow("GPT-Live Talk requires an OpenAI Platform API key with /v1/live access");
     expect(createBrowserSession).not.toHaveBeenCalled();
   });
 

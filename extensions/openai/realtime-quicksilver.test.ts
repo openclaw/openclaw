@@ -30,8 +30,9 @@ describe("openai gpt-live model detection", () => {
   });
 
   it("advertises only curated /v1/live models", () => {
-    expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1-boulder-alpha")).toBe(true);
     expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1-Boulder-Alpha ")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(false);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(false);
     expect(isSupportedOpenAIGptLiveModel("gpt-live-1-mini")).toBe(false);
   });
@@ -70,7 +71,7 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
     expect(
       provider.createBridge({
         ...callbacks,
-        providerConfig: { apiKey: "test-key", model: "gpt-live-1-codex" },
+        providerConfig: { apiKey: "test-key", model: "gpt-live-1-boulder-alpha" },
       }),
     ).toMatchObject({ supportsToolResultContinuation: true });
     expect(
@@ -94,7 +95,7 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
       provider.createBridge({
         providerConfig: {
           apiKey: "azure-test-key",
-          model: "gpt-live-1-codex",
+          model: "gpt-live-1-boulder-alpha",
           azureEndpoint: "https://example.openai.azure.com",
           azureDeployment: "realtime",
         },
