@@ -68,7 +68,7 @@ describe("live transport adapter factories", () => {
     expect(matrixQaAdapterFactory.supportsModuleFlows).toBe(true);
     expect(slackQaAdapterFactory.supportsModuleFlows).toBe(true);
     expect(whatsappQaAdapterFactory.supportsModuleFlows).toBe(true);
-    expect(telegramQaAdapterFactory.supportsModuleFlows).toBeUndefined();
+    expect(telegramQaAdapterFactory.supportsModuleFlows).toBe(true);
   });
 
   it.each([
@@ -83,9 +83,7 @@ describe("live transport adapter factories", () => {
       const adapterOptions = { sutAccountId: `${channelId}-sut` };
       const state = createQaBusState();
       const adapter: QaTransportAdapter = createQaChannelTransport(state);
-      if (channelId !== "telegram") {
-        adapter.prepareFlow = async () => ({});
-      }
+      adapter.prepareFlow = async () => ({});
       create.mockResolvedValueOnce(adapter);
       const created = await createQaTransportAdapter(
         {

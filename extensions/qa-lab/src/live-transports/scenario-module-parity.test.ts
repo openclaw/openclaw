@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "../scenario-catalog.js";
 import * as discordScenarioRuntime from "./discord/scenario-runtime.js";
 import * as slackScenarioRuntime from "./slack/scenario-runtime.js";
+import * as telegramScenarioRuntime from "./telegram/scenario-runtime.js";
 import * as whatsappScenarioRuntime from "./whatsapp/scenario-runtime.js";
 
 const LANES = [
@@ -107,4 +108,23 @@ describe("live transport scenario module routing", () => {
       }
     },
   );
+
+  it("routes the Telegram help flow through its typed module context", () => {
+    const scenario = readQaScenarioPack().scenarios.find(
+      (candidate) => candidate.id === "telegram-help-command",
+    );
+    expect(scenario).toBeDefined();
+    if (!scenario) {
+      throw new Error("telegram-help-command is missing from the QA catalog");
+    }
+    const call = readScenarioModuleCall(scenario, "./live-transports/telegram/scenario-runtime.js");
+
+    expect(call?.call).toBe("runTelegramHelpCommandScenario");
+    expect(call?.args?.map(readExpression)).toEqual([
+      "telegramScenarioContext",
+      "transport",
+      "config",
+    ]);
+    expect(telegramScenarioRuntime.runTelegramHelpCommandScenario).toBeTypeOf("function");
+  });
 });

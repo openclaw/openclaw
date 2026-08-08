@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveLiveTransportQaScenarioIds } from "./live-transports/shared/scenario-selection.js";
+import { resolveTelegramQaScenarioIds } from "./live-transports/telegram/scenario-selection.js";
 import {
   resolveQaProfileScenarios,
   resolveQaRunProfileExecutionSelection,
@@ -53,12 +53,10 @@ describe("taxonomy profile scenario selection", () => {
   });
 
   it("derives channel defaults from catalog metadata and lane constraints", () => {
-    const liveTelegram = resolveLiveTransportQaScenarioIds({
-      channelId: "telegram",
+    const liveTelegram = resolveTelegramQaScenarioIds({
       providerMode: "live-frontier",
     });
-    const mockTelegram = resolveLiveTransportQaScenarioIds({
-      channelId: "telegram",
+    const mockTelegram = resolveTelegramQaScenarioIds({
       providerMode: "mock-openai",
     });
 

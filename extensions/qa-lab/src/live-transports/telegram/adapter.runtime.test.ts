@@ -118,6 +118,33 @@ describe("Telegram QA transport adapter", () => {
         },
       },
     });
+    const prepared = await adapter.prepareFlow?.({
+      scenarioId: "telegram-help-command",
+      scenarioTitle: "Telegram help command reply",
+      timeoutMs: 60_000,
+    } as never);
+    expect(prepared).toMatchObject({
+      telegramScenarioContext: {
+        accountId: "sut",
+        driverIdentity: { id: 1, username: "driver_bot" },
+        groupId: "-100123",
+        scenario: {
+          id: "telegram-help-command",
+          timeoutMs: 60_000,
+          title: "Telegram help command reply",
+        },
+        sutIdentity: { id: 2, username: "openclaw_qa_bot" },
+      },
+    });
+    const telegramScenarioContext = prepared?.telegramScenarioContext as {
+      createNativeCommandInput(command: string): unknown;
+    };
+    expect(telegramScenarioContext.createNativeCommandInput("help")).toMatchObject({
+      command: "help",
+      conversation: { id: "-100123", kind: "group" },
+      senderId: "1",
+      senderName: "driver_bot",
+    });
 
     await vi.waitFor(() => expect(pollResolvers).toHaveLength(1));
     await adapter.sendInbound?.({
@@ -133,11 +160,10 @@ describe("Telegram QA transport adapter", () => {
         text: "@openclaw_qa_bot reply exactly: QA-MARKER",
       }),
     );
-    await adapter.sendInbound?.({
+    await adapter.sendNativeCommand?.({
+      command: "status",
       conversation: { id: "logical-room", kind: "group" },
       senderId: "driver",
-      text: "/status",
-      nativeCommand: { name: "status" },
     });
     expect(mocks.callTelegramApi).toHaveBeenCalledWith(
       "placeholder",

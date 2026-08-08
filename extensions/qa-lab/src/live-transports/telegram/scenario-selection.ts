@@ -12,7 +12,11 @@ export function resolveTelegramQaScenarioIds(params: {
   providerMode: QaProviderModeInput;
   scenarioIds?: readonly string[];
 }): string[] {
-  return resolveLiveTransportQaScenarioIds({ channelId: TELEGRAM_QA_CHANNEL_ID, ...params });
+  return resolveLiveTransportQaScenarioIds({
+    channelId: TELEGRAM_QA_CHANNEL_ID,
+    supportsModuleFlows: true,
+    ...params,
+  });
 }
 
 export function listTelegramQaScenarios(params: {
@@ -21,6 +25,7 @@ export function listTelegramQaScenarios(params: {
 }) {
   return listLiveTransportQaScenarios({
     channelId: TELEGRAM_QA_CHANNEL_ID,
+    supportsModuleFlows: true,
     ...params,
   });
 }

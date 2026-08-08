@@ -171,6 +171,7 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     adapterFactories: [
       {
         id: "telegram",
+        supportsModuleFlows: true,
         matches: ({ channelId, driver }) => driver === "live" && channelId === "telegram",
         create: createTelegramQaTransportAdapter,
       },

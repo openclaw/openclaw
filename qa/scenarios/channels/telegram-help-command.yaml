@@ -25,30 +25,9 @@ scenario:
         - /commands for full list
 
 flow:
-  steps:
-    - name: help returns the concise command guide
-      actions:
-        - resetTransport: true
-        - set: startIndex
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
-        - sendInbound:
-            conversation: { id: telegram-command-room, kind: channel }
-            senderId: qa-command-operator
-            senderName: QA Command Operator
-            text:
-              expr: "`/${config.command}`"
-            nativeCommand:
-              name:
-                expr: config.command
-        - waitForOutbound:
-            conversation: { id: telegram-command-room, kind: channel }
-            sinceIndex: { ref: startIndex }
-            textIncludes: { expr: "config.expectedAny[0]" }
-            timeoutMs: 60000
-          saveAs: reply
-        - assert:
-            expr: "config.expectedAny.every((needle) => reply.text.includes(needle))"
-            message:
-              expr: "`help reply missing expected text: ${reply.text}`"
-      detailsExpr: reply.text
+  module: ./live-transports/telegram/scenario-runtime.js
+  call: runTelegramHelpCommandScenario
+  args:
+    - { expr: telegramScenarioContext }
+    - { expr: transport }
+    - { expr: config }

@@ -79,6 +79,8 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
     import("./live-transports/discord/scenario-runtime.js"),
   "./live-transports/slack/scenario-runtime.js": () =>
     import("./live-transports/slack/scenario-runtime.js"),
+  "./live-transports/telegram/scenario-runtime.js": () =>
+    import("./live-transports/telegram/scenario-runtime.js"),
   "./live-transports/whatsapp/scenario-runtime.js": () =>
     import("./live-transports/whatsapp/scenario-runtime.js"),
   "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),

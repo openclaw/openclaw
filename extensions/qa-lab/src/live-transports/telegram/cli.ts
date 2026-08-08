@@ -19,6 +19,7 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "telegram",
     adapterFactory: createLiveTransportQaAdapterFactory({
       id: "telegram",
+      supportsModuleFlows: true,
       async create(context) {
         return (await loadTelegramQaAdapterRuntime()).createTelegramQaTransportAdapter(context);
       },
