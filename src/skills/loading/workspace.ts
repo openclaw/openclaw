@@ -1352,7 +1352,7 @@ function truncateSkillDescription(description: string, maxChars: number): string
  */
 export function formatSkillsCompact(
   skills: Skill[],
-  opts?: { descriptionMaxChars?: number },
+  opts?: { descriptionMaxChars?: number; includeLoadInstruction?: boolean },
 ): string {
   if (skills.length === 0) {
     return "";
@@ -1363,9 +1363,13 @@ export function formatSkillsCompact(
   );
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
-    descriptionMaxChars > 0
-      ? "Use the read tool to load a skill's file when the task matches its name or description."
-      : "Use the read tool to load a skill's file when the task matches its name.",
+    ...(opts?.includeLoadInstruction === false
+      ? []
+      : [
+          descriptionMaxChars > 0
+            ? "Use the read tool to load a skill's file when the task matches its name or description."
+            : "Use the read tool to load a skill's file when the task matches its name.",
+        ]),
     "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
@@ -1422,6 +1426,7 @@ function buildRenderedSkillsPrompt(params: {
   total: number;
   format: SkillsPromptFormat;
   includeLimitNote?: boolean;
+  includeLoadInstruction?: boolean;
 }): string {
   // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
   // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
@@ -1439,8 +1444,11 @@ function buildRenderedSkillsPrompt(params: {
     params.format.kind === "compact"
       ? formatSkillsCompact(params.skills, {
           descriptionMaxChars: params.format.descriptionMaxChars,
+          includeLoadInstruction: params.includeLoadInstruction,
         })
-      : formatSkillsForPrompt(params.skills);
+      : formatSkillsForPrompt(params.skills, {
+          includeLoadInstruction: params.includeLoadInstruction,
+        });
   return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
 }
 
@@ -1470,6 +1478,7 @@ function applySkillsPromptLimits(params: {
         total,
         format,
         includeLimitNote,
+        includeLoadInstruction: false,
       });
       if (prompt.length <= limits.maxSkillsPromptChars) {
         return prompt;
