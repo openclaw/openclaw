@@ -280,6 +280,7 @@ export async function finishGatewayStartup(params: {
         sessionObserver.removeConnection(connId);
       },
       getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
+      getSessionMessageSubscriberConnIds: sessionMessageSubscribers.get,
       registerToolEventRecipient: toolEventRecipients.add,
       dedupe,
       wizardSessions,
