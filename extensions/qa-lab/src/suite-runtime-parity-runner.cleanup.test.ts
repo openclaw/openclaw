@@ -218,8 +218,9 @@ describe("runtime parity suite transport cleanup", () => {
         "failed cleanup phases: lab stop: owned lab shutdown reset",
       );
       expect((thrown as Error).message).toContain(
-        "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json evidence=/qa-output/qa-evidence.json",
+        "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
       );
+      expect((thrown as Error).message).not.toContain(" evidence=");
       expect((thrown as Error).cause).toBe(cleanupError);
       expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
     } finally {

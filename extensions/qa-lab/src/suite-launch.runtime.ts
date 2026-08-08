@@ -5,7 +5,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
 import {
-  QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   buildQaSuiteEvidenceSummary,
@@ -27,6 +26,10 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
+import {
+  runQaSuiteEvidenceLifecycle,
+  type QaSuiteEvidenceTarget,
+} from "./suite-evidence-lifecycle.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -214,15 +217,18 @@ async function loadQaLabServerRuntime() {
 }
 
 async function loadQaFlowSuiteRuntime() {
-  const [{ runQaFlowSuite }, startLab] = await Promise.all([
-    import("./suite.js"),
+  const [{ runQaFlowSuiteFromRuntimeCore }, startLab] = await Promise.all([
+    import("./suite-run.runtime.js"),
     loadQaLabServerRuntime(),
   ]);
-  return async (params: QaSuiteRunParams | undefined) =>
-    await runQaFlowSuite({
-      ...params,
-      startLab: params?.startLab ?? startLab,
-    });
+  return async (params: QaSuiteRunParams | undefined, target?: QaSuiteEvidenceTarget) =>
+    await runQaFlowSuiteFromRuntimeCore(
+      {
+        ...params,
+        startLab: params?.startLab ?? startLab,
+      },
+      target,
+    );
 }
 
 function resolveRequestedScenarios(params: {
@@ -697,9 +703,10 @@ async function writeUnifiedQaSuiteArtifacts(params: {
   scenarioIds: readonly string[];
   scenarios: readonly QaSuiteScenarioResult[];
   startedAt: Date;
+  target: QaSuiteEvidenceTarget;
 }) {
   await fs.mkdir(params.outputDir, { recursive: true });
-  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
+  const evidencePath = params.target.canonicalPath;
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const report = renderUnifiedQaSuiteReport({
@@ -722,7 +729,11 @@ async function writeUnifiedQaSuiteArtifacts(params: {
     scenarios: [...params.scenarios],
     startedAt: params.startedAt,
   }) satisfies QaSuiteSummaryJson;
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
+  await fs.writeFile(
+    params.target.stagedPath,
+    `${JSON.stringify(params.evidence, null, 2)}\n`,
+    "utf8",
+  );
   await fs.writeFile(reportPath, report, "utf8");
   await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   return {
@@ -738,13 +749,14 @@ async function writeUnifiedQaSuiteArtifacts(params: {
 async function runUnifiedQaSuite(params: {
   plan: Extract<QaSuiteExecutionPlan, { kind: "unified" }>;
   runParams: QaSuiteRunParams | undefined;
+  target: QaSuiteEvidenceTarget;
 }): Promise<QaUnifiedSuiteResult & { observedCells: QaScenarioExecutionCell[] }> {
   if (params.plan.testFileScenariosByKind.size > 0) {
     rejectFlowOnlySuiteOptionsForUnifiedRun(params.runParams);
   }
   const startedAt = new Date();
-  const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
-  const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
+  const repoRoot = params.runParams!.repoRoot!;
+  const outputDir = params.runParams!.outputDir!;
   // Only an explicitly selected single flow may replace the unified suite's mock default.
   const [selectedScenario] = params.plan.scenarios;
   const selectedProviderMode =
@@ -1356,6 +1368,7 @@ async function runUnifiedQaSuite(params: {
     scenarioIds: params.plan.scenarios.map((scenario) => scenario.id),
     scenarios,
     startedAt,
+    target: params.target,
   });
   const progressResults = params.plan.scenarios.flatMap((scenario) => {
     const results = scenarioResultsById.get(scenario.id);
@@ -1408,12 +1421,21 @@ async function runUnifiedQaSuite(params: {
 }
 
 export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
-  const runParams = args[0];
+  return await runQaSuiteEvidenceLifecycle(args[0], ({ repoRoot, outputDir, target }) =>
+    runQaSuiteCore({ ...args[0], repoRoot, outputDir }, target),
+  );
+}
+
+export async function runQaSuiteCore(
+  runParams: QaSuiteRunParams,
+  target: QaSuiteEvidenceTarget,
+): Promise<QaSuiteRuntimeResult> {
   const plan = await resolveSuiteExecutionPlan(runParams);
   if (plan.kind === "unified") {
     const { observedCells, ...result } = await runUnifiedQaSuite({
       runParams,
       plan,
+      target,
     });
     return {
       executionKind: "suite",
@@ -1422,7 +1444,8 @@ export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteR
       result,
     };
   }
-  const result = await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(...args));
+  const runQaFlowSuite = await loadQaFlowSuiteRuntime();
+  const result = await runQaSuiteWithInfraRetry(() => runQaFlowSuite(runParams, target));
   const startedScenarioIds = new Set(result.startedScenarioIds);
   return {
     executionKind: "flow",
@@ -1435,8 +1458,9 @@ export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteR
 export async function runQaFlowSuiteFromRuntime(
   ...args: [QaSuiteRunParams?]
 ): Promise<QaSuiteResult> {
-  return await (
-    await loadQaFlowSuiteRuntime()
-  )(args[0]);
+  const runQaFlowSuite = await loadQaFlowSuiteRuntime();
+  return await runQaSuiteEvidenceLifecycle(args[0], ({ repoRoot, outputDir, target }) =>
+    runQaFlowSuite({ ...args[0], repoRoot, outputDir }, target),
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

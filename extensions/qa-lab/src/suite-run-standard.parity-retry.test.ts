@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
+import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type {
   QaSuiteResolvedRunContext,
@@ -46,6 +50,11 @@ const mocks = vi.hoisted(() => ({
   waitForGatewayHealthy: vi.fn(async () => {}),
   waitForTransportReady: vi.fn(async () => {}),
   runQaFlowSuiteCleanupPlan: vi.fn<typeof runQaFlowSuiteCleanupPlan>(async () => []),
+  runQaSuiteScenarioDefinitionForRuntime: vi.fn(async () => ({
+    name: "runtime-soak-100-turn",
+    status: "pass" as const,
+    steps: [],
+  })),
   writeQaSuiteProgress: vi.fn(),
 }));
 
@@ -80,6 +89,7 @@ vi.mock("./suite.js", async (importOriginal) => ({
   requireQaSuiteStartLab: vi.fn(),
   resolveQaSuiteTransportReadyTimeoutMs: vi.fn(() => 1_000),
   runQaFlowSuiteCleanupPlan: mocks.runQaFlowSuiteCleanupPlan,
+  runQaSuiteScenarioDefinitionForRuntime: mocks.runQaSuiteScenarioDefinitionForRuntime,
   waitForQaLabReadyOrStopOwned: vi.fn(async () => {}),
   writeQaSuiteProgress: mocks.writeQaSuiteProgress,
 }));
@@ -132,6 +142,14 @@ function makeRetryTestResult(status: "pass" | "fail"): QaSuiteScenarioResult {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.runQaFlowSuiteCleanupPlan.mockResolvedValue([]);
+});
+
+const tempRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempRoots.splice(0).map((repoRoot) => fs.rm(repoRoot, { recursive: true, force: true })),
+  );
 });
 
 describe("QA suite Control UI ownership", () => {
@@ -237,6 +255,48 @@ describe("QA runtime parity scenario retry isolation", () => {
         String(message).startsWith("run complete"),
       ),
     ).toHaveLength(0);
+  });
+
+  it("discards staged evidence when direct runtime cleanup fails", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-direct-runtime-cleanup-"));
+    tempRoots.push(repoRoot);
+    const outputDir = path.join(repoRoot, "output");
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(evidencePath, "stale\n", "utf8");
+    const cleanupError = new Error("direct runtime cleanup failed");
+    mocks.runQaFlowSuiteCleanupPlan.mockResolvedValueOnce([
+      { phase: "agent harnesses", error: cleanupError },
+    ]);
+    mocks.writeQaSuiteArtifacts.mockImplementationOnce(
+      async (params: { evidenceTarget?: { stagedPath: string }; outputDir: string }) => {
+        const stagedPath = params.evidenceTarget?.stagedPath;
+        if (!stagedPath) {
+          throw new Error("expected direct runtime evidence target");
+        }
+        await fs.writeFile(stagedPath, "candidate\n", "utf8");
+        return {
+          evidence: { kind: "test" },
+          evidencePath,
+          report: "",
+          reportPath: path.join(params.outputDir, "qa-suite-report.md"),
+          summaryPath: path.join(params.outputDir, "qa-suite-summary.json"),
+        };
+      },
+    );
+
+    const thrown = await runQaFlowSuiteFromRuntime({
+      repoRoot,
+      outputDir,
+      lab: makeRetryTestLab(),
+      providerMode: "live-frontier",
+      scenarioIds: ["runtime-soak-100-turn"],
+    }).catch((error: unknown) => error);
+
+    expect((thrown as Error).message).toContain("direct runtime cleanup failed");
+    expect(mocks.runQaSuiteScenarioDefinitionForRuntime).toHaveBeenCalledOnce();
+    await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.readdir(outputDir)).filter((entry) => entry.endsWith(".staged"))).toEqual([]);
   });
 
   it.each([

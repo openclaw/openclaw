@@ -15,6 +15,7 @@ import {
   type QaSuiteGatewayRssSample,
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
+import type { QaSuiteEvidenceTarget } from "./suite-evidence-lifecycle.js";
 import {
   applyQaMergePatch,
   collectQaSuiteTransportPolicy,
@@ -53,6 +54,7 @@ export async function runQaFlowSuiteStandard(
   params: QaSuiteRunParams | undefined,
   context: QaSuiteResolvedRunContext,
   runScenarioDefinition: QaSuiteScenarioRunner,
+  evidenceTarget?: QaSuiteEvidenceTarget,
 ): Promise<QaSuiteResult> {
   const {
     startedAt,
@@ -110,7 +112,6 @@ export async function runQaFlowSuiteStandard(
   let runError: unknown;
   let result: QaSuiteResult | undefined;
   let completionProgress: string | undefined;
-  let evidenceWritten = false;
   const startedScenarioIds: string[] = [];
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
@@ -399,7 +400,8 @@ export async function runQaFlowSuiteStandard(
         channelDriver: transportFactoryResult.driver,
         channelDriverSelection: params?.channelDriverSelection,
         isolatedWorkers: false,
-        writeEvidenceFile: params?.writeEvidenceFile,
+        writeEvidenceFile: evidenceTarget !== undefined,
+        evidenceTarget,
         // Same "filtered → executed list, unfiltered → null" convention as
         // the concurrent-path writeQaSuiteArtifacts call above.
         scenarioIds:
@@ -415,7 +417,6 @@ export async function runQaFlowSuiteStandard(
     } satisfies QaLabLatestReport;
     lab.setLatestReport(latestReport);
     completionProgress = `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`;
-    evidenceWritten = evidence !== undefined && (params?.writeEvidenceFile ?? true);
     result = {
       outputDir,
       evidence,
@@ -462,7 +463,7 @@ export async function runQaFlowSuiteStandard(
             }
           },
     });
-    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
+    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result });
   }
   if (!result || !completionProgress) {
     throw new Error("QA suite completed without terminal result metadata");

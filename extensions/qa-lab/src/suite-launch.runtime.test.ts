@@ -11,8 +11,16 @@ import type {
   QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
-const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
+const {
+  crablineRuntimeLoads,
+  evidenceTargets,
+  generatedOutputDirs,
+  runQaFlowSuite,
+  runQaTestFileScenarios,
+} = vi.hoisted(() => ({
   crablineRuntimeLoads: vi.fn(),
+  evidenceTargets: new WeakMap<object, { stagedPath: string }>(),
+  generatedOutputDirs: new Set<string>(),
   runQaFlowSuite: vi.fn(),
   runQaTestFileScenarios: vi.fn(),
 }));
@@ -22,9 +30,23 @@ vi.mock("@openclaw/crabline", async (importOriginal) => {
   return await importOriginal<typeof import("@openclaw/crabline")>();
 });
 
-vi.mock("./suite.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./suite.js")>()),
-  runQaFlowSuite,
+vi.mock("./suite-run.runtime.js", () => ({
+  runQaFlowSuiteFromRuntimeCore: async (
+    params: object | undefined,
+    target?: { canonicalPath: string; stagedPath: string },
+  ) => {
+    if (params && target) {
+      evidenceTargets.set(params, target);
+      generatedOutputDirs.add(path.dirname(target.canonicalPath));
+    }
+    try {
+      return await runQaFlowSuite(params);
+    } finally {
+      if (params) {
+        evidenceTargets.delete(params);
+      }
+    }
+  },
 }));
 
 vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
@@ -113,7 +135,11 @@ describe("qa suite runtime launcher", () => {
       ) => {
         const outputDir = params?.outputDir ?? "/tmp/qa-flow";
         const evidencePath = path.join(outputDir, "qa-evidence.json");
-        const evidence = await writeEvidence(evidencePath, params?.writeEvidenceFile);
+        const target = params ? evidenceTargets.get(params) : undefined;
+        const evidence = await writeEvidence(
+          target?.stagedPath ?? evidencePath,
+          params?.writeEvidenceFile,
+        );
         const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
         return {
           evidence,
@@ -163,8 +189,11 @@ describe("qa suite runtime launcher", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     await Promise.all(
-      tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+      [...tempRoots.splice(0), ...generatedOutputDirs].map((root) =>
+        fs.rm(root, { recursive: true, force: true }),
+      ),
     );
+    generatedOutputDirs.clear();
   });
 
   it("keeps Crabline out of unrelated live transport startup", async () => {
@@ -182,22 +211,26 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("routes selected flow scenarios to the flow suite engine", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-flow-route-");
     const result = await runQaSuite({
-      repoRoot: process.cwd(),
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/flow-route",
       providerMode: "mock-openai",
       scenarioIds: ["channel-chat-baseline"],
     });
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "flow-route");
 
     expect(result).toMatchObject({
       executionKind: "flow",
       result: {
-        summaryPath: "/tmp/qa-flow/qa-suite-summary.json",
+        summaryPath: path.join(outputDir, "qa-suite-summary.json"),
       },
     });
     expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
     expect(runQaFlowSuite).toHaveBeenCalledWith(
       expect.objectContaining({
-        repoRoot: process.cwd(),
+        repoRoot,
+        outputDir,
         providerMode: "mock-openai",
         scenarioIds: ["channel-chat-baseline"],
       }),
@@ -279,6 +312,37 @@ describe("qa suite runtime launcher", () => {
     } finally {
       stderrWrite.mockRestore();
     }
+  });
+
+  it("does not publish stale or staged evidence when flow cleanup fails", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-cleanup-publication-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "cleanup-publication");
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(evidencePath, "stale\n", "utf8");
+    const cleanupError = new Error("agent harness cleanup failed");
+    let cleanupFailure: unknown;
+    try {
+      throwQaSuiteCleanupErrors({
+        cleanupFailures: [{ phase: "agent harnesses", error: cleanupError }],
+        runFailed: false,
+        runError: undefined,
+      });
+    } catch (error) {
+      cleanupFailure = error;
+    }
+    runQaFlowSuite.mockRejectedValueOnce(cleanupFailure);
+
+    await expect(
+      runQaSuite({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    ).rejects.toBe(cleanupFailure);
+    await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.readdir(outputDir)).filter((entry) => entry.endsWith(".staged"))).toEqual([]);
   });
 
   it("partitions flow-only suites that request isolated workers", async () => {
@@ -1145,13 +1209,29 @@ describe("qa suite runtime launcher", () => {
 
   it("runs mixed flow and Vitest/Playwright scenarios as one suite", async () => {
     const repoRoot = await makeTempRepo("qa-suite-mixed-");
-    const result = await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/mixed",
-      scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
-    });
-
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mixed");
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    const rename = fs.rename.bind(fs);
+    const publications: Array<{ source: string; destination: string }> = [];
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (String(destination) === evidencePath) {
+        publications.push({ source: String(source), destination: String(destination) });
+        expect(path.basename(String(source))).toMatch(/^\.qa-evidence\.json\..+\.staged$/);
+        await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      return await rename(source, destination);
+    });
+    let result: Awaited<ReturnType<typeof runQaSuite>>;
+    try {
+      result = await runQaSuite({
+        repoRoot,
+        outputDir: ".artifacts/qa-e2e/mixed",
+        scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
     expect(result).toMatchObject({
       executionKind: "suite",
       result: {
@@ -1173,7 +1253,10 @@ describe("qa suite runtime launcher", () => {
       }),
     );
     await expect(fs.access(path.join(outputDir, "qa-suite-summary.json"))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).resolves.toBeUndefined();
+    expect(publications).toEqual([
+      { source: expect.any(String), destination: path.join(outputDir, "qa-evidence.json") },
+    ]);
+    await expect(fs.access(evidencePath)).resolves.toBeUndefined();
     await expect(fs.access(path.join(outputDir, "flow", "qa-evidence.json"))).rejects.toMatchObject(
       {
         code: "ENOENT",

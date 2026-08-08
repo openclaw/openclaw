@@ -15,6 +15,7 @@ import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
+import type { QaSuiteEvidenceTarget } from "./suite-evidence-lifecycle.js";
 import { splitModelRef } from "./suite-planning.js";
 import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
 import { createQaSuiteReportNotes } from "./suite-support.js";
@@ -133,13 +134,15 @@ export async function writeQaSuiteArtifacts(params: {
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
   writeEvidenceFile?: boolean;
+  evidenceTarget?: QaSuiteEvidenceTarget;
   runCrablineChannelDriverSmoke?: (
     params: Parameters<QaCrablineRuntime["runOpenClawCrablineChannelDriverSmoke"]>[0],
   ) => Promise<QaCrablineChannelDriverSmokeResult>;
 }) {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
-  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
+  const evidencePath =
+    params.evidenceTarget?.canonicalPath ?? path.join(params.outputDir, QA_EVIDENCE_FILENAME);
   const crablineChannelDriverSelection = params.channelDriverSelection;
   // Non-Crabline package acceptance mounts this source without plugin-local
   // dependencies. Keep the owner runtime outside every unrelated live path.
@@ -266,7 +269,11 @@ export async function writeQaSuiteArtifacts(params: {
   const writeEvidenceFile = params.writeEvidenceFile ?? true;
   await fs.writeFile(reportPath, report, "utf8");
   if (evidence && writeEvidenceFile) {
-    await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+    await fs.writeFile(
+      params.evidenceTarget?.stagedPath ?? evidencePath,
+      `${JSON.stringify(evidence, null, 2)}\n`,
+      "utf8",
+    );
   }
   await fs.writeFile(
     summaryPath,
@@ -283,7 +290,10 @@ export async function writeQaSuiteArtifacts(params: {
   await assertQaSuiteArtifactWritten("report", reportPath);
   await assertQaSuiteArtifactWritten("summary", summaryPath);
   if (evidence && writeEvidenceFile) {
-    await assertQaSuiteArtifactWritten("evidence", evidencePath);
+    await assertQaSuiteArtifactWritten(
+      "evidence",
+      params.evidenceTarget?.stagedPath ?? evidencePath,
+    );
   }
   return { evidence, evidencePath, report, reportPath, summaryPath };
 }

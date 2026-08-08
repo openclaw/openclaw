@@ -18,6 +18,7 @@ import {
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
+import type { QaSuiteEvidenceTarget } from "./suite-evidence-lifecycle.js";
 import {
   collectQaSuiteTransportPolicy,
   mapQaSuiteWithConcurrency,
@@ -68,7 +69,7 @@ export async function runQaRuntimeParitySuite(params: {
   progressEnabled: boolean;
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
-  writeEvidenceFile?: boolean;
+  evidenceTarget?: QaSuiteEvidenceTarget;
 }) {
   const ownsLab = !params.lab;
   const startLab = requireQaSuiteStartLab(params.startLab);
@@ -109,7 +110,6 @@ export async function runQaRuntimeParitySuite(params: {
   let runError: unknown;
   let parentTransportCleaned = false;
   let result: QaSuiteResult | undefined;
-  let evidenceWritten = false;
   const startedScenarioIds = new Set<string>();
   try {
     if (params.channelDriver === "live") {
@@ -182,7 +182,7 @@ export async function runQaRuntimeParitySuite(params: {
               controlUiEnabled: params.controlUiEnabled ?? scenarioRequiresControlUi(scenario),
               forcedRuntime: runtime,
               captureRuntimeParityCell: true,
-              writeEvidenceFile: params.writeEvidenceFile,
+              writeEvidenceFile: false,
             });
             for (const startedScenarioId of cellResult.startedScenarioIds) {
               startedScenarioIds.add(startedScenarioId);
@@ -277,7 +277,8 @@ export async function runQaRuntimeParitySuite(params: {
             ? params.selectedScenarios.map((scenario) => scenario.id)
             : undefined,
         runtimePair: params.runtimePair,
-        writeEvidenceFile: params.writeEvidenceFile,
+        writeEvidenceFile: params.evidenceTarget !== undefined,
+        evidenceTarget: params.evidenceTarget,
       },
     );
     lab.setLatestReport({
@@ -292,7 +293,6 @@ export async function runQaRuntimeParitySuite(params: {
       finishedAt: finishedAt.toISOString(),
       scenarios: [...liveScenarioOutcomes],
     });
-    evidenceWritten = evidence !== undefined && (params.writeEvidenceFile ?? true);
     result = {
       outputDir: params.outputDir,
       evidence,
@@ -317,7 +317,7 @@ export async function runQaRuntimeParitySuite(params: {
         : []),
       ...(ownsLab ? [{ phase: "lab stop", run: () => lab.stop() }] : []),
     ]);
-    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
+    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result });
   }
   if (!result) {
     throw new Error("QA runtime parity suite completed without a result");

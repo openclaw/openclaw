@@ -167,6 +167,7 @@ describe("isolated QA suite transport cleanup", () => {
     expect((thrown as Error).message).toContain(
       "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
     );
+    expect((thrown as Error).message).not.toContain(" evidence=");
     expect((thrown as Error).cause).toBe(cleanupError);
     expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
     stderrWrite.mockRestore();
