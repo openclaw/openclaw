@@ -1,15 +1,10 @@
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { downloadGeneratedVideoAsset } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   assertOkOrThrowHttpError,
-  assertProviderBinaryResponseContent,
-  createProviderOperationDeadline,
-  createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeneratedVideoAsset } from "openclaw/plugin-sdk/video-generation";
 
 export type XaiVideoRequestPolicy = {
@@ -74,54 +69,27 @@ export async function downloadXaiVideo(
     maxBytes: number;
   } & XaiVideoRequestPolicy,
 ): Promise<GeneratedVideoAsset> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? params.defaultTimeoutMs,
-    label: "xAI generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? params.defaultTimeoutMs,
-  });
-  const { response, release } = await fetchXaiVideoResponse({
+  return await downloadGeneratedVideoAsset({
     url: params.url,
-    stage: "download",
-    requestFailedMessage: "xAI generated video download failed",
-    auditContext: "xai-video-download",
-    init: { method: "GET" },
-    timeoutMs,
+    timeoutMs: params.timeoutMs ?? params.defaultTimeoutMs,
     defaultTimeoutMs: params.defaultTimeoutMs,
-    allowPrivateNetwork: params.allowPrivateNetwork,
-    dispatcherPolicy: params.dispatcherPolicy,
     fetchFn: params.fetchFn,
+    provider: "xai",
+    label: "xAI generated video download",
+    requestFailedMessage: "xAI generated video download failed",
+    maxBytes: params.maxBytes,
+    fetchResponse: async ({ timeoutMs }) =>
+      await fetchXaiVideoResponse({
+        url: params.url,
+        stage: "download",
+        requestFailedMessage: "xAI generated video download failed",
+        auditContext: "xai-video-download",
+        init: { method: "GET" },
+        timeoutMs,
+        defaultTimeoutMs: params.defaultTimeoutMs,
+        allowPrivateNetwork: params.allowPrivateNetwork,
+        dispatcherPolicy: params.dispatcherPolicy,
+        fetchFn: params.fetchFn,
+      }),
   });
-  try {
-    try {
-      assertProviderBinaryResponseContent(response, "xAI generated video download", "video");
-    } catch (error) {
-      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
-      // before the rejected response and its dispatcher can be released.
-      void response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `xAI generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`xAI generated video download exceeds ${maxBytes} bytes`),
-    });
-    if (buffer.byteLength === 0) {
-      throw new Error("xAI generated video download: malformed video response");
-    }
-    return {
-      buffer,
-      mimeType,
-      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-    };
-  } finally {
-    await release();
-  }
 }

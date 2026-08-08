@@ -121,10 +121,6 @@ vi.mock("../../agents/embedded-agent.js", () => {
   };
 });
 
-vi.mock("../../agents/embedded-agent-runner/run-orchestrator.js", () => ({
-  runEmbeddedAgentInternal: (params: unknown) => runEmbeddedAgentMock(params),
-}));
-
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
 }));
@@ -169,7 +165,15 @@ vi.mock("../../runtime.js", () => {
 
 vi.mock("./queue.js", () => {
   return {
+    admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
+    parkSteerCandidate: vi.fn(() => ({
+      admit: async () => "steer",
+      accepted: vi.fn(),
+      fallback: vi.fn(),
+      consume: vi.fn(),
+    })),
+    resolveFollowupAbortSignal: vi.fn(() => undefined),
     scheduleFollowupDrain: vi.fn(),
     clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
@@ -225,11 +229,16 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../../agents/subagent-registry.js", () => ({
-  getLatestSubagentRunByChildSessionKey: () => null,
-  listSubagentRunsForController: () => [],
-  markSubagentRunTerminated: () => 0,
-}));
+vi.mock("../../agents/subagent-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/subagent-registry.js")>();
+  return {
+    ...actual,
+    getSwarmRunByLaunchReplayKey: () => undefined,
+    getLatestSubagentRunByChildSessionKey: () => null,
+    listSubagentRunsForController: () => [],
+    markSubagentRunTerminated: () => 0,
+  };
+});
 
 // #85714: keep the real private-final decision but spy the WARN emitter so we
 // can assert it fires only through the substantive text suppression branch.
@@ -437,7 +446,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
       typing,
       sessionCtx,
@@ -502,7 +510,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         shouldSteer: false,
         shouldFollowup: false,
         isActive: false,
-        isStreaming: false,
         typing,
         sessionCtx,
         sessionEntry,
@@ -566,7 +573,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -707,7 +713,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -764,7 +769,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -842,7 +846,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         shouldSteer: false,
         shouldFollowup: false,
         isActive: false,
-        isStreaming: false,
         typing,
         sessionCtx,
         sessionEntry,
@@ -1067,7 +1070,6 @@ describe("runReplyAgent block streaming", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       opts: { onBlockReply },
       typing,
       sessionCtx,
@@ -1173,7 +1175,6 @@ describe("runReplyAgent block streaming", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       opts: { onBlockReply, blockReplyTimeoutMs: 1 },
       typing,
       sessionCtx,
@@ -1288,7 +1289,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1377,7 +1377,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1465,7 +1464,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1630,7 +1628,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1801,7 +1798,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1907,7 +1903,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -2007,7 +2002,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -2074,7 +2068,6 @@ describe("runReplyAgent claude-cli routing", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "claude-cli/opus-4.5",
@@ -2194,7 +2187,6 @@ describe("runReplyAgent claude-cli routing", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -2284,7 +2276,6 @@ describe("runReplyAgent claude-cli routing", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -2356,7 +2347,6 @@ describe("runReplyAgent messaging tool dedupe", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionKey,
@@ -2490,7 +2480,6 @@ describe("runReplyAgent reminder commitment guard", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" }),
@@ -2722,7 +2711,6 @@ describe("runReplyAgent fallback reasoning tags", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry: params?.sessionEntry,
@@ -2863,7 +2851,6 @@ describe("runReplyAgent response usage footer", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -3107,7 +3094,6 @@ describe("runReplyAgent transient HTTP retry", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude-opus-4-6",
@@ -3183,7 +3169,6 @@ describe("runReplyAgent billing error classification", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude",
@@ -3244,7 +3229,6 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude",
@@ -3424,7 +3408,6 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing: createMockTypingController(),
       sessionCtx,
       sessionEntry,

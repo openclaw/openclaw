@@ -1,12 +1,14 @@
 // Minimax provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  downloadGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
@@ -259,53 +261,26 @@ async function downloadVideoFromUrl(params: {
   maxBytes: number;
   policy: MinimaxRequestPolicy;
 }): Promise<GeneratedVideoAsset> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "MiniMax generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const { response, release } = await fetchMinimaxResponse({
-    stage: "download",
+  return await downloadGeneratedVideoAsset({
     url: params.url,
-    init: { method: "GET" },
-    timeoutMs,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     fetchFn: params.fetchFn,
+    provider: "minimax",
+    label: "MiniMax generated video download",
     requestFailedMessage: "MiniMax generated video download failed",
-    policy: params.policy,
+    maxBytes: params.maxBytes,
+    fetchResponse: async ({ timeoutMs }) =>
+      await fetchMinimaxResponse({
+        stage: "download",
+        url: params.url,
+        init: { method: "GET" },
+        timeoutMs,
+        fetchFn: params.fetchFn,
+        requestFailedMessage: "MiniMax generated video download failed",
+        policy: params.policy,
+      }),
   });
-  try {
-    try {
-      assertProviderBinaryResponseContent(response, "MiniMax generated video download", "video");
-    } catch (error) {
-      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
-      // before the rejected response and its dispatcher can be released.
-      void response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
-    });
-    if (buffer.byteLength === 0) {
-      throw new Error("MiniMax generated video download: malformed video response");
-    }
-    return {
-      buffer,
-      mimeType,
-      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-    };
-  } finally {
-    await release();
-  }
 }
 
 async function downloadVideoFromFileId(params: {
@@ -378,14 +353,6 @@ async function downloadVideoFromFileId(params: {
     policy: params.policy,
   });
   try {
-    try {
-      assertProviderBinaryResponseContent(response, "MiniMax generated video download", "video");
-    } catch (error) {
-      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
-      // before the rejected response and its dispatcher can be released.
-      void response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
       timeoutMs,
@@ -396,9 +363,6 @@ async function downloadVideoFromFileId(params: {
       onOverflow: ({ maxBytes }) =>
         new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
     });
-    if (buffer.byteLength === 0) {
-      throw new Error("MiniMax generated video download: malformed video response");
-    }
     return {
       buffer,
       mimeType,

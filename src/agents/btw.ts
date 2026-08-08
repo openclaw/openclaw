@@ -9,6 +9,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
@@ -20,7 +21,6 @@ import type {
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
-import type { AgentExecutionAttribution } from "./agent-execution-attribution.js";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
@@ -130,10 +130,7 @@ function resolveReturnedAuthProfileSource(
   if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
     return "auto";
   }
-  return (
-    sessionEntry.authProfileOverrideSource ??
-    (typeof sessionEntry.authProfileOverrideCompactionCount === "number" ? "auto" : "user")
-  );
+  return resolveSessionAuthProfileOverrideSource(sessionEntry);
 }
 
 // Planning and immediate resolution share one scoped snapshot so provider
@@ -583,8 +580,6 @@ async function resolveRuntimeModel(params: {
 }
 
 type RunBtwSideQuestionParams = {
-  /** Host-owned execution identity; never projected onto the public harness params object. */
-  attribution?: AgentExecutionAttribution;
   cfg: OpenClawConfig;
   agentDir: string;
   provider: string;
@@ -629,7 +624,6 @@ type RunBtwSideQuestionParams = {
 };
 
 async function runCliBtwSideQuestion(params: {
-  attribution?: AgentExecutionAttribution;
   cfg: OpenClawConfig;
   model: string;
   question: string;
@@ -654,7 +648,6 @@ async function runCliBtwSideQuestion(params: {
     overrideSeconds: params.opts?.timeoutOverrideSeconds,
   });
   const prepared = await prepareCliRunContext({
-    ...(params.attribution ? { attribution: params.attribution } : {}),
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
@@ -971,9 +964,8 @@ export async function runBtwSideQuestion(
       runtimeAuthPlan.modelRoute?.authRequirement === "api-key" && "auth" in resolvedAttempt
         ? resolvedAttempt.auth.apiKey?.trim()
         : undefined;
-    const { attribution: _attribution, ...publicParams } = params;
     const result = await selectedHarness.runSideQuestion({
-      ...publicParams,
+      ...params,
       provider: runtimeModel.provider,
       model: runtimeModel.id,
       runtimeModel,
@@ -1094,7 +1086,6 @@ export async function runBtwSideQuestion(
       : undefined);
   if (cliProvider) {
     return runCliBtwSideQuestion({
-      ...(params.attribution ? { attribution: params.attribution } : {}),
       cfg: params.cfg,
       model: params.model,
       question: params.question,
