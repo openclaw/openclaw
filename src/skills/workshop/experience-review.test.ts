@@ -134,7 +134,9 @@ describe("skill experience review scheduler", () => {
     const runReview = vi.fn((_candidate, abortSignal?: AbortSignal) => {
       reviewSignal = abortSignal;
       return new Promise<void>((_resolve, reject) => {
-        abortSignal?.addEventListener("abort", () => reject(abortSignal.reason), { once: true });
+        abortSignal?.addEventListener("abort", () => reject(new Error("review aborted")), {
+          once: true,
+        });
       });
     });
     const scheduler = createSkillExperienceReviewScheduler({
