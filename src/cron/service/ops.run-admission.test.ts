@@ -94,13 +94,17 @@ describe("cron service run admission", () => {
     clearCommandLane(CommandLane.Cron);
   });
 
-  it("drains a burst of scheduled jobs without exceeding shared admission", async () => {
+  it.each([
+    ["drains a burst of scheduled jobs without exceeding shared admission", 40, 4, false],
+    ["drains ten jobs without retrying billing-classified HTTP 429 failures", 10, undefined, true],
+  ] as const)("%s", async (_name, jobCount, testAdmissionLimit, includeBillingFailures) => {
     vi.useRealTimers();
     const store = opsRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:05.250Z");
-    const jobs = Array.from({ length: 40 }, (_, index) =>
+    let now = dueAt;
+    const jobs = Array.from({ length: jobCount }, (_, index) =>
       createDueIsolatedJob({
-        id: `scheduled-admission-burst-${index}`,
+        id: `${includeBillingFailures && index < 5 ? "billing" : "scheduled-admission-burst"}-${index}`,
         nowMs: dueAt,
         nextRunAtMs: dueAt,
       }),
@@ -109,13 +113,16 @@ describe("cron service run admission", () => {
 
     let active = 0;
     let peakActive = 0;
-    const completed = new Set<string>();
+    const attemptsByJobId = new Map<string, number>();
+    const billingError =
+      '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
+    const rateLimitError = "429 rate limit exceeded";
     const state = createAdmissionTestState({
       cronEnabled: true,
       storePath: store.storePath,
-      testAdmissionLimit: 4,
+      testAdmissionLimit,
       log: noopLogger,
-      nowMs: () => dueAt,
+      nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async ({ job }: { job: { id: string } }) => {
@@ -125,21 +132,58 @@ describe("cron service run admission", () => {
           setTimeout(resolve, 2);
         });
         active -= 1;
-        completed.add(job.id);
-        return { status: "ok" as const, summary: job.id };
+        const attempt = (attemptsByJobId.get(job.id) ?? 0) + 1;
+        attemptsByJobId.set(job.id, attempt);
+        if (includeBillingFailures && attempt === 1) {
+          const isBillingFailure = job.id.startsWith("billing-");
+          const reason = isBillingFailure ? "billing" : "rate_limit";
+          return {
+            status: "error",
+            error: isBillingFailure ? billingError : rateLimitError,
+            errorClassification: { kind: "reason", reason },
+          } as const;
+        }
+        return { status: "ok", summary: job.id } as const;
       }),
     });
 
     await onTimer(state);
 
-    expect(completed).toEqual(new Set(jobs.map((job) => job.id)));
-    expect(peakActive).toBe(4);
-    const persisted = await loadCronStore(store.storePath);
+    expect(new Set(attemptsByJobId.keys())).toEqual(new Set(jobs.map((job) => job.id)));
+    expect(peakActive).toBe(testAdmissionLimit ?? DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+    const afterFirstRun = await loadCronStore(store.storePath);
     expect(
-      persisted.jobs.every(
-        (job) => job.state.queuedAtMs === undefined && job.state.runningAtMs === undefined,
-      ),
-    ).toBe(true);
+      afterFirstRun.jobs.map(({ state: jobState }) => [jobState.queuedAtMs, jobState.runningAtMs]),
+    ).toEqual(Array.from({ length: jobCount }, () => [undefined, undefined]));
+    if (!includeBillingFailures) {
+      return;
+    }
+
+    for (const job of afterFirstRun.jobs) {
+      const isBillingFailure = job.id.startsWith("billing-");
+      expect(job.enabled).toBe(!isBillingFailure);
+      expect(job.state.lastError).toBe(isBillingFailure ? billingError : rateLimitError);
+      expect(job.state.lastErrorReason).toBe(isBillingFailure ? "billing" : "rate_limit");
+      expect(job.state.nextRunAtMs).toBe(isBillingFailure ? undefined : dueAt + 30_000);
+    }
+
+    now = dueAt + 30_001;
+    await onTimer(state);
+
+    const afterRetry = await loadCronStore(store.storePath);
+    expect(new Set(afterRetry.jobs.map((job) => job.id)).size).toBe(jobs.length);
+    for (const job of afterRetry.jobs) {
+      const isBillingFailure = job.id.startsWith("billing-");
+      expect(attemptsByJobId.get(job.id)).toBe(isBillingFailure ? 1 : 2);
+      expect(job.state.lastStatus).toBe(isBillingFailure ? "error" : "ok");
+      expect(job.state.lastError).toBe(isBillingFailure ? billingError : undefined);
+      expect(job.state.lastErrorReason).toBe(isBillingFailure ? "billing" : undefined);
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect([job.state.queuedAtMs, job.state.runningAtMs]).toEqual([undefined, undefined]);
+    }
+    expect(state.runAdmission).toMatchObject({ active: 0, waiters: [] });
+    expect(state.queuedRunReservationsByJobId.size).toBe(0);
   });
 
   it("finalizes an admitted scheduled sibling before surfacing an activation failure", async () => {

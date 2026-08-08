@@ -51,6 +51,11 @@ export function resolveCronExecutionRetryHint(input: CronRetryHintInput): CronRe
   if (!error || typeof error !== "string") {
     return { retryable: false };
   }
+  // Billing failures can include HTTP 429 without becoming transient.
+  // Preserve the provider's authoritative reason before matching message text.
+  if (classifiedReason === "billing") {
+    return { retryable: false };
+  }
   if (SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN.test(error)) {
     return { retryable: executionStarted !== true };
   }
