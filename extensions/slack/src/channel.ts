@@ -244,9 +244,7 @@ async function setSlackHeartbeatThreadStatus(params: {
     return;
   }
   try {
-    const client = target.teamId
-      ? getSlackWriteClient(botToken, { teamId: target.teamId })
-      : getSlackWriteClient(botToken);
+    const client = getSlackWriteClient(botToken, { teamId: target.teamId });
     const apiTargetId = canonicalizeSlackApiTargetId(target.kind, target.id, params.to);
     const channelId =
       target.kind === "channel"

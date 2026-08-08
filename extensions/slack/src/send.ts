@@ -916,17 +916,10 @@ export async function reconcileSlackUnknownSend(
   }
   const suppliedClient = recipient.teamId ? undefined : opts?.client;
   const readClient =
-    suppliedClient ??
-    (recipient.teamId
-      ? createSlackReadClient(readToken, { teamId: recipient.teamId })
-      : createSlackReadClient(readToken));
+    suppliedClient ?? createSlackReadClient(readToken, { teamId: recipient.teamId });
   const writeClient =
     suppliedClient ??
-    (writeToken
-      ? recipient.teamId
-        ? getSlackWriteClient(writeToken, { teamId: recipient.teamId })
-        : getSlackWriteClient(writeToken)
-      : undefined);
+    (writeToken ? getSlackWriteClient(writeToken, { teamId: recipient.teamId }) : undefined);
   const payloadReplyToId = ctx.payloads[0]?.replyToId;
   const effectiveReplyToId = Object.hasOwn(ctx, "effectiveReplyToId")
     ? normalizeOptionalString(ctx.effectiveReplyToId)

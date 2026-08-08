@@ -216,13 +216,9 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   }
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   if (mode === "write") {
-    return opts.teamId
-      ? getSlackWriteClient(token, { teamId: opts.teamId })
-      : getSlackWriteClient(token);
+    return getSlackWriteClient(token, { teamId: opts.teamId });
   }
-  return opts.teamId
-    ? createSlackLookupClient(token, { teamId: opts.teamId })
-    : createSlackLookupClient(token);
+  return createSlackLookupClient(token, { teamId: opts.teamId });
 }
 
 async function resolveBotUserId(client: WebClient) {
