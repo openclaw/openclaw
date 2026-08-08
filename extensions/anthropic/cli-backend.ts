@@ -149,6 +149,27 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     toolAvailabilityEnforcement: "execution-args",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
+    buildManualCompactionPrompt: (customInstructions) => {
+      const instructions = customInstructions?.trim();
+      return instructions ? `/compact ${instructions}` : "/compact";
+    },
+    manualCompactionInput: "arg",
+    validateManualCompactionOutput: (rawOutput) => {
+      for (const line of rawOutput.split("\n")) {
+        try {
+          const event = JSON.parse(line) as { type?: unknown; subtype?: unknown };
+          if (event.type === "system" && event.subtype === "compacting") {
+            return { ok: true };
+          }
+        } catch {
+          // Ignore non-JSON process noise; the positive acknowledgement is authoritative.
+        }
+      }
+      return {
+        ok: false,
+        reason: "Claude CLI did not confirm that native compaction ran.",
+      };
+    },
     // Anthropic routes direct anthropic-messages calls on subscription OAuth
     // tokens to metered extra-usage billing (or rejects them without balance);
     // opted-in embedded runs on subscription credentials execute through this

@@ -81,6 +81,29 @@ describe("Claude CLI adapter equivalence", () => {
 
     expect(prepared).toEqual({ env: {}, isolatedCompletionEnforced: true });
   });
+
+  it("builds Claude Code's native manual compaction command", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(backend.buildManualCompactionPrompt?.()).toBe("/compact");
+    expect(backend.buildManualCompactionPrompt?.(" keep operator decisions ")).toBe(
+      "/compact keep operator decisions",
+    );
+    expect(backend.manualCompactionInput).toBe("arg");
+    expect(
+      backend.validateManualCompactionOutput?.(
+        `${JSON.stringify({ type: "system", subtype: "compacting" })}\n`,
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      backend.validateManualCompactionOutput?.(
+        `${JSON.stringify({ type: "system", subtype: "local_command" })}\n`,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "Claude CLI did not confirm that native compaction ran.",
+    });
+  });
 });
 
 describe("resolveClaudeCliAutoCompactEnv", () => {

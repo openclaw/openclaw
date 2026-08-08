@@ -586,6 +586,52 @@ describe("handleCompactCommand", () => {
     });
   });
 
+  it("targets the persisted native CLI session for manual compaction", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () =>
+        [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            config: { command: "claude" },
+            bundleMcp: false,
+          },
+        ] as never,
+    });
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+    });
+
+    try {
+      await handleCompactCommand(
+        {
+          ...buildCompactParams("/compact", {
+            commands: { text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig),
+          provider: "anthropic",
+          sessionEntry: {
+            sessionId: "cli-session",
+            updatedAt: Date.now(),
+            cliSessionBindings: {
+              "claude-cli": { sessionId: "native-claude-session" },
+            },
+          },
+        } as HandleCommandsParams,
+        true,
+      );
+
+      expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+        agentHarnessId: "claude-cli",
+        cliSessionId: "native-claude-session",
+        trigger: "manual",
+      });
+    } finally {
+      cliBackendsTesting.resetDepsForTest();
+    }
+  });
+
   it.each([
     { provider: "anthropic", harness: "claude-cli", override: true, expectedRuntime: "claude-cli" },
     { provider: "anthropic", harness: "claude-cli", expectedRuntime: "claude-cli" },

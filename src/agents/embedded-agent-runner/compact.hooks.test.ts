@@ -36,6 +36,7 @@ import {
   registerProviderStreamForModelMock,
   resolveProviderEntryApiKeyProfileReferenceMock,
   resolveContextWindowInfoMock,
+  resolveCliBackendConfigMock,
   resolveContextEngineMock,
   resolveEffectiveCompactionModeMock,
   resolveEmbeddedAgentStreamFnMock,
@@ -46,6 +47,7 @@ import {
   resolveSessionAgentIdMock,
   resolveSessionAgentIdsMock,
   rotateTranscriptAfterCompactionMock,
+  runCliAgentMock,
   selectAgentHarnessForPreparedModelProvidersMock,
   selectAgentHarnessMock,
   shouldPreferExplicitConfigApiKeyAuthMock,
@@ -3113,6 +3115,36 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       runtimeProvider: undefined,
       model: "gpt-5.5",
     });
+  });
+
+  it("routes a queued manual CLI session to backend-owned compaction", async () => {
+    resolveCliBackendConfigMock.mockReturnValue({
+      id: "claude-cli",
+      ownsNativeCompaction: true,
+      buildManualCompactionPrompt: () => "/compact",
+    });
+    runCliAgentMock.mockClear();
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        trigger: "manual",
+        provider: "anthropic",
+        model: "opus",
+        agentHarnessId: "claude-cli",
+        cliSessionId: "native-session",
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "claude-cli",
+        cliSessionId: "native-session",
+        prompt: "/compact",
+        controlOperation: "compact",
+      }),
+    );
+    expect(resolveContextEngineMock).not.toHaveBeenCalled();
   });
 
   it("normalizes an omitted manual target before native harness compaction", async () => {

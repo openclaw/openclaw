@@ -56,6 +56,9 @@ export type ResolvedCliBackend = {
   autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
+  buildManualCompactionPrompt?: CliBackendPlugin["buildManualCompactionPrompt"];
+  manualCompactionInput?: CliBackendPlugin["manualCompactionInput"];
+  validateManualCompactionOutput?: CliBackendPlugin["validateManualCompactionOutput"];
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
@@ -97,6 +100,9 @@ type FallbackCliBackendPolicy = {
   autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
+  buildManualCompactionPrompt?: CliBackendPlugin["buildManualCompactionPrompt"];
+  manualCompactionInput?: CliBackendPlugin["manualCompactionInput"];
+  validateManualCompactionOutput?: CliBackendPlugin["validateManualCompactionOutput"];
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
@@ -165,6 +171,9 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     autoSelectAuthProfile: entry.backend.autoSelectAuthProfile,
     contextEngineHostCapabilities: entry.backend.contextEngineHostCapabilities,
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
+    buildManualCompactionPrompt: entry.backend.buildManualCompactionPrompt,
+    manualCompactionInput: entry.backend.manualCompactionInput,
+    validateManualCompactionOutput: entry.backend.validateManualCompactionOutput,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
     parseJsonlEvent: entry.backend.parseJsonlEvent,
@@ -425,6 +434,9 @@ export function resolveCliBackendConfig(
       autoSelectAuthProfile: registered.autoSelectAuthProfile,
       contextEngineHostCapabilities: registered.contextEngineHostCapabilities,
       ownsNativeCompaction: registered.ownsNativeCompaction,
+      buildManualCompactionPrompt: registered.buildManualCompactionPrompt,
+      manualCompactionInput: registered.manualCompactionInput,
+      validateManualCompactionOutput: registered.validateManualCompactionOutput,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
       parseJsonlEvent: registered.parseJsonlEvent,
@@ -460,6 +472,9 @@ export function resolveCliBackendConfig(
     autoSelectAuthProfile: fallbackPolicy.autoSelectAuthProfile,
     contextEngineHostCapabilities: fallbackPolicy.contextEngineHostCapabilities,
     ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
+    buildManualCompactionPrompt: fallbackPolicy.buildManualCompactionPrompt,
+    manualCompactionInput: fallbackPolicy.manualCompactionInput,
+    validateManualCompactionOutput: fallbackPolicy.validateManualCompactionOutput,
     prepareExecution: fallbackPolicy.prepareExecution,
     resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
     parseJsonlEvent: fallbackPolicy.parseJsonlEvent,

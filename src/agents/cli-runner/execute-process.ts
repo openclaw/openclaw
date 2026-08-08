@@ -513,6 +513,25 @@ export async function executeCliProcess(params: {
       },
     );
   }
+  if (
+    runParams.controlOperation === "compact" &&
+    context.backendResolved.validateManualCompactionOutput
+  ) {
+    const validation = context.backendResolved.validateManualCompactionOutput(stdout);
+    if (!validation.ok) {
+      throw new FailoverError(validation.reason, {
+        reason: "unknown",
+        ...failoverContext,
+        status: resolveFailoverStatus("unknown"),
+      });
+    }
+    return {
+      text: "",
+      rawText: "",
+      diagnostics: { process: processDiagnostics },
+      finalPromptText: params.prompt,
+    };
+  }
   const parsed =
     parsedStructuredOutput ??
     parseCliOutput({

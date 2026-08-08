@@ -158,6 +158,70 @@ beforeEach(() => {
 });
 
 describe("executePreparedCliRun supervisor output capture", () => {
+  it("passes native compaction as an argument and requires backend acknowledgement", async () => {
+    const raw = `${JSON.stringify({ type: "system", subtype: "compacting" })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(raw);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.params.prompt = "/compact";
+    context.params.controlOperation = "compact";
+    context.bootstrapPromptWarningLines = ["must not decorate the control command"];
+    context.backendResolved.manualCompactionInput = "arg";
+    context.backendResolved.validateManualCompactionOutput = (output) =>
+      output.includes('"subtype":"compacting"')
+        ? { ok: true }
+        : { ok: false, reason: "native compaction was not acknowledged" };
+
+    const result = await executePreparedCliRun(context);
+
+    expect(requireSupervisorSpawnInput()).toEqual(
+      expect.objectContaining({ argv: ["agent-cli", "/compact"], input: "" }),
+    );
+    expect(result).toMatchObject({ text: "", rawText: "", finalPromptText: "/compact" });
+  });
+
+  it("rejects a zero-exit native compaction without backend acknowledgement", async () => {
+    const raw = `${JSON.stringify({ type: "system", subtype: "local_command" })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(raw);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.params.prompt = "/compact";
+    context.params.controlOperation = "compact";
+    context.backendResolved.manualCompactionInput = "arg";
+    context.backendResolved.validateManualCompactionOutput = () => ({
+      ok: false,
+      reason: "native compaction was not acknowledged",
+    });
+
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "native compaction was not acknowledged",
+    );
+  });
+
   it("runs prepared backend staging inside the serialized execution queue", async () => {
     const firstSpawnEntered = createDeferred();
     const releaseFirstSpawn = createDeferred();

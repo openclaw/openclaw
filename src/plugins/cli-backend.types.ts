@@ -284,6 +284,17 @@ export type CliBackendPlugin = {
    */
   ownsNativeCompaction?: boolean;
   /**
+   * Builds the exact backend command that manually compacts an existing
+   * resumable session. Requires `ownsNativeCompaction`.
+   */
+  buildManualCompactionPrompt?: (customInstructions?: string) => string;
+  /** Prompt transport required by the backend's manual compaction command. */
+  manualCompactionInput?: "arg" | "stdin";
+  /** Confirms that a successful process exit actually performed native compaction. */
+  validateManualCompactionOutput?: (
+    rawOutput: string,
+  ) => { ok: true } | { ok: false; reason: string };
+  /**
    * Whether embedded runs opted into `cliBackendDispatch: "subscription-auth"`
    * execute through this backend when the selected credential is
    * subscription-scoped (oauth/token) or unresolvable.
