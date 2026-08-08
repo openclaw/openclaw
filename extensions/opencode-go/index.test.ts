@@ -132,7 +132,7 @@ describe("opencode-go provider plugin", () => {
       "glm-5",
       "glm-5.1",
       "glm-5.2",
-      "hy3-preview",
+      "hy3",
       "kimi-k2.5",
       "kimi-k2.6",
       "kimi-k2.7-code",

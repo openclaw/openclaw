@@ -141,8 +141,8 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 131_072,
     },
     {
-      id: "hy3-preview",
-      name: "HY3 Preview",
+      id: "hy3",
+      name: "Hy3",
       api: "openai-completions",
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
