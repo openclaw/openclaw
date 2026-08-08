@@ -262,22 +262,38 @@ export async function startGatewayService(
     throw err;
   }
 
-  const runtime = nextState.runtime;
-  const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
-  const newFailedExit =
-    runtime?.status === "stopped" &&
-    typeof runtime.lastExitStatus === "number" &&
-    runtime.lastExitStatus !== 0 &&
-    runtime.lastExitStatus !== state.runtime?.lastExitStatus;
-  if (failedState || newFailedExit) {
-    const failure = failedState ? "state failed" : `exit ${runtime?.lastExitStatus}`;
-    throw new Error(`Service failed to start (${failure}). Check the service logs and retry.`);
-  }
+  assertGatewayServiceStarted(state, nextState, "start");
 
   return {
     outcome: "started",
     state: nextState,
   };
+}
+
+/**
+ * Validates that a gateway service actually started after a raw platform start.
+ * Rejects if the service manager reports a failed state or a new non-zero exit
+ * code, which indicates the binary started but immediately crashed.
+ *
+ * Kept module-private: production callers share this helper, and exporting it
+ * trips the unused-exports deadcode gate even though recovery uses it.
+ */
+function assertGatewayServiceStarted(
+  preState: GatewayServiceState,
+  postState: GatewayServiceState,
+  context: string,
+): void {
+  const runtime = postState.runtime;
+  const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
+  const newFailedExit =
+    runtime?.status === "stopped" &&
+    typeof runtime.lastExitStatus === "number" &&
+    runtime.lastExitStatus !== 0 &&
+    runtime.lastExitStatus !== preState.runtime?.lastExitStatus;
+  if (failedState || newFailedExit) {
+    const failure = failedState ? "state failed" : `exit ${runtime?.lastExitStatus}`;
+    throw new Error(`Service failed to ${context} (${failure}). Check the service logs and retry.`);
+  }
 }
 
 export function describeGatewayServiceRestart(
@@ -419,4 +435,41 @@ export function resolveGatewayService(): GatewayService {
     return withGatewayServiceMutationGuards(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
   return createUnsupportedGatewayService();
+}
+
+/**
+ * Restores a managed service after a package swap installs a newer OpenClaw.
+ *
+ * Only safe when both preconditions hold:
+ * - The running config was last written by a newer OpenClaw version (the
+ *   future-config guard would refuse a regular restart, but starting an
+ *   already-installed unit is exempt because it does not rewrite the unit or
+ *   act on the config).
+ * - The managed service unit is still installed on disk, so "start" asks the
+ *   service manager to run the unit whose ExecStart points at the newly
+ *   installed binary. On launchd, start can enable or bootstrap an agent;
+ *   requiring an installed unit keeps this to "run what is already on disk."
+ *
+ * Ownership is still enforced, so a service OpenClaw does not manage is never
+ * touched.
+ */
+export async function startGatewayServiceAfterFailedUpdate(
+  args: GatewayServiceControlArgs,
+): Promise<void> {
+  // Ownership only — do not go through withGatewayServiceMutationGuards, which
+  // also applies the future-config version block this recovery must survive.
+  // Call Allowed directly so a merge with main (which inlined/removed the local
+  // OwnedByOpenClaw helper) cannot leave a dangling name at this call site.
+  assertGatewayServiceMutationAllowed("start the gateway service", process.env);
+  if (args.env && args.env !== process.env) {
+    assertGatewayServiceMutationAllowed("start the gateway service", args.env);
+  }
+  const service = isSupportedGatewayServicePlatform(process.platform)
+    ? GATEWAY_SERVICE_REGISTRY[process.platform]
+    : createUnsupportedGatewayService();
+
+  const preState = await readGatewayServiceState(service, { env: args.env });
+  await service.start(args);
+  const postState = await readGatewayServiceState(service, { env: args.env });
+  assertGatewayServiceStarted(preState, postState, "start after update recovery");
 }

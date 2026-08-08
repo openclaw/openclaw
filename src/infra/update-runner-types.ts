@@ -28,6 +28,13 @@ export type UpdateRunResult = {
   before?: { sha?: string | null; version?: string | null };
   after?: { sha?: string | null; version?: string | null };
   steps: UpdateStepResult[];
+  /**
+   * Package-update producers set this when a replacement package tree was
+   * actually installed (swap completed, or in-place update reached post-install
+   * doctor). Git and pre-swap failures leave it unset/false so failed-update
+   * recovery cannot bypass the future-config start guard on inference alone.
+   */
+  packageReplacementVerified?: boolean;
   durationMs: number;
   recovery?:
     | { serviceRestartSafe: true }

@@ -20,6 +20,7 @@ import {
   GATEWAY_SERVICE_MARKER,
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
 } from "../../daemon/constants.js";
+import { readFutureConfigActionBlock } from "../../daemon/future-config-guard.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
@@ -28,7 +29,11 @@ import {
 } from "../../daemon/schtasks.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  startGatewayServiceAfterFailedUpdate,
+} from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
@@ -573,6 +578,13 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
   preManagedServiceStop: PreManagedServiceStop | undefined;
   jsonMode: boolean;
+  /**
+   * Producer-owned fact from the package-update path: a replacement package
+   * tree was actually installed. Required before the future-config start
+   * exception may run. Git rollbacks and pre-swap failures must leave this
+   * false/undefined so recovery stays on the guarded restart only.
+   */
+  packageReplacementVerified?: boolean;
 }): Promise<void> {
   if (!params.preManagedServiceStop?.stopped || !params.preManagedServiceStop.serviceEnv) {
     return;
@@ -586,11 +598,65 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
     }
   } catch (err) {
-    const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
-    if (params.jsonMode) {
-      defaultRuntime.error(message);
-    } else {
-      defaultRuntime.log(theme.warn(message));
+    // A completed package swap leaves this process older than the config it now
+    // reads, so the version guard refuses the restart and the service stays
+    // stopped with only a warning. Only recover when the package-update
+    // producer verified a replacement, the config is genuinely newer than this
+    // binary, AND the managed service is still installed. Future-config
+    // metadata alone is not enough — Git and pre-swap failures can stamp or
+    // observe newer config without installing a replacement binary.
+    if (!params.packageReplacementVerified) {
+      const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
+      return;
+    }
+    const block = await readFutureConfigActionBlock("restart");
+    if (!block) {
+      const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
+      return;
+    }
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: params.preManagedServiceStop.serviceEnv,
+    });
+    if (!state.installed) {
+      const message =
+        `Failed to restart managed gateway service after failed update: ${String(err)}; ` +
+        "recovery start skipped because no managed service is installed.";
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
+      return;
+    }
+    try {
+      await startGatewayServiceAfterFailedUpdate({
+        env: params.preManagedServiceStop.serviceEnv,
+        stdout: serviceControlStdoutForMode(params.jsonMode),
+      });
+      if (!params.jsonMode) {
+        defaultRuntime.log(
+          theme.muted("Started managed gateway service after failed update recovery restart."),
+        );
+      }
+    } catch (recoveryErr) {
+      const message =
+        `Failed to restart managed gateway service after failed update: ${String(err)}; ` +
+        `recovery start also failed: ${String(recoveryErr)}`;
+      if (params.jsonMode) {
+        defaultRuntime.error(message);
+      } else {
+        defaultRuntime.log(theme.warn(message));
+      }
     }
   }
 }
