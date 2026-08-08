@@ -491,6 +491,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       isAvailable: vi.fn(async () => false),
       request: vi.fn(),
     },
+    talk: {
+      openSession: vi.fn(),
+    },
     config: {
       current: vi.fn(() => ({})) as unknown as PluginRuntime["config"]["current"],
       mutateConfigFile: vi.fn(async () => ({

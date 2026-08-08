@@ -5,6 +5,12 @@ import {
 } from "../talk/realtime-session-harness.js";
 
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+export {
+  PLUGIN_TALK_AUDIO_FORMAT,
+  type OpenPluginTalkSessionParams,
+  type PluginTalkSession,
+  type PluginTalkSessionEvent,
+} from "../talk/plugin-session.js";
 export type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceAgentConsultRunner,
