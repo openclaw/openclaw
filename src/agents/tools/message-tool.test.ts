@@ -4513,6 +4513,168 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.params?.text).toBe("");
     expect(call?.params?.message).toBe("Visible");
   });
+
+  it("suppresses a send whose text is only the heartbeat token", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        text: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("suppresses heartbeat-only sends through text aliases", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        content: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips the heartbeat token but still sends real content", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        text: "All checks passed. HEARTBEAT_OK",
+      },
+    });
+
+    expect(call?.params?.text).toBe("All checks passed.");
+  });
+
+  it("suppresses heartbeat-only presentation sends", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        presentation: {
+          title: "HEARTBEAT_OK",
+          blocks: [{ type: "text", text: "HEARTBEAT_OK" }],
+        },
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("suppresses heartbeat-only interactive sends", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        interactive: {
+          blocks: [{ type: "text", text: "HEARTBEAT_OK" }],
+        },
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips heartbeat tokens across mixed flat and structured send text", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        text: "Flat content HEARTBEAT_OK",
+        presentation: {
+          blocks: [{ type: "text", text: "Presentation content HEARTBEAT_OK" }],
+        },
+        interactive: {
+          blocks: [{ type: "text", text: "Interactive content HEARTBEAT_OK" }],
+        },
+      },
+    });
+
+    expect(call?.params?.text).toBe("Flat content");
+    expect(call?.params?.presentation).toEqual({
+      blocks: [{ type: "text", text: "Presentation content" }],
+    });
+    expect(call?.params?.interactive).toEqual({
+      blocks: [{ type: "text", text: "Interactive content" }],
+    });
+  });
+
+  it("preserves heartbeat-token text for non-send actions", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        action: "poll",
+        channel: "telegram",
+        target: "telegram:123",
+        pollQuestion: "HEARTBEAT_OK",
+        pollOption: ["Yes", "No"],
+      },
+    });
+
+    expect(call?.params?.pollQuestion).toBe("HEARTBEAT_OK");
+  });
+
+  it.each([
+    {
+      name: "media URL",
+      content: { mediaUrl: "file:///tmp/status.png" },
+    },
+    {
+      name: "inline buffer",
+      content: { buffer: "aGVsbG8=" },
+    },
+    {
+      name: "image alias",
+      content: { image: "https://example.com/status.png" },
+    },
+    {
+      name: "portable location",
+      content: { location: { latitude: 48.858844, longitude: 2.294351 } },
+    },
+  ])("keeps sending $name when the heartbeat token is the only text", async ({ content }) => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "telegram",
+        target: "telegram:123",
+        text: "HEARTBEAT_OK",
+        ...content,
+      },
+    });
+
+    expect(call?.params?.text).toBe("");
+    expect(call?.params).toMatchObject(content);
+  });
 });
 
 describe("message tool sandbox passthrough", () => {
