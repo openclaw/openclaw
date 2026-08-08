@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  insertOperatorApproval,
+  resolveOperatorApproval,
+} from "../gateway/operator-approval-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -120,6 +124,42 @@ function prepareExecutionIdentityContextAtAdmission(
   });
 }
 
+function recordDeniedApprovalForRun(
+  runId: string,
+  database: ReturnType<typeof databaseOptions>,
+  id = "denied-approval",
+  reusableSessionRun = false,
+): void {
+  insertOperatorApproval({
+    approval: {
+      id,
+      kind: "exec",
+      presentation: {
+        kind: "exec",
+        commandText: "details withheld",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      source: {
+        runId,
+        ...(reusableSessionRun ? { sessionId: runId } : {}),
+        toolCallId: "private-tool-call",
+        toolName: "exec",
+      },
+      runtimeEpoch: "runtime-1",
+      createdAtMs: 100,
+      expiresAtMs: 1_000,
+    },
+    databaseOptions: database,
+  });
+  resolveOperatorApproval({
+    id,
+    decision: "deny",
+    resolver: { kind: "device", id: "private-reviewer-device" },
+    nowMs: 200,
+    databaseOptions: database,
+  });
+}
+
 describe("execution identity context storage", () => {
   it("replays one byte-identical canonical context idempotently across restart", () => {
     const database = databaseOptions();
@@ -228,10 +268,11 @@ describe("execution identity context storage", () => {
       executionId: "execution-second",
       runtimeInstanceId: "runtime-1",
     });
+    recordDeniedApprovalForRun("session-run", database, "shared-run-approval");
 
     const discovery = inspectExecutionIdentityRun(
       { runId: "session-run" },
-      { ...database, now: 101 },
+      { ...database, now: 300 },
     );
     expect(discovery).toMatchObject({
       run: { runId: "session-run", status: "known" },
@@ -248,7 +289,7 @@ describe("execution identity context storage", () => {
     expect(
       inspectExecutionIdentityRun(
         { runId: "session-run", executionLimit: 1 },
-        { ...database, now: 101 },
+        { ...database, now: 300 },
       ),
     ).toMatchObject({
       identity: {
@@ -260,7 +301,7 @@ describe("execution identity context storage", () => {
     expect(
       inspectExecutionIdentityRun(
         { runId: "session-run", executionOffset: 1, executionLimit: 1 },
-        { ...database, now: 101 },
+        { ...database, now: 300 },
       ),
     ).toMatchObject({
       identity: {
@@ -268,14 +309,52 @@ describe("execution identity context storage", () => {
         candidates: [{ executionId: "execution-second" }],
       },
     });
+    const firstInspection = inspectExecutionIdentityRun(
+      { executionId: "execution-first" },
+      { ...database, now: 300 },
+    );
+    const secondInspection = inspectExecutionIdentityRun(
+      { executionId: "execution-second" },
+      { ...database, now: 300 },
+    );
+    expect(firstInspection.identity).toEqual({ state: "present", context: first });
+    expect(secondInspection.identity).toEqual({ state: "present", context: second });
+    for (const inspection of [firstInspection, secondInspection]) {
+      expect(inspection).toMatchObject({
+        coverage: {
+          state: "unknown",
+          missingEvidence: expect.arrayContaining(["decision.execution_link"]),
+        },
+        decisions: [
+          { decision: { outcome: "not-applicable" } },
+          {
+            decision: {
+              outcome: "unknown",
+              reasonCode: "operator_approval_execution_link_ambiguous",
+            },
+            enforcement: { coverageState: "unknown", contextFieldsUsed: ["runId"] },
+            missingEvidence: ["decision.execution_link"],
+            remediation: [{ code: "treat_as_run_correlated" }],
+          },
+        ],
+      });
+    }
+    expect(firstInspection.decisions[1]?.receiptId).not.toBe(
+      secondInspection.decisions[1]?.receiptId,
+    );
     expect(
-      inspectExecutionIdentityRun({ executionId: "execution-first" }, { ...database, now: 101 })
-        .identity,
-    ).toEqual({ state: "present", context: first });
-    expect(
-      inspectExecutionIdentityRun({ executionId: "execution-second" }, { ...database, now: 101 })
-        .identity,
-    ).toEqual({ state: "present", context: second });
+      inspectExecutionIdentityRun(
+        { executionId: "execution-first", decisionLimit: 1 },
+        { ...database, now: 300 },
+      ),
+    ).toMatchObject({
+      coverage: {
+        state: "unknown",
+        missingEvidence: expect.arrayContaining(["decision.execution_link"]),
+      },
+      decisions: [{ decision: { outcome: "not-applicable" } }],
+      nextDecisionCursor: "1",
+    });
   });
 
   it("confirms durable retries without manufacturing lost evidence", () => {
@@ -827,5 +906,147 @@ describe("execution identity context storage", () => {
         { ...database, now: 123 },
       ).decisions,
     ).toEqual([]);
+  });
+
+  it("projects an authoritative denied approval by run before and after restart", () => {
+    const database = databaseOptions();
+    prepareExecutionIdentityContextAtAdmission(facts("run-denied-receipt"), {
+      ...database,
+      now: 100,
+      contextId: "context-denied-receipt",
+      executionId: "execution-denied-receipt",
+      runtimeInstanceId: "runtime-1",
+    });
+    recordDeniedApprovalForRun("run-denied-receipt", database);
+
+    const beforeRestart = inspectExecutionIdentityRun(
+      { runId: "run-denied-receipt" },
+      { ...database, now: 300 },
+    );
+    expect(beforeRestart).toMatchObject({
+      coverage: { state: "enforced" },
+      decisions: [
+        { decision: { outcome: "not-applicable" } },
+        {
+          contextId: "context-denied-receipt",
+          executionId: "execution-denied-receipt",
+          runId: "run-denied-receipt",
+          decision: {
+            outcome: "denied",
+            reasonCode: "operator_approval_denied_by_reviewer",
+          },
+          enforcement: {
+            coverageState: "enforced",
+            contextFieldsUsed: ["runId"],
+          },
+          source: { owner: "operator_approvals" },
+        },
+      ],
+    });
+    expect(JSON.stringify(beforeRestart)).not.toContain("private-reviewer-device");
+    expect(JSON.stringify(beforeRestart)).not.toContain("private-tool-call");
+
+    closeOpenClawStateDatabaseForTest();
+    expect(
+      inspectExecutionIdentityRun({ runId: "run-denied-receipt" }, { ...database, now: 300 }),
+    ).toEqual(beforeRestart);
+    expect(
+      inspectExecutionIdentityRun(
+        { runId: "run-denied-receipt", decisionOffset: 1, decisionLimit: 1 },
+        { ...database, now: 300 },
+      ),
+    ).toMatchObject({
+      decisions: [{ decision: { reasonCode: "operator_approval_denied_by_reviewer" } }],
+    });
+  });
+
+  it("keeps a corrupt approval unknown before its decision page is returned", () => {
+    const database = databaseOptions();
+    prepareExecutionIdentityContextAtAdmission(facts("run-corrupt-approval"), {
+      ...database,
+      now: 100,
+      contextId: "context-corrupt-approval",
+      executionId: "execution-corrupt-approval",
+      runtimeInstanceId: "runtime-1",
+    });
+    recordDeniedApprovalForRun("run-corrupt-approval", database, "corrupt-approval");
+    openOpenClawStateDatabase(database)
+      .db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?")
+      .run("{", "corrupt-approval");
+
+    expect(
+      inspectExecutionIdentityRun(
+        { executionId: "execution-corrupt-approval", decisionLimit: 1 },
+        { ...database, now: 300 },
+      ),
+    ).toMatchObject({
+      coverage: {
+        state: "unknown",
+        missingEvidence: expect.arrayContaining(["operator_approval.valid"]),
+      },
+      decisions: [{ decision: { outcome: "not-applicable" } }],
+      nextDecisionCursor: "1",
+    });
+  });
+
+  it("does not assign a retained old approval to a later execution with the same run id", () => {
+    const database = databaseOptions();
+    prepareExecutionIdentityContextAtAdmission(facts("reused-session-run"), {
+      ...database,
+      now: 0,
+      contextId: "context-old-execution",
+      executionId: "execution-old",
+      runtimeInstanceId: "runtime-1",
+    });
+    recordDeniedApprovalForRun("reused-session-run", database, "old-approval", true);
+    expect(pruneExpiredExecutionIdentityContexts({ database, now: RETENTION_MS + 1 })).toBe(1);
+    prepareExecutionIdentityContextAtAdmission(facts("reused-session-run"), {
+      ...database,
+      now: RETENTION_MS + 1,
+      contextId: "context-later-execution",
+      executionId: "execution-later",
+      runtimeInstanceId: "runtime-1",
+    });
+
+    expect(
+      inspectExecutionIdentityRun(
+        { executionId: "execution-later" },
+        { ...database, now: RETENTION_MS + 1 },
+      ),
+    ).toMatchObject({
+      coverage: {
+        state: "unknown",
+        missingEvidence: expect.arrayContaining(["decision.execution_link"]),
+      },
+      decisions: [
+        { decision: { outcome: "not-applicable" } },
+        {
+          decision: {
+            outcome: "unknown",
+            reasonCode: "operator_approval_execution_link_ambiguous",
+          },
+        },
+      ],
+    });
+  });
+
+  it("reports a retained approval with no identity context as an unknown missing link", () => {
+    const database = databaseOptions();
+    recordDeniedApprovalForRun("run-missing-context", database);
+
+    expect(
+      inspectExecutionIdentityRun({ runId: "run-missing-context" }, { ...database, now: 300 }),
+    ).toMatchObject({
+      run: { runId: "run-missing-context", status: "known" },
+      identity: {
+        state: "unknown",
+        reasonCode: "decision_context_link_missing",
+      },
+      decisions: [],
+      coverage: {
+        state: "unknown",
+        missingEvidence: ["identity.context", "decision.context_link"],
+      },
+    });
   });
 });

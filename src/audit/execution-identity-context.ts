@@ -3,10 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type {
   AuditRunInspectResult,
-  DecisionReceiptV1,
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
 import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
+import { countOperatorApprovalReceiptsForRun } from "../gateway/operator-approval-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -22,6 +22,8 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { clearAuditIdentityKeyCacheForDatabase } from "./audit-identity.js";
+import { countExecutionDecisionFactsForRun } from "./execution-decision-facts.js";
+import { presentExecutionDecisionReceipts } from "./execution-decision-receipts.js";
 import {
   parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
@@ -381,44 +383,6 @@ function readExecutionIdentityContextByExecutionId(
   );
 }
 
-function admissionDecision(context: ExecutionIdentityContextV1): DecisionReceiptV1 {
-  return {
-    schemaVersion: 1,
-    receiptId: `${context.contextId}:admission`,
-    contextId: context.contextId,
-    executionId: context.executionId,
-    runId: context.runId,
-    occurredAt: context.createdAt,
-    action: {
-      family: "run",
-      operation: "admission",
-      summary: "Run admission was recorded without an identity-aware policy or grant decision.",
-    },
-    decision: {
-      outcome: "not-applicable",
-      reasonCode: "run_admission_identity_not_evaluated",
-    },
-    enforcement: {
-      coverageState: context.coverageState,
-      policyRefs: [],
-      grantRefs: [],
-      contextFieldsUsed: [],
-    },
-    source: {
-      owner: "agent-command",
-      recordRef: context.contextId,
-      decisionBoundary: "agent-command.run-admission",
-    },
-    missingEvidence: [...context.missingEvidence],
-    remediation: [
-      {
-        code: "no_identity_enforcement_claimed",
-        text: "Treat this receipt as attribution only; it does not prove authorization.",
-      },
-    ],
-  };
-}
-
 function unavailableResult(params: {
   selector: { runId: string } | { executionId: string };
   resolvedRunId?: string;
@@ -469,33 +433,6 @@ function unavailableIdentityContext(
   });
 }
 
-function presentResult(params: {
-  context: ExecutionIdentityContextV1;
-  decisionOffset?: number;
-  decisionLimit?: number;
-}): AuditRunInspectResult {
-  const allDecisions = [admissionDecision(params.context)];
-  const offset = params.decisionOffset ?? 0;
-  const limit = params.decisionLimit ?? 50;
-  const decisions = allDecisions.slice(offset, offset + limit);
-  const nextOffset = offset + decisions.length;
-  return {
-    schemaVersion: 1,
-    run: {
-      runId: params.context.runId,
-      executionId: params.context.executionId,
-      status: "known",
-    },
-    identity: { state: "present", context: params.context },
-    decisions,
-    coverage: {
-      state: params.context.coverageState,
-      missingEvidence: [...params.context.missingEvidence],
-    },
-    ...(nextOffset < allDecisions.length ? { nextDecisionCursor: String(nextOffset) } : {}),
-  };
-}
-
 function inspectExactExecution(
   params: { executionId: string; decisionOffset?: number; decisionLimit?: number },
   options: ExecutionIdentityReadOptions,
@@ -504,10 +441,14 @@ function inspectExactExecution(
   const selector = { executionId };
   const contextResult = readExecutionIdentityContextByExecutionId(executionId, options);
   if (contextResult.status === "found") {
-    return presentResult({
+    return presentExecutionDecisionReceipts({
       context: contextResult.context,
+      approvalLinkState: hasMultipleRetainedRunContexts(contextResult.context.runId, options)
+        ? "ambiguous"
+        : "unambiguous",
       decisionOffset: params.decisionOffset,
       decisionLimit: params.decisionLimit,
+      options,
     });
   }
   if (contextResult.status === "corrupt") {
@@ -564,6 +505,20 @@ function hasAnyRunContext(db: DatabaseSync, runId: string): boolean {
   );
 }
 
+function hasMultipleRetainedRunContexts(
+  runId: string,
+  options: ExecutionIdentityReadOptions,
+): boolean {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "execution_identity_contexts")) {
+        return false;
+      }
+      return readRowsByRunId(db, runId, options.now ?? Date.now(), 0, 2).length > 1;
+    }, options) ?? false
+  );
+}
+
 function hasRetainedAuditRun(db: DatabaseSync, runId: string, now: number): boolean {
   if (!tableExists(db, "audit_events")) {
     return false;
@@ -601,10 +556,12 @@ function inspectRunSelector(
         : [];
       if (firstMatches.length === 1) {
         try {
-          return presentResult({
+          return presentExecutionDecisionReceipts({
             context: parseExecutionIdentityRow(firstMatches[0]!),
+            approvalLinkState: "unambiguous",
             decisionOffset: params.decisionOffset,
             decisionLimit: params.decisionLimit,
+            options,
           });
         } catch {
           return unavailableResult({
@@ -650,6 +607,24 @@ function inspectRunSelector(
           coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
           ...(page.length > limit ? { nextExecutionCursor: String(offset + limit) } : {}),
         };
+      }
+      if (
+        countOperatorApprovalReceiptsForRun({ runId, nowMs: now, databaseOptions: options }) > 0 ||
+        countExecutionDecisionFactsForRun({ runId, now, database: options }) > 0
+      ) {
+        return unavailableResult({
+          selector: { runId },
+          runStatus: "known",
+          state: "unknown",
+          reasonCode: "decision_context_link_missing",
+          missingEvidence: ["identity.context", "decision.context_link"],
+          remediation: [
+            {
+              code: "record_new_identity_context",
+              text: "Confirm execution identity collection is enabled, then run and request the action again to record a linked context.",
+            },
+          ],
+        });
       }
       if (tableExists(db, "execution_identity_contexts") && hasAnyRunContext(db, runId)) {
         return unavailableIdentityContext(
