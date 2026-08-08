@@ -1,6 +1,7 @@
 // Control UI view renders skill workshop screen content.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { AsyncDirective, directive, type ElementPart } from "lit/async-directive.js";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../../components/file-preview-modal-registration.ts";
@@ -44,6 +45,33 @@ const STATUS_LABEL: Record<SkillWorkshopStatusFilter, string> = {
 
 const TODAY_PREVIEW_MAX_ITEMS = 3;
 const TODAY_PREVIEW_MAX_ITEM_CHARS = 120;
+const queueResizeSessions = new WeakMap<Element, { cleanup: () => void }>();
+
+class QueueResizeLifecycleDirective extends AsyncDirective {
+  private root: Element | null = null;
+  private resizeEnabled = false;
+
+  override render(_resizeEnabled: boolean) {
+    return nothing;
+  }
+
+  override update(part: ElementPart, [resizeEnabled]: [boolean]) {
+    if (this.root && this.resizeEnabled && !resizeEnabled) {
+      cleanupQueueResizesWithin(this.root);
+    }
+    this.root = part.element;
+    this.resizeEnabled = resizeEnabled;
+    return nothing;
+  }
+
+  protected override disconnected() {
+    if (this.root) {
+      cleanupQueueResizesWithin(this.root);
+    }
+  }
+}
+
+const manageQueueResizeLifecycle = directive(QueueResizeLifecycleDirective);
 
 const GROUP_LABEL: Record<SkillWorkshopProposal["recencyGroup"], string> = {
   today: "skillWorkshop.recency.today",
@@ -65,6 +93,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
   const allPending = props.proposals.filter((p) => p.status === "pending");
   const todayHero = selected ?? allPending[0] ?? props.proposals[0];
   const hasNoProposals = props.proposals.length === 0 && !props.loading && !props.error;
+  const queueResizeEnabled = !hasNoProposals && props.mode === "board";
 
   const body = hasNoProposals
     ? renderWorkshopEmptyState({
@@ -92,7 +121,11 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
         canScan: props.access.canScanHistory,
         onScan: props.onHistoryScan,
       })}
-      <div class="sw-view" data-mode=${props.mode}>
+      <div
+        ${manageQueueResizeLifecycle(queueResizeEnabled)}
+        class="sw-view"
+        data-mode=${props.mode}
+      >
         ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
       </div>
     </section>
@@ -220,10 +253,25 @@ function renderQueueResizer(props: SkillWorkshopProps) {
   `;
 }
 
+function cleanupQueueResize(resizer: Element): void {
+  queueResizeSessions.get(resizer)?.cleanup();
+}
+
+function cleanupQueueResizesWithin(root: Element): void {
+  for (const resizer of root.querySelectorAll(".sw-queue-resizer")) {
+    cleanupQueueResize(resizer);
+  }
+}
+
 function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void {
   event.preventDefault();
   event.stopPropagation();
+  const resizer = event.currentTarget;
+  if (!(resizer instanceof HTMLElement) || queueResizeSessions.has(resizer)) {
+    return;
+  }
 
+  const activePointerId = event.pointerId;
   const startX = event.clientX;
   const startWidth = props.queueWidth;
   const body = document.body;
@@ -235,22 +283,52 @@ function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void 
   const cleanup = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
-    window.removeEventListener("pointercancel", onUp);
+    window.removeEventListener("pointercancel", onCancel);
+    window.removeEventListener("blur", onBlur);
+    resizer.removeEventListener("lostpointercapture", onLostPointerCapture);
+    const session = queueResizeSessions.get(resizer);
+    if (session?.cleanup === cleanup) {
+      queueResizeSessions.delete(resizer);
+    }
+    try {
+      if (resizer.hasPointerCapture(activePointerId)) {
+        resizer.releasePointerCapture(activePointerId);
+      }
+    } catch {
+      // Detached targets may no longer expose a valid capture state.
+    }
     body.style.cursor = previousCursor;
     body.style.userSelect = previousUserSelect;
   };
 
   const onMove = (moveEvent: PointerEvent) => {
+    if (moveEvent.pointerId !== activePointerId) {
+      return;
+    }
     props.onQueueWidthChange(startWidth + moveEvent.clientX - startX);
   };
 
-  const onUp = () => {
-    cleanup();
+  const finish = (pointerId: number) => {
+    if (pointerId === activePointerId && queueResizeSessions.get(resizer)?.cleanup === cleanup) {
+      cleanup();
+    }
   };
+  const onUp = (upEvent: PointerEvent) => finish(upEvent.pointerId);
+  const onCancel = (cancelEvent: PointerEvent) => finish(cancelEvent.pointerId);
+  const onLostPointerCapture = (lostEvent: PointerEvent) => finish(lostEvent.pointerId);
+  const onBlur = () => cleanup();
 
+  queueResizeSessions.set(resizer, { cleanup });
+  try {
+    resizer.setPointerCapture(activePointerId);
+    resizer.addEventListener("lostpointercapture", onLostPointerCapture);
+  } catch {
+    // Window listeners still own the gesture when capture is unavailable.
+  }
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
-  window.addEventListener("pointercancel", onUp);
+  window.addEventListener("pointercancel", onCancel);
+  window.addEventListener("blur", onBlur);
 }
 
 function resizeQueueWithKeyboard(event: KeyboardEvent, props: SkillWorkshopProps): void {

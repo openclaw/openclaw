@@ -123,9 +123,10 @@ class ResizableDivider extends OpenClawLitElement {
   }
 
   private handlePointerDown = (e: PointerEvent) => {
-    if (e.button !== 0) {
+    if (e.button !== 0 || this.activePointerId !== null) {
       return;
     }
+    this.activePointerId = e.pointerId;
     this.isDragging = true;
     this.startPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
     this.startRatio = this.currentRatio();
@@ -136,12 +137,14 @@ class ResizableDivider extends OpenClawLitElement {
     document.addEventListener("pointermove", this.handlePointerMove);
     document.addEventListener("pointerup", this.handlePointerUp);
     document.addEventListener("pointercancel", this.handlePointerUp);
+    this.addEventListener("lostpointercapture", this.handlePointerUp);
+    window.addEventListener("blur", this.handleWindowBlur);
 
     e.preventDefault();
   };
 
   private handlePointerMove = (e: PointerEvent) => {
-    if (!this.isDragging) {
+    if (!this.isDragging || e.pointerId !== this.activePointerId) {
       return;
     }
 
@@ -176,7 +179,14 @@ class ResizableDivider extends OpenClawLitElement {
     this.emitResize(this.startRatio + deltaRatio);
   };
 
-  private handlePointerUp = () => {
+  private handlePointerUp = (e: PointerEvent) => {
+    if (e.pointerId !== this.activePointerId) {
+      return;
+    }
+    this.stopDragging();
+  };
+
+  private handleWindowBlur = () => {
     this.stopDragging();
   };
 
@@ -211,11 +221,12 @@ class ResizableDivider extends OpenClawLitElement {
     }
     this.isDragging = false;
     this.classList.remove("dragging");
-    this.releaseActivePointer();
-
     document.removeEventListener("pointermove", this.handlePointerMove);
     document.removeEventListener("pointerup", this.handlePointerUp);
     document.removeEventListener("pointercancel", this.handlePointerUp);
+    this.removeEventListener("lostpointercapture", this.handlePointerUp);
+    window.removeEventListener("blur", this.handleWindowBlur);
+    this.releaseActivePointer();
   }
 
   private emitResize(nextRatio: number) {
@@ -255,7 +266,6 @@ class ResizableDivider extends OpenClawLitElement {
       return;
     }
     this.setPointerCapture(pointerId);
-    this.activePointerId = pointerId;
   }
 
   private releaseActivePointer() {

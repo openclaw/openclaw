@@ -3,7 +3,48 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./browser-panel.ts";
+import type { BrowserPanelController } from "./browser-panel-controller.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
+
+function attachAnnotationOverlay(panel: {
+  browserPanelController: BrowserPanelController;
+  renderRoot: ShadowRoot;
+}) {
+  const stage = document.createElement("div");
+  stage.className = "bp-stage";
+  vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 100,
+    bottom: 100,
+    width: 100,
+    height: 100,
+    toJSON: () => ({}),
+  });
+  const overlay = document.createElement("canvas");
+  const capturedPointers = new Set<number>();
+  overlay.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
+  overlay.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
+  const releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
+  overlay.releasePointerCapture = releasePointerCapture;
+  overlay.addEventListener("pointerdown", (event) =>
+    panel.browserPanelController.handleOverlayPointerDown(event as PointerEvent),
+  );
+  overlay.addEventListener("pointermove", (event) =>
+    panel.browserPanelController.handleOverlayPointerMove(event as PointerEvent),
+  );
+  stage.append(overlay);
+  panel.renderRoot.append(stage);
+
+  const dispatchPointer = (type: string, pointerId: number, clientX: number, clientY: number) => {
+    const event = new MouseEvent(type, { bubbles: true, clientX, clientY });
+    Object.defineProperty(event, "pointerId", { configurable: true, value: pointerId });
+    overlay.dispatchEvent(event);
+  };
+  return { capturedPointers, dispatchPointer, overlay, releasePointerCapture };
+}
 
 describe("normalizeBrowserUrlDraft", () => {
   beforeEach(() => {
@@ -163,5 +204,74 @@ describe("normalizeBrowserUrlDraft", () => {
     );
 
     expect(panel.browserPanelIsOpen()).toBe(false);
+  });
+
+  it("ends an active annotation gesture when the panel closes", async () => {
+    localStorage.setItem(
+      "openclaw.browser.panel.v1",
+      JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
+    );
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      browserPanelController: BrowserPanelController;
+      handleToggleRequest: (event: Event) => void;
+      renderRoot: ShadowRoot;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const { capturedPointers, dispatchPointer, releasePointerCapture } =
+      attachAnnotationOverlay(panel);
+
+    panel.browserPanelController.setMode("annotate");
+    dispatchPointer("pointerdown", 7, 10, 20);
+    expect(capturedPointers.has(7)).toBe(true);
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
+    );
+
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(capturedPointers.has(7)).toBe(false);
+    expect(panel.browserPanelController.mode).toBe("annotate");
+    expect(panel.browserPanelController.strokes).toEqual([{ points: [{ x: 0.1, y: 0.2 }] }]);
+
+    dispatchPointer("pointermove", 7, 30, 40);
+    expect(panel.browserPanelController.strokes).toEqual([{ points: [{ x: 0.1, y: 0.2 }] }]);
+  });
+
+  it("ends an active annotation gesture when the panel is suppressed", async () => {
+    localStorage.setItem(
+      "openclaw.browser.panel.v1",
+      JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
+    );
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      suppressed: boolean;
+      browserPanelController: BrowserPanelController;
+      renderRoot: ShadowRoot;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const { capturedPointers, dispatchPointer, releasePointerCapture } =
+      attachAnnotationOverlay(panel);
+    panel.browserPanelController.setMode("annotate");
+    dispatchPointer("pointerdown", 7, 10, 20);
+    expect(capturedPointers.has(7)).toBe(true);
+
+    panel.suppressed = true;
+    await panel.updateComplete;
+
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(capturedPointers.has(7)).toBe(false);
+    expect(panel.browserPanelController.mode).toBe("annotate");
+    expect(panel.browserPanelController.strokes).toEqual([{ points: [{ x: 0.1, y: 0.2 }] }]);
+
+    dispatchPointer("pointermove", 7, 30, 40);
+    expect(panel.browserPanelController.strokes).toEqual([{ points: [{ x: 0.1, y: 0.2 }] }]);
   });
 });

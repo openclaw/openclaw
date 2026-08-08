@@ -33,6 +33,7 @@ openclaw-custodian-panel {
   position: absolute;
   z-index: 2;
   background: transparent;
+  touch-action: none;
 }
 
 .cp-resizer:hover {

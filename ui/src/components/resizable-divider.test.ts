@@ -73,14 +73,14 @@ async function renderDivider() {
   return divider;
 }
 
-function dispatchPointer(target: EventTarget, type: string, clientX: number) {
+function dispatchPointer(target: EventTarget, type: string, clientX: number, pointerId = 7) {
   target.dispatchEvent(
     new PointerEvent(type, {
       bubbles: true,
       button: 0,
       cancelable: true,
       clientX,
-      pointerId: 7,
+      pointerId,
       pointerType: "touch",
     }),
   );
@@ -220,5 +220,61 @@ describe("resizable-divider", () => {
     dispatchPointer(document, "pointerup", 220);
     expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it("keeps a drag owned by the pointer that started it", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    divider.setPointerCapture = setPointerCapture;
+    divider.releasePointerCapture = releasePointerCapture;
+    divider.hasPointerCapture = vi.fn(() => true);
+    divider.addEventListener("resize", resized);
+
+    dispatchPointer(divider, "pointerdown", 100, 7);
+    dispatchPointer(divider, "pointerdown", 140, 8);
+    dispatchPointer(document, "pointermove", 220, 8);
+    dispatchPointer(document, "pointerup", 220, 8);
+    dispatchPointer(document, "pointercancel", 220, 8);
+
+    expect(resized).not.toHaveBeenCalled();
+    expect(divider.classList.contains("dragging")).toBe(true);
+    expect(setPointerCapture).toHaveBeenCalledTimes(1);
+    expect(releasePointerCapture).not.toHaveBeenCalled();
+
+    dispatchPointer(document, "pointermove", 220, 7);
+    expectLastResizeRatio(resized, 0.7);
+
+    dispatchPointer(document, "pointerup", 220, 7);
+    expect(divider.classList.contains("dragging")).toBe(false);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it("releases drag ownership on owner capture loss or window blur", async () => {
+    const divider = await renderDivider();
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    divider.setPointerCapture = setPointerCapture;
+    divider.releasePointerCapture = releasePointerCapture;
+    divider.hasPointerCapture = vi.fn(() => true);
+
+    dispatchPointer(divider, "pointerdown", 100, 7);
+    dispatchPointer(divider, "lostpointercapture", 100, 8);
+    expect(divider.classList.contains("dragging")).toBe(true);
+
+    dispatchPointer(divider, "lostpointercapture", 100, 7);
+    expect(divider.classList.contains("dragging")).toBe(false);
+
+    dispatchPointer(divider, "pointerdown", 120, 9);
+    expect(setPointerCapture).toHaveBeenLastCalledWith(9);
+    expect(divider.classList.contains("dragging")).toBe(true);
+
+    window.dispatchEvent(new Event("blur"));
+    expect(divider.classList.contains("dragging")).toBe(false);
+
+    dispatchPointer(divider, "pointerdown", 140, 10);
+    expect(setPointerCapture).toHaveBeenLastCalledWith(10);
+    expect(divider.classList.contains("dragging")).toBe(true);
   });
 });

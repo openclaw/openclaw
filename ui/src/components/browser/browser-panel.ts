@@ -76,8 +76,13 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   override updated(changed: Map<string, unknown>): void {
-    if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
-      void this.browserPanelController.refreshAll();
+    if (changed.has("suppressed")) {
+      const restored = this.dockLayout.setSuppressed(this.suppressed);
+      if (this.suppressed) {
+        this.browserPanelController.cancelOverlayPointerGesture();
+      } else if (restored) {
+        void this.browserPanelController.refreshAll();
+      }
     }
     this.browserPanelController.synchronizeHostProperties(changed);
     if (changed.has("client") || changed.has("available")) {
@@ -143,6 +148,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   private closePanel(): void {
+    this.browserPanelController.cancelOverlayPointerGesture();
     this.dockLayout.setOpen(false);
   }
 

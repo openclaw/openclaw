@@ -78,6 +78,7 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
   }
 
   hideWithoutPersisting(): void {
+    this.clearResizeListeners();
     this.setOpen(false, false);
   }
 
@@ -155,12 +156,19 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
 
   startResize(event: PointerEvent): void {
     event.preventDefault();
-    this.clearResizeListeners();
+    if (this.resizeCleanup !== null) {
+      return;
+    }
+    const activePointerId = event.pointerId;
+    const resizer = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     const startX = event.clientX;
     const startY = event.clientY;
     const startHeight = this.height;
     const startWidth = this.width;
     const onMove = (move: PointerEvent) => {
+      if (move.pointerId !== activePointerId) {
+        return;
+      }
       if (this.dock === "bottom") {
         const next = Math.max(this.options.layout.minHeight, startHeight + (startY - move.clientY));
         this.height = Math.min(next, this.options.layout.maxHeight());
@@ -174,24 +182,54 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
     };
     const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      window.removeEventListener("blur", onUp);
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
+      window.removeEventListener("blur", onBlur);
+      resizer?.removeEventListener("lostpointercapture", onLostPointerCapture);
+      try {
+        if (resizer?.hasPointerCapture(activePointerId)) {
+          resizer.releasePointerCapture(activePointerId);
+        }
+      } catch {
+        // Detached targets may no longer expose a valid capture state.
+      }
       if (this.resizeCleanup === cleanup) {
         this.resizeCleanup = null;
       }
     };
-    const onUp = () => {
+    const finish = () => {
+      if (this.resizeCleanup !== cleanup) {
+        return;
+      }
       cleanup();
       if (this.host.isConnected) {
         this.persist();
       }
     };
+    const onPointerEnd = (end: PointerEvent) => {
+      if (end.pointerId === activePointerId) {
+        finish();
+      }
+    };
+    const onLostPointerCapture = (lost: PointerEvent) => {
+      if (lost.pointerId === activePointerId) {
+        finish();
+      }
+    };
+    const onBlur = () => finish();
     this.resizeCleanup = cleanup;
+    if (resizer) {
+      try {
+        resizer.setPointerCapture(activePointerId);
+        resizer.addEventListener("lostpointercapture", onLostPointerCapture);
+      } catch {
+        // Keep the window listeners as a fallback for synthetic or detached targets.
+      }
+    }
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    window.addEventListener("blur", onUp);
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
+    window.addEventListener("blur", onBlur);
   }
 
   renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
@@ -246,6 +284,7 @@ export const dockPanelStyles = css`
     position: absolute;
     z-index: 2;
     background: transparent;
+    touch-action: none;
   }
   :is(.bp-resizer, .tp-resizer):hover {
     background: var(--accent, #ff5c5c);

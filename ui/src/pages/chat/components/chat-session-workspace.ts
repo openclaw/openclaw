@@ -79,6 +79,9 @@ type SessionWorkspaceState = {
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
   dock: ChatWorkspaceDock;
+  // Own the gesture before its drag threshold; dockDragging only tracks the overlay.
+  dockDragCancel: (() => void) | null;
+  dockDragPointerId: number | null;
   dockDragging: boolean;
   dockDragZone: ChatWorkspaceDock | null;
   error: string | null;
@@ -141,8 +144,13 @@ function clearWorkspaceSearchTimer(workspace: SessionWorkspaceState | undefined)
   }
 }
 
-export function clearSessionWorkspaceTimers(state: SessionWorkspaceHost) {
-  clearWorkspaceSearchTimer(state.sessionWorkspaceState);
+function clearWorkspaceEffects(workspace: SessionWorkspaceState | undefined) {
+  workspace?.dockDragCancel?.();
+  clearWorkspaceSearchTimer(workspace);
+}
+
+export function clearSessionWorkspaceEffects(state: SessionWorkspaceHost) {
+  clearWorkspaceEffects(state.sessionWorkspaceState);
 }
 
 function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
@@ -152,7 +160,7 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
   if (current?.sessionKey === sessionKey && current.agentId === agentId) {
     return current;
   }
-  clearWorkspaceSearchTimer(current);
+  clearWorkspaceEffects(current);
   const next: SessionWorkspaceState = {
     activeId: null,
     agentId,
@@ -163,6 +171,8 @@ function getWorkspaceState(state: SessionWorkspaceHost): SessionWorkspaceState {
     // Dock preference is app-wide, seeded from the host's loaded settings;
     // per-session state just carries it forward.
     dock: current?.dock ?? normalizeChatWorkspaceDock(state.settings?.chatWorkspaceDock),
+    dockDragCancel: null,
+    dockDragPointerId: null,
     dockDragging: false,
     dockDragZone: null,
     error: null,
@@ -606,7 +616,11 @@ export function openSessionWorkspaceFile(
 
 export function toggleSessionWorkspace(state: SessionWorkspaceHost) {
   const workspace = getWorkspaceState(state);
-  workspace.collapsed = !workspace.collapsed;
+  const collapsed = !workspace.collapsed;
+  if (collapsed) {
+    workspace.dockDragCancel?.();
+  }
+  workspace.collapsed = collapsed;
   if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
     loadWorkspace(state, workspace);
   }
@@ -638,11 +652,18 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
   if (!(grip instanceof HTMLElement)) {
     return;
   }
-  const workbench = grip.closest<HTMLElement>(".chat-workbench");
+  const dragGrip = grip;
+  const workbench = dragGrip.closest<HTMLElement>(".chat-workbench");
   if (!workbench) {
     return;
   }
   const workspace = getWorkspaceState(state);
+  if (workspace.dockDragPointerId !== null) {
+    return;
+  }
+  const activePointerId = event.pointerId;
+  dragGrip.setPointerCapture(activePointerId);
+  workspace.dockDragPointerId = activePointerId;
   const startX = event.clientX;
   const startY = event.clientY;
 
@@ -657,7 +678,10 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
     return x > rect.right - rect.width * 0.3 ? "right" : null;
   };
 
-  const handleMove = (move: PointerEvent) => {
+  function handleMove(move: PointerEvent) {
+    if (move.pointerId !== activePointerId) {
+      return;
+    }
     if (!workspace.dockDragging) {
       if (Math.hypot(move.clientX - startX, move.clientY - startY) < 5) {
         return;
@@ -672,27 +696,53 @@ function startSessionWorkspaceDockDrag(state: SessionWorkspaceHost, event: Point
       workspace.dockDragZone = zone;
       requestUpdate(state);
     }
-  };
-  const finish = (apply: boolean) => {
-    grip.removeEventListener("pointermove", handleMove);
-    grip.removeEventListener("pointerup", handleUp);
-    grip.removeEventListener("pointercancel", handleCancel);
+  }
+  function finish(pointerId: number, apply: boolean) {
+    if (pointerId !== activePointerId || workspace.dockDragPointerId !== activePointerId) {
+      return;
+    }
+    dragGrip.removeEventListener("pointermove", handleMove);
+    dragGrip.removeEventListener("pointerup", handleUp);
+    dragGrip.removeEventListener("pointercancel", handleCancel);
+    dragGrip.removeEventListener("lostpointercapture", handleLostPointerCapture);
+    window.removeEventListener("blur", handleBlur);
+    workspace.dockDragCancel = null;
+    workspace.dockDragPointerId = null;
     const zone = workspace.dockDragZone;
     workspace.dockDragging = false;
     workspace.dockDragZone = null;
+    try {
+      if (dragGrip.hasPointerCapture(activePointerId)) {
+        dragGrip.releasePointerCapture(activePointerId);
+      }
+    } catch {
+      // Capture can already be gone when the grip is detached or the browser canceled it.
+    }
     if (apply && zone) {
       setSessionWorkspaceDock(state, zone);
       return;
     }
     requestUpdate(state);
-  };
-  const handleUp = () => finish(true);
-  const handleCancel = () => finish(false);
+  }
+  function handleUp(up: PointerEvent) {
+    finish(up.pointerId, true);
+  }
+  function handleCancel(cancel: PointerEvent) {
+    finish(cancel.pointerId, false);
+  }
+  function handleLostPointerCapture(lost: PointerEvent) {
+    finish(lost.pointerId, false);
+  }
+  function handleBlur() {
+    finish(activePointerId, false);
+  }
 
-  grip.setPointerCapture(event.pointerId);
-  grip.addEventListener("pointermove", handleMove);
-  grip.addEventListener("pointerup", handleUp);
-  grip.addEventListener("pointercancel", handleCancel);
+  workspace.dockDragCancel = () => finish(activePointerId, false);
+  dragGrip.addEventListener("pointermove", handleMove);
+  dragGrip.addEventListener("pointerup", handleUp);
+  dragGrip.addEventListener("pointercancel", handleCancel);
+  dragGrip.addEventListener("lostpointercapture", handleLostPointerCapture);
+  window.addEventListener("blur", handleBlur);
 }
 
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
