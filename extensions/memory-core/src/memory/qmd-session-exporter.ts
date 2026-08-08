@@ -19,10 +19,12 @@ import {
   refreshQmdSessionArtifactDocIds,
   replaceQmdSessionArtifactMappings,
   type QmdSessionArtifactMapping,
+  type QmdSessionArtifactProvenance,
 } from "../qmd-session-artifacts.js";
 import { sanitizeQmdCollectionNameSegment } from "./qmd-collection-metadata.js";
 
 const log = createSubsystemLogger("memory");
+const SESSION_MARKDOWN_CONTENT_START_LINE = 3;
 
 type QmdSessionExporterConfig = {
   dir: string;
@@ -40,6 +42,7 @@ type BuildSearchPath = (
 type ExportedSessionState = {
   entryHash: string;
   mtimeMs: number;
+  provenance?: QmdSessionArtifactProvenance;
   revisionToken: string | null;
   target: string;
   targetRevision: string | null;
@@ -52,6 +55,7 @@ function buildSessionExportRevision(corpusEntry: SessionTranscriptCorpusEntry): 
   return [
     corpusEntry.contentRevision,
     corpusEntry.sessionKey ?? "",
+    corpusEntry.sessionKind ?? "",
     corpusEntry.updatedAtMs ?? "",
     corpusEntry.generatedByDreamingNarrative === true ? "dreaming" : "",
     corpusEntry.generatedByCronRun === true ? "cron" : "",
@@ -121,7 +125,13 @@ export class QmdSessionExporter {
         }
         tracked.add(sessionFile);
         artifactMappings.push(
-          this.buildSessionArtifactMapping(sessionFile, targetName, target, corpusEntry),
+          this.buildSessionArtifactMapping(
+            sessionFile,
+            targetName,
+            target,
+            corpusEntry,
+            state.provenance,
+          ),
         );
         keep.add(target);
         continue;
@@ -129,6 +139,7 @@ export class QmdSessionExporter {
       const entry = await buildSessionEntry(sessionFile, {
         generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
         generatedByCronRun: corpusEntry.generatedByCronRun === true,
+        ...(corpusEntry.sessionKind ? { sessionKind: corpusEntry.sessionKind } : {}),
         ...(corpusEntry.transcriptSource === "sqlite" && corpusEntry.storePath
           ? {
               agentId: corpusEntry.agentId,
@@ -143,8 +154,9 @@ export class QmdSessionExporter {
         continue;
       }
       tracked.add(sessionFile);
+      const provenance = buildSessionArtifactProvenance(entry);
       artifactMappings.push(
-        this.buildSessionArtifactMapping(sessionFile, targetName, target, corpusEntry),
+        this.buildSessionArtifactMapping(sessionFile, targetName, target, corpusEntry, provenance),
       );
       const needsWrite =
         !state ||
@@ -169,6 +181,7 @@ export class QmdSessionExporter {
       this.exportedSessionState.set(sessionFile, {
         entryHash: entry.hash,
         mtimeMs: entry.mtimeMs,
+        ...(provenance ? { provenance } : {}),
         revisionToken,
         target,
         targetRevision: nextTargetRevision,
@@ -231,6 +244,7 @@ export class QmdSessionExporter {
     artifactPath: string,
     target: string,
     corpusEntry: SessionTranscriptCorpusEntry,
+    provenance?: QmdSessionArtifactProvenance,
   ): QmdSessionArtifactMapping {
     return {
       agentId: corpusEntry.agentId,
@@ -241,6 +255,7 @@ export class QmdSessionExporter {
         agentId: corpusEntry.agentId,
         sessionId: corpusEntry.sessionId,
       }),
+      ...(provenance ? { provenance } : {}),
       searchPath: this.buildSearchPath(
         this.config.collectionName,
         artifactPath,
@@ -294,4 +309,18 @@ function renderSessionMarkdown(entry: SessionFileEntry): string {
   const header = `# Session ${path.basename(entry.path, path.extname(entry.path))}`;
   const body = entry.content?.trim().length ? entry.content.trim() : "(empty)";
   return `${header}\n\n${body}\n`;
+}
+
+function buildSessionArtifactProvenance(
+  entry: SessionFileEntry,
+): QmdSessionArtifactProvenance | undefined {
+  const content = entry.content?.trim() ?? "";
+  const lines = entry.lineProvenance;
+  if (!content || !lines?.length || content.split("\n").length !== lines.length) {
+    return undefined;
+  }
+  return {
+    contentStartLine: SESSION_MARKDOWN_CONTENT_START_LINE,
+    lines,
+  };
 }
