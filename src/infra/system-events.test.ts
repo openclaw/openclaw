@@ -1,7 +1,7 @@
 // Covers system event queue routing, draining, and formatting.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
@@ -11,6 +11,7 @@ import {
   consumeSystemEventEntries,
   drainSystemEventEntries,
   enqueueSystemEvent,
+  enqueueSystemEventWithReceipt,
   hasSystemEvents,
   isSystemEventContextChanged,
   peekSystemEventEntries,
@@ -29,6 +30,8 @@ async function importSystemEventsModule(cacheBust: string): Promise<SystemEvents
 
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
+
+afterEach(() => vi.restoreAllMocks());
 
 async function drainFormattedEvents(
   sessionKey: string,
@@ -196,6 +199,42 @@ describe("system events (session routing)", () => {
       "third",
     ]);
     expect(peekSystemEvents(key)).toEqual(["second"]);
+  });
+
+  it("removes an exact receipt once while preserving its sibling", () => {
+    const options = { sessionKey: " agent:main:test-receipt ", contextKey: "exec:first" };
+    const receipt = enqueueSystemEventWithReceipt("first", options);
+    expect(receipt).not.toBeNull();
+    enqueueSystemEvent("sibling", { ...options, contextKey: "exec:sibling" });
+    expect(enqueueSystemEventWithReceipt("first", options)).toBeNull();
+
+    expect(receipt?.()).toBe(true);
+    expect(peekSystemEvents("agent:main:test-receipt")).toEqual(["sibling"]);
+    expect(receipt?.()).toBe(false);
+  });
+
+  it("keeps identical receipt-owned entries distinct and removes by queue identity", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const key = "agent:main:test-identical-receipts";
+    const options = {
+      sessionKey: key,
+      contextKey: "exec:reused-slug",
+      deliveryContext: { channel: "telegram", to: "123" },
+    };
+    const first = enqueueSystemEventWithReceipt("completed", options, { allowDuplicate: true });
+    enqueueSystemEvent("unrelated", { sessionKey: key, contextKey: "marker" });
+    const second = enqueueSystemEventWithReceipt("completed", options, { allowDuplicate: true });
+
+    expect(peekSystemEventEntries(key)).toEqual([
+      expect.objectContaining({ text: "completed", ts: 1_800_000_000_000 }),
+      expect.objectContaining({ text: "unrelated", ts: 1_800_000_000_000 }),
+      expect.objectContaining({ text: "completed", ts: 1_800_000_000_000 }),
+    ]);
+    expect(second?.()).toBe(true);
+    expect(peekSystemEvents(key)).toEqual(["completed", "unrelated"]);
+    expect(second?.()).toBe(false);
+    expect(first?.()).toBe(true);
+    expect(peekSystemEvents(key)).toEqual(["unrelated"]);
   });
 
   it("matches consumed delivery contexts through normalized route identity", () => {

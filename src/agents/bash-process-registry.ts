@@ -6,6 +6,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { SystemEventReceipt } from "../infra/system-events.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { readEnvInt } from "./bash-tools.shared.js";
@@ -113,6 +114,8 @@ interface FinishedSession {
 
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
+let finishedSessionsByProcess = new WeakMap<ProcessSession, FinishedSession>();
+let finishedCompletionReceipts = new WeakMap<FinishedSession, SystemEventReceipt>();
 const activeBackgroundExecSessionIds = new Set<string>();
 let finishedSessionOutputChars = 0;
 
@@ -143,6 +146,29 @@ export function getSession(id: string) {
 /** Returns a retained finished background session by id. */
 export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
+}
+
+/** Returns the terminal snapshot owned by the original live session. */
+export function getFinishedSessionForProcess(session: ProcessSession) {
+  return finishedSessionsByProcess.get(session);
+}
+
+export function retainFinishedCompletionReceipt(sessionId: string, receipt: SystemEventReceipt) {
+  const finished = finishedSessions.get(sessionId);
+  if (!finished) {
+    receipt();
+    return () => false;
+  }
+  finishedCompletionReceipts.set(finished, receipt);
+  return () => finishedCompletionReceipts.has(finished);
+}
+
+export function takeFinishedCompletionReceipt(
+  finished: FinishedSession,
+): SystemEventReceipt | undefined {
+  const receipt = finishedCompletionReceipts.get(finished);
+  finishedCompletionReceipts.delete(finished);
+  return receipt;
 }
 
 function deleteFinishedSession(id: string): boolean {
@@ -296,7 +322,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   // Keep full completed logs; evict older records rather than silently
   // truncating the process poll/log contract or dropping the newest result.
   deleteFinishedSession(session.id);
-  finishedSessions.set(session.id, {
+  const finished: FinishedSession = {
     id: session.id,
     command: session.command,
     scopeKey: session.scopeKey,
@@ -314,7 +340,9 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     tail: session.tail,
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
-  });
+  };
+  finishedSessionsByProcess.set(session, finished);
+  finishedSessions.set(session.id, finished);
   finishedSessionOutputChars += session.aggregated.length;
   while (
     finishedSessions.size > MAX_FINISHED_SESSION_COUNT ||
@@ -399,6 +427,8 @@ export function listFinishedSessions() {
 function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
+  finishedSessionsByProcess = new WeakMap();
+  finishedCompletionReceipts = new WeakMap();
   finishedSessionOutputChars = 0;
   activeBackgroundExecSessionIds.clear();
   stopSweeper();

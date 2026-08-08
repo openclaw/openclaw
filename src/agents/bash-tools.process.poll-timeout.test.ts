@@ -4,7 +4,13 @@
  */
 import { afterEach, expect, test, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  deleteSession,
+  markExited,
+  retainFinishedCompletionReceipt,
+} from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -93,6 +99,83 @@ test("process poll waits for completion when timeout is provided", async () => {
     assertUnresolvedAtMs: 200,
     advanceMs: 100,
   });
+});
+
+test("waiting poll retains terminal state and its receipt after indexed cleanup", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-cleared-while-waiting";
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const remove = vi.fn(() => true);
+
+    setTimeout(() => {
+      appendOutput(session, "stdout", "done after cleanup\n");
+      markExited(session, 0, null, "completed");
+      retainFinishedCompletionReceipt(sessionId, remove);
+      deleteSession(sessionId);
+    }, 10);
+
+    const pollPromise = pollSession(processTool, "toolcall-cleanup", sessionId, 2000);
+    await vi.advanceTimersByTimeAsync(250);
+    const poll = await pollPromise;
+
+    expect(poll.details).toMatchObject({
+      status: "completed",
+      aggregated: expect.stringContaining("done after cleanup"),
+    });
+    expect(poll.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("done after cleanup"),
+    });
+    expect(remove).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("waiting poll does not adopt a same-id successor after removal", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-reused-while-waiting";
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const successorRemove = vi.fn(() => true);
+
+    setTimeout(() => {
+      session.backgrounded = false;
+      deleteSession(sessionId);
+      markExited(session, 0, null, "completed");
+
+      const successor = createProcessSessionFixture({
+        id: sessionId,
+        command: "successor",
+        backgrounded: true,
+      });
+      addSession(successor);
+      appendOutput(successor, "stdout", "successor output\n");
+      markExited(successor, 0, null, "completed");
+      retainFinishedCompletionReceipt(sessionId, successorRemove);
+    }, 10);
+
+    const originalPoll = pollSession(processTool, "toolcall-original", sessionId, 2000);
+    await vi.advanceTimersByTimeAsync(250);
+    const removed = await originalPoll;
+
+    expect(removed.details).toMatchObject({ status: "failed" });
+    expect(removed.content[0]).toMatchObject({
+      type: "text",
+      text: `No session found for ${sessionId}`,
+    });
+    expect(successorRemove).not.toHaveBeenCalled();
+
+    const successorPoll = await pollSession(processTool, "toolcall-successor", sessionId);
+    expect(successorPoll.details).toMatchObject({
+      status: "completed",
+      aggregated: expect.stringContaining("successor output"),
+    });
+    expect(successorRemove).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("process poll accepts string timeout values", async () => {

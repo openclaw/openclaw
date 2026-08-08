@@ -18,6 +18,7 @@ import {
   listRunningSessions,
   markBackgrounded,
   markExited,
+  retainFinishedCompletionReceipt,
   setJobTtlMs,
   tail,
 } from "./bash-process-registry.js";
@@ -186,6 +187,14 @@ describe("bash process registry", () => {
         totalOutputChars: 0,
       },
     ]);
+  });
+
+  it("removes a completion receipt when its finished session is missing", () => {
+    const remove = vi.fn(() => true);
+    const isPending = retainFinishedCompletionReceipt("missing", remove);
+
+    expect(remove).toHaveBeenCalledOnce();
+    expect(isPending()).toBe(false);
   });
 
   it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {

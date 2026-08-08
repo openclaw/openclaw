@@ -41,6 +41,13 @@ type SystemEventOptions = {
   replace?: boolean;
 };
 
+export type SystemEventReceipt = () => boolean;
+
+type ReceiptOptions = {
+  /** Receipt-owned producers may need distinct, structurally identical queue entries. */
+  allowDuplicate?: boolean;
+};
+
 function requireSessionKey(key?: string | null): string {
   const trimmed = normalizeOptionalString(key) ?? "";
   if (!trimmed) {
@@ -101,9 +108,10 @@ function findDuplicateInQueue(
   return queue.some((event) => isDuplicateSystemEvent(event, incoming));
 }
 
-export function enqueueSystemEventEntry(
+function enqueueSystemEventQueueEntry(
   text: string,
   options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
 ): SystemEvent | null {
   if (options.replace) {
     return replaceSystemEventEntry(text, options);
@@ -116,7 +124,10 @@ export function enqueueSystemEventEntry(
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
-  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
+  if (
+    receiptOptions?.allowDuplicate !== true &&
+    findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)
+  ) {
     return null;
   }
   if (normalizedContextKey !== null) {
@@ -132,11 +143,42 @@ export function enqueueSystemEventEntry(
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
-  return cloneSystemEvent(event);
+  return event;
+}
+
+export function enqueueSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+): SystemEvent | null {
+  const event = enqueueSystemEventQueueEntry(text, options);
+  return event ? cloneSystemEvent(event) : null;
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   return enqueueSystemEventEntry(text, options) !== null;
+}
+
+/** Enqueues an event and returns one-use removal ownership for that exact queue entry. */
+export function enqueueSystemEventWithReceipt(
+  text: string,
+  options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
+): SystemEventReceipt | null {
+  const event = enqueueSystemEventQueueEntry(text, options, receiptOptions);
+  if (!event) {
+    return null;
+  }
+  const sessionKey = requireSessionKey(options.sessionKey);
+  return () => {
+    const entry = getSessionQueue(sessionKey);
+    const index = entry?.queue.indexOf(event) ?? -1;
+    if (!entry || index === -1) {
+      return false;
+    }
+    entry.queue.splice(index, 1);
+    resetQueueState(sessionKey, entry);
+    return true;
+  };
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
@@ -201,7 +243,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     entry.queue.shift();
   }
   entry.lastContextKey = normalizedContextKey;
-  return cloneSystemEvent(event);
+  return event;
 }
 
 function isDuplicateSystemEvent(

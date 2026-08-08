@@ -20,7 +20,7 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
-const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
@@ -29,8 +29,9 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
 }));
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: enqueueSystemEventMock,
+vi.mock("../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/system-events.js")>()),
+  enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -65,7 +66,8 @@ beforeEach(() => {
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockClear();
-  enqueueSystemEventMock.mockClear();
+  enqueueSystemEventWithReceiptMock.mockReset();
+  enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
 });
 
@@ -201,7 +203,7 @@ function expectExecTarget(
 }
 
 function requireSystemEventCall(): [string, Record<string, unknown>] {
-  const call = enqueueSystemEventMock.mock.calls[0];
+  const call = enqueueSystemEventWithReceiptMock.mock.calls[0];
   if (!call) {
     throw new Error("expected system event call");
   }
@@ -548,7 +550,7 @@ describe("exec notifyOnExit suppression", () => {
     const outcome = await runBackgroundedExit({ reason: "manual-cancel" });
 
     expect(outcome.status).toBe("failed");
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
@@ -725,7 +727,7 @@ describe("sandbox exec finalization suspension", () => {
       expect(finalizeExec).toHaveBeenCalledOnce();
       expect(getActiveBackgroundExecSessionCount()).toBe(0);
       expect(run.session.finalizing).toBe(false);
-      expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+      expect(enqueueSystemEventWithReceiptMock).toHaveBeenCalledTimes(1);
       expect(requireSystemEventCall()[0]).toContain(
         expectedStatus === "failed" ? "Exec failed" : "Exec completed",
       );
