@@ -758,6 +758,7 @@ export function buildEmbeddedRunPayloads(params: {
     (params.heartbeatToolResponse.outcome === "blocked" ||
       hasExplicitMutatingToolFailureAcknowledgement(
         getHeartbeatToolNotificationText(params.heartbeatToolResponse),
+        params.lastToolError?.toolName ?? "",
       ));
   for (const text of answerTexts) {
     const {
@@ -780,7 +781,13 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent,
     });
     hasUserFacingAssistantReply = true;
-    if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
+    if (
+      cleanedText &&
+      hasExplicitMutatingToolFailureAcknowledgement(
+        cleanedText,
+        params.lastToolError?.toolName ?? "",
+      )
+    ) {
       hasUserFacingFailureAcknowledgement = true;
     }
   }
