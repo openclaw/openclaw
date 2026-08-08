@@ -7,7 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecHost } from "../infra/exec-approvals.js";
-import { safeStatSync } from "../infra/path-guards.js";
+import { isPathInside, safeStatSync } from "../infra/path-guards.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
@@ -64,10 +64,7 @@ function resolveExistingHostWorkdir(workdir: string): string | null {
 }
 
 function isHostPathInsideRoot(params: { root: string; candidate: string }): boolean {
-  const root = path.resolve(params.root);
-  const candidate = path.resolve(params.candidate);
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return isPathInside(params.root, params.candidate);
 }
 
 function safeCurrentCwd(): string | null {

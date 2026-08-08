@@ -141,7 +141,7 @@ export function resolveWritableSandboxBindHostRoots(
     if (
       !parsed.writable ||
       seen.has(parsed.hostRoot) ||
-      readonlyRoots.some((root) => isHostPathWithinOrEqual(parsed.hostRoot, root))
+      readonlyRoots.some((root) => isPathInside(parsed.hostRoot, root))
     ) {
       continue;
     }
@@ -165,7 +165,7 @@ export function hasSandboxBindReadonlyHostShadows(binds: readonly string[] | und
   const writableRoots = parsedBinds.filter((bind) => bind.writable).map((bind) => bind.hostRoot);
   const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
   return writableRoots.some((writableRoot) =>
-    readonlyRoots.some((readonlyRoot) => isHostPathWithinOrEqual(writableRoot, readonlyRoot)),
+    readonlyRoots.some((readonlyRoot) => isPathInside(writableRoot, readonlyRoot)),
   );
 }
 
@@ -396,11 +396,6 @@ function isPathInsideHost(root: string, target: string): boolean {
   );
   const canonicalTarget = path.resolve(canonicalTargetParent, path.basename(resolvedTarget));
   return isPathInside(canonicalRoot, canonicalTarget);
-}
-
-function isHostPathWithinOrEqual(root: string, target: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(target));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function toHostSegments(relativePosix: string): string[] {
