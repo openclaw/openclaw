@@ -6,6 +6,12 @@ import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env"
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
+import {
+  advanceBuzzRecoveryWatermark,
+  createBuzzRecoveryFrontier,
+  openBuzzRecoveryWatermarkStore,
+  resolveBuzzColdStartSince,
+} from "./recovery-watermark.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./target.js";
 import {
@@ -75,6 +81,28 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
   const configuredChannelIds = new Set(channelIds);
   const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });
 
+  const watermarkStore = openBuzzRecoveryWatermarkStore({
+    onError: (error) => {
+      ctx.log?.warn?.(
+        `[${account.accountId}] Buzz recovery watermark unavailable: ${error.message}`,
+      );
+    },
+  });
+  const reportWatermarkError = (error: Error) => {
+    ctx.log?.warn?.(`[${account.accountId}] Buzz recovery watermark failed: ${error.message}`);
+  };
+  const commitRecoveryCheckpoint = async (seconds: number | undefined) => {
+    if (seconds === undefined) {
+      return;
+    }
+    await advanceBuzzRecoveryWatermark({
+      store: watermarkStore,
+      accountId: account.accountId,
+      seconds,
+      onError: reportWatermarkError,
+    });
+  };
+
   let hasAttemptedSession = false;
   let reconnectAttempt = 0;
   while (!ctx.abortSignal.aborted) {
@@ -86,9 +114,18 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       reportBusFailure = resolve;
     });
     try {
-      const sessionSince =
-        Math.floor(Date.now() / 1000) - (hasAttemptedSession ? RECONNECT_LOOKBACK_SECONDS : 0);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const sessionSince = hasAttemptedSession
+        ? nowSeconds - RECONNECT_LOOKBACK_SECONDS
+        : await resolveBuzzColdStartSince({
+            store: watermarkStore,
+            accountId: account.accountId,
+            nowSeconds,
+            lookbackSeconds: RECONNECT_LOOKBACK_SECONDS,
+            onError: reportWatermarkError,
+          });
       hasAttemptedSession = true;
+      const recoveryFrontier = createBuzzRecoveryFrontier({ sinceSeconds: sessionSince });
       bus = await startBuzzBus({
         accountId: account.accountId,
         relayUrl: account.relayUrl,
@@ -103,7 +140,20 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
           }
-          await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message, signal });
+          const token = recoveryFrontier.admit({
+            createdAt: message.createdAt,
+            observedSeconds: Math.floor(Date.now() / 1000),
+          });
+          try {
+            await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message, signal });
+          } catch (error) {
+            recoveryFrontier.abandon(token);
+            throw error;
+          }
+          await commitRecoveryCheckpoint(recoveryFrontier.settle(token));
+        },
+        onHistoryDrained: () => {
+          void commitRecoveryCheckpoint(recoveryFrontier.markBacklogDrained());
         },
         onMessageError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz message failed: ${error.message}`);
