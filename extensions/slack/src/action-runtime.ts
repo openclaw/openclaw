@@ -552,16 +552,19 @@ export async function handleSlackAction(
 
   const readOpts = buildActionOpts("read");
   const writeOpts = buildActionOpts("write");
-  const assertReadTargetAllowed = async (target: SlackActionChannelTarget) =>
+  const assertReadTargetAllowed = async (target: string | SlackActionChannelTarget) => {
+    const resolved =
+      typeof target === "string" ? { channelId: target, routingTarget: target } : target;
     await assertSlackReadTargetAllowed({
       account,
       cfg,
-      channelId: target.channelId,
-      routingTarget: target.routingTarget,
-      ...(target.teamId ? { teamId: target.teamId } : {}),
+      channelId: resolved.channelId,
+      routingTarget: resolved.routingTarget,
+      ...(resolved.teamId ? { teamId: resolved.teamId } : {}),
       conversationReadOrigin: context?.conversationReadOrigin,
       context,
     });
+  };
 
   if (reactionsActions.has(action)) {
     if (!isActionEnabled("reactions")) {
