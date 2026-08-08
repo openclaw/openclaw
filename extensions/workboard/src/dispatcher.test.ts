@@ -24,7 +24,7 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
 }
 
 describe("dispatchAndStartWorkboardCards", () => {
-  it("persists the resolved subagent runtime on new executions", async () => {
+  it("persists the resolved subagent runtime and run identity on new executions", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
       title: "Claude worker",

@@ -11,7 +11,9 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import {
   assertRestrictedWorkboardTarget,
+  cleanupWorkboardRunWorktree,
   managedWorktreeName,
+  reconcilePendingWorkboardTerminalRun,
   resolveDispatchWorkspaceAccess,
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
@@ -514,6 +516,17 @@ async function runWorkboardDispatch(
         }),
         ...(materializedWorkspace ? { workspace: materializedWorkspace } : {}),
       });
+      const terminalEvent = await reconcilePendingWorkboardTerminalRun({
+        store: params.store,
+        runId: run.runId,
+      });
+      if (terminalEvent && params.worktrees) {
+        await cleanupWorkboardRunWorktree({
+          store: params.store,
+          worktrees: params.worktrees,
+          runId: terminalEvent.runId,
+        });
+      }
       started.push({
         cardId: updated.id,
         title: updated.title,

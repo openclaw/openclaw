@@ -332,47 +332,78 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardBlockInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
   ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => await this.blockDirect(id, input, scope));
+  }
+
+  async blockTerminalRun(
+    runIdInput: unknown,
+    reasonInput: unknown,
+  ): Promise<WorkboardCard | undefined> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
+      const runId = normalizeBoundedString(runIdInput, undefined, 160, "run id");
+      if (!runId) {
+        return undefined;
       }
-      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
-      const now = Date.now();
-      const reason =
-        normalizeBoundedString(input.reason, undefined, 2000, "block reason") ??
-        "Workboard card blocked.";
-      const metadata = existing.metadata ?? {};
-      const notification: WorkboardNotification = {
-        id: randomUUID(),
-        kind: "failed",
-        createdAt: now,
-        sequence: this.nextNotificationSequence(now),
-        message: capText(reason, 240) ?? "Workboard card blocked.",
-        ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
-        ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
-      };
-      const execution =
-        existing.execution?.status === "running"
-          ? { ...existing.execution, status: "blocked" as const, updatedAt: now }
-          : existing.execution;
-      return await this.updateCard(id, {
-        status: "blocked",
-        ...(execution ? { execution } : {}),
-        metadata: {
-          ...metadata,
-          claim: undefined,
-          attempts: closeRunningAttempts(metadata.attempts, now, "blocked", reason),
-          failureCount: (metadata.failureCount ?? 0) + 1,
-          comments: [
-            ...(metadata.comments ?? []),
-            { id: randomUUID(), body: reason, createdAt: now },
-          ].slice(-MAX_CARD_COMMENTS),
-          notifications: [...(metadata.notifications ?? []), notification].slice(
-            -MAX_CARD_NOTIFICATIONS,
-          ),
-        },
-      });
+      // Match and transition under one mutation lock so a late terminal event
+      // cannot block a card that has already been completed or redispatched.
+      const card = (await this.list()).find(
+        (entry) =>
+          entry.status === "running" &&
+          entry.runId === runId &&
+          entry.execution?.status === "running" &&
+          entry.execution.runId === runId,
+      );
+      if (!card) {
+        return undefined;
+      }
+      return await this.blockDirect(card.id, { reason: reasonInput }, null);
+    });
+  }
+
+  private async blockDirect(
+    id: string,
+    input: WorkboardBlockInput,
+    scope: WorkboardMutationScope | null | undefined,
+  ): Promise<WorkboardCard> {
+    const existing = await this.get(id);
+    if (!existing) {
+      throw new Error(`card not found: ${id}`);
+    }
+    assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
+    const now = Date.now();
+    const reason =
+      normalizeBoundedString(input.reason, undefined, 2000, "block reason") ??
+      "Workboard card blocked.";
+    const metadata = existing.metadata ?? {};
+    const notification: WorkboardNotification = {
+      id: randomUUID(),
+      kind: "failed",
+      createdAt: now,
+      sequence: this.nextNotificationSequence(now),
+      message: capText(reason, 240) ?? "Workboard card blocked.",
+      ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
+      ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
+    };
+    const execution =
+      existing.execution?.status === "running"
+        ? { ...existing.execution, status: "blocked" as const, updatedAt: now }
+        : existing.execution;
+    return await this.updateCard(id, {
+      status: "blocked",
+      ...(execution ? { execution } : {}),
+      metadata: {
+        ...metadata,
+        claim: undefined,
+        attempts: closeRunningAttempts(metadata.attempts, now, "blocked", reason),
+        failureCount: (metadata.failureCount ?? 0) + 1,
+        comments: [
+          ...(metadata.comments ?? []),
+          { id: randomUUID(), body: reason, createdAt: now },
+        ].slice(-MAX_CARD_COMMENTS),
+        notifications: [...(metadata.notifications ?? []), notification].slice(
+          -MAX_CARD_NOTIFICATIONS,
+        ),
+      },
     });
   }
 

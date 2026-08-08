@@ -44,6 +44,84 @@ export async function cleanupWorkboardRunWorktree(params: {
   });
 }
 
+type WorkboardTerminalRunEvent = {
+  runId: string;
+  outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
+  error?: string;
+};
+
+const MAX_PENDING_TERMINAL_RUNS = 64;
+const pendingTerminalRunEvents = new WeakMap<
+  WorkboardStore,
+  Map<string, WorkboardTerminalRunEvent>
+>();
+
+function rememberPendingTerminalRun(store: WorkboardStore, event: WorkboardTerminalRunEvent): void {
+  let events = pendingTerminalRunEvents.get(store);
+  if (!events) {
+    events = new Map();
+    pendingTerminalRunEvents.set(store, events);
+  }
+  if (events.has(event.runId)) {
+    return;
+  }
+  events.set(event.runId, event);
+  const oldestRunId = events.keys().next().value;
+  if (events.size > MAX_PENDING_TERMINAL_RUNS && oldestRunId) {
+    events.delete(oldestRunId);
+  }
+}
+
+function terminalRunReason(event: WorkboardTerminalRunEvent): string {
+  const error = event.error?.trim().slice(0, 1200);
+  if (error) {
+    return `Subagent run ended with an error before recording a Workboard terminal action: ${error}`;
+  }
+  switch (event.outcome) {
+    case "timeout":
+      return "Subagent run timed out before recording a Workboard terminal action.";
+    case "killed":
+      return "Subagent run was killed before recording a Workboard terminal action.";
+    case "reset":
+      return "Subagent run was reset before recording a Workboard terminal action.";
+    case "deleted":
+      return "Subagent run was deleted before recording a Workboard terminal action.";
+    case "error":
+      return "Subagent run failed before recording a Workboard terminal action.";
+    default:
+      return "Subagent run completed without recording workboard_complete or workboard_block.";
+  }
+}
+
+export async function reconcileWorkboardTerminalRun(params: {
+  store: WorkboardStore;
+  event: WorkboardTerminalRunEvent;
+}): Promise<void> {
+  const card = await params.store.blockTerminalRun(
+    params.event.runId,
+    terminalRunReason(params.event),
+  );
+  if (!card) {
+    // `subagent_ended` can arrive after run() resolves but before dispatch
+    // records the run id. Retain this owner-local event for that exact write.
+    rememberPendingTerminalRun(params.store, params.event);
+  }
+}
+
+export async function reconcilePendingWorkboardTerminalRun(params: {
+  store: WorkboardStore;
+  runId: string;
+}): Promise<WorkboardTerminalRunEvent | undefined> {
+  const events = pendingTerminalRunEvents.get(params.store);
+  const event = events?.get(params.runId);
+  if (!event) {
+    return undefined;
+  }
+  events?.delete(params.runId);
+  const card = await params.store.blockTerminalRun(event.runId, terminalRunReason(event));
+  return card ? event : undefined;
+}
+
 export async function resolveDispatchWorkspaceAccess(params: {
   card: WorkboardCard;
   currentAccess?: WorkboardWorkspaceAccess;
