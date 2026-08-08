@@ -345,9 +345,12 @@ export async function deliverReplies(params: {
     cfg: params.cfg,
     surface: "signal",
   });
+  const outboundPlanBySourceIndex = new Map(
+    outboundPlan.map((entry) => [entry.sourceIndex, entry] as const),
+  );
   for (let replyIndex = 0; replyIndex < replies.length; replyIndex++) {
     const payload = replies[replyIndex]!;
-    const planEntry = outboundPlan[replyIndex];
+    const planEntry = outboundPlanBySourceIndex.get(replyIndex);
     const deliveryResults: Array<{
       channel: "signal";
       messageId: string;

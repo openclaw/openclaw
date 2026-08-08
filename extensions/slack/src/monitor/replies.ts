@@ -194,9 +194,12 @@ export async function deliverReplies(params: {
     cfg: params.cfg,
     surface: "slack",
   });
+  const outboundPlanBySourceIndex = new Map(
+    outboundPlan.map((entry) => [entry.sourceIndex, entry] as const),
+  );
   for (let candidateIndex = 0; candidateIndex < candidateReplies.length; candidateIndex++) {
     const payload = candidateReplies[candidateIndex]!;
-    const planEntry = outboundPlan[candidateIndex];
+    const planEntry = outboundPlanBySourceIndex.get(candidateIndex);
     const threadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: params.replyToMode,
       payloadReplyToId: payload.replyToId,
