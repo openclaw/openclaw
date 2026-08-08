@@ -722,7 +722,7 @@ enum ExecApprovalsPromptPresenter {
         if decisions.indices.contains(selectedIndex) {
             return decisions[selectedIndex]
         }
-        return decisions.contains(.deny) ? .deny : nil
+        return nil
     }
 
     static func allowedPromptDecisions(_ request: ExecApprovalPromptRequest) -> [ExecApprovalDecision] {
@@ -930,10 +930,7 @@ private enum ExecHostExecutor {
                         allowAlwaysEligible: context.canPersistAllowAlways)),
                 timeoutMs: execApprovalsSocketTimeoutMs)
             else {
-                return self.errorResponse(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: approval prompt closed without decision",
-                    reason: "approval-cancelled")
+                return self.errorResponse(ExecHostRequestEvaluator.promptClosedError())
             }
 
             let followupDecision: ExecApprovalDecision
