@@ -66,6 +66,8 @@ vi.mock("./subagent-depth.js", () => ({
 
 import {
   maybeWakeRequesterAfterAllChildrenSettled,
+  rearmNoScopeDeferredRequesterSettleWakes,
+  testing as requesterSettleWakeTesting,
   type RequesterSettleWakeBatchState,
 } from "./subagent-announce.requester-settle-wake.js";
 
@@ -156,6 +158,9 @@ function deliveredCallArg(): Record<string, unknown> {
 
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   beforeEach(() => {
+    requesterSettleWakeTesting.setDepsForTest({
+      hasInProcessGatewayRequestContext: () => true,
+    });
     deliverSpy.mockClear();
     transitionBatchSpy.mockClear();
     completeBatchSpy.mockClear();
@@ -664,6 +669,88 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(firstChild.requesterSettleWake?.status).toBe("pending");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("defers without dispatching while no gateway request scope is available", async () => {
+    requesterSettleWakeTesting.setDepsForTest({
+      hasInProcessGatewayRequestContext: () => false,
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({ runId: "run-a" }),
+      makeSettledChild({ runId: "run-b" }),
+    ]);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+      expect(transitionBatchSpy).toHaveBeenCalledTimes(1);
+      const deferredState = transitionBatchSpy.mock.calls[0]?.[1] as
+        | RequesterSettleWakeBatchState
+        | undefined;
+      expect(deferredState?.status).toBe("pending");
+      expect(deferredState?.attemptCount).toBe(0);
+      expect(deferredState?.nextAttemptAt).toBeGreaterThan(0);
+
+      // No dispatch happens even after the base retry window: the scope is
+      // still missing, so the wake must keep deferring instead of failing.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+
+      // Once the gateway scope is installed, the same wake dispatches normally.
+      requesterSettleWakeTesting.setDepsForTest({
+        hasInProcessGatewayRequestContext: () => true,
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
+      expect(deliverSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      requesterSettleWakeTesting.setDepsForTest({
+        hasInProcessGatewayRequestContext: () => true,
+      });
+    }
+  });
+
+  it("re-admits no-scope-deferred wakes immediately when gateway context becomes ready (#119915)", async () => {
+    requesterSettleWakeTesting.setDepsForTest({
+      hasInProcessGatewayRequestContext: () => false,
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({ runId: "run-a" }),
+      makeSettledChild({ runId: "run-b" }),
+    ]);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+
+      // The gateway scope becomes ready well before the 30s + jitter backoff
+      // deadline. The deferred batch must re-admit immediately instead of
+      // parking the requester's final reply for the full retry window.
+      requesterSettleWakeTesting.setDepsForTest({
+        hasInProcessGatewayRequestContext: () => true,
+      });
+      rearmNoScopeDeferredRequesterSettleWakes();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(deliverSpy).toHaveBeenCalledTimes(1);
+      expect(deliveredCallArg().targetRequesterSessionKey).toBe(REQUESTER);
+      expect(completeBatchSpy).toHaveBeenCalledTimes(1);
+
+      // A later lifecycle drain re-invocation is a no-op: the batch is complete.
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(deliverSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      requesterSettleWakeTesting.setDepsForTest({
+        hasInProcessGatewayRequestContext: () => true,
+      });
     }
   });
 
