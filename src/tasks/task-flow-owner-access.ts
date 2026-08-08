@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   findLatestTaskFlowForOwnerKey,
+  findNewestNonTerminalTaskFlowForOwnerKey,
   getTaskFlowById,
   listTaskFlowsForOwnerKey,
 } from "./task-flow-registry.js";
@@ -47,5 +48,14 @@ export function resolveTaskFlowForLookupTokenForOwner(params: {
   if (!normalizedToken || normalizedToken !== normalizedCallerOwnerKey) {
     return undefined;
   }
-  return findLatestTaskFlowForOwner({ callerOwnerKey: normalizedCallerOwnerKey });
+  const latest = findLatestTaskFlowForOwner({ callerOwnerKey: normalizedCallerOwnerKey });
+  // Mirror resolveTaskFlowForLookupToken (#119129): prefer the newest live flow
+  // (including resumable blocked flows without an endedAt) when the newest
+  // overall is terminal, so owner-key lookups do not silently resolve to a
+  // finished flow.
+  if (latest) {
+    const active = findNewestNonTerminalTaskFlowForOwnerKey(normalizedCallerOwnerKey);
+    return active ?? latest;
+  }
+  return latest;
 }
