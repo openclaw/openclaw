@@ -31,7 +31,7 @@ import {
 import { ensureBoardViewElement, ensureWorkboardCardChipElement } from "./board-session-surface.ts";
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
 import { clearChatHistory } from "./chat-history.ts";
-import { ChatPaneBoard } from "./chat-pane-board.ts";
+import { ChatPaneHistoryAnchor } from "./chat-pane-history-anchor.ts";
 import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   CHAT_MODAL_SELECTOR,
@@ -60,10 +60,9 @@ import { exportChatMarkdown } from "./export.ts";
 import { admitInitialTurnHandoff, admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
-const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
-export abstract class ChatPaneLifecycle extends ChatPaneBoard {
+export abstract class ChatPaneLifecycle extends ChatPaneHistoryAnchor {
   private clearComposerPrefillAttention(): void {
     if (this.composerPrefillAttentionTimer !== null) {
       window.clearTimeout(this.composerPrefillAttentionTimer);
@@ -84,7 +83,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
       if (this.composerPrefillAttentionTarget === input) {
         this.clearComposerPrefillAttention();
       }
-    }, COMPOSER_PREFILL_ATTENTION_DURATION_MS);
+    }, 1_200);
   }
 
   protected confirmConversationReset(): Promise<boolean> {
@@ -707,6 +706,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
       this.ensureSessionRail();
     }
+    this.loadHistoryAnchorIfNeeded();
   }
 
   override disconnectedCallback() {

@@ -1644,15 +1644,18 @@ class SessionsPage extends OpenClawLightDomElement {
             this.selectedKeys = new Set();
           },
           onDeleteSelected: () => void this.deleteSelected(),
-          onNavigateToChat: (sessionKey) => {
-            const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+          onNavigateToChat: (sessionKey, historyAnchor) => {
+            const face = historyAnchor
+              ? "chat"
+              : resolveSessionPreferredFaceForKey(context, sessionKey);
             context.navigate(face, {
               ...sessionNavigationTarget({
                 context,
                 face,
                 sessionKey,
                 agentId: this.sessionPathAgentId(sessionKey, context),
-                preferenceDerivedFace: true,
+                preferenceDerivedFace: historyAnchor === undefined,
+                historyAnchor,
               }).options,
               hash: "",
             });

@@ -268,6 +268,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         startup: true,
         awaitHistory: true,
         deferBranches: true,
+        historyAnchor: this.active ? this.historyAnchor : undefined,
       });
       this.deferSessionHydrationUntilTranscript(state.sessionKey, historyRefresh);
     }
@@ -371,6 +372,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         startup: true,
         awaitHistory: true,
         deferBranches: true,
+        historyAnchor: this.active ? this.historyAnchor : undefined,
       });
       this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
       void historyRefresh.finally(() => {

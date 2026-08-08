@@ -105,6 +105,9 @@ function restoreChatQueueForSession(state: ChatPageHost, sessionKey: string): Ch
 }
 
 function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
+  if (state.chatHistoryAnchorActive) {
+    return;
+  }
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
@@ -188,6 +191,7 @@ export function resetChatStateForRouteSession(
     ) === true;
   state.currentSessionId = snapshot.sessionId;
   state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
+  state.chatHistoryAnchorActive = false;
   state.reconnectResumeSessionId = null;
   state.chatHistoryPagination = snapshot.pagination;
   state.chatMessage = "";
