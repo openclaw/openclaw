@@ -243,9 +243,15 @@ export type NativeHookRelayBridgeRegistration = {
   server: Server;
 };
 
+export type RetiredNativeHookRelayBridge = {
+  bridge: NativeHookRelayBridgeRegistration;
+  closeTimer: NodeJS.Timeout;
+};
+
 export type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
+  retiredRelayBridges: Set<RetiredNativeHookRelayBridge>;
   invocations: NativeHookRelayInvocation[];
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
