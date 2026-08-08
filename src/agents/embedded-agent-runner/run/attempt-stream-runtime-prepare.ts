@@ -178,6 +178,7 @@ export async function prepareEmbeddedAttemptStreamRuntime(input: {
     abortRun,
     markTimedOutDuringCompaction: input.lifecycle.markTimedOutDuringCompaction,
     markTimedOutByRunBudget: input.lifecycle.markTimedOutByRunBudget,
+    onFlushPartialOutput: preparedStream.subscription.flushPartialAssistantText,
   });
 
   return {

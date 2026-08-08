@@ -24,6 +24,20 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
   sessionLockController: StreamSettleInput["sessionLockController"];
   withOwnedSessionWriteLock: StreamSettleInput["withOwnedSessionWriteLock"];
   waitForPendingEvents: () => Promise<void>;
+  /**
+   * Flushes any partial assistant text remaining in the subscription buffer.
+   * Called after {@link waitForPendingEvents} so a queued `message_update` that
+   * was still serialized when the run-budget timer fired still has its delta
+   * committed before the attempt result is finalized. Idempotent: a second call
+   * reads an already-emptied buffer and is a no-op. See #113182.
+   */
+  flushPartialAssistantText?: () => void;
+  /**
+   * Gates the post-drain re-flush to the run-budget timeout terminal this
+   * repair targets. Cancellation and provider-failure aborts must not publish
+   * partial output through the settlement path (P2).
+   */
+  flushPartialAssistantTextOnRunBudgetTimeout?: boolean;
   repairedRejectedThinkingReplay: boolean;
   getRunAbortDeadlineAtMs: () => number;
   shouldFlushForContextEngine: () => boolean;
@@ -45,6 +59,15 @@ export async function finalizeEmbeddedAttemptStreamPhase(input: {
   const { activeSession, sessionManager, sessionLockController, withOwnedSessionWriteLock } = input;
 
   await input.waitForPendingEvents();
+  // After the subscription queue drains, a `message_update` that was still
+  // serialized when the run-budget timer fired has now written its delta into
+  // the buffer. The timeout's pre-abort flush (attempt-timeout-prepare.ts)
+  // could not see it; re-flush here so the partial text is not lost. No-op on
+  // a clean completion (message_end already emptied the buffer). Only for the
+  // run-budget timeout terminal — never for cancellation or provider failure.
+  if (input.flushPartialAssistantTextOnRunBudgetTimeout) {
+    input.flushPartialAssistantText?.();
+  }
   const beforeAgentFinalizeRevisionReason = input.getBeforeAgentFinalizeRevisionReason();
   const beforeAgentFinalizeRevisionEntryId = input.getBeforeAgentFinalizeRevisionEntryId();
   let rewoundBeforeAgentFinalizeRevision = false;

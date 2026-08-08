@@ -311,6 +311,9 @@ export async function runEmbeddedAttemptSettledPhase(
       sessionLockController: input.sessionLock.sessionLockController,
       withOwnedSessionWriteLock: input.sessionLock.withOwnedSessionWriteLock,
       waitForPendingEvents,
+      flushPartialAssistantText: subscription.flushPartialAssistantText,
+      flushPartialAssistantTextOnRunBudgetTimeout: projectAgentRunAttemptTerminal(state.terminal)
+        .timedOutByRunBudget,
       repairedRejectedThinkingReplay: input.getRepairedRejectedThinkingReplay(),
       getRunAbortDeadlineAtMs,
       shouldFlushForContextEngine: () =>

@@ -984,6 +984,7 @@ export function handleMessageUpdate(
     if (isResponsesCommentary && chunk) {
       // Keep cumulative end events monotonic without feeding commentary into reply buffers.
       ctx.state.deltaBuffer += chunk;
+      ctx.state.deltaBufferIsCommentary = true;
     }
     const commentaryText =
       !chunk && (!isResponsesCommentary || !hadResponsesCommentaryText)
@@ -1015,6 +1016,7 @@ export function handleMessageUpdate(
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
+    ctx.state.deltaBufferIsCommentary = false;
     if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
       if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
         appendBlockReplyChunk(ctx, chunk);
@@ -1356,6 +1358,9 @@ export function handleMessageEnd(
   const finalizeMessageEnd = () => {
     ctx.state.deltaBuffer = "";
     ctx.state.thinkingTagStream = createThinkingTagStreamState();
+    ctx.state.deltaBufferIsCommentary = false;
+    ctx.state.flushedVisibleCursor = 0;
+    ctx.state.flushedVisibleText = "";
     ctx.state.blockBuffer = "";
     ctx.blockChunker?.reset();
     ctx.state.blockState.thinking = false;

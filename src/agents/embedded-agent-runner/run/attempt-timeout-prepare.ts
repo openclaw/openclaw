@@ -27,6 +27,10 @@ export function prepareEmbeddedAttemptTimeout(input: {
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
   markTimedOutDuringCompaction: () => void;
   markTimedOutByRunBudget: () => void;
+  /** Callback invoked just before abort, to flush any partial model output
+   * accumulated during streaming. Without this, assistant text being generated
+   * at the timeout boundary would be discarded (see #113182). */
+  onFlushPartialOutput?: () => void;
 }) {
   const { activeSession, attempt } = input;
   let abortWarnTimer: NodeJS.Timeout | undefined;
@@ -71,6 +75,10 @@ export function prepareEmbeddedAttemptTimeout(input: {
         ) {
           input.markTimedOutDuringCompaction();
         }
+        // Flush any partial model output before abort. Without this, assistant
+        // text accumulated during streaming would be discarded when the run is
+        // terminated at the configured timeoutMs (see #113182).
+        input.onFlushPartialOutput?.();
         input.markTimedOutByRunBudget();
         input.abortRun(true);
         if (!abortWarnTimer) {

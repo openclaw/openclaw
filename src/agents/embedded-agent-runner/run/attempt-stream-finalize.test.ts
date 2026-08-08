@@ -391,4 +391,115 @@ describe("finalizeEmbeddedAttemptStreamPhase", () => {
     expect(fixture.input.onSettleErrorState).toHaveBeenCalledOnce();
     expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
   });
+
+  it("flushes partial assistant text after pending events drain so a queued message_update is not lost", async () => {
+    // Regression for #113182: the run-budget timer's pre-abort flush reads
+    // deltaBuffer synchronously, but a message_update handler serialized on
+    // pendingEventChain may not have written its delta yet. Settlement waits
+    // for the queue; re-flush here so that delayed delta is still committed.
+    const fixture = createFixture();
+    fixture.input.waitForPendingEvents = vi.fn(async () => {
+      fixture.order.push("pending-events");
+    });
+    const flushPartialAssistantText = vi.fn(() => {
+      fixture.order.push("flush-partial");
+    });
+    fixture.input.flushPartialAssistantText = flushPartialAssistantText;
+    fixture.input.flushPartialAssistantTextOnRunBudgetTimeout = true;
+    mocks.settleStream.mockImplementation(async () => {
+      fixture.order.push("settle");
+      return {
+        promptError: null,
+        promptErrorSource: null,
+        timedOutDuringCompaction: false,
+        compactionOccurredThisAttempt: false,
+        messagesSnapshot: [],
+        sessionIdUsed: "session-1",
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: undefined,
+        attemptUsage: undefined,
+        cacheBreak: null,
+        lastCallUsage: undefined,
+        promptCache: undefined,
+      };
+    });
+    mocks.completeAfterTurn.mockResolvedValue({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+
+    await finalizeEmbeddedAttemptStreamPhase(fixture.input);
+
+    expect(flushPartialAssistantText).toHaveBeenCalledOnce();
+    // Flush must run AFTER the queue drains, so a queued delta is in the buffer
+    // when flush reads it — not before, where it would still be pending.
+    expect(fixture.order.indexOf("pending-events")).toBeLessThan(
+      fixture.order.indexOf("flush-partial"),
+    );
+  });
+
+  it("does not flush on non-run-budget terminals (cancellation / provider failure)", async () => {
+    // P2: the settlement re-flush must be gated on the run-budget timeout
+    // terminal; cancellation and provider-failure aborts must not publish
+    // partial output through the finalize path.
+    const fixture = createFixture();
+    const flushPartialAssistantText = vi.fn();
+    fixture.input.flushPartialAssistantText = flushPartialAssistantText;
+    fixture.input.flushPartialAssistantTextOnRunBudgetTimeout = false;
+    mocks.settleStream.mockResolvedValue({
+      promptError: null,
+      promptErrorSource: null,
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      messagesSnapshot: [],
+      sessionIdUsed: "session-1",
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: undefined,
+      attemptUsage: undefined,
+      cacheBreak: null,
+      lastCallUsage: undefined,
+      promptCache: undefined,
+    });
+    mocks.completeAfterTurn.mockResolvedValue({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+
+    await finalizeEmbeddedAttemptStreamPhase(fixture.input);
+
+    expect(flushPartialAssistantText).not.toHaveBeenCalled();
+  });
+
+  it("does not require flushPartialAssistantText when the stream completed cleanly", async () => {
+    // A clean completion empties deltaBuffer via message_end; the post-drain
+    // flush is optional and must not break the finalize path when unset.
+    const fixture = createFixture();
+    fixture.input.flushPartialAssistantText = undefined;
+    mocks.settleStream.mockResolvedValue({
+      promptError: null,
+      promptErrorSource: null,
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      messagesSnapshot: [],
+      sessionIdUsed: "session-1",
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: undefined,
+      attemptUsage: undefined,
+      cacheBreak: null,
+      lastCallUsage: undefined,
+      promptCache: undefined,
+    });
+    mocks.completeAfterTurn.mockResolvedValue({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+
+    await expect(finalizeEmbeddedAttemptStreamPhase(fixture.input)).resolves.toEqual({
+      sessionIdUsed: "session-1",
+      sessionFileUsed: "session.jsonl",
+    });
+  });
 });
