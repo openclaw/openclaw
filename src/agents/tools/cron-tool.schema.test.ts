@@ -6,6 +6,7 @@ import {
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { recoverCronObjectFromFlatParams } from "./cron-tool-canonicalize.js";
 import { createCronTool } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
@@ -116,6 +117,90 @@ describe("createCronToolSchema", () => {
     );
   });
 
+  it("exposes provider-compatible flat add fields for models that cannot nest job objects", () => {
+    expect(propertyAt(schemaRecord, "name")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "enabled")).toMatchObject({ type: "boolean" });
+    expect(propertyAt(schemaRecord, "sessionTarget")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "at")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "everyMs")).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
+    expect(propertyAt(schemaRecord, "expr")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "tz")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "message")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "text")?.description).toMatch(/systemEvent/i);
+    expect(propertyAt(schemaRecord, "mode")?.description).toMatch(/wake.*only/i);
+    expect(propertyAt(schemaRecord, "text")?.description).toMatch(/add.*update.*wake/i);
+  });
+
+  it("keeps advanced and policy fields in the canonical nested contract", () => {
+    for (const field of [
+      "anchorMs",
+      "model",
+      "fallbacks",
+      "toolsAllow",
+      "thinking",
+      "timeoutSeconds",
+      "script",
+      "toolBudget",
+      "pacingMin",
+      "pacingMax",
+      "triggerScript",
+      "triggerOnce",
+      "streamCommand",
+      "streamCwd",
+      "streamMode",
+      "streamMatch",
+      "streamBatchMs",
+      "streamMaxBatchBytes",
+    ]) {
+      expect(propertyAt(schemaRecord, field)).toBeUndefined();
+    }
+    expect(propertyAt(schemaRecord, "job.payload.model")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "job.payload.toolsAllow")).toMatchObject({ type: "array" });
+    expect(propertyAt(schemaRecord, "job.schedule.command")).toMatchObject({ type: "array" });
+  });
+
+  // Drift guard: every flat field the schema advertises must be a key the
+  // canonicalizer recovers into the nested job/patch shape. A field that is not
+  // recoverable would be silently dropped, so a model would set it with no
+  // effect. Keys that route the call itself (action, job/patch targeting,
+  // gateway options, wake/run/list options) are the only advertised keys the
+  // canonicalizer may ignore; adding one here needs the same scrutiny.
+  it("only advertises flat fields the canonicalizer can recover", () => {
+    const callRoutingFields = new Set([
+      "action",
+      "contextMessages",
+      "gatewayToken",
+      "gatewayUrl",
+      "id",
+      "includeDisabled",
+      "in",
+      "job",
+      "jobId",
+      "limit",
+      "mode",
+      "offset",
+      "patch",
+      "runMode",
+      "timeoutMs",
+    ]);
+    const topLevelFields = Object.keys(
+      (schemaRecord["properties"] ?? {}) as Record<string, unknown>,
+    );
+    const flatFields = topLevelFields.filter((field) => !callRoutingFields.has(field));
+    expect(flatFields.length).toBeGreaterThan(0);
+    for (const field of flatFields) {
+      // `found` reflects key recognition before value normalization, so a
+      // placeholder value is enough to prove the key is not dropped.
+      expect({ field, found: recoverCronObjectFromFlatParams({ [field]: true }).found }).toEqual({
+        field,
+        found: true,
+      });
+    }
+  });
+
   it("exposes next_check with its relative duration parameter", () => {
     expect(Value.Check(schema, { action: "next_check", in: "15m" })).toBe(true);
     expect(propertyAt(schemaRecord, "in")?.description).toContain("next_check");
@@ -174,11 +259,9 @@ describe("createCronToolSchema", () => {
   });
 
   it("documents wake, context, and session-target fields", () => {
-    expect(propertyAt(schemaRecord, "text")?.description).toBe(
-      'systemEvent text for action="wake"',
-    );
+    expect(propertyAt(schemaRecord, "text")?.description).toMatch(/add.*update.*wake/i);
     expect(propertyAt(schemaRecord, "mode")?.description).toBe(
-      'Wake mode for action="wake" (default next-heartbeat)',
+      'Wake mode for action="wake" only (default next-heartbeat); not cron job delivery mode',
     );
     for (const path of ["job.sessionTarget", "patch.sessionTarget"]) {
       expect(propertyAt(schemaRecord, path)?.description).toBe(

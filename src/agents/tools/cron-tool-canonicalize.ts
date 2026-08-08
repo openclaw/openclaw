@@ -7,6 +7,9 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
+// "on-exit" is recognized (not synthesized) so an explicit on-exit kind
+// survives canonicalization and reaches the assertNoCronShellExecution
+// rejection instead of being overwritten by another flat schedule field.
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
@@ -35,13 +38,34 @@ const CRON_FLAT_SCHEDULE_KEYS = [
   "stagger",
   "staggerMs",
   "exact",
-  "command",
-  "cwd",
-  "mode",
-  "match",
-  "batchMs",
-  "maxBatchBytes",
+  // command/cwd deliberately excluded — must stay fully nested under an
+  // explicit schedule.kind="stream" object, never flat-recovered, so the
+  // assertNoCronShellExecution guard has one legitimate path to check.
+  // Dedicated stream* aliases (not the raw field names) avoid colliding with
+  // unrelated same-named top-level fields, e.g. the wake-only `mode`.
+  "streamCommand",
+  "streamCwd",
+  "streamMode",
+  "streamMatch",
+  "streamBatchMs",
+  "streamMaxBatchBytes",
 ] as const;
+const CRON_FLAT_PACING_KEYS = ["pacingMin", "pacingMax"] as const;
+const CRON_FLAT_TRIGGER_KEYS = ["triggerScript", "triggerOnce"] as const;
+type CronFlatFieldGroup = "scalar" | "schedule" | "payload" | "pacing" | "trigger";
+
+const CRON_FLAT_FIELD_GROUPS: ReadonlyMap<string, CronFlatFieldGroup> = new Map([
+  ...CRON_FLAT_SCHEDULE_KEYS.map((key) => [key, "schedule"] as const),
+  ...CRON_FLAT_PAYLOAD_KEYS.map((key) => [key, "payload"] as const),
+  ...CRON_FLAT_PACING_KEYS.map((key) => [key, "pacing"] as const),
+  ...CRON_FLAT_TRIGGER_KEYS.map((key) => [key, "trigger"] as const),
+  ["schedule", "schedule"] as const,
+  ["scheduleKind", "schedule"] as const,
+  ["payload", "payload"] as const,
+  ["namePayload", "payload"] as const,
+  ["pacing", "pacing"] as const,
+  ["trigger", "trigger"] as const,
+]);
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
   "declarationKey",
@@ -65,7 +89,16 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "sessionTargetName",
   ...CRON_FLAT_PAYLOAD_KEYS,
   ...CRON_FLAT_SCHEDULE_KEYS,
+  ...CRON_FLAT_PACING_KEYS,
+  ...CRON_FLAT_TRIGGER_KEYS,
 ]);
+
+function cronFlatFieldGroup(key: string): CronFlatFieldGroup | undefined {
+  if (!CRON_RECOVERABLE_OBJECT_KEYS.has(key)) {
+    return undefined;
+  }
+  return CRON_FLAT_FIELD_GROUPS.get(key) ?? "scalar";
+}
 
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
   return isStringOption(value, CRON_SCHEDULE_KINDS);
@@ -192,22 +225,30 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     schedule.kind = "cron";
   }
 
-  const movedCommand = moveDefinedField({ source: value, target: schedule, from: "command" });
-  if (movedCommand && !isCronScheduleKind(schedule.kind)) {
-    schedule.kind = "on-exit";
+  // command is deliberately not flat-recovered (see CRON_FLAT_SCHEDULE_KEYS);
+  // an explicit schedule.kind must be provided nested for on-exit.
+  for (const key of ["anchorMs", "tz", "staggerMs"] as const) {
+    hasSchedule = moveDefinedField({ source: value, target: schedule, from: key }) || hasSchedule;
   }
 
-  for (const key of [
-    "anchorMs",
-    "tz",
-    "staggerMs",
-    "cwd",
-    "mode",
-    "match",
-    "batchMs",
-    "maxBatchBytes",
+  // stream* flat aliases avoid colliding with unrelated top-level fields
+  // (e.g. wake-only `mode`). Any one of them present is explicit stream
+  // intent, so it sets kind="stream" even if streamCommand itself is
+  // missing — that surfaces as a clear "command required" error downstream
+  // instead of a silently ignored field.
+  for (const [from, to] of [
+    ["streamCommand", "command"],
+    ["streamCwd", "cwd"],
+    ["streamMode", "mode"],
+    ["streamMatch", "match"],
+    ["streamBatchMs", "batchMs"],
+    ["streamMaxBatchBytes", "maxBatchBytes"],
   ] as const) {
-    hasSchedule = moveDefinedField({ source: value, target: schedule, from: key }) || hasSchedule;
+    const movedStreamField = moveDefinedField({ source: value, target: schedule, from, to });
+    if (movedStreamField && !isCronScheduleKind(schedule.kind)) {
+      schedule.kind = "stream";
+    }
+    hasSchedule = movedStreamField || hasSchedule;
   }
   hasSchedule =
     moveDefinedField({ source: value, target: schedule, from: "stagger", to: "staggerMs" }) ||
@@ -226,8 +267,6 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
       schedule.kind = "every";
     } else if (schedule.expr !== undefined) {
       schedule.kind = "cron";
-    } else if (schedule.command !== undefined) {
-      schedule.kind = "on-exit";
     }
   }
 
@@ -276,6 +315,36 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 }
 
+function canonicalizeCronToolPacing(value: Record<string, unknown>): void {
+  const pacing = isRecord(value.pacing) ? { ...value.pacing } : {};
+  let hasPacing = isRecord(value.pacing);
+
+  hasPacing =
+    moveDefinedField({ source: value, target: pacing, from: "pacingMin", to: "min" }) || hasPacing;
+  hasPacing =
+    moveDefinedField({ source: value, target: pacing, from: "pacingMax", to: "max" }) || hasPacing;
+
+  if (hasPacing) {
+    value.pacing = pacing;
+  }
+}
+
+function canonicalizeCronToolTrigger(value: Record<string, unknown>): void {
+  const trigger = isRecord(value.trigger) ? { ...value.trigger } : {};
+  let hasTrigger = isRecord(value.trigger);
+
+  hasTrigger =
+    moveDefinedField({ source: value, target: trigger, from: "triggerScript", to: "script" }) ||
+    hasTrigger;
+  hasTrigger =
+    moveDefinedField({ source: value, target: trigger, from: "triggerOnce", to: "once" }) ||
+    hasTrigger;
+
+  if (hasTrigger) {
+    value.trigger = trigger;
+  }
+}
+
 /**
  * Normalizes whitespace-padded cron object keys. Some tool-call
  * extraction/serialization pipelines can produce keys with trailing spaces
@@ -312,6 +381,8 @@ export function canonicalizeCronToolObject(
   repairPaddedCronKeys(next);
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
+  canonicalizeCronToolPacing(next);
+  canonicalizeCronToolTrigger(next);
   canonicalizeCronToolPayload(next);
   return next;
 }
@@ -331,20 +402,121 @@ export function isEmptyRecoveredCronPatch(value: unknown): boolean {
   );
 }
 
+function cronFlatValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return (
+      left.length === right.length &&
+      left.every((entry, index) => cronFlatValuesEqual(entry, right[index]))
+    );
+  }
+  if (!isRecord(left) || !isRecord(right)) {
+    return false;
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => Object.hasOwn(right, key) && cronFlatValuesEqual(left[key], right[key]))
+  );
+}
+
+function isDuplicateStructuredFlatGroup(
+  nestedValue: Record<string, unknown>,
+  flatValue: Record<string, unknown>,
+): boolean {
+  return Object.entries(flatValue).every(
+    ([key, value]) =>
+      Object.hasOwn(nestedValue, key) && cronFlatValuesEqual(nestedValue[key], value),
+  );
+}
+
+/** Merges scalar flat fields while rejecting partial structured-family mixtures. */
+export function mergeCronObjectWithFlatParams(params: {
+  action: "add" | "update";
+  nestedName: "job" | "patch";
+  nested: Record<string, unknown>;
+  flat: Record<string, unknown>;
+}): Record<string, unknown> {
+  const merged = { ...params.nested };
+  for (const [key, flatValue] of Object.entries(params.flat)) {
+    if (!Object.hasOwn(merged, key)) {
+      merged[key] = flatValue;
+      continue;
+    }
+    const nestedValue = merged[key];
+    if (
+      (key === "schedule" || key === "payload" || key === "pacing" || key === "trigger") &&
+      isRecord(nestedValue) &&
+      isRecord(flatValue) &&
+      isDuplicateStructuredFlatGroup(nestedValue, flatValue)
+    ) {
+      continue;
+    }
+    if (cronFlatValuesEqual(nestedValue, flatValue)) {
+      continue;
+    }
+    const flatLabel =
+      key === "schedule" || key === "payload" || key === "pacing" || key === "trigger"
+        ? `${key} fields`
+        : key;
+    throw new Error(
+      `cron ${params.action} cannot mix ${params.nestedName}.${key} with conflicting flat ${flatLabel}; use flat fields only`,
+    );
+  }
+  return merged;
+}
+
 /** Recovers cron job or patch fields that a model flattened beside the action arguments. */
 export function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
   found: boolean;
   value: Record<string, unknown>;
+  consumedKeys: string[];
 } {
   const value: Record<string, unknown> = {};
+  const consumedKeys: string[] = [];
   let found = false;
   for (const key of Object.keys(params)) {
-    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
+    if (cronFlatFieldGroup(key) !== undefined && params[key] !== undefined) {
       value[key] = params[key];
+      // Keep raw kind visible so on-exit retains error precedence over command/cwd.
+      if (key !== "kind") {
+        consumedKeys.push(key);
+      }
       found = true;
     }
   }
-  return { found, value: canonicalizeCronToolObject(value) };
+  return { found, value: canonicalizeCronToolObject(value), consumedKeys };
+}
+
+const CRON_STREAM_ONLY_FLAT_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["match", "streamMatch"],
+  ["batchMs", "streamBatchMs"],
+  ["maxBatchBytes", "streamMaxBatchBytes"],
+]);
+
+/**
+ * Rejects bare schedule-shaped keys on add/update that collide with an
+ * unrelated same-named top-level field instead of silently doing nothing.
+ * `mode` is a real top-level field, but only for action="wake"; `match`/
+ * `batchMs`/`maxBatchBytes` have no other top-level meaning at all. Both
+ * would otherwise be dropped by canonicalization with no effect and no
+ * error, reproducing the exact silent-failure shape this flat-field system
+ * exists to prevent.
+ */
+export function assertNoStrayCronScheduleAliasFields(value: Record<string, unknown>): void {
+  if (value.mode !== undefined) {
+    throw new Error('"mode" is only valid for action="wake"; use streamMode for stream schedules.');
+  }
+  for (const [key, alias] of CRON_STREAM_ONLY_FLAT_ALIASES) {
+    if (value[key] !== undefined) {
+      throw new Error(
+        `"${key}" is not a valid field for action="add" or action="update"; use ${alias} for stream schedules.`,
+      );
+    }
+  }
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */

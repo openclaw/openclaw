@@ -123,7 +123,9 @@ function createCronScheduleSchema(): TSchema {
             description: "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
           }),
         ),
-        cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
+        cwd: Type.Optional(
+          Type.String({ minLength: 1, description: "Working directory (kind=stream)" }),
+        ),
         mode: optionalStringEnum(["line", "match"] as const),
         match: Type.Optional(Type.String({ description: "Regex source (stream match mode)" })),
         batchMs: optionalNonNegativeIntegerSchema(),
@@ -348,12 +350,61 @@ function createCronPatchObjectSchema(): TSchema {
   );
 }
 
+// Small flat path for common jobs when a model cannot reliably emit nested
+// objects. Advanced fields stay in the canonical job/patch schema; runtime may
+// still recover additional legacy flat fields without advertising them here.
+function createCronFlatJobSchemaProperties() {
+  return {
+    name: Type.Optional(
+      Type.String({
+        description: 'Flat job name for action="add" or action="update"',
+      }),
+    ),
+    enabled: Type.Optional(
+      Type.Boolean({
+        description: 'Flat enabled flag for action="add" or action="update"',
+      }),
+    ),
+    sessionTarget: Type.Optional(
+      Type.String({
+        description:
+          'Flat job target for action="add" or action="update": main | isolated | current | session:<id>',
+      }),
+    ),
+    at: Type.Optional(
+      Type.String({
+        description: 'Flat one-shot ISO-8601 time for action="add" or action="update"',
+      }),
+    ),
+    everyMs: optionalPositiveIntegerSchema({
+      description: 'Flat recurring interval ms for action="add" or action="update"',
+    }),
+    expr: Type.Optional(
+      Type.String({
+        description: 'Flat cron expression for action="add" or action="update"',
+      }),
+    ),
+    tz: Type.Optional(
+      Type.String({
+        description: "IANA timezone for a flat cron expression",
+      }),
+    ),
+    message: Type.Optional(
+      Type.String({
+        description:
+          'Flat agentTurn prompt for action="add" or action="update"; implies an agentTurn payload',
+      }),
+    ),
+  };
+}
+
 // Flattened schema: runtime validates per-action requirements.
 export function createCronToolSchema(): TSchema {
   return Type.Object(
     {
       action: stringEnum(CRON_ACTIONS),
       ...gatewayCallOptionSchemaProperties(),
+      ...createCronFlatJobSchemaProperties(),
       includeDisabled: Type.Optional(Type.Boolean()),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
@@ -371,9 +422,15 @@ export function createCronToolSchema(): TSchema {
           description: 'Relative duration for action="next_check" (for example, "15m")',
         }),
       ),
-      text: Type.Optional(Type.String({ description: 'systemEvent text for action="wake"' })),
+      text: Type.Optional(
+        Type.String({
+          description:
+            'systemEvent text for action="add" or action="update"; event text for action="wake"',
+        }),
+      ),
       mode: optionalStringEnum(CRON_WAKE_MODES, {
-        description: 'Wake mode for action="wake" (default next-heartbeat)',
+        description:
+          'Wake mode for action="wake" only (default next-heartbeat); not cron job delivery mode',
       }),
       runMode: optionalStringEnum(CRON_RUN_MODES, {
         description:
