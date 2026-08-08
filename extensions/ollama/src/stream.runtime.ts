@@ -55,6 +55,7 @@ export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const OLLAMA_TERMINAL_TAIL_MAX_BYTES = 256 * 1024;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -867,6 +868,7 @@ export async function* parseNdjsonStream(
   let buffer = "";
   let pendingRecordBytes = 0;
   let terminalRecord: OllamaChatResponse | undefined;
+  let terminalTailBytes = 0;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -878,6 +880,12 @@ export async function* parseNdjsonStream(
         // A terminal record was already parsed; the remaining body bytes only
         // need fatal UTF-8 validation before the completion is exposed.
         decoder.decode(value, { stream: true });
+        terminalTailBytes += value.byteLength;
+        if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
+          // Bound the post-terminal validation drain: a peer that keeps
+          // sending valid trailing bytes must not withhold completion forever.
+          break;
+        }
         continue;
       }
       buffer += decoder.decode(value, { stream: true });
