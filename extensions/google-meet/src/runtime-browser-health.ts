@@ -20,7 +20,7 @@ export async function refreshGoogleMeetBrowserHealth(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
   logger: RuntimeLogger;
-  options?: { force?: boolean; readOnly?: boolean };
+  options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number };
   runtime: PluginRuntime;
   session: GoogleMeetSession;
 }): Promise<boolean> {
@@ -34,6 +34,7 @@ export async function refreshGoogleMeetBrowserHealth(params: {
             fullConfig,
             mode: session.mode,
             readOnly: options.readOnly,
+            timeoutMs: options.timeoutMs,
             trackedMeetingUrl: session.url,
             trackedTargetId: session.chrome?.browserTab?.targetId,
             url: session.url,
@@ -44,6 +45,7 @@ export async function refreshGoogleMeetBrowserHealth(params: {
             fullConfig,
             mode: session.mode,
             readOnly: options.readOnly,
+            timeoutMs: options.timeoutMs,
             trackedMeetingUrl: session.url,
             trackedTargetId: session.chrome?.browserTab?.targetId,
             url: session.url,

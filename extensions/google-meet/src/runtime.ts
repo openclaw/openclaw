@@ -544,7 +544,7 @@ export class GoogleMeetRuntime {
 
   async #refreshBrowserHealth(
     session: GoogleMeetSession,
-    options: { force?: boolean; readOnly?: boolean } = {},
+    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number } = {},
   ): Promise<boolean> {
     return await refreshGoogleMeetBrowserHealth({ ...this.params, options, session });
   }

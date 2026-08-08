@@ -5465,11 +5465,21 @@ describe("google-meet plugin", () => {
         session,
         spoken: false,
       });
+    const refreshForProbe = vi
+      .spyOn(meetingRuntimeProbes, "refreshMeetingCaptionHealthForProbe")
+      .mockResolvedValue({ browserHealthChecked: false, manualActionIsAuthoritative: false });
 
-    await runtime.testListen({ url: MEET_URL, mode: "transcribe", timeoutMs: 1 });
+    try {
+      await runtime.testListen({ url: MEET_URL, mode: "transcribe", timeoutMs: 1 });
 
-    expect(joinForProbe).toHaveBeenCalled();
-    expect(publicJoin).not.toHaveBeenCalled();
+      expect(joinForProbe).toHaveBeenCalled();
+      expect(publicJoin).not.toHaveBeenCalled();
+      const forwardedTimeoutMs = refreshForProbe.mock.calls[0]?.[2];
+      expect(forwardedTimeoutMs).toBeGreaterThan(0);
+      expect(forwardedTimeoutMs).toBeLessThanOrEqual(1);
+    } finally {
+      refreshForProbe.mockRestore();
+    }
   });
 
   it("preserves plugin ownership from browser create through join and leave", async () => {

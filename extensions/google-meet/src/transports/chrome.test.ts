@@ -286,4 +286,55 @@ describe("google meet chrome transport", () => {
       { timeoutMs: 10_000, scopes: ["operator.admin"] },
     );
   });
+
+  it("forwards the probe deadline through retained-tab recovery", async () => {
+    const gatewayRequest = vi.fn(async (_method, params) => {
+      if (params.path === "/tabs") {
+        return {
+          tabs: [
+            {
+              targetId: "meet-tab",
+              title: "Meet",
+              url: "https://meet.google.com/abc-defg-hij?hl=en",
+            },
+          ],
+        };
+      }
+      if (params.path === "/tabs/focus") {
+        return { ok: true };
+      }
+      if (params.path === "/act") {
+        return {
+          result: JSON.stringify({
+            inCall: true,
+            micMuted: true,
+            url: "https://meet.google.com/abc-defg-hij?hl=en",
+          }),
+        };
+      }
+      throw new Error(`unexpected browser request path ${String(params.path)}`);
+    });
+
+    await recoverCurrentMeetTab({
+      runtime: browserRuntime(gatewayRequest),
+      config: resolveGoogleMeetConfig({}),
+      mode: "transcribe",
+      readOnly: true,
+      timeoutMs: 25,
+      trackedMeetingUrl: "https://meet.google.com/abc-defg-hij",
+      trackedTargetId: "meet-tab",
+      url: "https://meet.google.com/abc-defg-hij",
+    });
+
+    const recoveryTimeouts = gatewayRequest.mock.calls.map(
+      ([, params]) => (params as { timeoutMs?: number }).timeoutMs,
+    );
+    expect(recoveryTimeouts.length).toBeGreaterThan(0);
+    expect(recoveryTimeouts.every((timeoutMs) => timeoutMs !== undefined && timeoutMs > 0)).toBe(
+      true,
+    );
+    expect(recoveryTimeouts.every((timeoutMs) => timeoutMs !== undefined && timeoutMs <= 25)).toBe(
+      true,
+    );
+  });
 });

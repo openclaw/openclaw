@@ -392,6 +392,7 @@ export async function recoverCurrentMeetTab(params: {
   fullConfig?: OpenClawConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
+  timeoutMs?: number;
   trackedMeetingUrl?: string;
   trackedTargetId?: string;
   url?: string;
@@ -415,6 +416,7 @@ export async function recoverCurrentMeetTab(params: {
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
       requestedMeetingUrl: params.url,
+      timeoutMs: params.timeoutMs,
       trackedMeetingUrl: params.trackedMeetingUrl,
       trackedTargetId: params.trackedTargetId,
     })),
@@ -427,6 +429,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
   fullConfig?: OpenClawConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
+  timeoutMs?: number;
   trackedMeetingUrl?: string;
   trackedTargetId?: string;
   url?: string;
@@ -463,6 +466,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
       requestedMeetingUrl: params.url,
+      timeoutMs: params.timeoutMs,
       trackedMeetingUrl: params.trackedMeetingUrl,
       trackedTargetId: params.trackedTargetId,
     })),
