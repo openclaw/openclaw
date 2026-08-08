@@ -22,12 +22,32 @@ function isRealtimeVoiceEnabled(voice: Record<string, unknown>): boolean {
   return isEnabledFlag(voice) && voice.mode !== "stt-tts";
 }
 
+function materializeModelProviderApiKeys(
+  sourceConfig: ResolverContext["sourceConfig"],
+  defaults: SecretDefaults | undefined,
+): ResolverContext["sourceConfig"] {
+  const config = structuredClone(sourceConfig);
+  if (!isRecord(config.models) || !isRecord(config.models.providers)) {
+    return config;
+  }
+  for (const providerConfig of Object.values(config.models.providers)) {
+    if (
+      isRecord(providerConfig) &&
+      hasConfiguredSecretInputValue(providerConfig.apiKey, defaults)
+    ) {
+      providerConfig.apiKey = "configured-secret";
+    }
+  }
+  return config;
+}
+
 function resolveAutoRealtimeProviderId(params: {
   providers: Record<string, unknown>;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): string | undefined {
-  for (const provider of listRealtimeVoiceProviders(params.context.sourceConfig).toSorted(
+  const config = materializeModelProviderApiKeys(params.context.sourceConfig, params.defaults);
+  for (const provider of listRealtimeVoiceProviders(config).toSorted(
     (left, right) =>
       (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
       (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER),
@@ -40,12 +60,12 @@ function resolveAutoRealtimeProviderId(params: {
     try {
       const resolvedConfig =
         provider.resolveConfig?.({
-          cfg: params.context.sourceConfig,
+          cfg: config,
           rawConfig,
         }) ?? rawConfig;
       if (
         provider.isConfigured({
-          cfg: params.context.sourceConfig,
+          cfg: config,
           providerConfig: resolvedConfig,
         })
       ) {

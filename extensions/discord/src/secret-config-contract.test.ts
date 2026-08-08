@@ -23,6 +23,19 @@ const { canonicalizeRealtimeVoiceProviderIdMock, listRealtimeVoiceProvidersMock 
         {
           id: "google",
           autoSelectOrder: 20,
+          resolveConfig: ({
+            cfg,
+            rawConfig,
+          }: {
+            cfg: OpenClawConfig;
+            rawConfig: Record<string, unknown>;
+          }) => {
+            const apiKey = rawConfig.apiKey ?? cfg.models?.providers?.google?.apiKey;
+            if (apiKey !== undefined && typeof apiKey !== "string") {
+              throw new Error("unresolved Google API key");
+            }
+            return { ...rawConfig, apiKey };
+          },
           isConfigured,
         },
         {
@@ -259,6 +272,51 @@ describe("Discord secret config contract", () => {
       "channels.discord.voice.realtime.providers.openai.apiKey",
     ]);
     expect(context.warnings).toStrictEqual([]);
+  });
+
+  it("auto-selects a global provider SecretRef before a lower local provider", () => {
+    const sourceConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com",
+            models: [],
+            apiKey: { source: "env", provider: "default", id: "GLOBAL_GOOGLE" },
+          },
+        },
+      },
+      channels: {
+        discord: {
+          voice: {
+            realtime: {
+              providers: {
+                codex: {
+                  apiKey: { source: "env", provider: "default", id: "LOWER_CODEX" },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({
+      sourceConfig,
+      env: { GLOBAL_GOOGLE: "available" },
+    });
+
+    collectRuntimeConfigAssignments({
+      config: structuredClone(sourceConfig),
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments).toStrictEqual([]);
+    expect(context.warnings).toStrictEqual([]);
+    expect(sourceConfig.models?.providers?.google?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GLOBAL_GOOGLE",
+    });
   });
 
   it("collects the canonical provider API key when an alias does not override it", () => {
