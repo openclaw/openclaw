@@ -307,10 +307,10 @@ export async function applyShortTermPromotions(
       if (candidate.score < minScore) {
         return false;
       }
-      if (candidate.signalCount < minRecallCount) {
+      if (candidate.recallCount < minRecallCount) {
         return false;
       }
-      if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
+      if (candidate.uniqueQueries < minUniqueQueries) {
         return false;
       }
       if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
