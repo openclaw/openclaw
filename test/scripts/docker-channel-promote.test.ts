@@ -327,6 +327,15 @@ describe("Docker channel promotion", () => {
     ).toEqual(Array(3).fill(`ghcr.io/openclaw/openclaw@${digest}`));
   });
 
+  it("does not expose an attestation bypass", () => {
+    expect(readFileSync("scripts/docker-channel-promote.mjs", "utf8")).not.toContain(
+      "attestation-policy",
+    );
+    expect(readFileSync("scripts/docker-channel-promote.d.mts", "utf8")).not.toContain(
+      "attestationPolicy",
+    );
+  });
+
   it("rejects a source whose version label does not match the requested release", () => {
     const execFileSyncImpl = createDockerMock({
       candidateVersion: "2026.6.34",
