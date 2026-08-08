@@ -567,3 +567,185 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     });
   });
 });
+
+describe("CodexAppServerEventProjector trailing silent-token shadowing", () => {
+  it("keeps the real final answer when a late event is answered with NO_REPLY", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    // A completed turn that emitted a real answer, then had a late child-completion
+    // event steered in and answered with the contract-mandated silent token.
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["here is the answer"]);
+  });
+
+  it("selects the delivered answer, not the trailing silent token, as the Activity answer", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    // Activity's "Selected answer" must agree with what delivery sent; selecting the
+    // newest item outright would show NO_REPLY as selected and supersede the real answer.
+    const selected = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) =>
+          event.stream === "item" &&
+          event.data.kind === "answer_candidate" &&
+          event.data.status === "selected",
+      )
+      .map((event) => event.data.itemId);
+    expect(selected).toEqual(["msg-1"]);
+  });
+
+  it.each([
+    ['{"action":"NO_REPLY"}', "json envelope"],
+    ['"NO_REPLY"', "quoted json string"],
+    ["<think>weighing it up</think>\nNO_REPLY", "reasoning-prefixed"],
+  ])("keeps the real answer when the late event answers with %s (%s)", async (silentText) => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    // Selection must recognize every encoding the delivery layer suppresses; a narrower
+    // test would pick the payload as the answer and the turn would go silent again.
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: silentText },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["here is the answer"]);
+  });
+
+  it("delivers substantive text that merely ends with the silent token", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+    const text = "Here is the answer.\n\nNO_REPLY";
+
+    // Negative control for the widened predicate: only token-only payloads are silence.
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", phase: "final_answer", text }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([text]);
+  });
+
+  it("does not treat a silent token superseded by later native work as terminal output", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    const laterTool = {
+      type: "commandExecution",
+      id: "cmd-1",
+      command: "/bin/bash -lc 'printf done'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "done",
+      exitCode: 0,
+      durationMs: 1,
+    };
+
+    // The silent item completes on the wire, so it becomes the latest completed item;
+    // the tool only appears in the turn snapshot. That is the ordering where the
+    // streaming guard cannot help, so invalidation must reach the silent branch itself.
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "NO_REPLY" },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "NO_REPLY" },
+        laterTool,
+      ]),
+    );
+
+    expect(projector.hasCompletedTerminalAssistantText()).toBe(false);
+  });
+
+  it("does not revive a pre-tool answer when native work runs before the silent token", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    const midTool = {
+      type: "commandExecution",
+      id: "mid-tool",
+      command: "/bin/bash -lc 'printf mid'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "mid",
+      exitCode: 0,
+      durationMs: 1,
+    };
+
+    // Native tool work after the answer supersedes it, exactly as finalizeAnswerCandidate
+    // treats it. Reviving it here would deliver a stale pre-tool answer where main stayed
+    // silent, so the trailing silent token must still win.
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "here is the answer" },
+        midTool,
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+  });
+
+  it("stays silent when the only assistant item is NO_REPLY", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    // Deliberate whole-turn silence must keep the token: downstream terminal
+    // classification counts it as intentional output, so dropping it here would
+    // let the empty-final fallback fire and break the silence contract.
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+  });
+
+  it("stays silent when commentary precedes a lone NO_REPLY", async () => {
+    const { projector } = await createProjectorWithAssistantHooks();
+
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "msg-1", phase: "commentary", text: "working on it" },
+        { type: "agentMessage", id: "msg-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+  });
+});

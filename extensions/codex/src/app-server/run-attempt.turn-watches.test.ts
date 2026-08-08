@@ -657,6 +657,24 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(await readCodexAppServerBinding(params.sessionFile)).toBeUndefined();
   });
 
+  it("recovers a completed answer trailed by a silent token from a non-completion timeout", async () => {
+    // A late steered event answered with the silent token completes after the real
+    // answer. That trailing item is deliberate output, not a truncated completion, so
+    // it must not cost the turn its timeout recovery.
+    const { result } = await runTurnWatchTimeoutScenario([
+      completedAssistant("msg-1", "Finished."),
+      completedAssistant("msg-2", "NO_REPLY"),
+    ]);
+
+    expect(projectAttemptResult(result)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Finished."],
+    });
+    expect(result.codexAppServerFailure).toBeUndefined();
+  });
+
   it("preserves a rewritten completed assistant after its id-less raw echo", async () => {
     const { result } = await runTurnWatchTimeoutScenario([
       completedAssistant("msg-1", "Contributor-rewritten answer."),
@@ -748,6 +766,21 @@ describe("runCodexAppServerAttempt turn watches", () => {
       assistantText: "Earlier answer.",
       activeCount: 0,
       completedCount: 2,
+      timeoutKind: "progress",
+      replayBlockedReason: "assistant_output",
+    },
+    {
+      // A silent token keeps recovery only while it is the NEWEST completion. An empty
+      // completion after it still means a superseded answer, so the abort must hold.
+      name: "after a silent token followed by an empty assistant completion",
+      notifications: [
+        completedAssistant("msg-1", "Earlier answer."),
+        completedAssistant("msg-2", "NO_REPLY"),
+        completedAssistant("msg-3"),
+      ],
+      assistantText: "Earlier answer.",
+      activeCount: 0,
+      completedCount: 3,
       timeoutKind: "progress",
       replayBlockedReason: "assistant_output",
     },

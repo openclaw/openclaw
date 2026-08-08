@@ -1,5 +1,6 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import {
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
   createAssistantMessage as buildAssistantMessage,
@@ -12,10 +13,15 @@ import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
+type AssistantTextItem = { itemId: string; text: string };
 
 export class CodexAssistantProjection {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
+  // Assistant items superseded by later native tool work, recorded from the completed
+  // turn payload by finalizeAnswerCandidate(). Kept as ids so snapshot replay after
+  // live processing stays idempotent.
+  private readonly invalidatedAssistantItemIds = new Set<string>();
   private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
   private latestCompletedItemId: string | undefined;
@@ -52,10 +58,15 @@ export class CodexAssistantProjection {
     if (!latestCompletedItemId) {
       return false;
     }
-    const finalItem = this.resolveFinalAssistantTextItem();
+    const { deliverable, trailingSilent } = this.resolveAssistantTextSelection();
+    // Recovery needs the newest completed terminal item to be this turn's own output.
+    // A trailing silent token is exactly that — the deliberate answer to a late steered
+    // event — so it keeps recovery. A newer *empty* completion is not: it means the
+    // answer was superseded or truncated, and must keep blocking recovery.
+    const terminalOutputItemId = trailingSilent?.itemId ?? deliverable?.itemId;
     return (
       this.latestCompletedItemId === latestCompletedItemId &&
-      finalItem?.itemId === latestCompletedItemId &&
+      terminalOutputItemId === latestCompletedItemId &&
       completedItemIds.has(latestCompletedItemId)
     );
   }
@@ -304,7 +315,11 @@ export class CodexAssistantProjection {
   }
 
   collectAssistantTexts(): string[] {
-    const finalText = this.resolveFinalAssistantTextItem()?.text;
+    const { deliverable, trailingSilent } = this.resolveAssistantTextSelection();
+    // Fall back to the silent token only when the whole turn was silent: terminal
+    // classification reads it as intentional output, so returning nothing here would
+    // let the empty-final fallback turn deliberate silence into a spurious reply.
+    const finalText = (deliverable ?? trailingSilent)?.text;
     return finalText ? [finalText] : [];
   }
 
@@ -333,7 +348,7 @@ export class CodexAssistantProjection {
       return;
     }
     const turnItems = turn.items ?? [];
-    const authoritativeIndex = turnItems.findLastIndex((item) => {
+    const isFinalAnswerItem = (item: CodexThreadItem): boolean => {
       if (
         item.type !== "agentMessage" ||
         typeof item.text !== "string" ||
@@ -343,7 +358,27 @@ export class CodexAssistantProjection {
       }
       const phase = readItemString(item, "phase");
       return phase === "final_answer" || phase === undefined;
-    });
+    };
+    // Native tool work after an answer supersedes it. Record that here, from the
+    // authoritative ordered payload, because the delivered selection walks assistant
+    // items only and cannot see interleaved native items — without this it would
+    // revive a pre-tool answer that this method treats as invalidated.
+    const lastClearingIndex = turnItems.findLastIndex(shouldClearTerminalPresentationForNativeItem);
+    const supersededItems = lastClearingIndex >= 0 ? turnItems.slice(0, lastClearingIndex) : [];
+    for (const item of supersededItems) {
+      if (item.type === "agentMessage" && item.id) {
+        this.invalidatedAssistantItemIds.add(item.id);
+      }
+    }
+    // Mirror the delivered selection: the deliverable answer is authoritative, and a
+    // silent payload only when the whole turn was silent. Selecting the newest item
+    // outright would mark a trailing NO_REPLY as Activity's "Selected answer" while
+    // the real answer was the one delivered.
+    const deliverableIndex = turnItems.findLastIndex(
+      (item) => isFinalAnswerItem(item) && !isSilentReplyPayloadText(item.text?.trim()),
+    );
+    const authoritativeIndex =
+      deliverableIndex >= 0 ? deliverableIndex : turnItems.findLastIndex(isFinalAnswerItem);
     const authoritative = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
     const invalidatedByLaterTool = turnItems
       .slice(authoritativeIndex + 1)
@@ -381,6 +416,12 @@ export class CodexAssistantProjection {
     return false;
   }
 
+  /**
+   * The newest terminal assistant item verbatim — deliberately NOT silence-aware, and
+   * allowed to diverge from the delivered answer (see the empty-final case in
+   * event-projector.commentary.test.ts). The mirrored transcript is built from
+   * `lastAssistant`, so do not "fix" this to match deliverable selection.
+   */
   createCurrentAttemptAssistantMessage(
     options: AssistantMessageOptions,
   ): AssistantMessage | undefined {
@@ -528,7 +569,19 @@ export class CodexAssistantProjection {
     this.supersedeVisibleAnswerCandidate();
   }
 
-  private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
+  /**
+   * Deliverable answer and trailing silent token are separate facts: one decides what
+   * the turn says, the other decides whether the newest completed item is still this
+   * turn's own output. Callers that conflate them either drop a real answer or lose
+   * timeout recovery.
+   */
+  private resolveAssistantTextSelection(): {
+    deliverable?: AssistantTextItem;
+    trailingSilent?: AssistantTextItem;
+  } {
+    // Newest silent token wins: it is the one that must match the latest completed
+    // terminal item when a late event is answered after the real answer.
+    let trailingSilent: AssistantTextItem | undefined;
     for (let i = this.assistantItemOrder.length - 1; i >= 0; i -= 1) {
       const itemId = this.assistantItemOrder[i];
       if (!itemId) {
@@ -538,11 +591,30 @@ export class CodexAssistantProjection {
       if (this.assistantPhaseByItem.get(itemId) === "commentary") {
         continue;
       }
-      if (text && !this.isToolProgressEchoText(itemId, text)) {
-        return { itemId, text };
+      if (!text || this.isToolProgressEchoText(itemId, text)) {
+        continue;
       }
+      // Must match the delivery layer's predicate, not the bare-token one: delivery
+      // suppresses every silent encoding (`{"action":"NO_REPLY"}`, quoted, reasoning-
+      // prefixed). A narrower test here selects such a payload as the answer, delivery
+      // then drops it, and the turn goes silent again — the bug this PR fixes.
+      if (isSilentReplyPayloadText(text)) {
+        // Invalidation applies to silent items too: a silent token superseded by later
+        // native work is not the turn's terminal output either, and letting it stand
+        // would keep recovery state disagreeing with Activity on the snapshot path.
+        if (!this.invalidatedAssistantItemIds.has(itemId)) {
+          trailingSilent ??= { itemId, text };
+        }
+        continue;
+      }
+      // Superseded by later native tool work: it is no longer the turn's terminal
+      // output, so it must not be revived. Older items are staler still, so stop.
+      if (this.invalidatedAssistantItemIds.has(itemId)) {
+        return { trailingSilent };
+      }
+      return { deliverable: { itemId, text }, trailingSilent };
     }
-    return undefined;
+    return { trailingSilent };
   }
 
   private rememberAssistantItem(itemId: string): void {
