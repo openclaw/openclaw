@@ -245,8 +245,8 @@ The command:
    `schema_meta.role = "global"` before checkpointing or changing the file.
 3. Requires a non-busy `wal_checkpoint(TRUNCATE)`. Stop any remaining OpenClaw
    process and retry if the checkpoint is busy.
-4. Sets `auto_vacuum` to `INCREMENTAL`, runs a full `VACUUM`, and checkpoints
-   again.
+4. Sets `auto_vacuum` to `INCREMENTAL`, runs a full `VACUUM`, then refreshes
+   SQLite planner statistics with `ANALYZE` and completes a final checkpoint.
 5. Runs `quick_check`, `integrity_check`, and `foreign_key_check`, then
    reapplies owner-only permissions to the database and SQLite sidecar files.
 
@@ -320,8 +320,9 @@ expected target count; a nonexistent explicit store path selects no targets.
 SQLite deletes reclaim pages inside the database first; they do not necessarily
 shrink the database file immediately. After deleting or archiving large
 transcripts, run `openclaw doctor --session-sqlite compact --session-sqlite-all-agents`
-to checkpoint WAL files, run `VACUUM`, and report before/after database and WAL
-sizes. Compaction requires a regular file with the current agent schema, the
+to checkpoint WAL files, run `VACUUM`, refresh SQLite planner statistics with
+`ANALYZE`, complete a final checkpoint, and report before/after database and
+WAL sizes. Compaction requires a regular file with the current agent schema, the
 selected agent's durable owner metadata, and no open handle in the doctor
 process. The destructive `import`, `compact`, `recover`, and `restore` modes
 hold the same state ownership lock as Gateway startup for their full operation;

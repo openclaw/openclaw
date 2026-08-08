@@ -52,6 +52,9 @@ export function compactDoctorSqliteFile(
     database.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     database.exec("VACUUM;");
     checkpointTruncate(database, options.sqlitePath);
+    // Refresh stats for VACUUM's rebuilt layout, then persist them before offline ownership ends.
+    database.exec("ANALYZE;");
+    checkpointTruncate(database, options.sqlitePath);
     const { integrityCheck } = assertSqliteIntegrity(database, options.sqlitePath);
     const after = readCompactSnapshot(database, options.sqlitePath);
     const beforeBytes = before.dbSizeBytes + before.walSizeBytes;

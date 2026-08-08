@@ -348,6 +348,13 @@ describe("runDoctorSessionSqlite", () => {
       });
       expect(dormantAfter.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(
+        (
+          dormantAfter.prepare("SELECT COUNT(*) AS count FROM sqlite_stat1").get() as {
+            count: number;
+          }
+        ).count,
+      ).toBeGreaterThan(0);
+      expect(
         currentAfter
           .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
