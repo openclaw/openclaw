@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
@@ -307,9 +308,16 @@ export function resolveCompactionContextTokenBudget(params: {
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;
+  agentId?: string;
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
+  // Compaction resolves its own context ceiling, so it must honor the selected
+  // agent's contextTokens cap too — otherwise it clamps back to the default and
+  // over-compacts a session the run path already sized to the per-agent cap (#118678).
+  const agentContextTokens = params.agentId
+    ? resolveAgentConfig(params.config ?? {}, params.agentId)?.contextTokens
+    : undefined;
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -318,6 +326,7 @@ export function resolveCompactionContextTokenBudget(params: {
         modelId: params.modelId,
         modelContextTokens: readAgentModelContextTokens(params.model),
         modelContextWindow: params.model?.contextWindow,
+        agentContextTokens,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;

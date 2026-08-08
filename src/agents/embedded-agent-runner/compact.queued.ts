@@ -533,11 +533,17 @@ async function compactResolvedContextEngine(
     releaseContextEngineOwnership();
     throw err;
   }
+  const { sessionAgentId: compactionSessionAgentId } = resolveSessionAgentIds({
+    sessionKey: runtimeTarget.sessionKey,
+    config: params.config,
+    agentId: runtimeTarget.agentId,
+  });
   const contextTokenBudget = resolveCompactionContextTokenBudget({
     config: params.config,
     provider: ceContextConfigProvider,
     modelId: ceModelId,
     model: effectiveRuntimeModel,
+    agentId: compactionSessionAgentId,
     requestedTokenBudget: params.contextTokenBudget,
   });
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({

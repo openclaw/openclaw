@@ -7,6 +7,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
   finalizeToolTerminalPresentation,
@@ -141,16 +142,32 @@ export function buildEmbeddedExtensionFactories(params: {
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
+    // Safeguard compaction sizes itself from the same effective context window,
+    // so it must honor the selected agent's contextTokens cap too (#118678).
+    const agentContextTokens = params.agentId
+      ? resolveAgentConfig(params.cfg ?? {}, params.agentId)?.contextTokens
+      : undefined;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
       provider: params.provider,
       modelId: params.modelId,
       modelContextTokens: params.model?.contextTokens,
       modelContextWindow: params.model?.contextWindow,
+      agentContextTokens,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
+    // The effective model's contextWindow is the authoritative per-run budget,
+    // already clamped upstream to min(agent cap, compaction budget, native
+    // window). resolveContextWindowInfo prefers the native contextTokens, which
+    // can exceed that budget, so never let safeguard size above the effective
+    // window it was handed (#118678).
+    const effectiveModelWindow = params.model?.contextWindow;
+    const safeguardContextWindowTokens =
+      typeof effectiveModelWindow === "number" && effectiveModelWindow > 0
+        ? Math.min(contextWindowInfo.tokens, effectiveModelWindow)
+        : contextWindowInfo.tokens;
     setCompactionSafeguardRuntime(params.sessionManager, {
-      contextWindowTokens: contextWindowInfo.tokens,
+      contextWindowTokens: safeguardContextWindowTokens,
       identifierPolicy: compactionCfg?.identifierPolicy,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,

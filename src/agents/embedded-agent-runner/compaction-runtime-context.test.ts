@@ -9,6 +9,7 @@ import { createProcessSessionFixture } from "../bash-process-registry.test-helpe
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  resolveCompactionContextTokenBudget,
   resolveCompactionHarnessRuntime,
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
@@ -16,6 +17,44 @@ import {
 import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
 
 const compactionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("resolveCompactionContextTokenBudget", () => {
+  // #118678: compaction independently re-resolves its context ceiling, so it
+  // must honor the selected agent's contextTokens cap. Without the agent id it
+  // clamps back to agents.defaults.contextTokens and over-compacts the session.
+  const cfg = {
+    agents: {
+      list: [{ id: "capped", contextTokens: 200_000 }],
+      defaults: { contextTokens: 128_000 },
+    },
+  } as unknown as OpenClawConfig;
+  const model = { contextWindow: 272_000 } as Parameters<
+    typeof resolveCompactionContextTokenBudget
+  >[0]["model"];
+
+  it("applies the selected agent's contextTokens cap", () => {
+    const budget = resolveCompactionContextTokenBudget({
+      config: cfg,
+      provider: "openai",
+      modelId: "mock-model",
+      model,
+      agentId: "capped",
+      requestedTokenBudget: 200_000,
+    });
+    expect(budget).toBe(200_000);
+  });
+
+  it("falls back to the default cap when no agent id is given", () => {
+    const budget = resolveCompactionContextTokenBudget({
+      config: cfg,
+      provider: "openai",
+      modelId: "mock-model",
+      model,
+      requestedTokenBudget: 200_000,
+    });
+    expect(budget).toBe(128_000);
+  });
+});
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
   it("lets the compaction override replace the inherited session level", () => {
