@@ -190,14 +190,44 @@ describe("startup plugin HTTP routing", () => {
             { name: "bare curl", accept: "*/*" },
             { name: "missing header", accept: undefined },
             { name: "empty header", accept: "" },
-            { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
             { name: "nonzero HTML quality", accept: "text/html;q=0.5" },
             { name: "text wildcard", accept: "text/*" },
+            {
+              name: "text wildcard with rejected XHTML",
+              accept: "application/xhtml+xml;q=0, text/*",
+            },
+            { name: "explicit XHTML", accept: "application/xhtml+xml" },
+            {
+              name: "nonmatching zero-quality parameter with wildcard",
+              accept: "text/html;profile=alternate;q=0, */*;q=1",
+            },
+            {
+              name: "mismatched charset rejection with matching HTML",
+              accept: "text/html;charset=utf-16;q=0, text/html;q=1",
+            },
+            {
+              name: "quoted parameter delimiters with wildcard",
+              accept: 'text/html;note="x; q=0; y", */*',
+            },
           ];
           const nonHtmlCases = [
             { name: "JSON", accept: "application/json" },
             { name: "event stream", accept: "text/event-stream" },
             { name: "zero-quality HTML", accept: "text/html;q=0" },
+            { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
+            { name: "rejected HTML with text wildcard", accept: "text/html;q=0, text/*" },
+            {
+              name: "nonmatching positive parameter with rejected wildcard",
+              accept: "text/html;profile=alternate;q=1, */*;q=0",
+            },
+            {
+              name: "matching charset rejection with less-specific HTML",
+              accept: "text/html;charset=utf-8;q=0, text/html;q=1",
+            },
+            {
+              name: "exact HTML rejection with parameterized text wildcard",
+              accept: "text/html;q=0, text/*;charset=utf-8;q=1",
+            },
             { name: "zero-quality wildcard", accept: "*/*;q=0" },
             { name: "mixed-case zero quality", accept: "text/html;Q=0" },
             { name: "zero-quality text wildcard", accept: "text/*;q=0" },

@@ -145,16 +145,90 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
   return { type, subtype, parameters, quality };
 }
 
-function matchesRepresentation(range: ParsedMediaType, representation: ParsedMediaType): boolean {
-  if (range.type !== representation.type || range.subtype !== representation.subtype) {
-    return false;
-  }
+type MediaRangeSpecificity = readonly [mediaType: number, parameters: number];
+
+function parametersMatchRepresentation(
+  range: ParsedMediaType,
+  representation: ParsedMediaType,
+): boolean {
   for (const [name, value] of range.parameters) {
     if (representation.parameters.get(name) !== value) {
       return false;
     }
   }
   return true;
+}
+
+function mediaRangeSpecificity(
+  range: ParsedMediaType,
+  representation: ParsedMediaType,
+): MediaRangeSpecificity | null {
+  let mediaType: number;
+  if (range.type === "*" && range.subtype === "*") {
+    mediaType = 0;
+  } else if (range.type !== representation.type) {
+    return null;
+  } else if (range.subtype === "*") {
+    mediaType = 1;
+  } else if (range.subtype === representation.subtype) {
+    mediaType = 2;
+  } else {
+    return null;
+  }
+  return parametersMatchRepresentation(range, representation)
+    ? [mediaType, range.parameters.size]
+    : null;
+}
+
+function compareSpecificity(left: MediaRangeSpecificity, right: MediaRangeSpecificity): number {
+  // Type specificity wins before parameter count; otherwise a parameterized
+  // wildcard could incorrectly override an exact representation match.
+  return left[0] - right[0] || left[1] - right[1];
+}
+
+function hasPositiveQualityAtBestSpecificity(
+  accept: string | undefined,
+  getSpecificity: (range: ParsedMediaType) => MediaRangeSpecificity | null,
+): boolean {
+  if (!accept) {
+    return false;
+  }
+  const ranges = splitOutsideQuotedStrings(accept, ",");
+  if (!ranges) {
+    return false;
+  }
+
+  let bestSpecificity: MediaRangeSpecificity | null = null;
+  let bestQuality = 0;
+  for (const range of ranges) {
+    const parsedRange = parseMediaType(range, true);
+    if (!parsedRange) {
+      continue;
+    }
+    const specificity = getSpecificity(parsedRange);
+    if (!specificity) {
+      continue;
+    }
+    const comparison = bestSpecificity ? compareSpecificity(specificity, bestSpecificity) : 1;
+    if (comparison > 0) {
+      bestSpecificity = specificity;
+      bestQuality = parsedRange.quality;
+    } else if (comparison === 0) {
+      bestQuality = Math.max(bestQuality, parsedRange.quality);
+    }
+  }
+  return bestSpecificity !== null && bestQuality > 0;
+}
+
+/** Checks whether an Accept field permits an offered media type. */
+export function acceptsMediaType(accept: string | undefined, offeredMediaType: string): boolean {
+  const representation = parseMediaType(offeredMediaType, false);
+  if (!representation) {
+    return false;
+  }
+  return hasPositiveQualityAtBestSpecificity(accept, (range) =>
+    mediaRangeSpecificity(range, representation),
+  );
 }
 
 /**
@@ -165,35 +239,12 @@ export function hasExplicitAcceptableMediaRange(
   accept: string | undefined,
   expectedRepresentation: string,
 ): boolean {
-  if (!accept) {
-    return false;
-  }
   const representation = parseMediaType(expectedRepresentation, false);
   if (!representation) {
     return false;
   }
-
-  const ranges = splitOutsideQuotedStrings(accept, ",");
-  if (!ranges) {
-    return false;
-  }
-  let bestSpecificity = -1;
-  let bestExplicitQuality = 0;
-  for (const range of ranges) {
-    if (!trimHttpOptionalWhitespace(range)) {
-      continue;
-    }
-    const parsedRange = parseMediaType(range, true);
-    if (!parsedRange || !matchesRepresentation(parsedRange, representation)) {
-      continue;
-    }
-    const specificity = parsedRange.parameters.size;
-    if (specificity > bestSpecificity) {
-      bestSpecificity = specificity;
-      bestExplicitQuality = parsedRange.quality;
-    } else if (specificity === bestSpecificity) {
-      bestExplicitQuality = Math.max(bestExplicitQuality, parsedRange.quality);
-    }
-  }
-  return bestSpecificity >= 0 && bestExplicitQuality > 0;
+  return hasPositiveQualityAtBestSpecificity(accept, (range) => {
+    const specificity = mediaRangeSpecificity(range, representation);
+    return specificity?.[0] === 2 ? specificity : null;
+  });
 }
