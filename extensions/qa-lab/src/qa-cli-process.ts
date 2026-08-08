@@ -2,6 +2,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendQaChildOutput,
@@ -83,12 +84,8 @@ function parseBalancedJsonPayloadStart(text: string) {
   }
 }
 
-function isJsonRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function isStructuredDiagnosticJson(value: unknown) {
-  if (!isJsonRecord(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const level = value.level ?? value.logLevel ?? value.severity;
@@ -104,14 +101,14 @@ function isStructuredDiagnosticJson(value: unknown) {
 }
 
 function isMemorySearchJsonPayload(value: unknown) {
-  return isJsonRecord(value) && Array.isArray(value.results);
+  return isRecord(value) && Array.isArray(value.results);
 }
 
 function isMemoryStatusJsonPayload(value: unknown) {
   if (Array.isArray(value)) {
     return true;
   }
-  return isJsonRecord(value) && value.command === "memory" && value.subcommand === "status";
+  return isRecord(value) && value.command === "memory" && value.subcommand === "status";
 }
 
 function resolveQaCliJsonPayloadMatcher(args: readonly string[]) {
