@@ -21,12 +21,15 @@ const TERMINAL_NDJSON = [
 ].join("\n");
 
 async function withOllamaServer(
-  bytes: Uint8Array,
+  chunks: Uint8Array[],
   run: (baseUrl: string) => Promise<void>,
 ): Promise<void> {
   const server: Server = createServer((_request, response) => {
     response.writeHead(200, { "content-type": "application/x-ndjson" });
-    response.end(bytes);
+    for (const chunk of chunks) {
+      response.write(chunk);
+    }
+    response.end();
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -59,9 +62,9 @@ function typeOf(event: unknown): string | undefined {
 }
 
 describe("ollama production stream UTF-8 rejection over real HTTP", () => {
-  it("rejects a partial UTF-8 byte after the terminal record instead of completing", async () => {
-    const bytes = new Uint8Array([...new TextEncoder().encode(`${TERMINAL_NDJSON}\n`), 0xc3]);
-    await withOllamaServer(bytes, async (baseUrl) => {
+  it("rejects a partial UTF-8 byte in a later body chunk instead of completing", async () => {
+    const terminalChunk = new TextEncoder().encode(`${TERMINAL_NDJSON}\n`);
+    await withOllamaServer([terminalChunk, new Uint8Array([0xc3])], async (baseUrl) => {
       const stream = createOllamaStreamFn(baseUrl)(model, context, {});
       const events = await collectStreamEvents(await Promise.resolve(stream));
       expect(events.some((event) => typeOf(event) === "done")).toBe(false);
@@ -73,7 +76,7 @@ describe("ollama production stream UTF-8 rejection over real HTTP", () => {
 
   it("completes successfully for a valid terminal stream", async () => {
     const bytes = new TextEncoder().encode(`${TERMINAL_NDJSON}\n`);
-    await withOllamaServer(bytes, async (baseUrl) => {
+    await withOllamaServer([bytes], async (baseUrl) => {
       const stream = createOllamaStreamFn(baseUrl)(model, context, {});
       const events = await collectStreamEvents(await Promise.resolve(stream));
       expect(events.some((event) => typeOf(event) === "done")).toBe(true);

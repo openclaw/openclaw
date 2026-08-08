@@ -866,6 +866,7 @@ export async function* parseNdjsonStream(
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
   let pendingRecordBytes = 0;
+  let terminalRecord: OllamaChatResponse | undefined;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -873,6 +874,12 @@ export async function* parseNdjsonStream(
         break;
       }
       pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
+      if (terminalRecord) {
+        // A terminal record was already parsed; the remaining body bytes only
+        // need fatal UTF-8 validation before the completion is exposed.
+        decoder.decode(value, { stream: true });
+        continue;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
@@ -890,11 +897,13 @@ export async function* parseNdjsonStream(
           continue;
         }
         if (parsed.done) {
-          // The production consumer exits the generator on the terminal
-          // record, so finalize the fatal decoder before exposing it: a
-          // partial UTF-8 sequence buffered by the continuing stream decode
-          // must reject the stream instead of completing successfully.
-          decoder.decode();
+          // Hold the terminal record until the whole response body has been
+          // read and fatal-decoded: the production consumer exits on the
+          // terminal record, so malformed bytes in later transport chunks
+          // would otherwise complete successfully without validation.
+          terminalRecord = parsed;
+          buffer = "";
+          break;
         }
         yield parsed;
       }
@@ -905,7 +914,9 @@ export async function* parseNdjsonStream(
     // when the generator is drained without a terminal record.
     buffer += decoder.decode();
 
-    if (buffer.trim()) {
+    if (terminalRecord) {
+      yield terminalRecord;
+    } else if (buffer.trim()) {
       try {
         yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
       } catch {
