@@ -90,6 +90,16 @@ struct CLIInstallerTests {
         #expect(CLIInstaller.installWatchdogTimeout(for: .exact(String())) == 900)
     }
 
+    #if DEBUG
+    @Test func `debug E2E channel bypass is explicit and validated`() {
+        #expect(CLIInstallPrompter.debugE2EInstallTarget(
+            arguments: ["OpenClaw", "--e2e-cli-channel", "stable"]) == .channel(.stable))
+        #expect(CLIInstallPrompter.debugE2EInstallTarget(
+            arguments: ["OpenClaw", "--e2e-cli-channel", "unknown"]) == nil)
+        #expect(CLIInstallPrompter.debugE2EInstallTarget(arguments: ["OpenClaw"]) == nil)
+    }
+    #endif
+
     @Test func `managed update uses the canonical updater without accepting downgrades`() {
         let command = CLIInstaller.managedUpdateCommand(
             executable: "/Users/Test User/.openclaw/bin/openclaw",
@@ -350,6 +360,25 @@ struct CLIInstallerTests {
 
         #expect(didStart)
         #expect(didWait)
+        #expect(activation == .ready)
+    }
+
+    @Test func `local gateway activation waits for the owned startup attempt before readiness`() async {
+        var events: [String] = []
+
+        let activation = await CLIInstaller.activateLocalGateway(
+            mode: .local,
+            paused: false,
+            start: { events.append("start") },
+            waitForStartupAttempt: {
+                events.append("startup-settled")
+            },
+            waitUntilReady: {
+                events.append("ready")
+                return true
+            })
+
+        #expect(events == ["start", "startup-settled", "ready"])
         #expect(activation == .ready)
     }
 

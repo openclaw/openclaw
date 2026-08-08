@@ -258,6 +258,7 @@ describe("install-cli.sh", () => {
       const result = runInstallCliShell(`
         set -euo pipefail
         source "${SCRIPT_PATH}"
+        JSON=1
         PREFIX=${JSON.stringify(prefix)}
         OPENCLAW_VERSION=latest
         REQUIRED_COMPATIBLE_VERSION=2026.7.2
@@ -275,6 +276,17 @@ describe("install-cli.sh", () => {
 
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("OpenClaw 2026.7.1-2 is older than config writer 2026.7.2");
+      expect(
+        result.stdout
+          .split("\n")
+          .filter((line) => line.startsWith("{"))
+          .map((line) => JSON.parse(line) as unknown),
+      ).toContainEqual({
+        code: "incompatible-version",
+        event: "error",
+        message:
+          "OpenClaw 2026.7.1-2 is older than config writer 2026.7.2. Choose a newer CLI channel or retry after the channel is updated.",
+      });
       expect(result.stderr).not.toContain("unexpected mutation");
       expect(readFileSync(openclaw, "utf8")).toBe("existing-managed-cli\n");
     } finally {

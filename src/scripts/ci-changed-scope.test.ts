@@ -383,11 +383,17 @@ describe("detectChangedScope", () => {
     for (const changedPath of [
       "scripts/codesign-mac-app.sh",
       "scripts/create-dmg.sh",
+      "scripts/e2e/macos-app-bootstrap-ci.ts",
+      "scripts/e2e/parallels/host-command.ts",
+      "scripts/e2e/parallels/host-server.ts",
+      "scripts/e2e/parallels/package-artifact.ts",
+      "scripts/e2e/parallels/types.ts",
       "scripts/lib/plistbuddy.sh",
       "scripts/lib/swift-toolchain.sh",
       "scripts/notarize-mac-artifact.sh",
       "scripts/package-mac-app.sh",
       "scripts/package-mac-dist.sh",
+      "test/scripts/parallels-smoke-model.test.ts",
     ]) {
       expect(detectChangedScope([changedPath])).toEqual({
         runNode: true,
@@ -590,7 +596,7 @@ describe("detectChangedScope", () => {
     });
     expect(detectChangedScope(["scripts/install-cli.sh"])).toEqual({
       runNode: true,
-      runMacos: false,
+      runMacos: true,
       runIosBuild: false,
       runAndroid: false,
       runWindows: false,

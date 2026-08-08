@@ -185,7 +185,12 @@ emit_json() {
 
 fail() {
   local msg="$1"
-  emit_json "{\"event\":\"error\",\"message\":\"${msg//\"/\\\"}\"}"
+  local code="${2:-}"
+  if [[ -n "$code" ]]; then
+    emit_json "{\"event\":\"error\",\"code\":\"${code//\"/\\\"}\",\"message\":\"${msg//\"/\\\"}\"}"
+  else
+    emit_json "{\"event\":\"error\",\"message\":\"${msg//\"/\\\"}\"}"
+  fi
   log "ERROR: $msg"
   exit 1
 }
@@ -831,7 +836,7 @@ require_openclaw_version_compatible() {
   if [[ "$status" -eq 2 ]]; then
     fail "Cannot compare resolved OpenClaw version '${candidate}' with config writer '${config_writer}'."
   fi
-  fail "OpenClaw ${candidate} is older than config writer ${config_writer}. Choose a newer CLI channel or retry after the channel is updated."
+  fail "OpenClaw ${candidate} is older than config writer ${config_writer}. Choose a newer CLI channel or retry after the channel is updated." "incompatible-version"
 }
 
 resolve_npm_openclaw_version() {

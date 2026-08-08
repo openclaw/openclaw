@@ -2966,6 +2966,37 @@ jobs:
               ;;
           esac
 
+  macos-app-bootstrap:
+    permissions:
+      contents: read
+    name: "macos-app-bootstrap"
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.run_macos == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    timeout-minutes: 60
+    steps:
+      - *platform_checkout_step
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Packaged app first-launch bootstrap
+        env:
+          OPENCLAW_E2E_ALLOW_HOME_RESET: "1"
+          OPENCLAW_MACOS_APP_BOOTSTRAP_ARTIFACT_DIR: .artifacts/macos-app-bootstrap
+        run: node --import tsx scripts/e2e/macos-app-bootstrap-ci.ts
+
+      - name: Upload packaged app bootstrap diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-app-bootstrap-${{ github.run_attempt }}
+          path: .artifacts/macos-app-bootstrap
+          if-no-files-found: warn
+          retention-days: 7
+
   macos-swift:
     permissions:
       contents: read
@@ -3583,6 +3614,7 @@ jobs:
       - skills-python
       - checks-windows
       - macos-node
+      - macos-app-bootstrap
       - macos-swift
       - ios-build
       - android
@@ -3615,6 +3647,7 @@ jobs:
             skills-python=${{ needs.skills-python.result }}
             checks-windows=${{ needs.checks-windows.result }}
             macos-node=${{ needs.macos-node.result }}
+            macos-app-bootstrap=${{ needs.macos-app-bootstrap.result }}
             macos-swift=${{ needs.macos-swift.result }}
             ios-build=${{ needs.ios-build.result }}
             android=${{ needs.android.result }}
@@ -3673,6 +3706,7 @@ jobs:
       - skills-python
       - checks-windows
       - macos-node
+      - macos-app-bootstrap
       - macos-swift
       - ios-build
       - android

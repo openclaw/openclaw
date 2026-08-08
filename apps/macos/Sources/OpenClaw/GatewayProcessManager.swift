@@ -394,6 +394,35 @@ final class GatewayProcessManager {
         }
     }
 
+    func waitForCurrentStartupReadiness() async -> Bool {
+        // The Mac node may reach this before local startup has created a task. In that case,
+        // return false instead of waiting for future work that might never be scheduled.
+        guard !Task.isCancelled else { return false }
+        guard let task = self.gatewayStartTask else {
+            return self.currentStatusIsReady
+        }
+        guard let generation = self.gatewayStartTaskGeneration,
+              generation == self.gatewayStartGeneration
+        else { return false }
+        await task.value
+        // A stop or replacement start invalidates the captured lifecycle even when it later
+        // reaches a usable status. Callers must retry against that newer attempt explicitly.
+        guard !Task.isCancelled,
+              self.gatewayStartGeneration == generation,
+              self.gatewayStartTask == nil
+        else { return false }
+        return self.currentStatusIsReady
+    }
+
+    private var currentStatusIsReady: Bool {
+        switch self.status {
+        case .running, .attachedExisting:
+            true
+        case .stopped, .starting, .failed:
+            false
+        }
+    }
+
     func stop() {
         self.gatewayStartGeneration &+= 1
         let stopGeneration = self.gatewayStartGeneration
@@ -900,9 +929,9 @@ extension GatewayProcessManager {
         launchAgentInstalled: Bool = false) async -> Bool
     {
         let startGeneration = self.gatewayStartGeneration
-        let readinessCandidate = self.launchAgentReadinessCandidate
-        let readinessFailure = self.launchAgentReadinessFailure
-        let readinessRevision = self.launchAgentReadinessRevision
+        var readinessCandidate = self.launchAgentReadinessCandidate
+        var readinessFailure = self.launchAgentReadinessFailure
+        var readinessRevision = self.launchAgentReadinessRevision
         let readinessPort = readinessCandidate?.failure.port
             ?? GatewayEnvironment.gatewayPort()
         let deadline = Date().addingTimeInterval(timeout)
@@ -916,13 +945,23 @@ extension GatewayProcessManager {
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 guard !Task.isCancelled else { return false }
                 let instance = await PortGuardian.shared.describe(port: readinessPort)
-                return self.publishGatewayReadinessSuccess(
+                if self.publishGatewayReadinessSuccess(
                     instance: instance,
                     startGeneration: startGeneration,
                     readinessCandidate: readinessCandidate,
                     readinessRevision: readinessRevision,
                     launchAgentInstalled: launchAgentInstalled,
                     endpointPIDBeforeProbe: endpointPIDBeforeProbe)
+                {
+                    return true
+                }
+                guard self.isCurrentGatewayStart(startGeneration) else { return false }
+                guard self.launchAgentReadinessCandidate == readinessCandidate else { return false }
+                // A sibling audit can finish while this health request is in flight. The same
+                // candidate is safe to re-probe; a replacement candidate must reject this result.
+                readinessCandidate = self.launchAgentReadinessCandidate
+                readinessFailure = self.launchAgentReadinessFailure
+                readinessRevision = self.launchAgentReadinessRevision
             } catch {
                 if Task.isCancelled || !self.isCurrentGatewayStart(startGeneration) {
                     return false
@@ -1041,19 +1080,32 @@ extension GatewayProcessManager {
     }
 
     private func probeGatewayHealth(timeoutMs: Double) async throws -> Data {
-        let connection = self.connection
+        let connection = self.connection.isolatedConnection()
         // Startup owns recovery and its wall-clock deadline. A normal request can recursively
         // start the Gateway and spend several 30-second connect retries before its RPC timer begins.
-        return try await AsyncTimeout.withTimeout(
-            seconds: max(0.001, timeoutMs / 1000),
-            onTimeout: { GatewayHealthProbeTimeout(timeoutMs: timeoutMs) },
-            operation: {
-                try await connection.request(
-                    method: GatewayConnection.Method.health.rawValue,
-                    params: nil,
-                    timeoutMs: timeoutMs,
-                    retryTransportFailures: false)
-            })
+        // Each poll owns a fresh connection: cancelling a connect waiter intentionally does not
+        // cancel the channel's shared connect attempt, so reusing it would keep joining a stale socket.
+        do {
+            let response = try await AsyncTimeout.withTimeout(
+                seconds: max(0.001, timeoutMs / 1000),
+                onTimeout: { GatewayHealthProbeTimeout(timeoutMs: timeoutMs) },
+                operation: {
+                    try await connection.request(
+                        method: GatewayConnection.Method.health.rawValue,
+                        params: nil,
+                        timeoutMs: timeoutMs,
+                        retryTransportFailures: false)
+                })
+            // Probe-local cleanup must not extend readiness past its deadline, even after
+            // the Gateway answered. The task retains the isolated connection until shutdown.
+            Task { await connection.shutdown() }
+            return response
+        } catch {
+            // A timed-out socket connect may ignore cancellation and keep the connection actor busy.
+            // Queue probe-local cleanup without extending the readiness deadline behind that work.
+            Task { await connection.shutdown() }
+            throw error
+        }
     }
 
     func clearLog() {
@@ -1204,6 +1256,27 @@ extension GatewayProcessManager {
     func _testBeginGatewayStartGeneration() {
         self.desiredActive = true
         self.gatewayStartGeneration &+= 1
+    }
+
+    func _testSetGatewayStartTask(
+        operation: @escaping @MainActor @Sendable () async -> Void)
+    {
+        self.gatewayStartGeneration &+= 1
+        let generation = self.gatewayStartGeneration
+        let task = Task { @MainActor in
+            await operation()
+            guard self.gatewayStartTaskGeneration == generation else { return }
+            self.gatewayStartTask = nil
+            self.gatewayStartTaskGeneration = nil
+        }
+        self.gatewayStartTaskGeneration = generation
+        self.gatewayStartTask = task
+    }
+
+    func _testClearGatewayStartTask() {
+        self.gatewayStartTask?.cancel()
+        self.gatewayStartTask = nil
+        self.gatewayStartTaskGeneration = nil
     }
 
     func _testPendingLaunchAgentPort() -> Int? {

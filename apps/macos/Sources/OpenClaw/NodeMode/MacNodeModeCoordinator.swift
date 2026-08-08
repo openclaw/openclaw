@@ -4,6 +4,12 @@ import OpenClawIPC
 import OpenClawKit
 import OSLog
 
+private struct MacNodeLocalGatewayNotReady: LocalizedError, Sendable {
+    var errorDescription: String? {
+        "Local Gateway is not ready for the node host worker"
+    }
+}
+
 struct MacNodeGatewayTLSSessionCache {
     private struct Key: Equatable {
         let url: URL
@@ -113,6 +119,9 @@ final class MacNodeModeCoordinator: NSObject {
     private let presenceReporter: MacNodePresenceReporter
     private let notificationCenter: NotificationCenter
     private let routeInvalidationHook: (@Sendable () async -> Void)?
+    private let connectionModeProvider: @MainActor () -> AppState.ConnectionMode
+    private let localGatewayReadiness: @MainActor () async -> Bool
+    private let nodeHostCommandProvider: @MainActor () async throws -> [String]
     private let refreshEvents: AsyncStream<Void>
     private let refreshContinuation: AsyncStream<Void>.Continuation
     private var tlsSessionCache = MacNodeGatewayTLSSessionCache()
@@ -149,7 +158,14 @@ final class MacNodeModeCoordinator: NSObject {
         initialPaused: Bool? = nil,
         initialComputerControlEnabled: Bool? = nil,
         routeInvalidationHook: (@Sendable () async -> Void)? = nil,
-        nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy = MacNodeHostWorkerRetryPolicy())
+        nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy = MacNodeHostWorkerRetryPolicy(),
+        connectionModeProvider: @escaping @MainActor () -> AppState.ConnectionMode = {
+            AppStateStore.shared.connectionMode
+        },
+        localGatewayReadiness: @escaping @MainActor () async -> Bool = {
+            await GatewayProcessManager.shared.waitForCurrentStartupReadiness()
+        },
+        nodeHostCommandProvider: (@MainActor () async throws -> [String])? = nil)
     {
         let refreshEvents = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         self.session = session
@@ -158,6 +174,11 @@ final class MacNodeModeCoordinator: NSObject {
         self.presenceReporter = presenceReporter
         self.notificationCenter = notificationCenter
         self.routeInvalidationHook = routeInvalidationHook
+        self.connectionModeProvider = connectionModeProvider
+        self.localGatewayReadiness = localGatewayReadiness
+        self.nodeHostCommandProvider = nodeHostCommandProvider ?? {
+            try await Self.resolveNodeHostCommand()
+        }
         self.nodeHostWorkerRetryPolicy = nodeHostWorkerRetryPolicy
         self.refreshEvents = refreshEvents.stream
         self.refreshContinuation = refreshEvents.continuation
@@ -479,7 +500,9 @@ final class MacNodeModeCoordinator: NSObject {
         claudeSessionCatalogEnabled: Bool) async throws -> ConnectionAttempt?
     {
         let config = endpoint.config
-        let workerManifest = try await self.startNodeHostWorkerIfConfigured()
+        let workerManifest = try await self.prepareNodeHostWorkerIfReady(
+            endpointGeneration: endpointGeneration,
+            routeAuthorityGeneration: routeAuthorityGeneration)
         let nativeCaps = self.currentCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
@@ -762,6 +785,12 @@ final class MacNodeModeCoordinator: NSObject {
     func handleNodeHostWorkerFailureForTesting() {
         self.handleNodeHostWorkerFailure()
     }
+
+    func prepareNodeHostWorkerForTesting() async throws -> MacNodeHostManifest? {
+        try await self.prepareNodeHostWorkerIfReady(
+            endpointGeneration: self.endpointAttemptGeneration,
+            routeAuthorityGeneration: self.routeAuthorityGeneration)
+    }
     #endif
 
     private func cancelReconnectProbe() {
@@ -816,30 +845,6 @@ final class MacNodeModeCoordinator: NSObject {
 
     private func currentCommands(caps: [String]) -> [String] {
         Self.resolvedCommands(caps: caps)
-    }
-
-    private func startNodeHostWorkerIfConfigured() async throws -> MacNodeHostManifest? {
-        guard let nodeHostWorker else { return nil }
-        guard self.nodeHostWorkerRetryTask == nil else {
-            throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
-        }
-        let executable: String
-        if let projectExecutable = CommandResolver.projectOpenClawExecutable() {
-            executable = projectExecutable
-        } else {
-            switch await CLIInstaller.status() {
-            case let .ready(location, _): executable = location
-            case let status:
-                throw MacNodeHostWorker.WorkerError.unavailable(status.message)
-            }
-        }
-        let command = [executable, "node", "worker"]
-        let input = MacNodeHostWorkerRetryPolicy.Input(
-            command: command,
-            configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
-        try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
-        self.activeNodeHostWorkerInput = input
-        return try await nodeHostWorker.start(command: command)
     }
 
     private func handleNodeHostWorkerFailure() {
@@ -900,6 +905,84 @@ final class MacNodeModeCoordinator: NSObject {
             return nil
         }
         return self.tlsSessionCache.sessionBox(url: url, params: tls.params)
+    }
+}
+
+extension MacNodeModeCoordinator {
+    private func prepareNodeHostWorkerIfReady(
+        endpointGeneration: UInt64,
+        routeAuthorityGeneration: UInt64) async throws -> MacNodeHostManifest?
+    {
+        guard self.nodeHostWorker != nil else { return nil }
+        if self.connectionModeProvider() == .local {
+            guard await self.localGatewayReadiness() else {
+                throw MacNodeLocalGatewayNotReady()
+            }
+            // CLI installation can invalidate this endpoint while readiness is suspended.
+            // Reject the stale attempt before resolving or launching another CLI process.
+            guard self.nodeHostAttemptIsCurrent(
+                endpointGeneration: endpointGeneration,
+                routeAuthorityGeneration: routeAuthorityGeneration)
+            else { return nil }
+        }
+        return try await self.startNodeHostWorkerIfConfigured(
+            endpointGeneration: endpointGeneration,
+            routeAuthorityGeneration: routeAuthorityGeneration)
+    }
+
+    fileprivate static func resolveNodeHostCommand() async throws -> [String] {
+        let executable: String
+        if let projectExecutable = CommandResolver.projectOpenClawExecutable() {
+            executable = projectExecutable
+        } else {
+            switch await CLIInstaller.status() {
+            case let .ready(location, _): executable = location
+            case let status:
+                throw MacNodeHostWorker.WorkerError.unavailable(status.message)
+            }
+        }
+        return [executable, "node", "worker"]
+    }
+
+    private func startNodeHostWorkerIfConfigured(
+        endpointGeneration: UInt64,
+        routeAuthorityGeneration: UInt64) async throws -> MacNodeHostManifest?
+    {
+        guard let nodeHostWorker else { return nil }
+        guard self.nodeHostWorkerRetryTask == nil else {
+            throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
+        }
+        let command = try await self.nodeHostCommandProvider()
+        // Command resolution can run CLI validation and suspend. Revalidate at the process-launch
+        // boundary so config, mode, pause, cancellation, or route changes cannot start stale work.
+        guard self.nodeHostAttemptIsCurrent(
+            endpointGeneration: endpointGeneration,
+            routeAuthorityGeneration: routeAuthorityGeneration)
+        else { return nil }
+        guard self.nodeHostWorkerRetryTask == nil else {
+            throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
+        }
+        let input = MacNodeHostWorkerRetryPolicy.Input(
+            command: command,
+            configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
+        try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
+        self.activeNodeHostWorkerInput = input
+        return try await nodeHostWorker.start(command: command)
+    }
+
+    private func nodeHostAttemptIsCurrent(
+        endpointGeneration: UInt64,
+        routeAuthorityGeneration: UInt64) -> Bool
+    {
+        !Task.isCancelled &&
+            Self.endpointAttemptIsCurrent(
+                capturedGeneration: endpointGeneration,
+                currentGeneration: self.endpointAttemptGeneration) &&
+            Self.routeAuthorityAllowsInvoke(
+                capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                isPaused: AppStateStore.shared.isPaused)
     }
 }
 

@@ -80,12 +80,24 @@ extension OnboardingView {
     @discardableResult
     func onboardingDidAppear() -> Task<Void, Never>? {
         onboardingVisible = true
+        #if DEBUG
+        currentPage = Self.debugE2EShouldOpenCLIPage(arguments: CommandLine.arguments)
+            ? (pageOrder.firstIndex(of: cliPageIndex) ?? 0)
+            : 0
+        #else
         currentPage = 0
-        updateMonitoring(for: 0)
+        #endif
+        updateMonitoring(for: self.activePageIndex)
         // App launch may have connected and emitted its snapshot before this
         // view subscribed. Always inspect the selected route once on appear.
         return self.probeConfiguredGatewayForDashboard(knownVisible: true)
     }
+
+    #if DEBUG
+    static func debugE2EShouldOpenCLIPage(arguments: [String]) -> Bool {
+        arguments.contains("--e2e-onboarding-cli")
+    }
+    #endif
 
     func onboardingDidDisappear() {
         onboardingVisible = false

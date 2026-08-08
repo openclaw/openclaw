@@ -68,6 +68,14 @@ final class CLIInstallPrompter {
     }
 
     func installTargetForCurrentBuild(confirmStable: Bool = false) -> CLIInstaller.InstallTarget? {
+        #if DEBUG
+        // Native CI launches the packaged app in a real GUI session but cannot approve NSAlert.
+        // Keep this consent bypass absent from release builds.
+        if let target = Self.debugE2EInstallTarget(arguments: CommandLine.arguments) {
+            return target
+        }
+        #endif
+
         let appVersion = Self.appVersion()
         if let target = CLIInstaller.automaticInstallTarget(
             appVersion: appVersion,
@@ -97,6 +105,17 @@ final class CLIInstallPrompter {
                 isDebug: CLIInstallBuild.isDebug))
             .map(CLIInstaller.InstallTarget.channel)
     }
+
+    #if DEBUG
+    static func debugE2EInstallTarget(arguments: [String]) -> CLIInstaller.InstallTarget? {
+        guard let flagIndex = arguments.firstIndex(of: "--e2e-cli-channel") else { return nil }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex),
+              let channel = CLIInstaller.Channel(rawValue: arguments[valueIndex])
+        else { return nil }
+        return .channel(channel)
+    }
+    #endif
 
     private func chooseChannel(suggested: CLIInstaller.Channel) -> CLIInstaller.Channel? {
         let channels = [suggested] + CLIInstaller.Channel.allCases.filter { $0 != suggested }

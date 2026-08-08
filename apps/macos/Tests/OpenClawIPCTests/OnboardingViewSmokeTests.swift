@@ -234,6 +234,24 @@ struct OnboardingViewSmokeTests {
             installing: true))
     }
 
+    @Test func `installed CLI stays complete when gateway startup fails`() {
+        let states = OnboardingView.cliInstallStepStates(
+            executableReady: true,
+            gatewayReady: false,
+            statusKnown: true,
+            installing: false,
+            phase: .idle)
+
+        #expect(states.install == .done)
+        #expect(states.service == .failed)
+    }
+
+    @Test func `packaged E2E can open onboarding on the CLI page`() {
+        #expect(OnboardingView.debugE2EShouldOpenCLIPage(
+            arguments: ["OpenClaw", "--e2e-onboarding-cli"]))
+        #expect(!OnboardingView.debugE2EShouldOpenCLIPage(arguments: ["OpenClaw"]))
+    }
+
     @Test func `connection mode change restarts full page monitoring`() {
         let state = AppState(preview: true)
         let view = OnboardingView(state: state)

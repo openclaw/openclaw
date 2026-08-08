@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 extension Notification.Name {
     static let openclawCLIInstalled = Notification.Name("openclaw.cli.installed")
@@ -67,6 +68,8 @@ enum ManagedCLIUpdateOutcome: Equatable {
 
 @MainActor
 enum CLIInstaller {
+    private static let installLogger = Logger(subsystem: "ai.openclaw", category: "cli.install")
+
     enum Channel: String, CaseIterable, Equatable {
         case stable
         case beta
@@ -327,6 +330,7 @@ enum CLIInstaller {
         let prefix = Self.installPrefix()
         await statusHandler("Installing OpenClaw CLI (\(target.selector))…")
         guard let installerURL = Bundle.main.url(forResource: "install-cli", withExtension: "sh") else {
+            self.recordInstallResult(code: "missing-resource")
             await statusHandler("Install failed: installer resource is missing. Reinstall OpenClaw.")
             return false
         }
@@ -346,6 +350,7 @@ enum CLIInstaller {
             let expectedVersion = target.requiresExactVersion ? GatewayEnvironment.appVersionString() : nil
             let managedStatus = await self.managedStatus(expectedVersion: expectedVersion)
             guard case let .ready(_, verifiedVersion) = managedStatus else {
+                self.recordInstallResult(code: "verification-failed")
                 await statusHandler("Install failed: \(managedStatus.message)")
                 return false
             }
@@ -355,6 +360,7 @@ enum CLIInstaller {
                    installedVersion: verifiedVersion,
                    appVersion: appVersion)
             {
+                self.recordInstallResult(code: "incompatible-version")
                 await statusHandler(
                     "Install failed: \(channel.label) resolved to Gateway \(verifiedVersion), " +
                         "which is older than this app (\(appVersion)). Choose a newer CLI channel " +
@@ -365,21 +371,32 @@ enum CLIInstaller {
             let installedVersion = parsed.last { $0.event == "done" }?.version
             let summary = installedVersion.map { "Installed openclaw \($0)." } ?? "Installed openclaw."
             self.rememberInstallPolicy(target)
+            self.recordInstallResult(code: "ready", failed: false)
             await statusHandler(summary)
             NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
             return true
         }
 
         let parsed = self.parseInstallEvents(response.stdout)
-        if let error = parsed.last(where: { $0.event == "error" })?.message {
+        if let errorEvent = parsed.last(where: { $0.event == "error" }),
+           let error = errorEvent.message
+        {
+            self.recordInstallResult(code: errorEvent.code ?? "installer-error")
             await statusHandler("Install failed: \(error)")
             return false
         }
 
+        self.recordInstallResult(code: "process-failed")
         let detail = response.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         let fallback = response.errorMessage ?? "install failed"
         await statusHandler("Install failed: \(detail.isEmpty ? fallback : detail)")
         return false
+    }
+
+    private static func recordInstallResult(code: String, failed: Bool = true) {
+        let result = failed ? "failed" : "ready"
+        self.installLogger.info(
+            "CLI install completed result=\(result, privacy: .public) code=\(code, privacy: .public)")
     }
 
     static func channelInstallIsCompatible(
@@ -569,12 +586,18 @@ enum CLIInstaller {
         mode: AppState.ConnectionMode = AppStateStore.shared.connectionMode,
         paused: Bool = AppStateStore.shared.isPaused,
         start: @MainActor () -> Void = { GatewayProcessManager.shared.setActive(true) },
+        waitForStartupAttempt: @MainActor () async -> Void = {
+            await GatewayProcessManager.shared.waitForStartupAttempt()
+        },
         waitUntilReady: @MainActor () async -> Bool = {
-            await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12)
+            await GatewayProcessManager.shared.waitForGatewayReady(timeout: 30)
         }) async -> LocalGatewayActivation
     {
         guard mode == .local, !paused else { return .deferred }
         start()
+        // The process manager owns launchd installation and its first readiness cycle. Wait for
+        // that lifecycle before taking the onboarding verdict so the two probes cannot race.
+        await waitForStartupAttempt()
         return await waitUntilReady() ? .ready : .failed
     }
 
@@ -627,6 +650,7 @@ enum CLIInstaller {
 
 private struct InstallEvent: Decodable {
     let event: String
+    let code: String?
     let version: String?
     let message: String?
 }

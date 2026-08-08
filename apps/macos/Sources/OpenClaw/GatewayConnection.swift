@@ -125,12 +125,12 @@ actor GatewayConnection {
         case cronStatus = "cron.status"
     }
 
-    private let endpointProvider: EndpointProvider
+    private nonisolated let endpointProvider: EndpointProvider
     private let supportsSharedEndpointRecovery: Bool
-    private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
-    private let includeDeviceIdentity: Bool
-    private let sessionProvider: SessionProvider
-    private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
+    private nonisolated let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
+    private nonisolated let includeDeviceIdentity: Bool
+    private nonisolated let sessionProvider: SessionProvider
+    private nonisolated let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
 
     private struct ConfiguredConnection {
@@ -182,20 +182,34 @@ actor GatewayConnection {
         supportsSharedEndpointRecovery: Bool = true,
         activationBindingKeyProvider: @escaping @Sendable () -> SymmetricKey? =
             GatewayConnection.defaultActivationBindingKey,
+        includeDeviceIdentity: Bool = true,
         sessionBox: WebSocketSessionBox? = nil,
         sessionProvider: SessionProvider? = nil,
         clientShutdown: @escaping @Sendable (GatewayChannelActor) async -> Void = { client in
             await client.shutdown()
         })
     {
+        let resolvedSessionProvider = Self.resolveSessionProvider(
+            sessionBox: sessionBox,
+            sessionProvider: sessionProvider)
         self.endpointProvider = endpointProvider
         self.supportsSharedEndpointRecovery = supportsSharedEndpointRecovery
         self.activationBindingKeyProvider = activationBindingKeyProvider
-        self.includeDeviceIdentity = true
-        self.sessionProvider = Self.resolveSessionProvider(
-            sessionBox: sessionBox,
-            sessionProvider: sessionProvider)
+        self.includeDeviceIdentity = includeDeviceIdentity
+        self.sessionProvider = resolvedSessionProvider
         self.clientShutdown = clientShutdown
+    }
+
+    /// Make a one-operation connection with the same endpoint, authentication, and TLS routing.
+    /// Bounded lifecycle probes must not inherit an older shared socket's in-flight connect attempt.
+    nonisolated func isolatedConnection() -> GatewayConnection {
+        GatewayConnection(
+            endpointProvider: self.endpointProvider,
+            supportsSharedEndpointRecovery: false,
+            activationBindingKeyProvider: self.activationBindingKeyProvider,
+            includeDeviceIdentity: self.includeDeviceIdentity,
+            sessionProvider: self.sessionProvider,
+            clientShutdown: self.clientShutdown)
     }
 
     #if DEBUG
@@ -212,17 +226,19 @@ actor GatewayConnection {
             await client.shutdown()
         })
     {
-        self.endpointProvider = {
+        let resolvedEndpointProvider: EndpointProvider = {
             try await EndpointSnapshot(config: configProvider(), routeAuthority: nil)
         }
+        let resolvedSessionProvider = Self.resolveSessionProvider(
+            sessionBox: sessionBox,
+            sessionProvider: sessionProvider)
+        self.endpointProvider = resolvedEndpointProvider
         self.supportsSharedEndpointRecovery = false
         self.activationBindingKeyProvider = activationBindingKeyProvider
         // Mock WebSocket routes do not exercise device authentication and must not
         // depend on the process-global persisted identity store.
         self.includeDeviceIdentity = false
-        self.sessionProvider = Self.resolveSessionProvider(
-            sessionBox: sessionBox,
-            sessionProvider: sessionProvider)
+        self.sessionProvider = resolvedSessionProvider
         self.clientShutdown = clientShutdown
     }
     #endif

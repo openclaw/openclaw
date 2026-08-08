@@ -101,10 +101,12 @@ private actor CoordinatorDrainSnapshotProbe {
 }
 
 private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
+    private var startCommands: [[String]] = []
     private var stopCount = 0
 
-    func start(command _: [String]) async throws -> MacNodeHostManifest {
-        MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
+    func start(command: [String]) async throws -> MacNodeHostManifest {
+        self.startCommands.append(command)
+        return MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
     }
 
     func supports(_: String) async -> Bool { false }
@@ -118,7 +120,68 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
     func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async { self.stopCount += 1 }
+    func starts() -> [[String]] { self.startCommands }
     func stops() -> Int { self.stopCount }
+}
+
+private actor CoordinatorAsyncGate {
+    private var entered = false
+    private var releasedValue: Bool?
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    func wait() async -> Bool {
+        self.entered = true
+        if let releasedValue {
+            return releasedValue
+        }
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func hasEntered() -> Bool { self.entered }
+
+    func release(_ value: Bool) {
+        self.releasedValue = value
+        let continuation = self.continuation
+        self.continuation = nil
+        continuation?.resume(returning: value)
+    }
+}
+
+private actor CoordinatorCallProbe {
+    private var callCount = 0
+
+    func record() {
+        self.callCount += 1
+    }
+
+    func calls() -> Int { self.callCount }
+}
+
+private actor CoordinatorCommandGate {
+    private var entered = false
+    private var command: [String]?
+    private var continuation: CheckedContinuation<[String], Never>?
+
+    func wait() async -> [String] {
+        self.entered = true
+        if let command {
+            return command
+        }
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func hasEntered() -> Bool { self.entered }
+
+    func release(_ command: [String]) {
+        self.command = command
+        let continuation = self.continuation
+        self.continuation = nil
+        continuation?.resume(returning: command)
+    }
 }
 
 struct MacNodeModeCoordinatorTests {
@@ -147,6 +210,147 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeModeCoordinator.endpointAttemptIsCurrent(
             capturedGeneration: 7,
             currentGeneration: 8))
+    }
+
+    @Test @MainActor func `local node host waits for Gateway readiness before starting`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let readiness = CoordinatorAsyncGate()
+        let commandResolution = CoordinatorCallProbe()
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            connectionModeProvider: { .local },
+            localGatewayReadiness: { await readiness.wait() },
+            nodeHostCommandProvider: {
+                await commandResolution.record()
+                return ["/tmp/openclaw", "node", "worker"]
+            })
+
+        let attempt = Task { @MainActor in
+            try await coordinator.prepareNodeHostWorkerForTesting()
+        }
+        try await self.waitUntil("local Gateway readiness wait") {
+            await readiness.hasEntered()
+        }
+        #expect(await commandResolution.calls() == 0)
+        #expect(await worker.starts().isEmpty)
+
+        await readiness.release(true)
+        _ = try await attempt.value
+        #expect(await commandResolution.calls() == 1)
+        #expect(await worker.starts() == [["/tmp/openclaw", "node", "worker"]])
+    }
+
+    @Test @MainActor func `local node host does not resolve CLI when Gateway startup fails`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let commandResolution = CoordinatorCallProbe()
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            connectionModeProvider: { .local },
+            localGatewayReadiness: { false },
+            nodeHostCommandProvider: {
+                await commandResolution.record()
+                return ["/tmp/openclaw", "node", "worker"]
+            })
+
+        do {
+            _ = try await coordinator.prepareNodeHostWorkerForTesting()
+            Issue.record("expected local Gateway readiness failure")
+        } catch {
+            #expect(error.localizedDescription == "Local Gateway is not ready for the node host worker")
+        }
+        #expect(await commandResolution.calls() == 0)
+        #expect(await worker.starts().isEmpty)
+    }
+
+    @Test @MainActor func `remote node host does not wait for local Gateway readiness`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let readinessCalls = CoordinatorCallProbe()
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            connectionModeProvider: { .remote },
+            localGatewayReadiness: {
+                await readinessCalls.record()
+                return false
+            },
+            nodeHostCommandProvider: { ["/tmp/openclaw", "node", "worker"] })
+
+        _ = try await coordinator.prepareNodeHostWorkerForTesting()
+
+        #expect(await readinessCalls.calls() == 0)
+        #expect(await worker.starts() == [["/tmp/openclaw", "node", "worker"]])
+    }
+
+    @Test @MainActor func `CLI install during Gateway startup cannot start a stale node host`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let readiness = CoordinatorAsyncGate()
+        let commandResolution = CoordinatorCallProbe()
+        let notificationCenter = NotificationCenter()
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            notificationCenter: notificationCenter,
+            observeNotifications: true,
+            connectionModeProvider: { .local },
+            localGatewayReadiness: { await readiness.wait() },
+            nodeHostCommandProvider: {
+                await commandResolution.record()
+                return ["/tmp/openclaw", "node", "worker"]
+            })
+
+        let attempt = Task { @MainActor in
+            try await coordinator.prepareNodeHostWorkerForTesting()
+        }
+        try await self.waitUntil("local Gateway readiness wait") {
+            await readiness.hasEntered()
+        }
+        notificationCenter.post(name: .openclawCLIInstalled, object: nil)
+        try await self.waitUntil("CLI install route invalidation") {
+            await worker.stops() == 1
+        }
+
+        await readiness.release(true)
+        let manifest = try await attempt.value
+        #expect(manifest == nil)
+        #expect(await commandResolution.calls() == 0)
+        #expect(await worker.starts().isEmpty)
+    }
+
+    @Test @MainActor func `CLI install during command resolution cannot start a stale node host`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let command = CoordinatorCommandGate()
+        let notificationCenter = NotificationCenter()
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            notificationCenter: notificationCenter,
+            observeNotifications: true,
+            connectionModeProvider: { .local },
+            localGatewayReadiness: { true },
+            nodeHostCommandProvider: { await command.wait() })
+
+        let attempt = Task { @MainActor in
+            try await coordinator.prepareNodeHostWorkerForTesting()
+        }
+        try await self.waitUntil("node host command resolution") {
+            await command.hasEntered()
+        }
+        notificationCenter.post(name: .openclawCLIInstalled, object: nil)
+        try await self.waitUntil("CLI install route invalidation") {
+            await worker.stops() == 1
+        }
+
+        await command.release(["/tmp/openclaw", "node", "worker"])
+        let manifest = try await attempt.value
+        #expect(manifest == nil)
+        #expect(await worker.starts().isEmpty)
     }
 
     @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async throws {

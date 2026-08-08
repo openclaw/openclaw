@@ -4071,10 +4071,16 @@ NODE
     const workflow = readCiWorkflow();
 
     expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
-    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(3);
+    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(4);
     expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
 
-    for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
+    for (const jobName of [
+      "checks-windows",
+      "macos-node",
+      "macos-app-bootstrap",
+      "macos-swift",
+      "ios-build",
+    ]) {
       const checkoutStep = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Checkout",
       );
@@ -4110,6 +4116,28 @@ NODE
 
     expect(schemaVersionStep.run).toContain("node scripts/check-native-state-schema-version.mjs");
     expect(schemaVersionStep.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
+  });
+
+  it("runs the packaged macOS app bootstrap in a real GUI launchd session", () => {
+    const workflow = readCiWorkflow();
+    const job = workflow.jobs["macos-app-bootstrap"];
+    const runStep = job.steps.find(
+      (step: WorkflowStep) => step.name === "Packaged app first-launch bootstrap",
+    );
+    const uploadStep = job.steps.find(
+      (step: WorkflowStep) => step.name === "Upload packaged app bootstrap diagnostics",
+    );
+
+    expect(job.needs).toEqual(["preflight"]);
+    expect(job.if).toBe(
+      "${{ needs.preflight.outputs.run_macos == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}",
+    );
+    expect(job["runs-on"]).toContain("macos-26");
+    expect(job["timeout-minutes"]).toBe(60);
+    expect(runStep.env.OPENCLAW_E2E_ALLOW_HOME_RESET).toBe("1");
+    expect(runStep.run).toBe("node --import tsx scripts/e2e/macos-app-bootstrap-ci.ts");
+    expect(uploadStep.if).toBe("${{ failure() }}");
+    expect(uploadStep.with.path).toBe(".artifacts/macos-app-bootstrap");
   });
 
   it("resets SwiftPM state between macOS release build retries", () => {
@@ -5376,6 +5404,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "skills-python",
       "checks-windows",
       "macos-node",
+      "macos-app-bootstrap",
       "macos-swift",
       "ios-build",
       "android",

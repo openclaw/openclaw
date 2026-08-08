@@ -30123,7 +30123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 190,
+      "line": 209,
       "path": "apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift",
       "source": "CLI install failed",
       "surface": "apple",
@@ -30131,7 +30131,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 190,
+      "line": 209,
       "path": "apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift",
       "source": "CLI install finished",
       "surface": "apple",
@@ -30139,7 +30139,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 77,
+      "line": 80,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Stable",
       "surface": "apple",
@@ -30147,7 +30147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 78,
+      "line": 81,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Beta",
       "surface": "apple",
@@ -30155,7 +30155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 79,
+      "line": 82,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Dev (Git main)",
       "surface": "apple",
@@ -30163,7 +30163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 133,
+      "line": 136,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "OpenClaw Gateway \\(version) is ready.",
       "surface": "apple",
@@ -30171,7 +30171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 135,
+      "line": 138,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "OpenClaw Gateway is not installed yet.",
       "surface": "apple",
@@ -30179,7 +30179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 137,
+      "line": 140,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "The OpenClaw Gateway could not be verified. Setup will repair it.",
       "surface": "apple",
@@ -30187,7 +30187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 139,
+      "line": 142,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway \\(found) does not match app \\(required). Setup will update it.",
       "surface": "apple",
@@ -30195,7 +30195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 490,
+      "line": 507,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Repairing the OpenClaw Gateway update…",
       "surface": "apple",
@@ -30203,7 +30203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 491,
+      "line": 508,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
       "surface": "apple",
@@ -30211,7 +30211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 512,
+      "line": 529,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update needs attention.",
       "surface": "apple",
@@ -30219,7 +30219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 514,
+      "line": 531,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update failed.",
       "surface": "apple",
@@ -30227,7 +30227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 529,
+      "line": 546,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "Gateway update finished, but verification failed.",
       "surface": "apple",
@@ -30235,7 +30235,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 536,
+      "line": 553,
       "path": "apps/macos/Sources/OpenClaw/CLIInstaller.swift",
       "source": "OpenClaw Gateway \\(installedVersion) is installed.",
       "surface": "apple",
@@ -35499,7 +35499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 384,
+      "line": 396,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Layout.swift",
       "source": "Back",
       "surface": "apple",
@@ -36019,7 +36019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 988,
+      "line": 1018,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "You’re all set!",
       "surface": "apple",
@@ -36027,7 +36027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 991,
+      "line": 1021,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Finish opens the chat — say hi to your new agent.",
       "surface": "apple",
@@ -36035,7 +36035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 999,
+      "line": 1029,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Configure later",
       "surface": "apple",
@@ -36043,7 +36043,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1000,
+      "line": 1030,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Pick Local or Remote in Settings → General whenever you’re ready.",
       "surface": "apple",
@@ -36051,7 +36051,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1007,
+      "line": 1037,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Remote gateway checklist",
       "surface": "apple",
@@ -36059,7 +36059,7 @@
     },
     {
       "kind": "ui-named-argument-multiline",
-      "line": 1008,
+      "line": 1038,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "On your gateway host: install/update the `openclaw` package and make sure credentials exist\n(typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.",
       "surface": "apple",
@@ -36067,7 +36067,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1017,
+      "line": 1047,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Open the menu bar panel",
       "surface": "apple",
@@ -36075,7 +36075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1018,
+      "line": 1048,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
       "surface": "apple",
@@ -36083,7 +36083,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1021,
+      "line": 1051,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Connect Discord, Slack, Telegram, WhatsApp, …",
       "surface": "apple",
@@ -36091,7 +36091,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1022,
+      "line": 1052,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Open Settings → Channels to link channels and monitor status.",
       "surface": "apple",
@@ -36099,7 +36099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1024,
+      "line": 1054,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Open Settings → Channels",
       "surface": "apple",
@@ -36107,7 +36107,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1029,
+      "line": 1059,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Try Voice Wake",
       "surface": "apple",
@@ -36115,7 +36115,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1030,
+      "line": 1060,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Enable Voice Wake in Settings for hands-free commands with a live transcript overlay.",
       "surface": "apple",
@@ -36123,7 +36123,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1033,
+      "line": 1063,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Use the panel + Canvas",
       "surface": "apple",
@@ -36131,7 +36131,7 @@
     },
     {
       "kind": "ui-named-argument-concatenated",
-      "line": 1034,
+      "line": 1064,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
       "surface": "apple",
@@ -36139,7 +36139,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1038,
+      "line": 1068,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Give your agent more powers",
       "surface": "apple",
@@ -36147,7 +36147,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1039,
+      "line": 1069,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
       "surface": "apple",
@@ -36155,7 +36155,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1041,
+      "line": 1071,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Open Settings → Skills",
       "surface": "apple",
@@ -36163,7 +36163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1046,
+      "line": 1076,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Launch at login",
       "surface": "apple",
@@ -36171,7 +36171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1073,
+      "line": 1103,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Skills included",
       "surface": "apple",
@@ -36179,7 +36179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1080,
+      "line": 1110,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -36187,7 +36187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1089,
+      "line": 1119,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Couldn’t load skills from the Gateway.",
       "surface": "apple",
@@ -36195,7 +36195,7 @@
     },
     {
       "kind": "ui-call-concatenated",
-      "line": 1092,
+      "line": 1122,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Make sure the Gateway is running and connected, then hit Refresh (or open Settings → Skills).",
       "surface": "apple",
@@ -36203,7 +36203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1098,
+      "line": 1128,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Details: \\(error)",
       "surface": "apple",
@@ -36211,7 +36211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1104,
+      "line": 1134,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "No skills reported yet.",
       "surface": "apple",

@@ -508,6 +508,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
         }
         AppActivationPolicy.apply(showDockIcon: state?.showDockIcon ?? false)
+        #if DEBUG
+        if OnboardingView.debugE2EShouldOpenCLIPage(arguments: CommandLine.arguments) {
+            // The delayed-readiness lane intentionally blocks automatic Gateway startup. Show
+            // onboarding before connection setup so the E2E cannot deadlock behind that block.
+            OnboardingController.shared.show()
+        }
+        #endif
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
             if !shouldWaitForConnection, launchPolicy.allowsAutomaticPresentation {
