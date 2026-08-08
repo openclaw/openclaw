@@ -158,6 +158,7 @@ export async function runManagerTurn(params: {
   };
 
   let acpTurnMarkedActive = false;
+  let turnStreamAcquiredNotified = false;
   // Liveness spans the whole task, not one attempt: mark once before the backend loop
   // (after the ready-meta check, so a pre-loop throw cannot leak it) and clear on every
   // runTurn exit, including unexpected retry/cleanup failures before terminal task writes.
@@ -250,10 +251,6 @@ export async function runManagerTurn(params: {
             ? AbortSignal.any([input.signal, internalAbortController.signal])
             : internalAbortController.signal;
           const eventGate = { open: true };
-          await input.onLifecycle?.({
-            type: "prompt_submitted",
-            at: Date.now(),
-          });
           const turnPromise = consumeAcpTurnStream({
             runtime,
             turn: {
@@ -265,6 +262,18 @@ export async function runManagerTurn(params: {
               signal: combinedSignal,
             },
             eventGate,
+            onPromptStarted: () =>
+              input.onLifecycle?.({
+                type: "prompt_submitted",
+                at: Date.now(),
+              }),
+            onTurnStreamAcquired: async () => {
+              if (turnStreamAcquiredNotified) {
+                return;
+              }
+              turnStreamAcquiredNotified = true;
+              await input.onTurnStreamAcquired?.();
+            },
             onOutputEvent: (event) => {
               sawTurnOutput = true;
               if (event.type === "text_delta" && event.stream !== "thought" && event.text) {

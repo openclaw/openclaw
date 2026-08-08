@@ -9,8 +9,13 @@ import {
   mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
+import {
+  copyEmbeddedRunAccountingObservers,
+  resolveEmbeddedRunAccountingObservers,
+} from "./accounting-observers.js";
 import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
 import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
+import { buildTraceToolSummary } from "./run-attempt-result.js";
 import {
   resolveEmbeddedRunAttemptTerminalOutcome,
   type EmbeddedRunTerminalState,
@@ -109,6 +114,24 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     });
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
     mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
+    resolveEmbeddedRunAccountingObservers(input.terminalBase.runParams)?.onAttemptObserved?.({
+      provider: input.finalization.preparedAttempt.model.provider,
+      model: input.finalization.preparedAttempt.model.id,
+      config: input.terminalBase.runParams.config,
+      agentDir: input.terminalBase.runParams.agentDir,
+      usage: attempt.attemptUsage,
+      assistantTurns: attempt.assistantTurns ?? 1,
+      assistantTurnsObserved: true,
+      toolSummary: buildTraceToolSummary({
+        toolMetas: attempt.toolMetas,
+        fallbackHadFailure: Boolean(attempt.lastToolError),
+      }) ?? { calls: 0, tools: [] },
+      toolsObserved: true,
+      codeModeEngaged: attempt.codeModeEngaged,
+      codeModeStats: attempt.codeModeStats,
+      codeModeLifecycleObserved:
+        attempt.codeModeStats?.bridgeLifecycle.unresolvedAtExtraction !== undefined,
+    });
     lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
     // Successful isolated finalization owns a fresh terminal, never the original abort signal.
     const terminalState: EmbeddedRunTerminalState = {
@@ -143,6 +166,9 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       finalizationSucceeded: true,
     };
   } catch (error) {
+    resolveEmbeddedRunAccountingObservers(input.terminalBase.runParams)?.onOpaqueWork?.(
+      "settled_finalization_failed",
+    );
     log.warn(
       `settled-turn finalization failed closed: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
         `provider=${errorContext.provider}/${errorContext.model} error=${formatErrorMessage(error)}`,
@@ -166,14 +192,14 @@ async function runPreparedSettledTurnFinalization(input: {
 }): Promise<EmbeddedRunAttemptResult> {
   return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
     const result = await runEmbeddedSettledTurnFinalizationWithBackend(
-      {
+      copyEmbeddedRunAccountingObservers(input.attempt, {
         ...input.attempt,
         operation: "settled-tool-finalization",
         prompt: input.prompt,
         disableTools: true,
         skipPreparedUserTurnMessage: true,
         initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
-      },
+      }),
       input.settledAttempt,
       input.harness,
     );

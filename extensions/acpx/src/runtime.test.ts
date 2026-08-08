@@ -629,6 +629,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     vi.spyOn(delegate, "startTurn").mockImplementation(
       (input): AcpRuntimeTurn => ({
         requestId: input.requestId,
+        promptStarted: Promise.resolve(),
         events: (async function* () {
           yield {
             type: "text_delta" as const,
@@ -659,6 +660,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "prompt",
       requestId: "turn-1",
     });
+    await expect(turn.promptStarted).resolves.toBeUndefined();
     const events: AcpRuntimeEvent[] = [];
     for await (const event of turn.events) {
       events.push(event);

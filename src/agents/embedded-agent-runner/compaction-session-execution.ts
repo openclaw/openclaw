@@ -30,6 +30,7 @@ import {
   resolveSessionWriteLockTargetKey,
   resolveSessionWriteLockOptions,
 } from "../session-write-lock.js";
+import { bindAgentSessionAccounting } from "../sessions/agent-session-accounting.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
 import { createAgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
@@ -61,6 +62,7 @@ import { log } from "./logger.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { createEmbeddedAgentResourceLoader } from "./resource-loader.js";
+import { resolveEmbeddedRunAccountingObservers } from "./run/accounting-observers.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 import { applySystemPromptToSession } from "./system-prompt.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
@@ -240,19 +242,32 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
         try {
-          const createdSession = await createAgentSession({
-            cwd: effectiveCwd,
-            agentDir,
-            authStorage,
-            modelRegistry,
-            model: effectiveModel,
-            thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: sessionToolAllowlist,
-            customTools,
-            sessionManager,
-            settingsManager,
-            resourceLoader,
-          });
+          const accountingObservers = resolveEmbeddedRunAccountingObservers(params);
+          const sessionOptions = bindAgentSessionAccounting(
+            {
+              cwd: effectiveCwd,
+              agentDir,
+              authStorage,
+              modelRegistry,
+              model: effectiveModel,
+              thinkingLevel: mapThinkingLevel(thinkLevel),
+              tools: sessionToolAllowlist,
+              customTools,
+              sessionManager,
+              settingsManager,
+              resourceLoader,
+            },
+            accountingObservers
+              ? {
+                  onAgentSubmission: accountingObservers.onAgentSubmission,
+                  onCoreCompactionInvocation: () =>
+                    accountingObservers.onOpaqueWork?.("session_core_compaction"),
+                  onExtensionCompactionInvocation: () =>
+                    accountingObservers.onOpaqueWork?.("session_extension_compaction"),
+                }
+              : undefined,
+          );
+          const createdSession = await createAgentSession(sessionOptions);
           session = createdSession.session;
           session.setActiveToolsByName(sessionToolAllowlist);
           applySystemPromptToSession(session, systemPromptText);
@@ -427,8 +442,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           const result = await compactWithSafetyTimeout(
             () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
-              return resolveEffectiveCompactionMode(params.config) === "default" &&
-                trigger !== "manual"
+              const useAutomaticCompaction =
+                resolveEffectiveCompactionMode(params.config) === "default" && trigger !== "manual";
+              return useAutomaticCompaction
                 ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
                 : activeSession.compact(params.customInstructions);
             },

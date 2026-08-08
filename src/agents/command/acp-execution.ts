@@ -14,6 +14,7 @@ import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import { applyAgentRunAbortMetadata } from "./lifecycle.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
+import { markActiveAgentCommandOpaqueWork } from "./run-accounting.js";
 import {
   loadAcpPolicyRuntime,
   loadAcpRuntimeErrorsRuntime,
@@ -102,6 +103,7 @@ export async function runAcpAgentCommand(params: {
 
     const acpImageAttachments = resolveInlineAgentImageAttachments(params.opts.images);
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+    params.opts.onExecutionStarted?.();
     await params.acpManager.runTurn({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
@@ -111,9 +113,11 @@ export async function runAcpAgentCommand(params: {
       mode: "prompt",
       requestId: params.runId,
       signal: params.opts.abortSignal,
+      onTurnStreamAcquired: () => {
+        markActiveAgentCommandOpaqueWork("acp_runtime");
+      },
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
-          params.opts.onExecutionStarted?.();
           attemptExecutionRuntime.emitAcpPromptSubmitted({
             runId: params.runId,
             sessionKey: params.sessionKey,

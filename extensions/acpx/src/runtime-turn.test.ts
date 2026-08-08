@@ -26,6 +26,50 @@ const turnInput: AcpRuntimeTurnInput = {
 };
 
 describe("lazyStartRuntimeTurn", () => {
+  it("forwards prompt readiness from a modern runtime", async () => {
+    let resolvePromptStarted!: () => void;
+    const promptStarted = new Promise<void>((resolve) => {
+      resolvePromptStarted = resolve;
+    });
+    const turn = lazyStartRuntimeTurn(
+      async () => ({
+        ensureSession: vi.fn(),
+        startTurn: (input) => ({
+          requestId: input.requestId,
+          promptStarted,
+          events: (async function* () {})(),
+          result: Promise.resolve({ status: "completed" as const }),
+          cancel: vi.fn(async () => {}),
+          closeStream: vi.fn(async () => {}),
+        }),
+        runTurn: vi.fn(),
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      }),
+      turnInput,
+    );
+    const observed = vi.fn();
+    void turn.promptStarted?.then(observed);
+
+    await Promise.resolve();
+    expect(observed).not.toHaveBeenCalled();
+    resolvePromptStarted();
+    await turn.promptStarted;
+    expect(observed).toHaveBeenCalledOnce();
+  });
+
+  it("rejects readiness when the resolved runtime cannot prove prompt submission", async () => {
+    const turn = lazyStartRuntimeTurn(
+      async () => createLegacyRuntime([{ type: "done", stopReason: "end_turn" }]),
+      turnInput,
+    );
+
+    await expect(turn.promptStarted).rejects.toThrow(
+      "ACP runtime did not expose prompt submission readiness",
+    );
+    await expect(turn.result).resolves.toEqual({ status: "completed", stopReason: "end_turn" });
+  });
+
   it.each(["cancel", "cancelled", "manual-cancel"])(
     "preserves %s cancellation from a legacy done event",
     async (stopReason) => {

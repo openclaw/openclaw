@@ -65,7 +65,7 @@ describe("usage-accumulator", () => {
       expect(acc.total).toBe(251_490);
     });
 
-    it("ignores undefined or zero-only usage", () => {
+    it("preserves explicit zero-only usage while ignoring undefined", () => {
       const acc = createUsageAccumulator();
 
       mergeUsageIntoAccumulator(acc, undefined);
@@ -77,7 +77,37 @@ describe("usage-accumulator", () => {
         total: 0,
       });
 
-      expect(acc).toEqual(createUsageAccumulator());
+      expect(toNormalizedUsage(acc)).toEqual({
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      });
+    });
+
+    it("intersects observed bucket provenance across aggregated calls", () => {
+      const acc = createUsageAccumulator();
+
+      mergeUsageIntoAccumulator(acc, {
+        input: 100,
+        output: 20,
+        cacheRead: 0,
+        total: 120,
+      });
+      mergeUsageIntoAccumulator(acc, {
+        input: 80,
+        output: 10,
+        total: 90,
+      });
+
+      expect(toNormalizedUsage(acc)).toEqual({
+        input: 180,
+        output: 30,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 210,
+      });
     });
   });
 
@@ -213,10 +243,19 @@ describe("usage-accumulator", () => {
       });
     });
 
-    it("omits zero fields", () => {
+    it("keeps buckets unknown when an earlier provider call omits them", () => {
       const acc = createUsageAccumulator();
       mergeUsageIntoAccumulator(acc, { input: 100, output: 50 });
 
+      expect(toNormalizedUsage(acc)).toEqual({
+        input: 100,
+        output: 50,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 150,
+      });
+
+      mergeUsageIntoAccumulator(acc, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
       expect(toNormalizedUsage(acc)).toEqual({
         input: 100,
         output: 50,

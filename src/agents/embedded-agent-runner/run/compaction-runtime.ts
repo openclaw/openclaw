@@ -13,6 +13,7 @@ import {
 } from "../compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { markContextEngineLlmCompleteInvocation } from "./accounting-observers.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -128,6 +129,7 @@ export async function compactEmbeddedRunForRecovery(
         recovery.trigger === "overflow"
           ? "context-engine.overflow-compaction"
           : "context-engine.timeout-compaction",
+      onLlmCompleteInvocation: () => markContextEngineLlmCompleteInvocation(runParams),
     }),
     onCompactionHookMessages: input.onCompactionHookMessages,
     ...(input.attempt.promptCache ? { promptCache: input.attempt.promptCache } : {}),

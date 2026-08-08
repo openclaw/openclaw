@@ -565,6 +565,7 @@ export function buildAfterTurnRuntimeContext(params: {
   tokenBudget?: number;
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
+  onLlmCompleteInvocation?: () => void;
 }): ContextEngineRuntimeContext {
   const sessionTarget = resolveRuntimeContextSessionTarget({
     attempt: params.attempt,
@@ -612,6 +613,7 @@ export function buildAfterTurnRuntimeContext(params: {
       authProfileId: params.attempt.authProfileId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",
+      onLlmCompleteInvocation: params.onLlmCompleteInvocation,
     }),
     ...(typeof params.tokenBudget === "number" &&
     Number.isFinite(params.tokenBudget) &&

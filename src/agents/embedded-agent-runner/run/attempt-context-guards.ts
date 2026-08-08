@@ -20,6 +20,7 @@ import {
   resolveCacheTtlPruningSettings,
   resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
+import { markContextEngineLlmCompleteInvocation } from "./accounting-observers.js";
 import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
 import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import { buildAfterTurnRuntimeContext } from "./attempt.prompt-helpers.js";
@@ -161,6 +162,7 @@ export function installEmbeddedAttemptContextGuards(input: {
           cwd: input.effectiveCwd,
           agentDir: input.agentDir,
           tokenBudget: attempt.contextTokenBudget,
+          onLlmCompleteInvocation: () => markContextEngineLlmCompleteInvocation(attempt),
           promptCache:
             input.getPromptCache() ??
             buildLoopPromptCacheInfo({

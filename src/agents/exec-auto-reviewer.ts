@@ -16,6 +16,7 @@ import {
   type ExecAutoReviewInput,
   type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
+import { markActiveAgentCommandOpaqueWork } from "./command/run-accounting.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import { DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT } from "./exec-auto-reviewer.prompt.js";
 import {
@@ -388,6 +389,7 @@ export function createModelExecAutoReviewer(params: {
       }
 
       completionController = new AbortController();
+      markActiveAgentCommandOpaqueWork("exec_auto_review_model_completion");
       const result = await raceWithReviewerTimeout(
         complete({
           model: prepared.model,

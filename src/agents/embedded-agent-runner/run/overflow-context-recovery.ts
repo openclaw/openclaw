@@ -21,6 +21,7 @@ import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInActiveTarget,
 } from "../tool-result-truncation.js";
+import { markContextEngineLlmCompleteInvocation } from "./accounting-observers.js";
 import {
   compactEmbeddedRunForRecovery,
   type EmbeddedRunCompactionRecoveryInput,
@@ -188,6 +189,7 @@ export async function recoverEmbeddedRunOverflow(
           runtimeSettings: compaction.runtimeSettings,
           config: runParams.config,
           agentId: input.sessionAgentId,
+          onLlmCompleteInvocation: () => markContextEngineLlmCompleteInvocation(runParams),
         });
       }
     } catch (compactErr) {

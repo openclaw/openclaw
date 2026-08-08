@@ -64,6 +64,50 @@ export type NormalizedUsage = {
   total?: number;
 };
 
+export type NormalizedUsageBucket =
+  | "input"
+  | "output"
+  | "cacheRead"
+  | "cacheWrite"
+  | "reasoningTokens"
+  | "total";
+
+const normalizedUsageObservedBuckets = new WeakMap<
+  NormalizedUsage,
+  ReadonlySet<NormalizedUsageBucket>
+>();
+
+export function bindNormalizedUsageObservedBuckets(
+  usage: NormalizedUsage,
+  buckets: Iterable<NormalizedUsageBucket>,
+): NormalizedUsage {
+  normalizedUsageObservedBuckets.set(usage, new Set(buckets));
+  return usage;
+}
+
+export function resolveNormalizedUsageObservedBuckets(
+  usage: NormalizedUsage,
+): ReadonlySet<NormalizedUsageBucket> {
+  const observed = normalizedUsageObservedBuckets.get(usage);
+  if (observed) {
+    return observed;
+  }
+  const inferred = new Set<NormalizedUsageBucket>();
+  for (const bucket of [
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "reasoningTokens",
+    "total",
+  ] as const) {
+    if (typeof usage[bucket] === "number" && Number.isFinite(usage[bucket])) {
+      inferred.add(bucket);
+    }
+  }
+  return inferred;
+}
+
 /** OpenAI chat-completions compatible usage shape. */
 export type OpenAiChatCompletionsUsage = {
   prompt_tokens: number;
@@ -230,7 +274,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     return undefined;
   }
 
-  return {
+  const usage = {
     input,
     output,
     cacheRead,
@@ -239,6 +283,17 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     total,
   };
+  return bindNormalizedUsageObservedBuckets(
+    usage,
+    [
+      ["input", input],
+      ["output", output],
+      ["cacheRead", cacheRead],
+      ["cacheWrite", cacheWrite],
+      ["reasoningTokens", reasoningTokens],
+      ["total", total],
+    ].flatMap(([bucket, value]) => (value !== undefined ? [bucket as NormalizedUsageBucket] : [])),
+  );
 }
 
 /**

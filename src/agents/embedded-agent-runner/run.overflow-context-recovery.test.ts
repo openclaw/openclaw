@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
+import { bindEmbeddedRunAccountingObservers } from "./run/accounting-observers.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -612,6 +613,8 @@ describe("recoverEmbeddedRunOverflow", () => {
       adoptCompactionTranscript,
       getActiveSession: () => activeSession,
     });
+    const onOpaqueWork = vi.fn();
+    bindEmbeddedRunAccountingObservers(input.runParams, { onOpaqueWork });
 
     expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
     expect(input.runOwnsCompactionBeforeHook).toHaveBeenCalledWith("overflow recovery");
@@ -625,8 +628,17 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionId: "rotated-session",
         sessionFile: "/tmp/rotated-session.jsonl",
         reason: "compaction",
+        onLlmCompleteInvocation: expect.any(Function),
       }),
     );
+    const maintenanceParams = mocks.maintenance.mock.calls[0]?.[0] as
+      | { onLlmCompleteInvocation?: () => void }
+      | undefined;
+    maintenanceParams?.onLlmCompleteInvocation?.();
+    maintenanceParams?.onLlmCompleteInvocation?.();
+    expect(onOpaqueWork).toHaveBeenCalledTimes(2);
+    expect(onOpaqueWork).toHaveBeenNthCalledWith(1, "context_engine_llm_complete");
+    expect(onOpaqueWork).toHaveBeenNthCalledWith(2, "context_engine_llm_complete");
     expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
   });
 

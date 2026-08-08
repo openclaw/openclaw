@@ -5,6 +5,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import type { LlmCompleteParams, LlmCompleteResult } from "../../plugins/runtime/types-core.js";
 import { enqueueCommandInLane, markGatewayDraining } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -35,6 +36,23 @@ const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string
   sessionKey: scope.sessionKey,
   storePath: scope.storePath ?? "/tmp/default-openclaw.sqlite",
 }));
+const { contextEngineCompleteMock } = vi.hoisted(() => ({
+  contextEngineCompleteMock: vi.fn<(request: LlmCompleteParams) => Promise<LlmCompleteResult>>(),
+}));
+const contextEngineCompleteResult: LlmCompleteResult = {
+  text: "",
+  provider: "test-provider",
+  model: "test-model",
+  agentId: "main",
+  usage: {},
+  execution: {
+    mode: "direct-provider",
+    owner: { kind: "provider", id: "test-provider" },
+  },
+  audit: {
+    caller: { kind: "context-engine" },
+  },
+};
 let createDeferredTurnMaintenanceAbortSignal: typeof import("./context-engine-maintenance.test-support.js").createDeferredTurnMaintenanceAbortSignal;
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
 let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
@@ -98,7 +116,14 @@ function expectSystemEventContaining(sessionKey: string, text: string) {
 }
 
 vi.mock("./context-engine-capabilities.js", () => ({
-  resolveContextEngineCapabilities: () => ({ llm: undefined }),
+  resolveContextEngineCapabilities: (params: { onLlmCompleteInvocation?: () => void }) => ({
+    llm: {
+      complete: async (request: LlmCompleteParams): Promise<LlmCompleteResult> => {
+        params.onLlmCompleteInvocation?.();
+        return await contextEngineCompleteMock(request);
+      },
+    },
+  }),
 }));
 
 vi.mock("./transcript-rewrite.js", () => ({
@@ -181,6 +206,7 @@ describe("runContextEngineMaintenance", () => {
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
     sessionManagerOpenMock.mockClear();
     resolveRuntimeTranscriptReadTargetMock.mockClear();
+    contextEngineCompleteMock.mockReset().mockResolvedValue(contextEngineCompleteResult);
     await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
@@ -253,6 +279,115 @@ describe("runContextEngineMaintenance", () => {
       replacements: [
         { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
       ],
+    });
+  });
+
+  it("marks each foreground maintenance LLM invocation", async () => {
+    const onLlmCompleteInvocation = vi.fn();
+    const maintain = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
+      await params.runtimeContext?.llm?.complete({ prompt: "summarize" } as never);
+      await params.runtimeContext?.llm?.complete({ prompt: "compress" } as never);
+      return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+    });
+
+    await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      },
+      sessionId: "session-foreground-llm",
+      sessionFile: "/tmp/session-foreground-llm.jsonl",
+      reason: "turn",
+      onLlmCompleteInvocation,
+    });
+
+    expect(contextEngineCompleteMock).toHaveBeenCalledTimes(2);
+    expect(onLlmCompleteInvocation).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not mark foreground maintenance that makes no LLM invocation", async () => {
+    const onLlmCompleteInvocation = vi.fn();
+
+    await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain: async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }),
+      },
+      sessionId: "session-foreground-no-llm",
+      sessionFile: "/tmp/session-foreground-no-llm.jsonl",
+      reason: "turn",
+      onLlmCompleteInvocation,
+    });
+
+    expect(contextEngineCompleteMock).not.toHaveBeenCalled();
+    expect(onLlmCompleteInvocation).not.toHaveBeenCalled();
+  });
+
+  it("marks a failing foreground maintenance LLM invocation", async () => {
+    contextEngineCompleteMock.mockRejectedValueOnce(new Error("runtime failed"));
+    const onLlmCompleteInvocation = vi.fn();
+    const maintain = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
+      await params.runtimeContext?.llm?.complete({ prompt: "summarize" } as never);
+      return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+    });
+
+    const result = await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      },
+      sessionId: "session-foreground-llm-failure",
+      sessionFile: "/tmp/session-foreground-llm-failure.jsonl",
+      reason: "turn",
+      onLlmCompleteInvocation,
+    });
+
+    expect(result).toBeUndefined();
+    expect(onLlmCompleteInvocation).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse the foreground LLM callback for deferred maintenance", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-opaque-", async () => {
+      const sessionKey = "agent:main:session-deferred-opaque";
+      const onLlmCompleteInvocation = vi.fn();
+      const deferred: Promise<void>[] = [];
+      const maintain = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
+        await params.runtimeContext?.llm?.complete({ prompt: "summarize" } as never);
+        return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+      });
+
+      await runContextEngineMaintenance({
+        contextEngine: {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background",
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        },
+        sessionId: "session-deferred-opaque",
+        sessionKey,
+        sessionFile: "/tmp/session-deferred-opaque.jsonl",
+        reason: "turn",
+        onLlmCompleteInvocation,
+        onDeferredMaintenance: (promise) => deferred.push(promise),
+      });
+
+      await expectDefined(deferred[0], "deferred maintenance promise");
+      expect(contextEngineCompleteMock).toHaveBeenCalledOnce();
+      expect(onLlmCompleteInvocation).not.toHaveBeenCalled();
     });
   });
 
@@ -1074,6 +1209,8 @@ describe("runContextEngineMaintenance", () => {
         resetCommandQueueStateForTest();
 
         const sessionKey = "agent:main:session-enqueue-reject";
+        const onDeferredMaintenance = vi.fn();
+        const onDeferredMaintenanceFailure = vi.fn();
         const maintain = vi.fn(async () => ({
           changed: false,
           bytesFreed: 0,
@@ -1100,6 +1237,8 @@ describe("runContextEngineMaintenance", () => {
           sessionKey,
           sessionFile: "/tmp/session-enqueue-reject.jsonl",
           reason: "turn",
+          onDeferredMaintenance,
+          onDeferredMaintenanceFailure,
         });
         await flushAsyncWork();
 
@@ -1111,6 +1250,9 @@ describe("runContextEngineMaintenance", () => {
         expect(task.status).toBe("cancelled");
         expect(String(task.terminalSummary)).toContain("gateway draining");
         expect(maintain).not.toHaveBeenCalled();
+        expect(onDeferredMaintenance).not.toHaveBeenCalled();
+        expect(onDeferredMaintenanceFailure).toHaveBeenCalledOnce();
+        expect(onDeferredMaintenanceFailure).toHaveBeenCalledWith(scheduleError);
       } finally {
         enqueueSpy.mockRestore();
         vi.useRealTimers();

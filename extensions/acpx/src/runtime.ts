@@ -65,6 +65,9 @@ type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
 type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>>;
 type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
+type PromptStartedAcpRuntimeTurn = AcpRuntimeTurn & {
+  promptStarted?: Promise<void>;
+};
 
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
@@ -1584,9 +1587,18 @@ export class AcpxRuntime implements AcpRuntime {
         });
       }
     });
+    const promptStarted = turnPromise.then(({ turn }) => {
+      const readiness = (turn as PromptStartedAcpRuntimeTurn).promptStarted;
+      if (!readiness) {
+        throw new Error("acpx did not expose prompt submission readiness.");
+      }
+      return readiness;
+    });
+    void promptStarted.catch(() => {});
 
     return {
       requestId: input.requestId,
+      promptStarted,
       events: {
         async *[Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
           const { command, turn } = await turnPromise;

@@ -168,8 +168,16 @@ export function lazyStartRuntimeTurn(
   input: AcpRuntimeTurnInput,
 ): AcpRuntimeTurn {
   const turnPromise = resolveRuntime().then((runtime) => startRuntimeTurn(runtime, input));
+  const promptStarted = turnPromise.then((turn) => {
+    if (!turn.promptStarted) {
+      throw new Error("ACP runtime did not expose prompt submission readiness.");
+    }
+    return turn.promptStarted;
+  });
+  void promptStarted.catch(() => {});
   return {
     requestId: input.requestId,
+    promptStarted,
     events: {
       async *[Symbol.asyncIterator]() {
         yield* (await turnPromise).events;

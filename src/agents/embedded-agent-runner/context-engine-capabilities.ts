@@ -13,6 +13,7 @@ type ResolveContextEngineCapabilitiesParams = {
   authProfileId?: string;
   contextEnginePluginId?: string;
   purpose: string;
+  onLlmCompleteInvocation?: () => void;
 };
 
 /**
@@ -32,7 +33,7 @@ export function resolveContextEngineCapabilities(
     llm: {
       complete: async (request) => {
         const { createRuntimeLlm } = await import("../../plugins/runtime/runtime-llm.runtime.js");
-        return await createRuntimeLlm({
+        const llm = createRuntimeLlm({
           getConfig: () => params.config,
           authority: {
             caller: { kind: "context-engine", id: params.purpose },
@@ -45,7 +46,9 @@ export function resolveContextEngineCapabilities(
             allowModelOverride: false,
             allowComplete: true,
           },
-        }).complete(request);
+        });
+        params.onLlmCompleteInvocation?.();
+        return await llm.complete(request);
       },
     },
   };

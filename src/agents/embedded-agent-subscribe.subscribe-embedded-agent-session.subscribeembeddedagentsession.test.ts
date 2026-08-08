@@ -272,6 +272,74 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
+  it("preserves observed zero buckets in cumulative usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = {
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+      totalTokens: 120,
+    };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({ type: "message_end", message: { role: "assistant", usage } });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 100,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+      total: 120,
+    });
+  });
+
+  it("records an observed all-zero usage snapshot when it is the only call", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: { role: "assistant", usage: makeZeroUsageSnapshot() },
+    });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    });
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    });
+  });
+
+  it("does not treat a bucket as exact when a later provider call omits it", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const emitUsage = (usage: Record<string, number>) => {
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit({ type: "message_end", message: { role: "assistant", usage } });
+    };
+
+    emitUsage({ input: 100, output: 20, cacheRead: 0, totalTokens: 120 });
+    emitUsage({ input: 80, output: 10, totalTokens: 90 });
+
+    expect(subscription.getUsageTotals()).toEqual({
+      input: 180,
+      output: 30,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      total: 210,
+    });
+  });
+
   it("emits cumulative run output usage once per completed assistant message", () => {
     const { emit, onAgentEvent } = createAgentEventHarness({
       runId: "usage-event-run",

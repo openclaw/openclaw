@@ -1,5 +1,5 @@
 /** Tests ACP manager backend failover across initialization and turn execution. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import {
@@ -234,6 +234,99 @@ describe("AcpSessionManager backend failover", () => {
 
     expect(harness.primaryRuntime.runTurn).toHaveBeenCalledTimes(1);
     expect(harness.fallbackRuntime.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports acquisition only for the failover candidate that submits a prompt", async () => {
+    const harness = setupFailoverBackends();
+    harness.primaryRuntime.runtime.startTurn = (input) => ({
+      requestId: input.requestId,
+      promptStarted: Promise.reject(new Error("primary failed before submission")),
+      events: (async function* () {})(),
+      result: Promise.resolve({
+        status: "failed" as const,
+        error: {
+          code: "ACP_TURN_FAILED",
+          message: "backend unavailable before submission",
+        },
+      }),
+      cancel: async () => {},
+      closeStream: async () => {},
+    });
+    const fallbackStartTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptStarted: Promise.resolve(),
+      events: (async function* () {})(),
+      result: Promise.resolve({ status: "completed" as const }),
+      cancel: async () => {},
+      closeStream: async () => {},
+    }));
+    harness.fallbackRuntime.runtime.startTurn = fallbackStartTurn;
+    const onTurnStreamAcquired = vi.fn();
+    const onLifecycle = vi.fn();
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: harness.cfg,
+        sessionKey: harness.sessionKey,
+        text: "fallback",
+        mode: "prompt",
+        requestId: "r-prompt-readiness-fallback",
+        onTurnStreamAcquired,
+        onLifecycle,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(onTurnStreamAcquired).toHaveBeenCalledOnce();
+    expect(onLifecycle).toHaveBeenCalledOnce();
+  });
+
+  it("does not fail over after a prompt was submitted", async () => {
+    const harness = setupFailoverBackends();
+    harness.primaryRuntime.runtime.startTurn = (input) => ({
+      requestId: input.requestId,
+      promptStarted: Promise.resolve(),
+      events: (async function* () {})(),
+      result: Promise.resolve({
+        status: "failed" as const,
+        error: {
+          code: "ACP_TURN_FAILED",
+          message: "primary failed after submission",
+        },
+      }),
+      cancel: async () => {},
+      closeStream: async () => {},
+    });
+    const fallbackStartTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptStarted: Promise.resolve(),
+      events: (async function* () {})(),
+      result: Promise.resolve({ status: "completed" as const }),
+      cancel: async () => {},
+      closeStream: async () => {},
+    }));
+    harness.fallbackRuntime.runtime.startTurn = fallbackStartTurn;
+    const onTurnStreamAcquired = vi.fn();
+    const onLifecycle = vi.fn();
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        provenance: "system",
+        cfg: harness.cfg,
+        sessionKey: harness.sessionKey,
+        text: "fallback",
+        mode: "prompt",
+        requestId: "r-submitted-prompt-failover",
+        onTurnStreamAcquired,
+        onLifecycle,
+      }),
+    ).rejects.toThrow("primary failed after submission");
+
+    expect(onTurnStreamAcquired).toHaveBeenCalledOnce();
+    expect(onLifecycle).toHaveBeenCalledOnce();
+    expect(fallbackStartTurn).not.toHaveBeenCalled();
   });
 
   it("does not fail over after a backend has emitted output", async () => {

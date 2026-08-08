@@ -59,6 +59,11 @@ import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
+  copyEmbeddedRunAccountingObservers,
+  markContextEngineLlmCompleteInvocation,
+  resolveEmbeddedRunAccountingObservers,
+} from "./run/accounting-observers.js";
+import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunHandleActive,
   resolveActiveEmbeddedRunHandleSessionId,
@@ -174,6 +179,9 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       disposeDeferredContextEngineAfterMaintenance: true,
       onDeferredMaintenance: () => {
         deferredScheduled = true;
+        resolveEmbeddedRunAccountingObservers(params.compactParams)?.onOpaqueWork?.(
+          "deferred_context_engine_maintenance",
+        );
       },
       onDeferredMaintenanceFailure: (error) => {
         deferredScheduleFailure = error;
@@ -243,14 +251,14 @@ export async function compactEmbeddedAgentSession(
     ...params,
     missingSessionKey: "resolve-existing",
   });
-  const resolvedParams = {
+  const resolvedParams = copyEmbeddedRunAccountingObservers(params, {
     ...params,
     agentId: runtimeTarget.agentId,
     sessionId: runtimeTarget.sessionId,
     sessionKey: runtimeTarget.sessionKey,
     sessionTarget: runtimeTarget,
     sessionFile: runtimeTarget.sessionKey,
-  };
+  });
   if (resolvedParams.trigger !== "manual") {
     return await compactEmbeddedAgentSessionImpl(resolvedParams);
   }
@@ -285,10 +293,12 @@ export async function compactEmbeddedAgentSession(
     resolvedParams.sessionFile,
   );
   try {
-    return await compactEmbeddedAgentSessionImpl({
-      ...resolvedParams,
-      abortSignal,
-    });
+    return await compactEmbeddedAgentSessionImpl(
+      copyEmbeddedRunAccountingObservers(resolvedParams, {
+        ...resolvedParams,
+        abortSignal,
+      }),
+    );
   } finally {
     clearActiveEmbeddedRun(
       resolvedParams.sessionId,
@@ -314,14 +324,14 @@ async function compactEmbeddedAgentSessionImpl(
     config: inputParams.config,
     agentId: runtimeTarget.agentId,
   });
-  const params = {
+  const params = copyEmbeddedRunAccountingObservers(inputParams, {
     ...inputParams,
     agentId: runtimeTarget.agentId,
     sessionId: runtimeTarget.sessionId,
     sessionKey: runtimeTarget.sessionKey,
     sessionTarget: runtimeTarget,
     sessionFile: runtimeTarget.sessionKey,
-  };
+  });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
   const runtimeSelection = resolveCompactionRuntimeSelection({
@@ -505,7 +515,7 @@ async function compactResolvedContextEngine(
         return { ...resolved, model: resolved.model as ProviderRuntimeModel | undefined };
       },
     });
-    preparedParams = {
+    preparedParams = copyEmbeddedRunAccountingObservers(params, {
       ...params,
       provider: ceProvider,
       model: ceModelId,
@@ -527,7 +537,7 @@ async function compactResolvedContextEngine(
             runtimeAuthPlan: undefined,
             runtimePlan: undefined,
           }),
-    };
+    });
   } catch (err) {
     await disposeContextEngine(contextEngine);
     releaseContextEngineOwnership();
@@ -559,13 +569,15 @@ async function compactResolvedContextEngine(
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   const harnessResult =
     attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
-      ? await maybeCompactAgentHarnessSession({
-          ...preparedParams,
-          runtimeModel: effectiveRuntimeModel,
-          contextEngine,
-          contextTokenBudget,
-          contextEngineRuntimeContext,
-        })
+      ? await maybeCompactAgentHarnessSession(
+          copyEmbeddedRunAccountingObservers(preparedParams, {
+            ...preparedParams,
+            runtimeModel: effectiveRuntimeModel,
+            contextEngine,
+            contextTokenBudget,
+            contextEngineRuntimeContext,
+          }),
+        )
       : undefined;
   if (lockedNativeHarness) {
     return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
@@ -683,7 +695,7 @@ async function compactResolvedContextEngine(
                 params.forcePreflight === true ||
                 params.preflightRequired === true ||
                 params.trigger === "manual",
-              runtimeContext: {
+              runtimeContext: copyEmbeddedRunAccountingObservers(runtimeContext, {
                 ...runtimeContext,
                 forceReason:
                   params.forcePreflight === true || params.preflightRequired === true
@@ -692,7 +704,7 @@ async function compactResolvedContextEngine(
                       ? "manual"
                       : undefined,
                 preflightCompactionTrigger: params.preflightCompactionTrigger,
-              },
+              }),
               runtimeSettings: contextEngineRuntimeSettings,
             },
             resolveCompactionTimeoutMs(params.config),
@@ -746,6 +758,7 @@ async function compactResolvedContextEngine(
             runtimeContext,
             runtimeSettings: contextEngineRuntimeSettings,
             config: params.config,
+            onLlmCompleteInvocation: () => markContextEngineLlmCompleteInvocation(params),
           });
         }
         if (engineOwnsCompaction && result.ok && result.compacted) {
@@ -798,7 +811,7 @@ async function compactResolvedContextEngine(
             // that bridge settles; an outer timeout would release transcript ownership while
             // the harness could still be compacting the same session.
             secondaryNativeHarnessCompaction = await maybeCompactAgentHarnessSession(
-              {
+              copyEmbeddedRunAccountingObservers(preparedParams, {
                 ...preparedParams,
                 sessionId: postCompactionSessionId,
                 sessionFile: postCompactionSessionFile,
@@ -806,7 +819,7 @@ async function compactResolvedContextEngine(
                 contextEngine,
                 contextTokenBudget,
                 contextEngineRuntimeContext,
-              },
+              }),
               { nativeCompactionRequest: "after_context_engine" },
             );
             if (secondaryNativeHarnessCompaction && !secondaryNativeHarnessCompaction.ok) {
@@ -890,7 +903,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
     agentId: params.params.agentId,
   });
   const { sessionFile: _sessionFile, ...runtimeParams } = params.params;
-  return {
+  return copyEmbeddedRunAccountingObservers(params.params, {
     ...runtimeParams,
     sessionTarget: buildContextEngineCompactionSessionTarget(params.params),
     ...buildEmbeddedCompactionRuntimeContext({
@@ -906,9 +919,10 @@ function buildCompactionContextEngineRuntimeContext(params: {
       authProfileId: params.params.authProfileId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.compaction",
+      onLlmCompleteInvocation: () => markContextEngineLlmCompleteInvocation(params.params),
     }),
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.params.currentTokenCount,
-  };
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

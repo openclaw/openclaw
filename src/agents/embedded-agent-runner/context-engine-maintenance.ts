@@ -60,6 +60,7 @@ type ContextEngineMaintenanceParams = {
   runtimeSettings?: ContextEngineRuntimeSettings;
   agentId?: string;
   executionMode?: "foreground" | "background";
+  onLlmCompleteInvocation?: () => void;
   onDeferredMaintenance?: (promise: Promise<void>) => void;
   onDeferredMaintenanceFailure?: (error: unknown) => void;
   config?: OpenClawConfig;
@@ -240,6 +241,7 @@ function buildContextEngineMaintenanceRuntimeContext(
       authProfileId: normalizeOptionalString(params.runtimeContext?.authProfileId),
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: params.purpose ?? "context-engine.maintenance",
+      onLlmCompleteInvocation: params.onLlmCompleteInvocation,
     }),
     ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
@@ -496,6 +498,7 @@ function scheduleDeferredTurnMaintenance(
     );
   } catch (err) {
     schedulerAbort.dispose();
+    params.onScheduleFailure?.(err);
     cancelFailedTask(err);
     return undefined;
   }
@@ -562,18 +565,29 @@ export async function runContextEngineMaintenance(
         );
         return undefined;
       }
+      let scheduleFailure: unknown;
       const deferred = scheduleDeferredTurnMaintenance({
         ...params,
         contextEngine,
         sessionKey,
+        onLlmCompleteInvocation: undefined,
         disposeContextEngineAfterMaintenance: params.disposeDeferredContextEngineAfterMaintenance,
-        onScheduleFailure: params.onDeferredMaintenanceFailure,
+        onScheduleFailure: (error) => {
+          scheduleFailure = error;
+          params.onDeferredMaintenanceFailure?.(error);
+        },
       });
       if (deferred) {
-        params.onDeferredMaintenance?.(deferred);
+        // enqueueCommandInLane reports an admission race as an already-rejected
+        // promise. Let that rejection settle before recording accepted work.
+        await Promise.resolve();
+        if (scheduleFailure === undefined) {
+          params.onDeferredMaintenance?.(deferred);
+        }
       }
     } catch (err) {
       log.warn(`failed to schedule deferred context engine maintenance: ${String(err)}`);
+      params.onDeferredMaintenanceFailure?.(err);
     }
     return undefined;
   }

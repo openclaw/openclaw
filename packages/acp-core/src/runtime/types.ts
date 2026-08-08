@@ -176,6 +176,11 @@ export type AcpRuntimeTurnResult =
 
 export interface AcpRuntimeTurn {
   readonly requestId: string;
+  /**
+   * Resolves only after the backend submits the model-facing ACP prompt.
+   * Runtimes that cannot prove this boundary must leave the field absent.
+   */
+  readonly promptStarted?: Promise<void>;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   readonly result: Promise<AcpRuntimeTurnResult>;
   /** Requests backend cancellation while keeping result/error reporting adapter-owned. */

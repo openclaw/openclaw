@@ -8,6 +8,7 @@ import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js"
 import { SessionManager } from "../../sessions/index.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
+import { markContextEngineLlmCompleteInvocation } from "./accounting-observers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import {
   runAttemptContextEngineBootstrap,
@@ -132,6 +133,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   input.onSessionManagerCreated(sessionManager);
 
   await input.withOwnedSessionWriteLock(async () => {
+    const onLlmCompleteInvocation = () => markContextEngineLlmCompleteInvocation(attempt);
     await runAttemptContextEngineBootstrap({
       hadSessionFile: transcriptState.hasBootstrapTranscriptState,
       contextEngine: input.activeContextEngine,
@@ -148,6 +150,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         tokenBudget: attempt.contextTokenBudget,
         activeAgentId: input.sessionAgentId,
         contextEnginePluginId: input.resolveActiveContextEnginePluginId(),
+        onLlmCompleteInvocation,
       }),
       contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
       providerId: attempt.provider,
@@ -168,6 +171,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
           runtimeSettings: contextParams.runtimeSettings,
           config: attempt.config,
           agentId: input.sessionAgentId,
+          onLlmCompleteInvocation,
         }),
       warn: (message) => log.warn(message),
     });

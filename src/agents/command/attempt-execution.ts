@@ -76,6 +76,7 @@ import {
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { runEmbeddedAgentInternal } from "../embedded-agent-runner/run-orchestrator.js";
+import { bindEmbeddedRunAccountingObservers } from "../embedded-agent-runner/run/accounting-observers.js";
 import type {
   AgentExecutionAttributionInfo,
   RunEmbeddedAgentInternalParams,
@@ -112,6 +113,7 @@ import {
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
+import type { AgentCommandRunCandidateAccounting } from "./run-accounting.types.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import {
   clearCliSessionInStore,
@@ -526,6 +528,7 @@ export async function persistCliTurnTranscript(params: {
 }
 
 export function runAgentAttempt(params: {
+  commandRunAccounting?: AgentCommandRunCandidateAccounting;
   providerOverride: string;
   modelOverride: string;
   configuredAuthProfileId?: string;
@@ -831,6 +834,7 @@ export function runAgentAttempt(params: {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
+    params.commandRunAccounting?.selectRuntime("cli");
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
@@ -1268,6 +1272,12 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   };
+  bindEmbeddedRunAccountingObservers(embeddedRunParams, {
+    onAgentSubmission: params.commandRunAccounting?.beginAgentSubmission,
+    onAttemptObserved: params.commandRunAccounting?.observeEmbeddedAttempt,
+    onRuntimeSelected: params.commandRunAccounting?.selectRuntime,
+    onOpaqueWork: params.commandRunAccounting?.markOpaqueWork,
+  });
   setChannelSourceTurnId(embeddedRunParams, readChannelSourceTurnId(params.runContext));
   setChannelSourceTurnSameThreadRequired(
     embeddedRunParams,

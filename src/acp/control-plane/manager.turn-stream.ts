@@ -89,6 +89,33 @@ function waitForQueuedEvents(): Promise<"pending"> {
   });
 }
 
+function invokeAcpPromptObserver(observer: (() => Promise<void> | void) | undefined): void {
+  try {
+    void Promise.resolve(observer?.()).catch(() => {});
+  } catch {
+    // Prompt observation must not affect a request that was already submitted.
+  }
+}
+
+function observeAcpPromptStarted(params: {
+  promptStarted: Promise<void> | undefined;
+  onPromptStarted?: () => Promise<void> | void;
+  onTurnStreamAcquired?: () => Promise<void> | void;
+}): Promise<void> {
+  if (!params.promptStarted) {
+    return Promise.resolve();
+  }
+  return params.promptStarted.then(
+    () => {
+      invokeAcpPromptObserver(params.onPromptStarted);
+      invokeAcpPromptObserver(params.onTurnStreamAcquired);
+    },
+    () => {
+      // Pre-submission failures are reported by the terminal turn result.
+    },
+  );
+}
+
 async function notifyTerminalResult(params: {
   result: AcpRuntimeTurnResult;
   eventGate: AcpTurnEventGate;
@@ -121,6 +148,8 @@ export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
+  onPromptStarted?: () => Promise<void> | void;
+  onTurnStreamAcquired?: () => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onOutputEvent?: (
     event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
@@ -129,6 +158,11 @@ export async function consumeAcpTurnStream(params: {
   if (params.runtime.startTurn) {
     // startTurn exposes result and event streams separately; coordinate both before reporting done.
     const turn = params.runtime.startTurn(params.turn);
+    const promptStartedObservation = observeAcpPromptStarted({
+      promptStarted: turn.promptStarted,
+      onPromptStarted: params.onPromptStarted,
+      onTurnStreamAcquired: params.onTurnStreamAcquired,
+    });
     const eventsPromise = consumeAcpTurnEvents({
       events: turn.events,
       eventGate: params.eventGate,
@@ -139,8 +173,14 @@ export async function consumeAcpTurnStream(params: {
       (error: unknown) => ({ kind: "event-error" as const, error }),
     );
     const resultPromise = turn.result.then(
-      (result) => ({ kind: "result" as const, result }),
-      (error: unknown) => ({ kind: "result-error" as const, error }),
+      async (result) => {
+        await promptStartedObservation;
+        return { kind: "result" as const, result };
+      },
+      async (error: unknown) => {
+        await promptStartedObservation;
+        return { kind: "result-error" as const, error };
+      },
     );
 
     let eventOutcome: AcpTurnStreamOutcome | null = null;
@@ -148,6 +188,7 @@ export async function consumeAcpTurnStream(params: {
     const firstOutcome = await Promise.race([eventsPromise, resultPromise]);
     if (firstOutcome.kind === "event-error") {
       await turn.closeStream({ reason: "turn-events-error" }).catch(() => {});
+      await promptStartedObservation;
       throw firstOutcome.error;
     }
     if (firstOutcome.kind === "events") {
@@ -198,8 +239,9 @@ export async function consumeAcpTurnStream(params: {
     };
   }
 
+  const events = params.runtime.runTurn(params.turn);
   return await consumeAcpTurnEvents({
-    events: params.runtime.runTurn(params.turn),
+    events,
     eventGate: params.eventGate,
     onEvent: params.onEvent,
     onOutputEvent: params.onOutputEvent,
