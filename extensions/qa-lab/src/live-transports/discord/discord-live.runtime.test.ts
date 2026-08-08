@@ -202,13 +202,37 @@ describe("discord live qa runtime", () => {
         sutAccountId: "sut",
         sutBotToken: "sut-token",
       },
-      { statusReactionsToolOnly: true },
+      { statusReactions: true, toolOnlyUnmentionedBotInput: true },
     );
 
     expect(next.messages?.ackReaction).toBe("👀");
     expect(next.messages?.ackReactionScope).toBe("all");
     expect(next.messages?.groupChat?.visibleReplies).toBe("message_tool");
     expect(next.messages?.statusReactions?.enabled).toBe(true);
+    const discordAccount = next.channels?.discord?.accounts?.sut;
+    expect(discordAccount?.allowBots).toBe(true);
+    expect(discordAccount?.guilds?.["123456789012345678"]?.requireMention).toBe(false);
+    expect(
+      discordAccount?.guilds?.["123456789012345678"]?.channels?.["223456789012345678"]
+        ?.requireMention,
+    ).toBe(false);
+  });
+
+  it("accepts unmentioned bot input without status reactions for runtime-context proof", () => {
+    const next = testing.buildDiscordQaConfig(
+      {},
+      {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotId: "423456789012345678",
+        sutAccountId: "sut",
+        sutBotToken: "sut-token",
+      },
+      { toolOnlyUnmentionedBotInput: true },
+    );
+
+    expect(next.messages?.groupChat?.visibleReplies).toBe("message_tool");
+    expect(next.messages?.statusReactions).toBeUndefined();
     const discordAccount = next.channels?.discord?.accounts?.sut;
     expect(discordAccount?.allowBots).toBe(true);
     expect(discordAccount?.guilds?.["123456789012345678"]?.requireMention).toBe(false);
@@ -282,6 +306,60 @@ describe("discord live qa runtime", () => {
       testing.computeDiscordRttMs("2026-04-22T11:59:59.125Z", "2026-04-22T12:00:00.875Z"),
     ).toBe(1750);
     expect(testing.computeDiscordRttMs("bad", "2026-04-22T12:00:00.875Z")).toBeUndefined();
+  });
+
+  it("sends a Discord image with multipart metadata and deletes the proof message", async () => {
+    const requests: Array<{ body: BodyInit | null | undefined; method?: string; url: string }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        requests.push({
+          body: init?.body,
+          method: init?.method,
+          url,
+        });
+        return init?.method === "DELETE"
+          ? new Response(null, { status: 204 })
+          : new Response(JSON.stringify({ id: "523456789012345678" }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+      }),
+    );
+
+    await expect(
+      testing.sendChannelImage({
+        token: "token",
+        channelId: "223456789012345678",
+        content: "hidden wrapper",
+        data: new Uint8Array([137, 80, 78, 71]),
+        filename: "runtime-context-redaction.png",
+      }),
+    ).resolves.toMatchObject({ id: "523456789012345678" });
+    await testing.deleteChannelMessage({
+      token: "token",
+      channelId: "223456789012345678",
+      messageId: "523456789012345678",
+    });
+
+    const form = requests[0]?.body;
+    expect(form).toBeInstanceOf(FormData);
+    const payloadJson = (form as FormData).get("payload_json");
+    if (typeof payloadJson !== "string") {
+      throw new TypeError("expected the Discord multipart payload to contain JSON text");
+    }
+    expect(JSON.parse(payloadJson)).toEqual({
+      content: "hidden wrapper",
+      allowed_mentions: { parse: [] },
+      attachments: [{ id: 0, filename: "runtime-context-redaction.png" }],
+    });
+    expect((form as FormData).get("files[0]")).toBeInstanceOf(Blob);
+    expect(requests[1]).toMatchObject({
+      method: "DELETE",
+      url: expect.stringContaining("/channels/223456789012345678/messages/523456789012345678"),
+    });
   });
 
   it("collects the status reaction sequence across timeline snapshots", () => {

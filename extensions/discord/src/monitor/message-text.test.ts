@@ -19,10 +19,19 @@ function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
+function internalRuntimeContext(body = '{"private":"runtime metadata"}'): string {
+  return [
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+    body,
+    "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+  ].join("\n");
+}
+
 function asForwardedSnapshotMessage(params: {
   content: string;
   embeds: Array<{ title?: string; description?: string }>;
   attachments?: Array<Record<string, unknown>>;
+  components?: Array<Record<string, unknown>>;
 }) {
   return asMessage({
     content: "",
@@ -33,6 +42,7 @@ function asForwardedSnapshotMessage(params: {
             content: params.content,
             embeds: params.embeds,
             attachments: params.attachments ?? [],
+            components: params.components ?? [],
             author: { id: "u2", username: "Bob", discriminator: "0" },
           },
         },
@@ -286,6 +296,95 @@ describe("resolveDiscordMessageText", () => {
     ).toBe("hello from content");
   });
 
+  it("strips internal runtime context while preserving user-authored text", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: ["Visible intro", "", internalRuntimeContext(), "", "Visible outro"].join("\n"),
+      }),
+    );
+
+    expect(text).toBe("Visible intro\n\nVisible outro");
+  });
+
+  it.each([
+    {
+      label: "begin",
+      content: ["Visible intro", "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", "Literal user tail"].join(
+        "\n",
+      ),
+    },
+    {
+      label: "end",
+      content: ["Visible intro", "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>", "Literal user tail"].join(
+        "\n",
+      ),
+    },
+  ])("preserves an unmatched runtime-context $label delimiter", ({ content }) => {
+    expect(resolveDiscordMessageText(asMessage({ content }))).toBe(content);
+  });
+
+  it("strips a complete runtime-context block after an unmatched opener", () => {
+    const literalPrefix = ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", "Literal user prefix"].join(
+      "\n",
+    );
+    const content = [literalPrefix, internalRuntimeContext(), "Visible tail"].join("\n");
+
+    expect(resolveDiscordMessageText(asMessage({ content }))).toBe(
+      [literalPrefix, "", "Visible tail"].join("\n"),
+    );
+  });
+
+  it("returns empty text for an internal-runtime-context-only message", () => {
+    expect(resolveDiscordMessageText(asMessage({ content: internalRuntimeContext() }))).toBe("");
+  });
+
+  it("uses rich fallback text when message content is only internal runtime context", () => {
+    expect(
+      resolveDiscordMessageText(
+        asMessage({
+          content: internalRuntimeContext(),
+          embeds: [{ title: "Visible embed", description: "Visible details" }],
+        }),
+      ),
+    ).toBe("Visible embed\nVisible details");
+  });
+
+  it("uses Components v2 text when message content is only internal runtime context", () => {
+    expect(
+      resolveDiscordMessageText(
+        asMessage({
+          content: internalRuntimeContext(),
+          components: [
+            {
+              type: ComponentType.Container,
+              components: [{ type: ComponentType.TextDisplay, content: "Visible component text" }],
+            },
+          ],
+        }),
+      ),
+    ).toBe("Visible component text");
+  });
+
+  it("strips internal runtime context from explicit fallback text", () => {
+    expect(
+      resolveDiscordMessageText(asMessage({ content: "" }), {
+        fallbackText: ["Visible fallback", internalRuntimeContext()].join("\n"),
+      }),
+    ).toBe("Visible fallback");
+  });
+
+  it("strips internal runtime context from referenced forwarded messages", () => {
+    const text = resolveDiscordMessageText(
+      asReferencedForwardMessage({
+        content: ["Visible referenced text", internalRuntimeContext()].join("\n"),
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toBe("[Forwarded message from @Bob]\nVisible referenced text");
+    expect(text).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+  });
+
   it("joins forwarded snapshot embed title and description when content is empty", () => {
     const text = resolveDiscordMessageText(
       asForwardedSnapshotMessage({
@@ -329,5 +428,47 @@ describe("resolveDiscordMessageText", () => {
 
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("Forwarded component text");
+  });
+
+  it("preserves forwarded media when snapshot content is only internal runtime context", () => {
+    const text = resolveDiscordMessageText(
+      asForwardedSnapshotMessage({
+        content: internalRuntimeContext(),
+        embeds: [],
+        attachments: [
+          {
+            id: "forwarded-image",
+            filename: "forwarded.png",
+            content_type: "image/png",
+            url: "https://cdn.discordapp.com/forwarded.png",
+          },
+        ],
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toBe("[Forwarded message from @Bob]\n<media:image>");
+    expect(text).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+  });
+
+  it("uses forwarded Components v2 text when snapshot content is only runtime context", () => {
+    const text = resolveDiscordMessageText(
+      asForwardedSnapshotMessage({
+        content: internalRuntimeContext(),
+        embeds: [],
+        components: [
+          {
+            type: ComponentType.Container,
+            components: [
+              { type: ComponentType.TextDisplay, content: "Forwarded visible component" },
+            ],
+          },
+        ],
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toBe("[Forwarded message from @Bob]\nForwarded visible component");
+    expect(text).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
   });
 });

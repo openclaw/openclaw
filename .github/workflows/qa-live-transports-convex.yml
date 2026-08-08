@@ -752,15 +752,36 @@ jobs:
 
           output_dir=".artifacts/qa-e2e/discord-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           scenario_args=()
+          provider_mode="live-frontier"
+          primary_model="openai/gpt-5.6-luna"
+          alternate_model="${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}"
+          selection_provider_mode=""
 
           if [[ -n "${INPUT_SCENARIO// }" ]]; then
             IFS=',' read -r -a raw_scenarios <<<"${INPUT_SCENARIO}"
             for raw in "${raw_scenarios[@]}"; do
               scenario="$(printf '%s' "${raw}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
               if [[ -n "${scenario}" ]]; then
+                scenario_provider_mode="live-frontier"
+                if [[ "${scenario}" == "discord-runtime-context-redaction" ]]; then
+                  scenario_provider_mode="mock-openai"
+                fi
+                # One QA invocation owns one provider/model tuple; mixing modes would
+                # silently run live scenarios under the mock provider.
+                if [[ -n "${selection_provider_mode}" && "${selection_provider_mode}" != "${scenario_provider_mode}" ]]; then
+                  echo "Discord scenario selection cannot combine mock-provider and live-provider scenarios; dispatch separate workflow runs." >&2
+                  exit 1
+                fi
+                selection_provider_mode="${scenario_provider_mode}"
                 scenario_args+=(--scenario "${scenario}")
               fi
             done
+          fi
+
+          if [[ "${selection_provider_mode}" == "mock-openai" ]]; then
+            provider_mode="mock-openai"
+            primary_model="mock-openai/gpt-5.6-luna"
+            alternate_model="mock-openai/gpt-5.6-luna-alt"
           fi
 
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
@@ -768,9 +789,9 @@ jobs:
           pnpm openclaw qa discord \
             --repo-root . \
             --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
-            --model openai/gpt-5.6-luna \
-            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
+            --provider-mode "${provider_mode}" \
+            --model "${primary_model}" \
+            --alt-model "${alternate_model}" \
             --fast \
             --credential-source convex \
             --credential-role ci \

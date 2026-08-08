@@ -18,4 +18,5 @@ export {
   resolveDiscordForwardedMessagesTextFromSnapshots,
   resolveDiscordMessageHistoryText,
   resolveDiscordMessageText,
+  resolveDiscordPrimaryContentText,
 } from "./message-text.js";

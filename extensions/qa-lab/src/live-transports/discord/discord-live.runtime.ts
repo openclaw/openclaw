@@ -50,6 +50,9 @@ export type DiscordQaScenarioRun =
       input: string;
     }
   | {
+      kind: "runtime-context-redaction";
+    }
+  | {
       kind: "thread-reply-filepath-attachment";
       expectedAttachmentFilename: string;
       input: string;
@@ -293,6 +296,12 @@ export const discordQaThreadReplyFilepathAttachmentScenario: DiscordQaScenarioIm
   },
 };
 
+export const discordQaRuntimeContextRedactionScenario: DiscordQaScenarioImplementation = {
+  buildRun: () => ({
+    kind: "runtime-context-redaction",
+  }),
+};
+
 const discordQaCredentialPayloadSchema = z.object({
   guildId: z.string().trim().min(1),
   channelId: z.string().trim().min(1),
@@ -367,7 +376,8 @@ function buildDiscordQaConfig(
     sutBotToken: string;
   },
   options: {
-    statusReactionsToolOnly?: boolean;
+    statusReactions?: boolean;
+    toolOnlyUnmentionedBotInput?: boolean;
     voiceAutoJoin?: {
       channelId: string;
       guildId: string;
@@ -379,19 +389,29 @@ function buildDiscordQaConfig(
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
   };
-  const messages = options.statusReactionsToolOnly
+  const toolOnlyUnmentionedBotInput =
+    options.toolOnlyUnmentionedBotInput === true || options.statusReactions === true;
+  const messages = toolOnlyUnmentionedBotInput
     ? {
         ...baseCfg.messages,
-        ackReaction: "👀",
-        ackReactionScope: "all" as const,
+        ...(options.statusReactions
+          ? {
+              ackReaction: "👀",
+              ackReactionScope: "all" as const,
+            }
+          : {}),
         groupChat: {
           ...baseCfg.messages?.groupChat,
           visibleReplies: "message_tool" as const,
         },
-        statusReactions: {
-          ...baseCfg.messages?.statusReactions,
-          enabled: true,
-        },
+        ...(options.statusReactions
+          ? {
+              statusReactions: {
+                ...baseCfg.messages?.statusReactions,
+                enabled: true,
+              },
+            }
+          : {}),
       }
     : {
         ...baseCfg.messages,
@@ -426,16 +446,16 @@ function buildDiscordQaConfig(
           [params.sutAccountId]: {
             enabled: true,
             token: params.sutBotToken,
-            allowBots: options.statusReactionsToolOnly ? true : "mentions",
+            allowBots: toolOnlyUnmentionedBotInput ? true : "mentions",
             groupPolicy: "allowlist",
             guilds: {
               [params.guildId]: {
-                requireMention: !options.statusReactionsToolOnly,
+                requireMention: !toolOnlyUnmentionedBotInput,
                 users: [params.driverBotId],
                 channels: {
                   [params.channelId]: {
                     enabled: true,
-                    requireMention: !options.statusReactionsToolOnly,
+                    requireMention: !toolOnlyUnmentionedBotInput,
                     users: [params.driverBotId],
                   },
                 },
@@ -581,6 +601,45 @@ async function sendChannelMessage(token: string, channelId: string, content: str
     },
     timeoutMs: 15_000,
   });
+}
+
+async function sendChannelImage(params: {
+  channelId: string;
+  content: string;
+  data: Uint8Array<ArrayBuffer>;
+  filename: string;
+  token: string;
+}) {
+  const body = new FormData();
+  body.append(
+    "payload_json",
+    JSON.stringify({
+      content: params.content,
+      allowed_mentions: { parse: [] },
+      attachments: [{ id: 0, filename: params.filename }],
+    }),
+  );
+  body.append("files[0]", new Blob([params.data], { type: "image/png" }), params.filename);
+  return await requestDiscord<DiscordMessage>(
+    `/channels/${params.channelId}/messages`,
+    params.token,
+    {
+      body,
+      timeoutMs: 15_000,
+    },
+  );
+}
+
+async function deleteChannelMessage(params: {
+  channelId: string;
+  messageId: string;
+  token: string;
+}) {
+  await requestDiscord<void>(
+    `/channels/${params.channelId}/messages/${params.messageId}`,
+    params.token,
+    { method: "DELETE", timeoutMs: 15_000 },
+  );
 }
 
 async function getChannelMessage(params: { token: string; channelId: string; messageId: string }) {
@@ -1381,7 +1440,9 @@ const testing = {
   observeStatusReactionTimeline,
   pollChannelMessages,
   runDiscordThreadReplyFilePathAttachmentScenario,
+  deleteChannelMessage,
   sendChannelMessage,
+  sendChannelImage,
   getChannelMessage,
   getCurrentDiscordVoiceState,
   listApplicationCommands,

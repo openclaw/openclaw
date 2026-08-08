@@ -465,6 +465,141 @@ describe("preflightDiscordMessage", () => {
     });
   });
 
+  it("drops internal-runtime-context-only messages before session dispatch", async () => {
+    const result = await runDmPreflight({
+      channelId: "dm-runtime-context-only",
+      message: createDiscordMessage({
+        id: "m-runtime-context-only",
+        channelId: "dm-runtime-context-only",
+        content: [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"private":"runtime metadata"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "begin",
+      content: ["Visible intro", "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", "Literal user tail"].join(
+        "\n",
+      ),
+    },
+    {
+      label: "end",
+      content: ["Visible intro", "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>", "Literal user tail"].join(
+        "\n",
+      ),
+    },
+  ])(
+    "dispatches literal user text containing an unmatched $label delimiter",
+    async ({ content, label }) => {
+      const result = await runDmPreflight({
+        channelId: `dm-runtime-context-unmatched-${label}`,
+        message: createDiscordMessage({
+          id: `m-runtime-context-unmatched-${label}`,
+          channelId: `dm-runtime-context-unmatched-${label}`,
+          content,
+          author: {
+            id: "user-1",
+            bot: false,
+            username: "alice",
+          },
+        }),
+        discordConfig: {
+          dmPolicy: "open",
+        } as DiscordConfig,
+      });
+
+      expect(expectPreflightResult(result).baseText).toBe(content);
+    },
+  );
+
+  it("strips a complete runtime-context block after an unmatched opener before dispatch", async () => {
+    const literalPrefix = ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", "Literal user prefix"].join(
+      "\n",
+    );
+    const result = await runDmPreflight({
+      channelId: "dm-runtime-context-unmatched-before-complete",
+      message: createDiscordMessage({
+        id: "m-runtime-context-unmatched-before-complete",
+        channelId: "dm-runtime-context-unmatched-before-complete",
+        content: [
+          literalPrefix,
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"private":"runtime metadata"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "Visible tail",
+        ].join("\n"),
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(expectPreflightResult(result).baseText).toBe(
+      [literalPrefix, "", "Visible tail"].join("\n"),
+    );
+  });
+
+  it("keeps native media when message text is only internal runtime context", async () => {
+    const result = await runDmPreflight({
+      channelId: "dm-runtime-context-media",
+      message: createDiscordMessage({
+        id: "m-runtime-context-media",
+        channelId: "dm-runtime-context-media",
+        content: [
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          '{"private":"runtime metadata"}',
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        attachments: [
+          {
+            id: "att-runtime-context-media",
+            url: "https://cdn.discordapp.com/attachments/1/photo.png",
+            content_type: "image/png",
+            filename: "photo.png",
+          },
+        ],
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("");
+    expect(preflight.preparedMedia).toEqual([
+      {
+        path: "/tmp/openclaw-discord-test/photo.png",
+        contentType: "image/png",
+      },
+    ]);
+  });
+
   it("ignores stale route-shaped channel bindings when config now routes to another agent", async () => {
     const channelId = "channel-stale-route";
     registerSessionBindingAdapter({
@@ -540,7 +675,17 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.threadBinding).toBeUndefined();
   });
 
-  it("preflights direct-message voice notes without mention gating", async () => {
+  it.each([
+    { label: "no typed content", content: "" },
+    {
+      label: "internal runtime context only",
+      content: [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        '{"private":"runtime metadata"}',
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    },
+  ])("preflights direct-message voice notes with $label", async ({ content }) => {
     transcribeFirstAudioMock.mockResolvedValue("hello openclaw from dm audio");
 
     const result = await runDmPreflight({
@@ -548,7 +693,7 @@ describe("preflightDiscordMessage", () => {
       message: createDiscordMessage({
         id: "m-dm-audio-1",
         channelId: "dm-channel-audio-1",
-        content: "",
+        content,
         attachments: [
           {
             id: "att-dm-audio-1",
@@ -2272,76 +2417,89 @@ describe("preflightDiscordMessage", () => {
     expect(expectPreflightResult(result).wasMentioned).toBe(false);
   });
 
-  it("uses attachment content_type for guild audio preflight mention detection", async () => {
-    transcribeFirstAudioMock.mockResolvedValue("hey openclaw");
+  it.each([
+    { label: "no typed content", content: "" },
+    {
+      label: "internal runtime context only",
+      content: [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        '{"private":"runtime metadata"}',
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    },
+  ])(
+    "uses attachment content_type for guild audio preflight mention detection with $label",
+    async ({ content }) => {
+      transcribeFirstAudioMock.mockResolvedValue("hey openclaw");
 
-    const channelId = "channel-audio-1";
-    const client = createGuildTextClient(channelId);
+      const channelId = "channel-audio-1";
+      const client = createGuildTextClient(channelId);
 
-    const message = createDiscordMessage({
-      id: "m-audio-1",
-      channelId,
-      content: "",
-      attachments: [
-        {
-          id: "att-1",
-          url: "https://cdn.discordapp.com/attachments/voice.ogg",
-          content_type: "audio/ogg",
-          filename: "voice.ogg",
-        },
-      ],
-      author: {
-        id: "user-1",
-        bot: false,
-        username: "Alice",
-      },
-    });
-
-    const result = await preflightDiscordMessage({
-      ...createPreflightArgs({
-        cfg: {
-          ...DEFAULT_PREFLIGHT_CFG,
-          messages: {
-            groupChat: {
-              mentionPatterns: ["openclaw"],
-            },
+      const message = createDiscordMessage({
+        id: "m-audio-1",
+        channelId,
+        content,
+        attachments: [
+          {
+            id: "att-1",
+            url: "https://cdn.discordapp.com/attachments/voice.ogg",
+            content_type: "audio/ogg",
+            filename: "voice.ogg",
           },
-        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
-        discordConfig: {} as DiscordConfig,
-        data: createGuildEvent({
-          channelId,
-          guildId: "guild-1",
-          author: message.author,
-          message,
+        ],
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "Alice",
+        },
+      });
+
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: {
+            ...DEFAULT_PREFLIGHT_CFG,
+            messages: {
+              groupChat: {
+                mentionPatterns: ["openclaw"],
+              },
+            },
+          } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+          discordConfig: {} as DiscordConfig,
+          data: createGuildEvent({
+            channelId,
+            guildId: "guild-1",
+            author: message.author,
+            message,
+          }),
+          client,
         }),
-        client,
-      }),
-      guildEntries: {
-        "guild-1": {
-          channels: {
-            [channelId]: {
-              enabled: true,
-              requireMention: true,
+        guildEntries: {
+          "guild-1": {
+            channels: {
+              [channelId]: {
+                enabled: true,
+                requireMention: true,
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    const guildAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { media?: unknown } }
-      | undefined;
-    expect(guildAudioCall?.ctx?.media).toEqual([
-      {
-        url: "https://cdn.discordapp.com/attachments/voice.ogg",
-        contentType: "audio/ogg",
-      },
-    ]);
-    const preflight = expectPreflightResult(result);
-    expect(preflight.wasMentioned).toBe(true);
-    expect(preflight.preflightAudioTranscript).toBe("hey openclaw");
-  });
+      expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+      const guildAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
+        | { ctx?: { media?: unknown } }
+        | undefined;
+      expect(guildAudioCall?.ctx?.media).toEqual([
+        {
+          url: "https://cdn.discordapp.com/attachments/voice.ogg",
+          contentType: "audio/ogg",
+        },
+      ]);
+      const preflight = expectPreflightResult(result);
+      expect(preflight.wasMentioned).toBe(true);
+      expect(preflight.preflightAudioTranscript).toBe("hey openclaw");
+    },
+  );
 
   it("does not transcribe guild audio from unauthorized members", async () => {
     const channelId = "channel-audio-unauthorized-1";

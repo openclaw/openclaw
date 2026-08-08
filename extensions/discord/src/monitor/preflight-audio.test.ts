@@ -40,6 +40,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
           },
         ],
       },
+      hasTypedText: false,
       isDirectMessage: true,
       shouldRequireMention: false,
       mentionRegexes: [],
@@ -77,6 +78,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
           },
         ],
       },
+      hasTypedText: false,
       isDirectMessage: true,
       shouldRequireMention: false,
       mentionRegexes: [],
@@ -111,6 +113,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
           },
         ],
       },
+      hasTypedText: false,
       isDirectMessage: true,
       shouldRequireMention: false,
       mentionRegexes: [],
@@ -134,7 +137,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
   it("does not preflight typed direct-message audio", async () => {
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: {
-        content: "typed caption",
         attachments: [
           {
             url: "https://cdn.discordapp.com/attachments/voice.ogg",
@@ -143,6 +145,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
           },
         ],
       },
+      hasTypedText: true,
       isDirectMessage: true,
       shouldRequireMention: false,
       mentionRegexes: [],
@@ -166,6 +169,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
           },
         ],
       },
+      hasTypedText: false,
       isDirectMessage: true,
       shouldRequireMention: false,
       mentionRegexes: [],

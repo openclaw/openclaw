@@ -31,6 +31,7 @@ export type DiscordQaScenarioEnvironment = {
     >;
   }>;
   driverIdentity: DiscordIdentity;
+  gateway: FlowPreparationInput["gateway"];
   observedMessages: DiscordObservedMessage[];
   outputDir: string;
   runtimeEnv: DiscordRuntimeEnv;
@@ -78,7 +79,10 @@ export function createDiscordQaScenarioEnvironment(params: {
                     },
                   }
                 : {}),
-              statusReactionsToolOnly: run.kind === "status-reactions-tool-only",
+              statusReactions: run.kind === "status-reactions-tool-only",
+              toolOnlyUnmentionedBotInput:
+                run.kind === "status-reactions-tool-only" ||
+                run.kind === "runtime-context-redaction",
             },
           );
           await patchLiveQaGatewayConfig({
@@ -95,6 +99,7 @@ export function createDiscordQaScenarioEnvironment(params: {
           return { cfg, run, ...(voiceChannel ? { voiceChannel } : {}) };
         },
         driverIdentity: params.driverIdentity,
+        gateway: input.gateway,
         observedMessages,
         outputDir: input.outputDir,
         runtimeEnv: params.runtimeEnv,

@@ -1,6 +1,7 @@
 // Discord plugin module implements message text behavior.
 import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripCompleteInternalRuntimeContextBlocks } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Message } from "../internal/discord.js";
 import {
   formatDiscordSnapshotAuthor,
@@ -24,20 +25,31 @@ export function resolveDiscordEmbedText(
   return title || description || "";
 }
 
+/** Resolves sanitized primary content without embed, component, or fallback text. */
+export function resolveDiscordPrimaryContentText(message: Pick<Message, "content">): string {
+  return resolveDiscordVisibleTextCandidate(message.content);
+}
+
 export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const embedText = resolveDiscordEmbedText(
-    (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
-      null,
+  // Sanitize before precedence so an internal-only candidate cannot hide visible fallbacks.
+  const contentText = resolveDiscordPrimaryContentText(message);
+  const embedText = resolveDiscordVisibleTextCandidate(
+    resolveDiscordEmbedText(
+      (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
+        null,
+    ),
   );
-  const componentText = extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message));
+  const componentText = resolveDiscordVisibleTextCandidate(
+    extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message)),
+  );
   const rawText =
-    normalizeOptionalString(message.content) ||
+    contentText ||
     embedText ||
     componentText ||
-    normalizeOptionalString(options?.fallbackText) ||
+    resolveDiscordVisibleTextCandidate(options?.fallbackText) ||
     "";
   const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
@@ -51,6 +63,10 @@ export function resolveDiscordMessageText(
     return forwardedText;
   }
   return `${baseText}\n${forwardedText}`;
+}
+
+function resolveDiscordVisibleTextCandidate(value: string | null | undefined): string {
+  return stripCompleteInternalRuntimeContextBlocks(normalizeOptionalString(value) ?? "");
 }
 
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
@@ -170,13 +186,17 @@ function buildDiscordForwardedMessageBlock(
 }
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
-  const content = normalizeOptionalString(snapshot.content) ?? "";
+  const content = resolveDiscordVisibleTextCandidate(snapshot.content);
   const attachmentText = formatDiscordMediaText({
     attachments: snapshot.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(snapshot),
   });
-  const embedText = resolveDiscordEmbedText(snapshot.embeds?.[0]);
-  const componentText = extractDiscordComponentsV2Text(snapshot.components);
+  const embedText = resolveDiscordVisibleTextCandidate(
+    resolveDiscordEmbedText(snapshot.embeds?.[0]),
+  );
+  const componentText = resolveDiscordVisibleTextCandidate(
+    extractDiscordComponentsV2Text(snapshot.components),
+  );
   const text = content || embedText || componentText;
   return [text, attachmentText].filter(Boolean).join("\n");
 }

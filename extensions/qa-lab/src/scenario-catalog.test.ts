@@ -211,6 +211,24 @@ describe("qa scenario catalog", () => {
     );
   });
 
+  it("catalogs the Discord runtime-context proof as an isolated mock-provider live flow", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("discord-runtime-context-redaction"));
+
+    expect(scenario.execution).toMatchObject({
+      channel: "discord",
+      providerMode: "mock-openai",
+      retryCount: 0,
+      suiteIsolation: "isolated",
+      config: { discordScenarioId: "discord-runtime-context-redaction" },
+    });
+    expect(JSON.stringify(scenario.execution.flow)).toContain("runDiscordScenario");
+    expect(JSON.stringify(scenario.execution.flow)).toContain(
+      "discordQaRuntimeContextRedactionScenario",
+    );
+    expect(scenario.coverage?.primary).toContain("discord.configured-and-runtime-routing");
+    expect(scenario.coverage?.secondary).toContain("discord.media-and-rich-content");
+  });
+
   it("requires explicit suite isolation for gateway state restart scenarios", () => {
     const scenarios = readQaScenarioPack()
       .scenarios.filter(isFlowScenario)

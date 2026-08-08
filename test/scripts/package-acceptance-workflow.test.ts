@@ -3592,6 +3592,54 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it("rejects mixed Discord provider modes while preserving single-mode selections", () => {
+    const runStep = workflowStep(
+      workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_discord"),
+      "Run Discord live lane",
+    );
+    expect(runStep.run).toBeTruthy();
+
+    const workdir = tempDirs.make("discord-provider-mode-");
+    const callsPath = resolve(workdir, "pnpm-calls");
+    const pnpmPath = resolve(workdir, "pnpm");
+    writeFileSync(
+      pnpmPath,
+      '#!/usr/bin/env node\nrequire("node:fs").appendFileSync(process.env.PNPM_CALLS, `${process.argv.slice(2).join(" ")}\\n`);\n',
+    );
+    chmodSync(pnpmPath, 0o755);
+
+    const runSelection = (inputScenario: string) => {
+      writeFileSync(callsPath, "");
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", runStep.run!], {
+        cwd: workdir,
+        encoding: "utf8",
+        env: {
+          GITHUB_OUTPUT: resolve(workdir, "github-output"),
+          GITHUB_RUN_ATTEMPT: "1",
+          GITHUB_RUN_ID: "123",
+          INPUT_SCENARIO: inputScenario,
+          OPENCLAW_CI_OPENAI_FALLBACK_MODEL: "openai/gpt-5.6-luna-alt",
+          PATH: `${workdir}:${process.env.PATH}`,
+          PNPM_CALLS: callsPath,
+        },
+      });
+      return { calls: readFileSync(callsPath, "utf8"), result };
+    };
+
+    const mixed = runSelection("discord-canary, discord-runtime-context-redaction");
+    expect(mixed.result.status).toBe(1);
+    expect(mixed.result.stderr).toContain("cannot combine mock-provider and live-provider");
+    expect(mixed.calls).toBe("");
+
+    const mockOnly = runSelection("discord-runtime-context-redaction");
+    expect(mockOnly.result.status, mockOnly.result.stderr).toBe(0);
+    expect(mockOnly.calls).toContain("--provider-mode mock-openai");
+
+    const liveOnly = runSelection("discord-canary");
+    expect(liveOnly.result.status, liveOnly.result.stderr).toBe(0);
+    expect(liveOnly.calls).toContain("--provider-mode live-frontier");
+  });
+
   it("requires QA live evidence artifacts when lanes run", () => {
     const cases = [
       ["run_mock_parity", "Upload parity artifacts", "always()"],

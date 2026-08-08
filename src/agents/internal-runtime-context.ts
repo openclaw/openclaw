@@ -65,16 +65,23 @@ function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): nu
   return text[lineStart - 2] === "\r" ? lineStart - 2 : lineStart - 1;
 }
 
+type DelimitedBlockOptions = {
+  preserveIncompleteBlock?: boolean;
+  preserveSurroundingWhitespace?: boolean;
+  separator?: string;
+};
+
 function extractDelimitedBlocks(
   text: string,
   begin: string,
   end: string,
-  options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
+  options: DelimitedBlockOptions = {},
 ): { text: string; blocks: string[] } {
   let next = text;
+  let searchFrom = 0;
   const blocks: string[] = [];
   for (;;) {
-    const start = findDelimitedTokenIndex(next, begin, 0);
+    const start = findDelimitedTokenIndex(next, begin, searchFrom);
     if (start === -1) {
       return { text: next, blocks };
     }
@@ -105,7 +112,13 @@ function extractDelimitedBlocks(
       ? next.slice(0, blockStart)
       : next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
-      return { text: before, blocks };
+      if (!options.preserveIncompleteBlock) {
+        return { text: before, blocks };
+      }
+      // An unmatched opener is literal in untrusted text. Keep scanning so it
+      // cannot shield a later complete protected block from removal.
+      searchFrom = start + begin.length;
+      continue;
     }
     let blockEnd = finish + end.length;
     while (next[blockEnd] === " " || next[blockEnd] === "\t") {
@@ -119,6 +132,7 @@ function extractDelimitedBlocks(
       !options.preserveSurroundingWhitespace && before && after
         ? `${before}${options.separator ?? "\n\n"}${after}`
         : `${before}${after}`;
+    searchFrom = 0;
   }
 }
 
@@ -126,7 +140,7 @@ function stripDelimitedBlock(
   text: string,
   begin: string,
   end: string,
-  options?: { preserveSurroundingWhitespace?: boolean; separator?: string },
+  options?: DelimitedBlockOptions,
 ): string {
   return extractDelimitedBlocks(text, begin, end, options).text;
 }
@@ -268,6 +282,24 @@ export function stripInternalRuntimeContext(
   return stripRuntimeContextPromptPreface(
     stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
   );
+}
+
+/**
+ * Remove complete protected blocks from untrusted text.
+ * Unmatched delimiters stay literal so malformed input cannot truncate user content.
+ */
+export function stripCompleteInternalRuntimeContextBlocks(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return extractDelimitedBlocks(
+    text,
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    INTERNAL_RUNTIME_CONTEXT_END,
+    {
+      preserveIncompleteBlock: true,
+    },
+  ).text;
 }
 
 /** Extract protected runtime-context blocks while returning remaining visible text. */

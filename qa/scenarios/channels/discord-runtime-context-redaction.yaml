@@ -1,0 +1,36 @@
+title: Discord internal runtime context stays out of user turns
+scenario:
+  id: discord-runtime-context-redaction
+  surface: channels
+  coverage:
+    primary:
+      - discord.configured-and-runtime-routing
+    secondary:
+      - discord.media-and-rich-content
+  objective: Prove real Discord inbound text strips hidden OpenClaw runtime context without dropping native image fallback or visible user text.
+  successCriteria:
+    - Wrapper-only text creates no Discord session user turn.
+    - Wrapper-only image input keeps the native <media:image> fallback without the hidden marker.
+    - Mixed visible text reaches the session while the hidden marker remains absent.
+    - Every driver message is deleted before the scenario finishes.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/discord/src/monitor/message-handler.preflight.ts
+    - extensions/discord/src/monitor/message-text.ts
+    - extensions/qa-lab/src/live-transports/discord/scenario-runtime.ts
+  execution:
+    kind: flow
+    channel: discord
+    providerMode: mock-openai
+    timeoutMs: 90000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: The flow inspects one real Discord channel session while sending and deleting three unique driver messages.
+    config: { discordScenarioId: discord-runtime-context-redaction }
+flow:
+  module: ./live-transports/discord/scenario-runtime.js
+  call: runDiscordScenario
+  args:
+    - { expr: discordScenarioContext }
+    - { moduleExport: discordQaRuntimeContextRedactionScenario }
