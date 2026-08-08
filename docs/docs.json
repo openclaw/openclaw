@@ -1122,6 +1122,7 @@
                   "install/gcp",
                   "install/hetzner",
                   "install/hostinger",
+                  "install/jetson",
                   "install/kubernetes",
                   "vps",
                   "install/macos-vm",
