@@ -4,6 +4,7 @@ import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchWithTimeoutGuarded,
@@ -292,6 +293,18 @@ export async function downloadVydraAsset(params: {
         bodyTimeoutMs: resolveTimeoutMs,
         onBodyTimeout: () => createVydraTimeoutError(deadline),
       });
+      try {
+        assertProviderBinaryResponseContent(
+          result.response,
+          `Vydra ${params.kind} download`,
+          params.kind,
+        );
+      } catch (error) {
+        // A debug-capture clone can keep the tee open, so waiting for cancel would hang
+        // before the rejected response and its dispatcher can be released.
+        void result.response.body?.cancel().catch(() => undefined);
+        throw error;
+      }
       const mimeType =
         result.response.headers.get("content-type")?.trim() ||
         (params.kind === "image"
@@ -305,6 +318,9 @@ export async function downloadVydraAsset(params: {
         onOverflow: ({ maxBytes }) =>
           new Error(`Vydra ${params.kind} download exceeds ${maxBytes} bytes`),
       });
+      if (buffer.byteLength === 0) {
+        throw new Error(`Vydra ${params.kind} download: malformed ${params.kind} response`);
+      }
       const extension = resolveVydraFileExtension(params.kind, mimeType);
       const fileStem =
         params.kind === "image" ? "image" : params.kind === "audio" ? "audio" : "video";

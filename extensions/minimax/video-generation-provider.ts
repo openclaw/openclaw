@@ -14,6 +14,7 @@ import {
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
@@ -23,7 +24,6 @@ import {
   type ProviderOperationTimeoutMs,
   type TransientProviderRetryConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -270,6 +270,7 @@ async function downloadVideoFromUrl(params: {
     label: "MiniMax generated video download",
     requestFailedMessage: "MiniMax generated video download failed",
     maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
     fetchResponse: async ({ timeoutMs }) =>
       await fetchMinimaxResponse({
         stage: "download",
@@ -354,15 +355,18 @@ async function downloadVideoFromFileId(params: {
   });
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
-    });
+    const buffer = Buffer.from(
+      await readProviderBinaryResponse(response, "MiniMax generated video download", "video", {
+        maxBytes: params.maxBytes,
+        timeoutMs,
+        onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
+          new Error(
+            `MiniMax generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
+          ),
+        onOverflow: ({ maxBytes }) =>
+          new Error(`MiniMax generated video download exceeds ${maxBytes} bytes`),
+      }),
+    );
     return {
       buffer,
       mimeType,
