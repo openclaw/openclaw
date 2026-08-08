@@ -74,6 +74,11 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
     session: activeSession,
     skipPromptSubmission: input.state.skipPromptSubmission,
   });
+  if (imageResult.failedMediaCount > 0) {
+    throw new Error(
+      `failed to hydrate ${imageResult.failedMediaCount} structured image attachment(s) for embedded agent input`,
+    );
+  }
 
   const reserveTokens = input.getCompactionReserveTokens();
   let state: PromptDispatchState = {

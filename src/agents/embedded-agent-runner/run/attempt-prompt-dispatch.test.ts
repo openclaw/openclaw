@@ -128,6 +128,25 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
     );
   });
 
+  it("rejects failed structured image hydration before provider submission", async () => {
+    hoisted.prepareEmbeddedAttemptPromptExecution.mockResolvedValueOnce({
+      images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      imageFactIndexes: [null],
+      detectedRefs: [],
+      failedMediaCount: 1,
+      loadedCount: 1,
+      skippedCount: 1,
+    });
+
+    await expect(dispatchEmbeddedAttemptPrompt(createInput())).rejects.toThrow(
+      "failed to hydrate 1 structured image attachment(s) for embedded agent input",
+    );
+
+    expect(hoisted.observeEmbeddedAttemptPrompt).not.toHaveBeenCalled();
+    expect(hoisted.prepareEmbeddedAttemptPromptPreflight).not.toHaveBeenCalled();
+    expect(hoisted.submitEmbeddedAttemptPrompt).not.toHaveBeenCalled();
+  });
+
   it("releases steering when preflight skips provider submission", async () => {
     const promptError = new Error("preflight rejected");
     const releaseLeasedSteering = vi.fn();
