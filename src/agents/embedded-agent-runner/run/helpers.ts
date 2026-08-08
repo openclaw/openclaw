@@ -190,6 +190,7 @@ export function resolveReportedModelRef(params: {
 export function resolveLatestCallUsage(params: {
   currentAttemptCandidates: readonly (NormalizedUsage | undefined)[];
   carriedCandidates: readonly (NormalizedUsage | undefined)[];
+  historicalCandidates?: readonly (NormalizedUsage | undefined)[];
 }): {
   currentAttempt: NormalizedUsage | undefined;
   latest: NormalizedUsage | undefined;
@@ -197,7 +198,10 @@ export function resolveLatestCallUsage(params: {
   const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
   return {
     currentAttempt,
-    latest: currentAttempt ?? params.carriedCandidates.find(hasNonzeroUsage),
+    latest:
+      currentAttempt ??
+      params.carriedCandidates.find(hasNonzeroUsage) ??
+      params.historicalCandidates?.find(hasNonzeroUsage),
   };
 }
 

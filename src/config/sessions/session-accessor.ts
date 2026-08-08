@@ -199,6 +199,7 @@ export {
   appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  branchSessionTranscriptSync,
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,

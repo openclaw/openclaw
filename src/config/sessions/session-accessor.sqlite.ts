@@ -61,6 +61,7 @@ export {
   switchSqliteSessionBranch,
 } from "./session-accessor.sqlite-message-cut.js";
 export {
+  branchSqliteSessionTranscriptSync,
   appendSqliteExpectedSessionTranscriptTurn,
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptEventSync,

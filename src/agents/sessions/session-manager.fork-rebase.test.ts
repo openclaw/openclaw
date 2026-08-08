@@ -34,6 +34,7 @@ describe("SessionManager stale-parent rebase", () => {
       now: 1,
     });
     const manager = SessionManager.open(target, dir);
+    const metadataManager = SessionManager.open(target, dir);
     const outOfBand = await appendTranscriptMessage(target, {
       eventId: "out-of-band",
       message: { role: "assistant", content: [{ type: "text", text: "late" }], timestamp: 2 },
@@ -67,6 +68,16 @@ describe("SessionManager stale-parent rebase", () => {
       effectiveParentId: outOfBand.messageId,
       messageId: appendedId,
     });
+
+    const metadataId = metadataManager.appendCustomEntry("diagnostic", { ok: true });
+    expect(metadataManager.getEntry(metadataId)?.parentId).toBe(appendedId);
+    expect(metadataManager.getBranch().map((entry) => entry.id)).toEqual([
+      base.messageId,
+      outOfBand.messageId,
+      appendedId,
+      metadataId,
+    ]);
+    expect(metadataManager.consumePromptContextMutation()).toBe("changed");
   });
 
   it("preserves a deliberate manager branch from an ancestor", async () => {

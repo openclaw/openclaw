@@ -1,10 +1,6 @@
 import type { TranscriptEntryAnchor } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
-import {
-  buildSessionContext as buildCoreSessionContext,
-  type SessionTreeEntry as CoreSessionTreeEntry,
-} from "../runtime/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { isIndexedSessionEntry, isSessionContextMetadataEntry } from "./session-manager-codec.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -19,7 +15,6 @@ import type {
   ModelChangeEntry,
   ResetEntry,
   ResetReason,
-  SessionContext,
   SessionEntry,
   SessionInfoEntry,
   SessionMessageEntry,
@@ -39,6 +34,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (!isIndexedSessionEntry(canonicalEntry)) {
       throw new Error(`Invalid session transcript entry: ${entry.type}`);
     }
+    const promptContextBefore = this.capturePromptContextIfClean();
     const activeBranchAppend =
       !this.pendingDeliberateAppend &&
       this.appendMode !== "side" &&
@@ -60,6 +56,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
           );
         }
         this.pendingDeliberateAppend = false;
+        this.markPromptContextMutationIfChanged(promptContextBefore);
         return persistenceResult.anchor;
       }
     }
@@ -70,6 +67,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (effectiveParentId !== undefined && effectiveParentId !== canonicalEntry.parentId) {
       this.reloadPersistedTranscript();
       this.pendingDeliberateAppend = false;
+      this.markPromptContextMutationIfChanged(promptContextBefore);
       return persistenceResult && typeof persistenceResult === "object"
         ? persistenceResult.anchor
         : undefined;
@@ -93,6 +91,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       this.appendMode = undefined;
       this.promptReleasedSideBranchParentId = undefined;
     }
+    this.markPromptContextMutationIfChanged(promptContextBefore);
     return persistenceResult && typeof persistenceResult === "object"
       ? persistenceResult.anchor
       : undefined;
@@ -291,6 +290,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     ) {
       throw new Error(`Append parent ${params.appendParentId} not found`);
     }
+    const promptContextBefore = this.capturePromptContextIfClean();
     const previousLeafId = this.leafId;
     this.leafId = params.targetId;
     const entry = this.createLeafControl(
@@ -307,6 +307,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.promptReleasedSideBranchParentId =
       params.appendMode === "side" ? params.appendParentId : undefined;
     this.pendingDeliberateAppend = false;
+    this.markPromptContextMutationIfChanged(promptContextBefore);
     return entry;
   }
 
@@ -355,29 +356,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       this.labelTimestampsById.delete(targetId);
     }
     return entry.id;
-  }
-
-  getBranch(fromId?: string): SessionEntry[] {
-    const path: SessionEntry[] = [];
-    const seen = new Set<string>();
-    let currentId = fromId ?? this.leafId;
-    while (currentId && !seen.has(currentId)) {
-      seen.add(currentId);
-      const current = this.byId.get(currentId);
-      if (current) {
-        const normalizedCurrent = this.normalizeEntryParent(current);
-        path.push(normalizedCurrent);
-        currentId = normalizedCurrent.parentId;
-      } else {
-        currentId = this.opaqueParentsById.get(currentId) ?? null;
-      }
-    }
-    path.reverse();
-    return path;
-  }
-
-  buildSessionContext(): SessionContext {
-    return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
   }
 
   getBoundaryCount(): number {
@@ -438,19 +416,23 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
+    const promptContextBefore = this.capturePromptContextIfClean();
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
     this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
     this.pendingDeliberateAppend = true;
+    this.markPromptContextMutationIfChanged(promptContextBefore);
   }
 
   resetLeaf(): void {
+    const promptContextBefore = this.capturePromptContextIfClean();
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
     this.pendingDeliberateAppend = true;
+    this.markPromptContextMutationIfChanged(promptContextBefore);
   }
 
   branchWithSummary(

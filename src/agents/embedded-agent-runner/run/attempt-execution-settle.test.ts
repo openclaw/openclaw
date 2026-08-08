@@ -46,7 +46,8 @@ function createFixture() {
     sessionId: "active-session",
     getActiveToolNames: vi.fn(() => ["read"]),
   };
-  const sessionManager = { kind: "session-manager" };
+  const consumePromptContextMutation = vi.fn(() => "changed" as const);
+  const sessionManager = { kind: "session-manager", consumePromptContextMutation };
   const hookRunner = { kind: "hook-runner" };
   const cacheTrace = { kind: "cache-trace" };
   const trajectoryRecorder = { kind: "trajectory" };
@@ -223,6 +224,7 @@ function createFixture() {
   return {
     cacheTrace,
     clearTimers,
+    consumePromptContextMutation,
     detachBackend,
     getBeforeAgentFinalizeRevisionReason,
     input,
@@ -293,6 +295,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         cache: expect.objectContaining({ trace: fixture.cacheTrace }),
         state: expect.objectContaining({
           beforeAgentFinalizeRevisionReason: "revision",
+          promptContextMutation: "changed",
           sessionIdUsed: "final-session",
           sessionFileUsed: "/tmp/final.jsonl",
           yieldDetected: true,
@@ -301,6 +304,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         trajectoryRecorder: fixture.trajectoryRecorder,
       }),
     );
+    expect(fixture.consumePromptContextMutation).toHaveBeenCalledOnce();
     expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
     expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
       "session-1",

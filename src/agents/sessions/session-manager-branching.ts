@@ -1,8 +1,4 @@
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
-import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
+import { branchSessionTranscriptSync } from "../../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   isJsonRecord,
@@ -12,6 +8,7 @@ import {
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
+  FileEntry,
   LabelEntry,
   PreservedOpaqueFileEntry,
   SessionEntry,
@@ -103,84 +100,69 @@ export class SessionManagerBranching extends SessionManagerEntries {
   }
 
   createBranchedSession(leafId: string): string | undefined {
-    const previousSessionId = this.sessionId;
-    const branchPath = this.collectBranchedSessionPath(leafId);
-    if (branchPath.entries.length === 0) {
-      throw new Error(`Entry ${leafId} not found`);
-    }
-
+    const promptContextBefore = this.capturePromptContextIfClean();
+    const persistenceTarget = this.persistenceTarget;
     const newSessionId = createSessionId();
     const timestamp = new Date().toISOString();
-    const persistenceTarget = this.persistenceTarget;
-
-    const header: SessionHeader = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: newSessionId,
-      timestamp,
-      cwd: this.cwd,
-      parentSession: persistenceTarget ? previousSessionId : undefined,
-    };
-    const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
-    const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
-    for (const [targetId, label] of this.labelsById) {
-      if (pathEntryIds.has(targetId)) {
-        labelsToWrite.push({
+    const stage = (source: SessionManagerBranching) => {
+      const branchPath = source.collectBranchedSessionPath(leafId);
+      if (branchPath.entries.length === 0) {
+        throw new Error(`Entry ${leafId} not found`);
+      }
+      const header: SessionHeader = {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: newSessionId,
+        timestamp,
+        cwd: this.cwd,
+        parentSession: persistenceTarget ? persistenceTarget.sessionId : undefined,
+      };
+      const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
+      const labelEntries: LabelEntry[] = [];
+      let parentId = branchPath.tailId;
+      for (const [targetId, label] of source.labelsById) {
+        if (!pathEntryIds.has(targetId)) {
+          continue;
+        }
+        const labelEntry: LabelEntry = {
+          type: "label",
+          id: generateSessionEntryId(branchPath.usedIds),
+          parentId,
+          timestamp: source.labelTimestampsById.get(targetId)!,
           targetId,
           label,
-          timestamp: this.labelTimestampsById.get(targetId)!,
-        });
+        };
+        branchPath.usedIds.add(labelEntry.id);
+        labelEntries.push(labelEntry);
+        parentId = labelEntry.id;
       }
-    }
+      const fileEntries: FileEntry[] = [header, ...branchPath.entries, ...labelEntries];
+      const staged = new SessionManagerBranching(this.cwd, undefined, fileEntries);
+      staged.opaqueFileEntries = branchPath.opaqueEntries;
+      staged.buildIndex();
+      return staged.getPersistedFileEntries();
+    };
 
-    const labelEntries: LabelEntry[] = [];
-    let parentId = branchPath.tailId;
-    for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
-      const labelEntry: LabelEntry = {
-        type: "label",
-        id: generateSessionEntryId(branchPath.usedIds),
-        parentId,
-        timestamp: labelTimestamp,
-        targetId,
-        label,
-      };
-      branchPath.usedIds.add(labelEntry.id);
-      labelEntries.push(labelEntry);
-      parentId = labelEntry.id;
-    }
-
-    this.fileEntries = [header, ...branchPath.entries, ...labelEntries];
-    this.opaqueFileEntries = branchPath.opaqueEntries;
-    this.sessionId = newSessionId;
     if (persistenceTarget) {
-      const updatedAt = Date.now();
-      const previousEntry = loadSessionEntry({
-        agentId: persistenceTarget.agentId,
-        sessionKey: persistenceTarget.sessionKey,
-        storePath: persistenceTarget.storePath,
+      const transition = branchSessionTranscriptSync(persistenceTarget, {
+        nextSessionId: newSessionId,
+        stage: (events) =>
+          stage(new SessionManagerBranching(this.cwd, undefined, events as FileEntry[])),
       });
-      const canonicalPreviousEntry = previousEntry
-        ? projectCanonicalSessionEntryShape(previousEntry as unknown as Record<string, unknown>)
-        : { updatedAt };
-      this.persistenceTarget = { ...persistenceTarget, sessionId: newSessionId };
-      replaceSessionEntrySync(
-        {
-          agentId: persistenceTarget.agentId,
-          sessionKey: persistenceTarget.sessionKey,
-          storePath: persistenceTarget.storePath,
-        },
-        {
-          ...canonicalPreviousEntry,
-          sessionId: newSessionId,
-          updatedAt,
-        },
+      if (transition.status === "conflict") {
+        throw new Error(`Session branch conflict: ${transition.reason}`);
+      }
+      this.setLoadedSessionTarget(
+        { ...persistenceTarget, sessionId: newSessionId },
+        transition.events as FileEntry[],
       );
-      this.buildIndex();
-      this.replacePersistedTranscript();
+      this.markPromptContextMutationIfChanged(promptContextBefore);
       return newSessionId;
     }
 
-    this.buildIndex();
+    const nextEvents = stage(this);
+    this.setLoadedSessionTarget(undefined, nextEvents as FileEntry[]);
+    this.markPromptContextMutationIfChanged(promptContextBefore);
     return undefined;
   }
 }

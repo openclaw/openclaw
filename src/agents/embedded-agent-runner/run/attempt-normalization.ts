@@ -162,11 +162,15 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const lastAssistantUsage = normalizeAssistantUsageForContext(sessionLastAssistant);
   const currentAttemptAssistantUsage = normalizeAssistantUsageForContext(currentAttemptAssistant);
   const promptCacheLastCallUsage = normalizeUsage(attempt.promptCache?.lastCallUsage as UsageLike);
+  const promptContextChanged = attempt.promptContextMutation === "changed";
   const callUsage = resolveLatestCallUsage({
-    // Latest assistant provenance, including unavailable, must precede carried retry totals
-    // so an older numeric context cannot revive across the unavailable barrier.
     currentAttemptCandidates: [currentAttemptAssistantUsage, promptCacheLastCallUsage],
-    carriedCandidates: [lastAssistantUsage, input.lastRunPromptUsage],
+    // A changed transcript invalidates every historical prompt-size fact. Only
+    // provider-exact usage from this attempt may cross that barrier.
+    carriedCandidates: promptContextChanged
+      ? [{ contextUsage: { state: "unavailable" as const } }]
+      : [input.lastRunPromptUsage],
+    historicalCandidates: promptContextChanged ? [] : [lastAssistantUsage],
   });
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);

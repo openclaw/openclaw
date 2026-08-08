@@ -43,6 +43,7 @@ export type EmbeddedAttemptClientToolCallSlot = {
 type EmbeddedAttemptResultState = Pick<
   EmbeddedRunAttemptResult,
   | "terminal"
+  | "promptContextMutation"
   | "preflightRecovery"
   | "sessionIdUsed"
   | "sessionFileUsed"

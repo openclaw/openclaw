@@ -1,11 +1,10 @@
-import {
-  loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
-} from "../../config/sessions/session-accessor.js";
+import { isDeepStrictEqual } from "node:util";
+import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
+  buildSessionContext,
   isIndexedSessionEntry,
   migrateToCurrentVersion,
   parseOpaqueLeafEntry,
@@ -17,6 +16,7 @@ import type {
   FileEntry,
   NewSessionOptions,
   PreservedOpaqueFileEntry,
+  SessionContext,
   SessionEntry,
   SessionHeader,
   SessionLeafControl,
@@ -26,6 +26,7 @@ export type SessionManagerPersistenceTarget = SessionTranscriptRuntimeTarget;
 
 export class SessionManagerCore {
   migrated = false;
+  protected promptContextMutationPending = false;
   protected sessionId = "";
   protected cwd: string;
   protected fileEntries: FileEntry[] = [];
@@ -54,11 +55,12 @@ export class SessionManagerCore {
     if (persistenceTarget || loadedEntries) {
       this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
     } else {
-      this.newSession();
+      this.initializeSession();
     }
   }
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
+    const promptContextBefore = this.capturePromptContextIfClean();
     const entries = loadTranscriptEventsSync(target) as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
@@ -67,6 +69,7 @@ export class SessionManagerCore {
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
+    this.markPromptContextMutationIfChanged(promptContextBefore);
   }
 
   protected setLoadedSessionTarget(
@@ -112,7 +115,10 @@ export class SessionManagerCore {
     if (this.persistenceTarget) {
       throw new Error("Persisted session managers cannot change session identity in place");
     }
-    return this.initializeSession(options);
+    const promptContextBefore = this.capturePromptContextIfClean();
+    const sessionId = this.initializeSession(options);
+    this.markPromptContextMutationIfChanged(promptContextBefore);
+    return sessionId;
   }
 
   private initializeSession(options?: NewSessionOptions): string | undefined {
@@ -408,6 +414,33 @@ export class SessionManagerCore {
     return this.resolveCanonicalParentId(branchFromId);
   }
 
+  getBranch(fromId?: string): SessionEntry[] {
+    const path: SessionEntry[] = [];
+    const seen = new Set<string>();
+    let currentId = fromId ?? this.leafId;
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId);
+      const current = this.byId.get(currentId);
+      if (current) {
+        const normalizedCurrent = this.normalizeEntryParent(current);
+        path.push(normalizedCurrent);
+        currentId = normalizedCurrent.parentId;
+      } else {
+        currentId = this.opaqueParentsById.get(currentId) ?? null;
+      }
+    }
+    path.reverse();
+    return path;
+  }
+
+  buildSessionContext(): SessionContext {
+    return buildSessionContext(this.getBranch());
+  }
+
+  protected capturePromptContextIfClean(): SessionContext | undefined {
+    return this.promptContextMutationPending ? undefined : this.buildSessionContext();
+  }
+
   protected clampOpaqueFileEntryIndexes(): void {
     let previousOpaqueIndex = 0;
     for (const opaqueEntry of this.opaqueFileEntries) {
@@ -515,6 +548,7 @@ export class SessionManagerCore {
   }
 
   clearPreservedOpaqueFileEntries(): void {
+    const promptContextBefore = this.capturePromptContextIfClean();
     this.opaqueFileEntries = [];
     this.opaqueParentsById.clear();
     this.invalidLeafControlIds.clear();
@@ -522,26 +556,24 @@ export class SessionManagerCore {
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
     this.promptReleasedSideBranchParentId = undefined;
-  }
-
-  protected replacePersistedTranscript(options?: {
-    leafAppendParentId?: string | null;
-    leafAppendMode?: "side";
-  }): void {
-    if (!this.persistenceTarget) {
-      return;
-    }
-    const leafAppendParentId =
-      options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
-    replaceTranscriptEventsSync(
-      this.persistenceTarget,
-      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
-    );
-    this.persistenceHeaderPending = false;
+    this.markPromptContextMutationIfChanged(promptContextBefore);
   }
 
   /** SQLite appends are synchronous; retained for the AgentSession contract. */
   protected flushPendingPersistence(): void {}
+
+  protected markPromptContextMutationIfChanged(before: SessionContext | undefined): void {
+    if (before && !isDeepStrictEqual(before, this.buildSessionContext())) {
+      this.promptContextMutationPending = true;
+    }
+  }
+
+  /** Attempt lifecycle consumes this fact when freezing the attempt result. */
+  consumePromptContextMutation(): "changed" | "unchanged" {
+    const result = this.promptContextMutationPending ? "changed" : "unchanged";
+    this.promptContextMutationPending = false;
+    return result;
+  }
 
   isPersisted(): boolean {
     return this.persistenceTarget !== undefined;

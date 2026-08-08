@@ -130,6 +130,9 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   // Publish ownership before async bootstrap. Outer cleanup must close this manager
   // even when a context-engine or transcript preparation step fails.
   input.onSessionManagerCreated(sessionManager);
+  // Caller-owned managers can span retries. Consume prior mutations before bootstrap
+  // so the frozen result describes this attempt rather than the manager's lifetime.
+  sessionManager.consumePromptContextMutation();
 
   await input.withOwnedSessionWriteLock(async () => {
     await runAttemptContextEngineBootstrap({

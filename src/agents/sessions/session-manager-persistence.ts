@@ -2,6 +2,7 @@ import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
   ensureSessionEntrySync,
+  replaceTranscriptEventsSync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
@@ -32,9 +33,9 @@ type PersistRecordResult =
 function requireTranscriptEventAppend(
   result: ReturnType<typeof appendTranscriptEventSync>,
   message: string,
-): void {
+): ReturnType<typeof appendTranscriptEventSync> {
   if (result.ok && result.value) {
-    return;
+    return result;
   }
   const cause = result.ok ? { code: "transcript-event-not-appended" as const } : result.error;
   throw new Error(`${message}: ${cause.code}`, { cause });
@@ -66,6 +67,19 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return 0;
     }
 
+    const promptContextBefore = this.capturePromptContextIfClean();
+    const fileEntriesBefore = this.fileEntries;
+    const opaqueFileEntriesBefore = this.opaqueFileEntries;
+    const runtimeStateBefore = {
+      appendMode: this.appendMode,
+      appendParentId: this.appendParentId,
+      leafId: this.leafId,
+      pendingDeliberateAppend: this.pendingDeliberateAppend,
+      promptContextMutationPending: this.promptContextMutationPending,
+      promptReleasedSideBranchParentId: this.promptReleasedSideBranchParentId,
+    };
+    this.fileEntries = [...this.fileEntries];
+    this.opaqueFileEntries = this.opaqueFileEntries.map((entry) => ({ ...entry }));
     const shiftOpaqueIndexesAfterRemoval = (start: number, count: number): void => {
       for (const opaqueEntry of this.opaqueFileEntries) {
         const removedBeforeOpaque = Math.max(0, Math.min(count, opaqueEntry.index - start));
@@ -147,7 +161,22 @@ export class SessionManagerPersistence extends SessionManagerCore {
     this.buildIndex();
     this.leafId = this.resolveCanonicalParentId(replacementParentId);
     this.appendParentId = replacementParentId;
-    this.replacePersistedTranscript();
+    try {
+      if (
+        this.persistenceTarget &&
+        !replaceTranscriptEventsSync(this.persistenceTarget, this.getPersistedFileEntries())
+      ) {
+        throw new Error("Session transcript was not replaced");
+      }
+      this.persistenceHeaderPending = false;
+    } catch (error) {
+      this.fileEntries = fileEntriesBefore;
+      this.opaqueFileEntries = opaqueFileEntriesBefore;
+      this.buildIndex();
+      Object.assign(this, runtimeStateBefore);
+      throw error;
+    }
+    this.markPromptContextMutationIfChanged(promptContextBefore);
     return removedEntries.length;
   }
 
@@ -201,7 +230,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
     if (entry.type !== "message") {
-      requireTranscriptEventAppend(
+      const appendResult = requireTranscriptEventAppend(
         appendTranscriptEventSync(
           scope,
           entry,
@@ -211,7 +240,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
         ),
         `Session transcript entry was not persisted: ${entry.id}`,
       );
-      return undefined;
+      return appendResult.effectiveParentId === undefined
+        ? undefined
+        : { effectiveParentId: appendResult.effectiveParentId };
     }
     const appendOptions = {
       cwd: this.cwd,

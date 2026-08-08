@@ -430,6 +430,7 @@ export async function runEmbeddedAttemptSettledPhase(
     subscription,
     state: {
       terminal: state.terminal,
+      promptContextMutation: sessionManager.consumePromptContextMutation(),
       preflightRecovery,
       sessionIdUsed,
       sessionFileUsed,

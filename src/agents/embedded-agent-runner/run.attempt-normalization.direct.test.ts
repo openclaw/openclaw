@@ -241,59 +241,55 @@ describe("normalizeEmbeddedRunAttempt", () => {
     expect(clean.replayState).toEqual({ replayInvalid: true, hadPotentialSideEffects: true });
   });
 
-  it("does not promote historical CLI usage without context provenance", async () => {
-    const state = makePromptState();
-    const legacyAssistant = {
-      role: "assistant",
-      api: "cli",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      content: [{ type: "text", text: "legacy reply" }],
-      usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
-      stopReason: "error",
-      timestamp: 1,
-    };
-    const attempt = makeAttempt();
-    attempt.messagesSnapshot = [legacyAssistant] as never;
-    attempt.lastAssistant = legacyAssistant as never;
-
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
-
-    expect(result.action).toBe("proceed");
-    if (result.action !== "proceed") {
-      throw new Error(`expected proceed, got ${result.action}`);
-    }
-    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
+  const exact = { input: 21_000, output: 2_000, total: 23_000 };
+  const carried = { input: 42_000, output: 1_000, total: 43_000 };
+  const unavailable = { contextUsage: { state: "unavailable" as const } };
+  const assistant = (usage: "exact" | "unavailable", timestamp: number) => ({
+    role: "assistant",
+    api: usage === "unavailable" ? "cli" : "openai-responses",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    content: [{ type: "text", text: `${usage} reply` }],
+    usage:
+      usage === "unavailable"
+        ? { input: 1, output: 1, totalTokens: 2 }
+        : {
+            input: exact.input,
+            output: exact.output,
+            totalTokens: exact.total,
+            contextUsage: {
+              state: "available",
+              promptTokens: exact.input,
+              totalTokens: exact.total,
+            },
+          },
+    stopReason: "stop",
+    timestamp,
   });
 
-  it("keeps the unavailable sentinel across a retry instead of reviving prior usage", async () => {
-    const state = makePromptState();
-    const legacyAssistant = {
-      role: "assistant",
-      api: "cli",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      content: [{ type: "text", text: "legacy reply" }],
-      usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
-      stopReason: "stop",
-      timestamp: 1,
-    };
-    const attempt = makeAttempt({
-      route: "compact_only",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.messagesSnapshot = [legacyAssistant] as never;
-    attempt.lastAssistant = legacyAssistant as never;
-    const input = makeNormalizationInput(attempt, state);
-    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
+  it.each([
+    ["changed blocks carried and historical", "changed", undefined, "exact", unavailable],
+    ["changed allows current exact", "changed", "exact", "unavailable", exact],
+    ["unchanged carried beats historical", "unchanged", undefined, "exact", carried],
+    ["current unavailable beats carried", "unchanged", "unavailable", "exact", unavailable],
+    ["historical unavailable cannot erase carried", "unchanged", undefined, "unavailable", carried],
+  ] as const)("%s", async (_name, mutation, currentKind, historicalKind, expected) => {
+    const attempt = makeAttempt();
+    const historical = assistant(historicalKind, 1);
+    attempt.messagesSnapshot = [historical] as never;
+    attempt.lastAssistant = historical as never;
+    attempt.promptContextMutation = mutation;
+    if (currentKind) {
+      attempt.currentAttemptAssistant = assistant(currentKind, 2) as never;
+    }
+    const input = makeNormalizationInput(attempt, makePromptState());
+    input.lastRunPromptUsage = carried;
 
     const result = await normalizeEmbeddedRunAttempt(input);
 
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
+    if (result.action !== "proceed") {
+      throw new Error(`expected proceed, got ${result.action}`);
     }
-    expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
+    expect(result.lastRunPromptUsage).toMatchObject(expected);
   });
 });

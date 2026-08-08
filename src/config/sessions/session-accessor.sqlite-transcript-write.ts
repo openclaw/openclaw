@@ -1,5 +1,7 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
+  deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
@@ -28,6 +30,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { rotateSessionEntryForTranscript } from "./session-accessor.sqlite-message-cut.js";
 import {
   readSqliteTranscriptEventRows,
   readSqliteTranscriptSnapshot,
@@ -169,6 +172,73 @@ export function replaceSqliteTranscriptEventsSync(
   return replaced;
 }
 
+/** Rotates one logical session to a staged branch in one guarded SQLite commit. */
+export function branchSqliteSessionTranscriptSync(
+  scope: SessionTranscriptAccessScope,
+  params: {
+    nextSessionId: string;
+    stage: (sourceEvents: TranscriptEvent[]) => TranscriptEvent[];
+  },
+) {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  const sourceDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const sourceSnapshot = runSqliteDeferredTransactionSync(
+    sourceDatabase.db,
+    () => ({
+      ...readSqliteTranscriptSnapshot(sourceDatabase, resolved.sessionId),
+      generation: readTranscriptGenerationInTransaction(sourceDatabase, resolved.sessionId) ?? null,
+    }),
+    { databaseLabel: sourceDatabase.path, operationLabel: "session branch source snapshot" },
+  );
+  const nextEvents = params.stage(sourceSnapshot.events);
+  const result = runOpenClawAgentWriteTransaction((database) => {
+    const sourceEntry = readSessionEntryRow(database, resolved.sessionKey);
+    if (!sourceEntry) {
+      return { status: "conflict" as const, reason: "missing-entry" as const };
+    }
+    if (sourceEntry.entry.sessionId !== resolved.sessionId) {
+      return { status: "conflict" as const, reason: "session-rebound" as const };
+    }
+    const sourceChanged =
+      (readTranscriptGenerationInTransaction(database, resolved.sessionId) ?? null) !==
+        sourceSnapshot.generation ||
+      !isSqliteTranscriptSnapshotUnchanged(database, resolved.sessionId, sourceSnapshot.rows);
+    if (sourceChanged) {
+      return { status: "conflict" as const, reason: "source-transcript-changed" as const };
+    }
+    const identityKeys = collectSessionEntryLookupKeys(database, resolved.sessionKey);
+    const previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+    replaceSqliteTranscriptEventsInTransaction(
+      database,
+      { ...resolved, sessionId: params.nextSessionId },
+      nextEvents,
+    );
+    writeSessionEntry(
+      database,
+      resolved.sessionKey,
+      rotateSessionEntryForTranscript({
+        currentEntry: sourceEntry.entry,
+        forked: false,
+        nextSessionId: params.nextSessionId,
+      }),
+      { previousEntry: sourceEntry.entry },
+    );
+    const currentIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+    if (
+      !deferOpenClawAgentPostCommitPublication(database, () =>
+        emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity),
+      )
+    ) {
+      throw new Error("Session branch identity publication requires an owned write transaction");
+    }
+    return { status: "committed" as const };
+  }, toDatabaseOptions(resolved));
+  if (result.status === "conflict") {
+    return result;
+  }
+  return { status: "committed" as const, events: nextEvents };
+}
+
 export async function trimSqliteTranscriptForManualCompact(
   scope: SessionTranscriptAccessScope,
   selectRetainedLines: (lines: readonly string[]) => readonly string[] | null,
@@ -267,10 +337,12 @@ export function appendSqliteTranscriptEventSync(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
-): Result<boolean, TranscriptEventAppendError> {
+): Result<boolean, TranscriptEventAppendError> & { effectiveParentId?: string | null } {
   assertNonMessageTranscriptEvent(event);
   const resolved = resolveSqliteTranscriptScope(scope);
-  let result: Result<boolean, TranscriptEventAppendError> = ok(false);
+  let result: Result<boolean, TranscriptEventAppendError> & {
+    effectiveParentId?: string | null;
+  } = ok(false);
   runOpenClawAgentWriteTransaction((database) => {
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     if (!fresh) {
@@ -290,13 +362,18 @@ export function appendSqliteTranscriptEventSync(
       });
       return;
     }
-    result = ok(
-      appendTranscriptEventInTransaction(
-        database,
-        resolved,
-        resolveTranscriptEventAppendParent(database, resolved.sessionId, event, options),
-      ),
+    const resolvedEvent = resolveTranscriptEventAppendParent(
+      database,
+      resolved.sessionId,
+      event,
+      options,
     );
+    result = {
+      ...ok(appendTranscriptEventInTransaction(database, resolved, resolvedEvent)),
+      ...(resolvedEvent === event
+        ? {}
+        : { effectiveParentId: (resolvedEvent as { parentId: string | null }).parentId }),
+    };
   }, toDatabaseOptions(resolved));
   return result;
 }

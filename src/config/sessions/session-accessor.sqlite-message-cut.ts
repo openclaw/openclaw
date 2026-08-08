@@ -301,7 +301,7 @@ function mutateSqliteSessionAtMessageInTransaction(
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
   const nextEntry = {
-    ...cloneMessageCutSessionEntry({
+    ...rotateSessionEntryForTranscript({
       currentEntry,
       forked: params.mode === "fork",
       forkSource:
@@ -459,7 +459,7 @@ function resolveMessageCut(
   };
 }
 
-function cloneMessageCutSessionEntry(params: {
+export function rotateSessionEntryForTranscript(params: {
   currentEntry: SessionEntry;
   forked: boolean;
   forkSource?: NonNullable<SessionEntry["forkSource"]>;

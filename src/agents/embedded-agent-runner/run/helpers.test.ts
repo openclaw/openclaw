@@ -187,33 +187,26 @@ describe("resolveNextSameModelRateLimitRetryCount", () => {
 });
 
 describe("resolveLatestCallUsage", () => {
-  it("preserves the previous exact call across a zero-usage retry", () => {
-    const previous = { input: 12, output: 3, total: 15 };
+  const current = { input: 20, output: 4, total: 24 };
+  const carried = { input: 12, output: 3, total: 15 };
+  const historical = { input: 8, output: 2, total: 10 };
 
-    expect(
-      resolveLatestCallUsage({
-        currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, undefined],
-        carriedCandidates: [previous],
-      }),
-    ).toEqual({
-      currentAttempt: undefined,
-      latest: previous,
-    });
-  });
-
-  it("replaces the previous call when a new nonzero snapshot arrives", () => {
-    const latest = { input: 20, output: 4, total: 24 };
-
-    expect(
-      resolveLatestCallUsage({
-        currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, latest],
-        carriedCandidates: [{ input: 12, output: 3, total: 15 }],
-      }),
-    ).toEqual({
-      currentAttempt: latest,
-      latest,
-    });
-  });
+  it.each([
+    ["current", [current], [carried], [historical], current, current],
+    ["carried", [undefined], [carried], [historical], undefined, carried],
+    ["historical", [undefined], [undefined], [historical], undefined, historical],
+  ] as const)(
+    "uses the %s tier first",
+    (_name, currentAttemptCandidates, carriedCandidates, historicalCandidates, exact, latest) => {
+      expect(
+        resolveLatestCallUsage({
+          currentAttemptCandidates,
+          carriedCandidates,
+          historicalCandidates,
+        }),
+      ).toEqual({ currentAttempt: exact, latest });
+    },
+  );
 });
 
 describe("buildUsageAgentMetaFields", () => {
