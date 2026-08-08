@@ -5,10 +5,10 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramMediaKind } from "./bot/helpers.js";
 import { getTelegramRuntime } from "./runtime.js";
 
-export const TELEGRAM_REPLY_MEDIA_CACHE_NAMESPACE = "telegram.reply-media-cache";
-export const TELEGRAM_REPLY_MEDIA_CACHE_MAX_ENTRIES = 2_000;
+const TELEGRAM_REPLY_MEDIA_CACHE_NAMESPACE = "telegram.reply-media-cache";
+const TELEGRAM_REPLY_MEDIA_CACHE_MAX_ENTRIES = 2_000;
 
-export type CachedReplyMedia = {
+type CachedReplyMedia = {
   fileId: string;
   path: string;
   kind: TelegramMediaKind;
