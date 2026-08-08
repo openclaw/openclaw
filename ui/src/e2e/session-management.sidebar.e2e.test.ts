@@ -427,22 +427,28 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}new`);
       const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
       await sidebarRow.waitFor({ state: "visible", timeout: 10_000 });
       const sidebarRows = page.locator(".sidebar-recent-session");
       await expect.poll(() => sidebarRows.count()).toBe(3);
-      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialListRequests = await gateway.getRequests("sessions.list");
+      const initialListCount = initialListRequests.length;
+      const initialListRequest = initialListRequests.at(-1);
+      if (!initialListRequest) {
+        throw new Error("Initial sessions.list request was not recorded");
+      }
 
-      await gateway.deferNext("sessions.list");
-      await gateway.closeLatest(1006, "disconnect proof");
+      await gateway.closeLatestWithDeferredNext(["sessions.list"], 1006, "disconnect proof");
       await sidebarRow.waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
 
       await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
-        .toBeGreaterThan(initialListCount);
+      const reconnectListRequest = await gateway.waitForRequest(
+        "sessions.list",
+        initialListRequest.id,
+      );
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(initialListCount + 1);
       await sidebarRow.waitFor({ state: "visible" });
       expect(await sidebarRows.count()).toBe(3);
       for (const otherKey of otherSessionKeys) {
@@ -451,16 +457,15 @@ suite.define(() => {
           .waitFor({ state: "visible" });
       }
 
-      const firstReconnectListCount = (await gateway.getRequests("sessions.list")).length;
       const refreshedResponse = sessionsListResponse([
         sessionRow(sessionKey, "Reconnect refreshed", Date.parse("2026-07-01T16:01:00.000Z")),
         sessionRow(otherSessionKeys[0], "Other A", Date.parse("2026-07-01T15:59:00.000Z")),
         sessionRow(otherSessionKeys[1], "Other B", Date.parse("2026-07-01T15:58:00.000Z")),
       ]);
-      await gateway.resolveDeferred("sessions.list", refreshedResponse);
+      await gateway.resolveDeferredById(reconnectListRequest.id, refreshedResponse);
       await expect.poll(() => sidebarRow.textContent()).toContain("Reconnect refreshed");
       await expect.poll(() => sidebarRows.count()).toBe(3);
-      await expectRequestCountStable(gateway, "sessions.list", firstReconnectListCount);
+      await expectRequestCountStable(gateway, "sessions.list", initialListCount + 1);
     } finally {
       await context.close();
     }
@@ -501,9 +506,11 @@ suite.define(() => {
       const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
-      await gateway.deferNext("sessions.subscribe");
-      await gateway.deferNext("sessions.list");
-      await gateway.closeLatest(1006, "session route reconnect");
+      await gateway.closeLatestWithDeferredNext(
+        ["sessions.subscribe", "sessions.list"],
+        1006,
+        "session route reconnect",
+      );
       await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.subscribe")).length, {

@@ -54,8 +54,7 @@ suite.define(() => {
           "openclaw.setup.detect",
           detection("provider/reconnected-model"),
         );
-        await gateway.deferNext("connect");
-        await gateway.closeLatest(1012, "model setup reconnect proof");
+        await gateway.closeLatestWithDeferredNext(["connect"], 1012, "model setup reconnect proof");
         await expect
           .poll(async () => page.getByText("original-model", { exact: true }).count())
           .toBe(0);

@@ -399,7 +399,7 @@ suite.define(() => {
   });
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
-    const page = await suite.browser.newPage();
+    const page = await suite.browser.newPage({ viewport: { width: 1280, height: 600 } });
     await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
@@ -503,24 +503,67 @@ suite.define(() => {
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
     const thread = page.locator(".chat-thread");
     await expect
-      .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
+      .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 400))
       .toBe(true);
-    const initialReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
-    await gateway.deferNext("sessions.catalog.read");
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
-    await page.clock.runFor(100);
-    await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
     await expect
-      .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
-      .toBe(initialReadCount + 1);
+      .poll(() =>
+        thread.evaluate(
+          (element) =>
+            element.scrollTop > 300 &&
+            Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop) <= 1,
+        ),
+      )
+      .toBe(true);
+    const initialReadRequests = await gateway.getRequests("sessions.catalog.read");
+    const initialReadCount = initialReadRequests.length;
+    const initialReadRequest = initialReadRequests.at(-1);
+    if (!initialReadRequest) {
+      throw new Error("Initial sessions.catalog.read request was not recorded");
+    }
+    await page.clock.runFor(300);
+    expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(initialReadCount);
+    await gateway.deferNext("sessions.catalog.read");
+    await thread.hover();
+    let crossedHistoryEdge = false;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await page.mouse.wheel(0, -400);
+      await page.clock.runFor(16);
+      const scrollTop = await thread.evaluate((element) => element.scrollTop);
+      if (scrollTop <= 300) {
+        crossedHistoryEdge = true;
+        break;
+      }
+    }
+    expect(crossedHistoryEdge).toBe(true);
+    const olderReadRequest = await gateway.waitForRequest(
+      "sessions.catalog.read",
+      initialReadRequest.id,
+    );
+    expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(initialReadCount + 1);
+    expect(olderReadRequest.params).toEqual({
+      catalogId: "claude",
+      hostId: "node:devbox",
+      threadId: "remote-thread",
+      limit: 50,
+      cursor: "older",
+    });
+    await page.locator('.chat-virtual-row:not([data-virtual-row-key="history"])').first().waitFor();
     await page.locator(".chat-history-loading").waitFor();
     expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    await thread.evaluate(
+      (element) =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              void element.getBoundingClientRect();
+              resolve();
+            });
+          });
+        }),
+    );
     const anchor = await firstVisibleVirtualRow(thread);
     await startVirtualRowPrependProbe(thread, anchor);
-    await gateway.resolveDeferred("sessions.catalog.read");
+    await gateway.resolveDeferredById(olderReadRequest.id);
     await expect
       .poll(() =>
         page
@@ -565,10 +608,6 @@ suite.define(() => {
     await expectCenteredLayout("claude-external-session-centered-1280.png");
     await page.setViewportSize({ width: 1600, height: 900 });
     await expectCenteredLayout("claude-external-session-centered-1600.png");
-    expect((await gateway.getRequests("sessions.catalog.read")).at(-1)?.params).toMatchObject({
-      catalogId: "claude",
-      cursor: "older",
-    });
     const exhaustedReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await thread.hover();
     await page.mouse.wheel(0, -10_000);

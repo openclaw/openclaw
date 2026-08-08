@@ -524,9 +524,7 @@ suite.define(() => {
     await surface.page.goto(approvalUrl(""));
     await waitForApprovalPage(surface.page);
     const initialConnectCount = (await surface.gateway.getRequests("connect")).length;
-    await surface.gateway.deferNext("connect");
-
-    await surface.gateway.closeLatest(1012, "test reconnect");
+    await surface.gateway.closeLatestWithDeferredNext(["connect"], 1012, "test reconnect");
     await Promise.all([
       surface.page.getByText("Connection interrupted", { exact: true }).waitFor(),
       expect

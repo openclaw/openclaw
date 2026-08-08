@@ -292,6 +292,7 @@ export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void
 
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
+  closeLatestWithDeferredNext: (methods: string[], code?: number, reason?: string) => Promise<void>;
   deliverLatest: (frame: unknown) => Promise<void>;
   deferNext: (method: string) => Promise<void>;
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
@@ -303,7 +304,12 @@ export type MockGatewayControls = {
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
   ) => Promise<void>;
+  rejectDeferredById: (
+    requestId: string,
+    error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+  ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
+  resolveDeferredById: (requestId: string, payload?: unknown) => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
   setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
@@ -312,7 +318,7 @@ export type MockGatewayControls = {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
     hasMultipleSessionSharingIdentities: boolean;
   }) => Promise<void>;
-  waitForRequest: (method: string) => Promise<MockGatewayRequest>;
+  waitForRequest: (method: string, afterRequestId?: string) => Promise<MockGatewayRequest>;
 };
 
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
@@ -720,16 +726,22 @@ function installControlUiMockGateway(
   };
   type ExposedGateway = {
     closeLatest: (code?: number, reason?: string) => void;
+    closeLatestWithDeferredNext: (methods: string[], code?: number, reason?: string) => void;
     deliverLatest: (frame: unknown) => void;
     deferNext: (method: string) => void;
     emit: (event: string, payload?: unknown) => void;
-    findRequests: (method?: string) => BrowserRequest[];
+    findRequests: (method?: string, afterRequestId?: string) => BrowserRequest[];
     rejectDeferred: (
       method: string,
       error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
     ) => void;
+    rejectDeferredById: (
+      requestId: string,
+      error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+    ) => void;
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
+    resolveDeferredById: (requestId: string, payload?: unknown) => void;
     setOnline: (online: boolean) => void;
     setOperatorScopes: (scopes: string[]) => void;
     setHistoryMessages: (messages: unknown[]) => void;
@@ -763,6 +775,8 @@ function installControlUiMockGateway(
   }
   const deferredMethods: string[] = [...scenario.deferredMethods];
   const deferredResponses: DeferredResponse[] = [];
+  const closedDeferredResponseIds: string[] = [];
+  const closedDeferredResponseLimit = 100;
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
@@ -1599,6 +1613,81 @@ function installControlUiMockGateway(
     return true;
   }
 
+  function rememberClosedDeferredResponse(requestId: string): void {
+    closedDeferredResponseIds.push(requestId);
+    const overflow = closedDeferredResponseIds.length - closedDeferredResponseLimit;
+    if (overflow > 0) {
+      closedDeferredResponseIds.splice(0, overflow);
+    }
+  }
+
+  function takeDeferredResponseById(requestId: string): DeferredResponse {
+    const index = deferredResponses.findIndex((response) => response.id === requestId);
+    if (index < 0) {
+      if (closedDeferredResponseIds.includes(requestId)) {
+        throw new Error(
+          `Deferred mock Gateway response for request ${requestId} belongs to a closed socket`,
+        );
+      }
+      throw new Error(`No deferred mock Gateway response for request ${requestId}`);
+    }
+    const [response] = deferredResponses.splice(index, 1);
+    if (!response) {
+      throw new Error(`Deferred mock Gateway response disappeared for request ${requestId}`);
+    }
+    return response;
+  }
+
+  function takeDeferredResponseByMethod(method: string): DeferredResponse {
+    const matches = deferredResponses.filter((candidate) => candidate.method === method);
+    if (matches.length === 0) {
+      throw new Error(`No deferred mock Gateway response for ${method}`);
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `Ambiguous deferred mock Gateway response for ${method}; use resolveDeferredById or rejectDeferredById`,
+      );
+    }
+    const response = matches[0];
+    if (!response) {
+      throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
+    }
+    return takeDeferredResponseById(response.id);
+  }
+
+  function rejectDeferredResponse(
+    response: DeferredResponse,
+    error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
+  ): void {
+    response.socket.deliver({
+      error: {
+        code: error?.code ?? "INVALID_REQUEST",
+        message: error?.message ?? "mock Gateway rejected request",
+        ...(error?.details ? { details: error.details } : {}),
+        ...(error?.retryable ? { retryable: true } : {}),
+      },
+      id: response.id,
+      ok: false,
+      type: "res",
+    });
+  }
+
+  function resolveDeferredResponse(response: DeferredResponse, payload?: unknown): void {
+    const resolvedPayload = applyScenarioAgentModel(
+      response.method,
+      payload ?? buildResponse(response.method, response.params),
+    );
+    if (response.method === "sessions.create" || response.method === "sessions.catalog.continue") {
+      recordMaterializedSession(response.params, resolvedPayload);
+    }
+    response.socket.deliver({
+      id: response.id,
+      ok: true,
+      payload: resolvedPayload,
+      type: "res",
+    });
+  }
+
   function parseFrame(raw: string | ArrayBufferLike | Blob | ArrayBufferView): BrowserFrame | null {
     if (typeof raw !== "string") {
       return null;
@@ -1678,6 +1767,17 @@ function installControlUiMockGateway(
       }
       sessionMessageSubscriptions.clear();
       stopRepeatingSessionEvents();
+      // Captured responses belong to this socket. Unconsumed deferNext entries
+      // remain armed so reconnect tests can stage the next socket's request.
+      for (let index = 0; index < deferredResponses.length;) {
+        const response = deferredResponses[index];
+        if (response?.socket !== this) {
+          index += 1;
+          continue;
+        }
+        deferredResponses.splice(index, 1);
+        rememberClosedDeferredResponse(response.id);
+      }
       this.dispatchEvent(new CloseEvent("close", { code, reason }));
     }
 
@@ -1745,6 +1845,14 @@ function installControlUiMockGateway(
     closeLatest(code, reason) {
       MockWebSocket.latest?.close(code ?? 1006, reason ?? "mock close");
     },
+    closeLatestWithDeferredNext(methods, code, reason) {
+      const socket = MockWebSocket.latest;
+      if (!socket || socket.readyState >= MockWebSocket.CLOSING) {
+        throw new Error("No live mock Gateway socket is available to close");
+      }
+      deferredMethods.push(...methods);
+      socket.close(code ?? 1006, reason ?? "mock close");
+    },
     deliverLatest(frame) {
       MockWebSocket.latest?.deliver(frame);
     },
@@ -1759,56 +1867,28 @@ function installControlUiMockGateway(
         type: "event",
       });
     },
-    findRequests(method) {
-      return method ? requests.filter((request) => request.method === method) : [...requests];
+    findRequests(method, afterRequestId) {
+      const afterIndex = afterRequestId
+        ? requests.findIndex((request) => request.id === afterRequestId)
+        : -1;
+      if (afterRequestId && afterIndex < 0) {
+        throw new Error(`No mock Gateway request found for ${afterRequestId}`);
+      }
+      const candidates = requests.slice(afterIndex + 1);
+      return method ? candidates.filter((request) => request.method === method) : candidates;
     },
     rejectDeferred(method, error) {
-      const index = deferredResponses.findIndex((response) => response.method === method);
-      if (index < 0) {
-        throw new Error(`No deferred mock Gateway response for ${method}`);
-      }
-      const [response] = deferredResponses.splice(index, 1);
-      if (!response) {
-        throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
-      }
-      response.socket.deliver({
-        error: {
-          code: error?.code ?? "INVALID_REQUEST",
-          message: error?.message ?? "mock Gateway rejected request",
-          ...(error?.details ? { details: error.details } : {}),
-          ...(error?.retryable ? { retryable: true } : {}),
-        },
-        id: response.id,
-        ok: false,
-        type: "res",
-      });
+      rejectDeferredResponse(takeDeferredResponseByMethod(method), error);
+    },
+    rejectDeferredById(requestId, error) {
+      rejectDeferredResponse(takeDeferredResponseById(requestId), error);
     },
     requests,
     resolveDeferred(method, payload) {
-      const index = deferredResponses.findIndex((response) => response.method === method);
-      if (index < 0) {
-        throw new Error(`No deferred mock Gateway response for ${method}`);
-      }
-      const [response] = deferredResponses.splice(index, 1);
-      if (!response) {
-        throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
-      }
-      const resolvedPayload = applyScenarioAgentModel(
-        response.method,
-        payload ?? buildResponse(response.method, response.params),
-      );
-      if (
-        response.method === "sessions.create" ||
-        response.method === "sessions.catalog.continue"
-      ) {
-        recordMaterializedSession(response.params, resolvedPayload);
-      }
-      response.socket.deliver({
-        id: response.id,
-        ok: true,
-        payload: resolvedPayload,
-        type: "res",
-      });
+      resolveDeferredResponse(takeDeferredResponseByMethod(method), payload);
+    },
+    resolveDeferredById(requestId, payload) {
+      resolveDeferredResponse(takeDeferredResponseById(requestId), payload);
     },
     setOnline(nextOnline) {
       online = nextOnline;
@@ -1864,10 +1944,6 @@ function installControlUiMockGateway(
 
   (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
   window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
-  window.addEventListener("pagehide", () => {
-    sessionMessageSubscriptions.clear();
-    stopRepeatingSessionEvents();
-  });
 }
 
 export async function installMockGateway(
@@ -1922,17 +1998,20 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
     }, frame);
   };
 
-  const getRequests = async (method?: string) =>
-    page.evaluate((targetMethod) => {
-      const gateway = (
-        window as Window & {
-          openclawControlUiE2eGateway?: {
-            findRequests: (method?: string) => MockGatewayRequest[];
-          };
-        }
-      ).openclawControlUiE2eGateway;
-      return gateway?.findRequests(targetMethod) ?? [];
-    }, method);
+  const getRequests = async (method?: string, afterRequestId?: string) =>
+    page.evaluate(
+      ({ afterId, targetMethod }) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              findRequests: (method?: string, afterRequestId?: string) => MockGatewayRequest[];
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        return gateway?.findRequests(targetMethod, afterId) ?? [];
+      },
+      { afterId: afterRequestId, targetMethod: method },
+    );
 
   return {
     async closeLatest(code, reason) {
@@ -1951,6 +2030,28 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
           gateway.closeLatest(closeCode, closeReason);
         },
         { closeCode: code, closeReason: reason },
+      );
+    },
+    async closeLatestWithDeferredNext(methods, code, reason) {
+      await page.evaluate(
+        ({ closeCode, closeReason, deferredMethods }) => {
+          const gateway = (
+            window as Window & {
+              openclawControlUiE2eGateway?: {
+                closeLatestWithDeferredNext: (
+                  methods: string[],
+                  code?: number,
+                  reason?: string,
+                ) => void;
+              };
+            }
+          ).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          gateway.closeLatestWithDeferredNext(deferredMethods, closeCode, closeReason);
+        },
+        { closeCode: code, closeReason: reason, deferredMethods: methods },
       );
     },
     deliverLatest,
@@ -2033,6 +2134,32 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         { targetMethod: method, responseError: error },
       );
     },
+    async rejectDeferredById(requestId, error) {
+      await page.evaluate(
+        ({ targetRequestId, responseError }) => {
+          const gateway = (
+            window as Window & {
+              openclawControlUiE2eGateway?: {
+                rejectDeferredById: (
+                  requestId: string,
+                  error?: {
+                    code?: string;
+                    message?: string;
+                    details?: unknown;
+                    retryable?: boolean;
+                  },
+                ) => void;
+              };
+            }
+          ).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          gateway.rejectDeferredById(targetRequestId, responseError);
+        },
+        { targetRequestId: requestId, responseError: error },
+      );
+    },
     async resolveDeferred(method, payload) {
       await page.evaluate(
         ({ targetMethod, responsePayload }) => {
@@ -2049,6 +2176,24 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
           gateway.resolveDeferred(targetMethod, responsePayload);
         },
         { targetMethod: method, responsePayload: payload },
+      );
+    },
+    async resolveDeferredById(requestId, payload) {
+      await page.evaluate(
+        ({ targetRequestId, responsePayload }) => {
+          const gateway = (
+            window as Window & {
+              openclawControlUiE2eGateway?: {
+                resolveDeferredById: (requestId: string, payload?: unknown) => void;
+              };
+            }
+          ).openclawControlUiE2eGateway;
+          if (!gateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          gateway.resolveDeferredById(targetRequestId, responsePayload);
+        },
+        { targetRequestId: requestId, responsePayload: payload },
       );
     },
     async setOnline(online) {
@@ -2129,23 +2274,23 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         gateway.setSessionSharingPolicy(nextPolicy);
       }, policy);
     },
-    async waitForRequest(method) {
+    async waitForRequest(method, afterRequestId) {
       await page.waitForFunction(
-        (targetMethod) => {
+        ({ afterId, targetMethod }) => {
           const gateway = (
             window as Window & {
               openclawControlUiE2eGateway?: {
-                requests: MockGatewayRequest[];
+                findRequests: (method?: string, afterRequestId?: string) => MockGatewayRequest[];
               };
             }
           ).openclawControlUiE2eGateway;
-          return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
+          return Boolean(gateway?.findRequests(targetMethod, afterId).length);
         },
-        method,
+        { afterId: afterRequestId, targetMethod: method },
         { timeout: 10_000 },
       );
-      const requests = await getRequests(method);
-      const request = requests.at(-1);
+      const requests = await getRequests(method, afterRequestId);
+      const request = afterRequestId ? requests[0] : requests.at(-1);
       if (!request) {
         throw new Error(`No mock Gateway request found for ${method}`);
       }

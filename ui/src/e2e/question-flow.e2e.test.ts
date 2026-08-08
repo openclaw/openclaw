@@ -438,19 +438,21 @@ suite.define(() => {
     await panel.waitFor();
     await expectQuestionAttention(page, true);
 
-    await gateway.deferNext("question.get");
-    await gateway.deferNext("question.get");
-    await gateway.closeLatest();
-    const recovery = await gateway.waitForRequest("question.get");
-    expect(recovery.params).toEqual({ id: request.id });
+    await gateway.closeLatestWithDeferredNext(["question.get", "question.get"]);
     await expect.poll(async () => (await gateway.getRequests("question.get")).length).toBe(2);
+    const recoveryRequests = await gateway.getRequests("question.get");
+    expect(recoveryRequests).toHaveLength(2);
+    for (const recovery of recoveryRequests) {
+      expect(recovery.params).toEqual({ id: request.id });
+    }
     const notFound = {
       code: "INVALID_REQUEST",
       message: "question was not found",
       details: { reason: "QUESTION_NOT_FOUND" },
     };
-    await gateway.rejectDeferred("question.get", notFound);
-    await gateway.rejectDeferred("question.get", notFound);
+    for (const recovery of recoveryRequests) {
+      await gateway.rejectDeferredById(recovery.id, notFound);
+    }
 
     await expect.poll(() => panel.count()).toBe(0);
     await expectQuestionAttention(page, false);
