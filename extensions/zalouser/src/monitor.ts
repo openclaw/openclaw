@@ -518,11 +518,16 @@ async function processMessage(
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
   const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg: config, route });
+  // Inbound agent body uses messagePrefix only. responsePrefix is outbound-only
+  // (schema help: "Text prepended to every outbound reply"). Explicit empty
+  // string still wins via ?? so it does not fall through.
+  const messagePrefix = account.config.messagePrefix ?? "";
+  const bodyForPrefix = messagePrefix ? `${messagePrefix} ${rawBody}` : rawBody;
   const body = buildEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
     timestamp: message.timestampMs,
-    body: rawBody,
+    body: bodyForPrefix,
   });
   const combinedBody =
     isGroup && historyKey
@@ -590,7 +595,7 @@ async function processMessage(
     },
     message: {
       body: combinedBody,
-      bodyForAgent: rawBody,
+      bodyForAgent: bodyForPrefix,
       rawBody,
       commandBody,
       inboundHistory,

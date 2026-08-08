@@ -36,7 +36,9 @@ export function buildInboundLine(params: {
   visibleReplyTo?: WhatsAppReplyContext | null;
 }) {
   const { cfg, msg, agentId, previousTimestamp, envelope } = params;
-  // WhatsApp inbound prefix: channels.whatsapp.responsePrefix > identity/defaults.
+  // Monitor snapshot (`resolveWebMonitorConfigSnapshot`) already pins
+  // channels.whatsapp.responsePrefix to the selected account's prepared
+  // messagePrefix. Keep that as the sole precedence owner here.
   const messagePrefix = resolveMessagePrefix(cfg, agentId, {
     configured: cfg.channels?.whatsapp?.responsePrefix,
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,

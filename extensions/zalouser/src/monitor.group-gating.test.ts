@@ -66,6 +66,7 @@ const createRuntimeEnv = () => createZalouserRuntimeEnv();
 type DispatchReplyCallArg = {
   ctx?: {
     Body?: string;
+    BodyForAgent?: string;
     BodyForCommands?: string;
     CommandAuthorized?: boolean;
     CommandBody?: string;
