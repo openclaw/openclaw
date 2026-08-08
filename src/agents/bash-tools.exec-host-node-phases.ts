@@ -363,6 +363,7 @@ export function buildNodeSystemRunInvoke(params: {
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
+  contextSessionKey?: string | undefined;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -393,6 +394,7 @@ export function buildNodeSystemRunInvoke(params: {
       timeoutMs,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      ...(params.contextSessionKey != null ? { contextSessionKey: params.contextSessionKey } : {}),
       ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
       ...(params.turnSourceTo != null ? { turnSourceTo: params.turnSourceTo } : {}),
       ...(params.turnSourceAccountId != null
@@ -425,6 +427,7 @@ export async function invokeNodeSystemRunDirect(params: {
     cwd: params.request.workdir,
     agentId: params.request.agentId,
     sessionKey: params.request.sessionKey,
+    contextSessionKey: params.request.notifySessionKey,
     notifyOnExit: params.request.notifyOnExit,
   });
   params.request.signal?.throwIfAborted();
