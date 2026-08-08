@@ -18,6 +18,7 @@ import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from 
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
+  runWorkerSshCandidates,
   workerSshCommandOptions,
   workerSshOptions,
   workerSshRemoteCommand,
@@ -594,6 +595,7 @@ async function runSshScript(params: {
   script: string;
   scriptArgs: readonly string[];
   timeoutMs: number;
+  port?: number;
   signal?: AbortSignal;
 }): Promise<SpawnResult> {
   return await params.runCommand(
@@ -604,7 +606,7 @@ async function runSshScript(params: {
       "-x",
       "-T",
       "-p",
-      String(params.prepared.port),
+      String(params.port ?? params.prepared.port),
       "--",
       params.prepared.sshTarget,
       workerSshRemoteCommand(["sh", "-s", "--", ...params.scriptArgs]),
@@ -627,12 +629,21 @@ async function cleanupRemoteUpload(params: {
   runCommand: WorkerBootstrapCommandRunner;
   timeoutMs: number;
 }): Promise<void> {
-  await runSshScript({
-    prepared: params.prepared,
-    runCommand: params.runCommand,
-    script: CLEANUP_UPLOAD_SCRIPT,
-    scriptArgs: [params.remotePath],
-    timeoutMs: Math.min(params.timeoutMs, 10_000),
+  // Candidate failover shares one budget so best-effort cleanup cannot extend teardown per port.
+  const cleanupDeadline = Date.now() + Math.min(params.timeoutMs, 10_000);
+  await runWorkerSshCandidates(params.prepared, (port) => {
+    const timeoutMs = cleanupDeadline - Date.now();
+    if (timeoutMs <= 0) {
+      throw new Error("Worker bootstrap upload cleanup timed out");
+    }
+    return runSshScript({
+      prepared: params.prepared,
+      runCommand: params.runCommand,
+      script: CLEANUP_UPLOAD_SCRIPT,
+      scriptArgs: [params.remotePath],
+      timeoutMs,
+      port,
+    });
   }).catch(() => undefined);
 }
 
@@ -693,7 +704,8 @@ export async function bootstrapWorker(
   request: WorkerBootstrapRequest,
   dependencies: WorkerBootstrapDependencies,
 ): Promise<WorkerAdmissionHandshake> {
-  const receipt = normalizeHandshake(request.artifact);
+  const artifact = request.artifact;
+  const receipt = normalizeHandshake(artifact);
   const timeoutMs = dependencies.timeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
   const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
   const prepared = await prepareWorkerSsh({
@@ -703,56 +715,62 @@ export async function bootstrapWorker(
     temporaryDirectoryPrefix: "openclaw-worker-bootstrap-",
   });
   try {
-    const preflight = parsePreflight(
-      await runSshScript({
+    const preflightResult = await runWorkerSshCandidates(prepared, (port) =>
+      runSshScript({
         prepared,
         runCommand,
         script: PREFLIGHT_SCRIPT,
-        scriptArgs: [receipt.bundleHash, JSON.stringify(receipt), request.artifact.install],
+        scriptArgs: [receipt.bundleHash, JSON.stringify(receipt), artifact.install],
         timeoutMs,
+        port,
         signal: dependencies.signal,
       }),
-      receipt,
     );
+    const preflight = parsePreflight(preflightResult, receipt);
     if (preflight.action === "current") {
       return preflight.receipt;
     }
 
     try {
-      if (request.artifact.install === "bundle") {
-        const transfer = await runCommand(
-          [
-            "scp",
-            ...workerSshOptions(prepared, { forwarding: "disabled" }),
-            "-P",
-            String(prepared.port),
-            "--",
-            request.artifact.tarballPath,
-            `${prepared.scpTarget}:${preflight.path}`,
-          ],
-          workerSshCommandOptions({ timeoutMs, signal: dependencies.signal }),
+      if (artifact.install === "bundle") {
+        const transfer = await runWorkerSshCandidates(prepared, (port) =>
+          runCommand(
+            [
+              "scp",
+              ...workerSshOptions(prepared, { forwarding: "disabled" }),
+              "-P",
+              String(port),
+              "--",
+              artifact.tarballPath,
+              `${prepared.scpTarget}:${preflight.path}`,
+            ],
+            workerSshCommandOptions({ timeoutMs, signal: dependencies.signal }),
+          ),
         );
         if (!isSuccess(transfer)) {
           throw commandFailure("bundle transfer", transfer);
         }
       }
 
-      const install = await runSshScript({
-        prepared,
-        runCommand,
-        script: INSTALL_SCRIPT,
-        scriptArgs: [
-          request.artifact.install,
-          receipt.bundleHash,
-          request.artifact.install === "npm" ? request.artifact.packageSpec : "",
-          request.artifact.install === "npm" ? request.artifact.packageIntegrity : "",
-          JSON.stringify(receipt),
-          preflight.path,
-          request.artifact.install === "bundle" ? request.artifact.tarballSha256 : "",
-        ],
-        timeoutMs,
-        signal: dependencies.signal,
-      });
+      const install = await runWorkerSshCandidates(prepared, (port) =>
+        runSshScript({
+          prepared,
+          runCommand,
+          script: INSTALL_SCRIPT,
+          scriptArgs: [
+            artifact.install,
+            receipt.bundleHash,
+            artifact.install === "npm" ? artifact.packageSpec : "",
+            artifact.install === "npm" ? artifact.packageIntegrity : "",
+            JSON.stringify(receipt),
+            preflight.path,
+            artifact.install === "bundle" ? artifact.tarballSha256 : "",
+          ],
+          timeoutMs,
+          port,
+          signal: dependencies.signal,
+        }),
+      );
       if (
         install.code === NPM_MISSING_EXIT_CODE ||
         install.stderr.includes(NPM_MISSING_MARKER) ||

@@ -1400,6 +1400,12 @@ export interface WorkerEnvironmentCredentials {
   session_id: string | null;
 }
 
+export interface WorkerEnvironmentSshFallbackPorts {
+  environment_id: string;
+  port: number;
+  position: number;
+}
+
 export interface WorkerEnvironments {
   attached_session_ids_json: Generated<string>;
   bootstrap_bundle_hash: string | null;
@@ -1663,6 +1669,7 @@ export interface DB {
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
+  worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
   worker_session_placements: WorkerSessionPlacements;
