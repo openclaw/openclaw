@@ -259,6 +259,20 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+      name: "projects gateway usage-cost --port into local config",
+      argv: ["gateway", "usage-cost", "--port", "19086", "--days", "7", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("usage.cost", 19086, { days: 7 });
+      },
+    },
+    {
+      name: "inherits parent --port for gateway usage-cost",
+      argv: ["gateway", "--port", "19087", "usage-cost", "--days", "7", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("usage.cost", 19087, { days: 7 });
+      },
+    },
+    {
       name: "passes decimal usage-cost --days values",
       argv: ["gateway", "usage-cost", "--days", "7", "--json"],
       assert: () => {
