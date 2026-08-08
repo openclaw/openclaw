@@ -181,7 +181,7 @@ for commands and recovery.
 
 | Runner                          | Jobs                                                                                                                                                                                                                                                                              |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ubuntu-24.04`                  | `security-fast`, manual CI dispatch and non-canonical repository fallbacks, the QA Smoke aggregate, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, and the whole Install Smoke workflow                                |
+| `ubuntu-24.04`                  | `security-fast`, ordinary manual CI dispatch and non-canonical repository fallbacks, the QA Smoke aggregate, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, and the whole Install Smoke workflow                       |
 | `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `pnpm-store-warmup`, `native-i18n`, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-*` lanes except `check-lint`, selected `check-additional-*` shards, `check-docs`, and `skills-python` |
 | `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, the serial Chromium/Vite `checks-ui-e2e` lane, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                              |
 | `blacksmith-16vcpu-ubuntu-2404` | Automatic QA Smoke CI shards, `build-artifacts` in CI and Testbox, and `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved)                                                                                                                                  |
@@ -209,7 +209,7 @@ concurrent repositories, retries, and burst overlap.
 
 The changed-target PR plan reduces the common Node test burst from 14 Blacksmith registrations to one. Broad-risk PRs keep the 14-registration compact fallback, so the worst case does not increase.
 
-Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
+Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. Ordinary `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners. Trusted parent dispatches and exact release gates keep `checks-ui-e2e` on `blacksmith-8vcpu-ubuntu-2404` because Chromium, Vite, and CDP polling require more than the hosted four-vCPU capacity. Normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
 ## Surface ratchets
 
