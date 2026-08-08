@@ -112,6 +112,12 @@ extension AgentOverviewSnapshot {
             state: ["lastStatus": AnyCodable("ok")],
             lastrunatms: now - 86_400_000 * 7,
             lastrunstatus: AnyCodable("ok"))
+        let usageDays = (12...31).map { day in
+            CostUsageDailyEntryLite(
+                date: String(format: "2026-07-%02d", day),
+                totalTokens: day * 100_000,
+                totalCost: Double(day) / 10)
+        }
         return AgentOverviewSnapshot(
             gatewayID: ScreenshotFixtureMode.gatewayID,
             skills: nil,
@@ -120,7 +126,15 @@ extension AgentOverviewSnapshot {
             cronJobs: [daily, weekly],
             dreaming: nil,
             dreamDiary: nil,
-            usage: nil,
+            usage: CostUsageSummaryLite(
+                updatedAt: now,
+                days: 31,
+                daily: usageDays,
+                totals: [
+                    "totalTokens": AnyCodable(43_000_000),
+                    "totalCost": AnyCodable(43.0),
+                ],
+                cacheStatus: ["status": AnyCodable("warm")]),
             agentSkillFilter: nil)
     }
 }
@@ -491,6 +505,27 @@ enum SkillMutationError: LocalizedError {
         case .invalidPatchPayload:
             "Could not encode the skill config update."
         }
+    }
+}
+
+enum CostUsageRequest {
+    static func monthParamsJSON(timeZone: TimeZone = .current, date: Date = Date()) -> String {
+        let offsetMinutes = timeZone.secondsFromGMT(for: date) / 60
+        let absoluteMinutes = abs(offsetMinutes)
+        let minuteSuffix = absoluteMinutes.isMultiple(of: 60)
+            ? ""
+            : String(format: ":%02d", absoluteMinutes % 60)
+        let utcOffset = "UTC\(offsetMinutes < 0 ? "-" : "+")\(absoluteMinutes / 60)\(minuteSuffix)"
+        let params: [String: Any] = [
+            "days": 31,
+            "mode": "specific",
+            "timeZone": timeZone.identifier,
+            "utcOffset": utcOffset,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: params, options: [.sortedKeys]) else {
+            return #"{"days":31,"mode":"gateway"}"#
+        }
+        return String(bytes: data, encoding: .utf8) ?? #"{"days":31,"mode":"gateway"}"#
     }
 }
 
