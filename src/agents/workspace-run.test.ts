@@ -132,6 +132,35 @@ describe("resolveRunWorkspaceDir", () => {
     ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
+  it("admits an explicit agentId that matches the rosterless implicit default", () => {
+    // `agent exec` resolves `resolveDefaultAgentId(baseConfig)` itself and
+    // passes it through as an explicit `agentId` (see fix/agent-exec-default-agent
+    // -store-scope, #119765) rather than leaving it unspecified. Against a
+    // rosterless config that value is always the legacy implicit agent, so
+    // this must be admitted the same as an unspecified agentId -- not
+    // rejected as "naming an owner outside the roster".
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      agentId: "main",
+      config: {},
+    });
+
+    expect(result.agentId).toBe("main");
+    expect(result.agentIdSource).toBe("explicit");
+    expect(result.usedFallback).toBe(true);
+  });
+
+  it("resolves the implicit legacy agent for a rosterless config (agent exec --isolated)", () => {
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      config: {},
+    });
+
+    expect(result.agentId).toBe("main");
+    expect(result.agentIdSource).toBe("default");
+    expect(result.usedFallback).toBe(true);
+  });
+
   it.each([
     { agentId: "research", sessionKey: undefined },
     { agentId: undefined, sessionKey: "agent:research:subagent:test" },
