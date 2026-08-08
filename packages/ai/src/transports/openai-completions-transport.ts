@@ -46,6 +46,11 @@ import {
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import {
+  isAzureFoundryMultiModelHostname,
+  isAzureOpenAICompatibleHostname,
+  isDedicatedAzureOpenAIHostname,
+} from "./azure-openai-hostnames-internal.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   buildGuardedModelFetch,
@@ -55,7 +60,10 @@ import {
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
-import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  detectOpenAICompletionsCompat,
+  isOpenAIFamilyFoundryDeployment,
+} from "./openai-completions-compat.js";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
@@ -188,15 +196,7 @@ function createOpenAICompletionsClient(
   });
 }
 
-function isAzureOpenAICompatibleHost(hostname: string): boolean {
-  return (
-    hostname.endsWith(".openai.azure.com") ||
-    hostname.endsWith(".services.ai.azure.com") ||
-    hostname.endsWith(".cognitiveservices.azure.com")
-  );
-}
-
-function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
+function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl" | "id" | "name">): boolean {
   if (!model.baseUrl.trim()) {
     return true;
   }
@@ -205,7 +205,17 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
     return true;
   }
   try {
-    return isAzureOpenAICompatibleHost(new URL(model.baseUrl).hostname.toLowerCase());
+    const hostname = new URL(model.baseUrl).hostname.toLowerCase();
+    if (isDedicatedAzureOpenAIHostname(hostname)) {
+      return true;
+    }
+    // Multi-model Foundry hosts front arbitrary vendors and deployment ids
+    // are operator-chosen aliases, so OpenAI reasoning-control semantics only
+    // apply when the canonical model identity is an OpenAI family model.
+    if (isAzureFoundryMultiModelHostname(hostname)) {
+      return isOpenAIFamilyFoundryDeployment(model.id, model.name);
+    }
+    return false;
   } catch {
     return false;
   }
@@ -227,7 +237,7 @@ function buildOpenAICompletionsClientConfig(
 
   try {
     const parsed = new URL(model.baseUrl);
-    isAzureHost = isAzureOpenAICompatibleHost(parsed.hostname.toLowerCase());
+    isAzureHost = isAzureOpenAICompatibleHostname(parsed.hostname.toLowerCase());
     parsed.searchParams.forEach((value, key) => {
       if (value) {
         defaultQuery[key] = value;
@@ -1907,14 +1917,13 @@ export function buildOpenAICompletionsParams(
   }
   if (compat.supportsPromptCacheKey && promptCacheKey) {
     params.prompt_cache_key = promptCacheKey;
-    // When the caller explicitly opted into long retention, forward the
-    // canonical prompt_cache_retention value alongside the cache key so
-    // OpenAI-compatible completions backends (oMLX, llama.cpp, official
-    // OpenAI, etc.) can honor the 24h prefix-cache lifetime. Without this
-    // the key reaches the wire but the retention preference is silently dropped.
-    if (cacheRetention === "long" && compat.supportsLongCacheRetention) {
-      params.prompt_cache_retention = "24h";
-    }
+  }
+  if (
+    cacheRetention === "long" &&
+    compat.supportsPromptCacheKey &&
+    compat.supportsLongCacheRetention
+  ) {
+    params.prompt_cache_retention = "24h";
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
@@ -2060,9 +2069,11 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
-  if (disableChatCompletionsToolReasoning) {
+  const isCustomProvider = model.name.includes("(Custom Provider)");
+  if (disableChatCompletionsToolReasoning && !isCustomProvider) {
     // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
     // tools unless reasoning is explicitly disabled.
+    // Skip this for custom non-OpenAI providers that don't support reasoning_effort.
     params.reasoning_effort = "none";
   } else if (
     compat.thinkingFormat === "openrouter" &&
@@ -2077,7 +2088,8 @@ export function buildOpenAICompletionsParams(
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
-    !omitChatCompletionsToolReasoningEffort
+    !omitChatCompletionsToolReasoningEffort &&
+    !isCustomProvider
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
   }
