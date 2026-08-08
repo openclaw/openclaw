@@ -54,6 +54,12 @@ const OPENAI_API_KEY_ENV_REF = {
   id: "OPENAI_API_KEY",
 } as const;
 
+const OPENAI_RENAMED_ENV_REF = {
+  source: "env",
+  provider: "default",
+  id: "OPENAI_MIGRATED_KEY",
+} as const;
+
 type ApplyFixture = {
   rootDir: string;
   stateDir: string;
@@ -198,13 +204,14 @@ function createOpenAiProviderTarget(params?: {
   path?: string;
   pathSegments?: string[];
   providerId?: string;
+  ref?: SecretsApplyPlan["targets"][number]["ref"];
 }): SecretsApplyPlan["targets"][number] {
   return {
     type: "models.providers.apiKey",
     path: params?.path ?? "models.providers.openai.apiKey",
     ...(params?.pathSegments ? { pathSegments: params.pathSegments } : {}),
     providerId: params?.providerId ?? "openai",
-    ref: OPENAI_API_KEY_ENV_REF,
+    ref: params?.ref ?? OPENAI_API_KEY_ENV_REF,
   };
 }
 
@@ -346,7 +353,52 @@ describe("secrets apply", () => {
     expect(nextAuthJson.openai).toBeDefined();
 
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
-    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).toContain("OPENAI_API_KEY=sk-openai-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+  });
+
+  it("keeps the .env source backing a newly written env SecretRef", async () => {
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(applied.changed).toBe(true);
+    expect(applied.changedFiles).not.toContain(fixture.envPath);
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).toContain("OPENAI_API_KEY=sk-openai-plaintext");
+
+    const { resolveSecretRefValue } = await import("./resolve.js");
+    await expect(
+      resolveSecretRefValue(OPENAI_API_KEY_ENV_REF, {
+        config: nextConfig as never,
+        env: { OPENAI_API_KEY: "sk-openai-plaintext" },
+      }),
+    ).resolves.toBe("sk-openai-plaintext");
+  });
+
+  it("still scrubs a stale .env key when the plan migrates to a different env var", async () => {
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget({ ref: OPENAI_RENAMED_ENV_REF })],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({
+      plan,
+      env: { ...fixture.env, OPENAI_MIGRATED_KEY: "sk-openai-plaintext" },
+      write: true,
+    });
+    expect(applied.changed).toBe(true);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("OPENAI_API_KEY=");
     expect(nextEnv).toContain("UNRELATED=value");
   });
 
@@ -1602,6 +1654,7 @@ describe("secrets apply", () => {
     const env = {
       HOME: homeDir,
       OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+      OPENAI_MIGRATED_KEY: "sk-openai-plaintext", // pragma: allowlist secret
     };
 
     await writeJsonFile(configPath, {
@@ -1623,7 +1676,7 @@ describe("secrets apply", () => {
 
     try {
       const plan = createPlan({
-        targets: [createOpenAiProviderTarget()],
+        targets: [createOpenAiProviderTarget({ ref: OPENAI_RENAMED_ENV_REF })],
         options: createOneWayScrubOptions(),
       });
 
@@ -1668,6 +1721,7 @@ describe("secrets apply", () => {
     const env = {
       HOME: homeDir,
       OPENAI_API_KEY: "sk-openai-plaintext", // pragma: allowlist secret
+      OPENAI_MIGRATED_KEY: "sk-openai-plaintext", // pragma: allowlist secret
     };
 
     await writeJsonFile(configPath, {
@@ -1696,7 +1750,7 @@ describe("secrets apply", () => {
 
     try {
       const plan = createPlan({
-        targets: [createOpenAiProviderTarget()],
+        targets: [createOpenAiProviderTarget({ ref: OPENAI_RENAMED_ENV_REF })],
         options: createOneWayScrubOptions(),
       });
 
@@ -1761,10 +1815,11 @@ describe("secrets apply", () => {
     await fs.copyFile(fixture.configPath, configPath);
     await fs.copyFile(fixture.envPath, configEnvPath);
     fixture.env.OPENCLAW_CONFIG_PATH = configPath;
+    fixture.env.OPENAI_MIGRATED_KEY = "sk-openai-plaintext"; // pragma: allowlist secret
 
     const applied = await runSecretsApply({
       plan: createPlan({
-        targets: [createOpenAiProviderTarget()],
+        targets: [createOpenAiProviderTarget({ ref: OPENAI_RENAMED_ENV_REF })],
         options: createOneWayScrubOptions(),
       }),
       env: fixture.env,
