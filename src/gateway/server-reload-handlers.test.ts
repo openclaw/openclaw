@@ -1718,14 +1718,18 @@ describe("gateway hot reload superseded tail recovery", () => {
       changedPaths: ["agents.defaults.workspace"],
       hotReasons: ["agents.defaults.workspace"],
     });
+    let transactionCurrent = true;
 
     try {
       await handlers.applyHotReload(
         plan,
         { agents: { defaults: { workspace: "/tmp/a" } } },
         {
-          isCurrent: () => false,
-          publish: async (commit) => await commit(),
+          isCurrent: () => transactionCurrent,
+          publish: async (commit) => {
+            await commit();
+            transactionCurrent = false;
+          },
         },
       );
       await vi.runAllTimersAsync();
@@ -1770,11 +1774,15 @@ describe("gateway hot reload superseded tail recovery", () => {
       changedPaths: ["agents.defaults.workspace"],
       hotReasons: ["agents.defaults.workspace"],
     });
+    let transactionCurrent = true;
 
     try {
       const staleTail = handlers.applyHotReload(plan, configA, {
-        isCurrent: () => false,
-        publish: async (commit) => await commit(),
+        isCurrent: () => transactionCurrent,
+        publish: async (commit) => {
+          await commit();
+          transactionCurrent = false;
+        },
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(hoisted.refreshContextWindowCache).toHaveBeenCalledOnce();
@@ -1950,7 +1958,11 @@ describe("gateway hot reload superseded tail recovery", () => {
     await reloadA;
 
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith(
+      "discord",
+      undefined,
+      expect.objectContaining({ lifecycleAbortSignal: expect.anything() }),
+    );
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
 
@@ -2748,7 +2760,11 @@ describe("gateway restart deferral preflight", () => {
     }
 
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith(
+      "discord",
+      undefined,
+      expect.objectContaining({ lifecycleAbortSignal: expect.anything() }),
+    );
     expect(runtimePublished).toBe(true);
     expect(setState).toHaveBeenCalledTimes(1);
   });
@@ -2792,7 +2808,11 @@ describe("gateway restart deferral preflight", () => {
     }
 
     expect(stopChannel).toHaveBeenCalledWith("telegram", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("telegram");
+    expect(startChannel).toHaveBeenCalledWith(
+      "telegram",
+      undefined,
+      expect.objectContaining({ lifecycleAbortSignal: expect.anything() }),
+    );
     expect(logReload.warn).toHaveBeenCalledWith(
       expect.stringContaining("channel reload timeout after"),
     );
@@ -4791,7 +4811,11 @@ describe("gateway plugin hot reload handlers", () => {
     expect(runtimeEnv.env[envKey]).toBeUndefined();
     expect(targetEnv[envKey]).toBeUndefined();
     expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith(
+      "discord",
+      undefined,
+      expect.objectContaining({ lifecycleAbortSignal: expect.anything() }),
+    );
   });
 
   it("skips channel work when the candidate env adds a skip flag", async () => {
@@ -5156,6 +5180,9 @@ describe("gateway plugin hot reload handlers", () => {
 
   it("restarts pre-stopped channels when runtime publication fails", async () => {
     const events: string[] = [];
+    const start = vi.fn(async (channel) => {
+      events.push(`start:${channel}`);
+    });
     const publish = vi.fn(async () => {
       throw new Error("publication failed");
     });
@@ -5175,9 +5202,7 @@ describe("gateway plugin hot reload handlers", () => {
         stop: vi.fn(async (channel) => {
           events.push(`stop:${channel}`);
         }),
-        start: vi.fn(async (channel) => {
-          events.push(`start:${channel}`);
-        }),
+        start,
       },
       reloadPlugins,
     );
@@ -5191,6 +5216,11 @@ describe("gateway plugin hot reload handlers", () => {
     ).rejects.toThrow("publication failed");
 
     expect(events).toEqual(["stop:discord", "start:discord"]);
+    expect(start).toHaveBeenCalledWith(
+      "discord",
+      undefined,
+      expect.objectContaining({ lifecycleAbortSignal: expect.anything() }),
+    );
     expect(handlers.setState).not.toHaveBeenCalled();
   });
 
@@ -5290,8 +5320,16 @@ describe("gateway plugin hot reload handlers", () => {
     expect(logChannels.error).toHaveBeenCalledWith(
       "failed to stop discord channel before plugin reload: stop failed",
     );
-    expect(startChannel).toHaveBeenCalledWith("telegram");
-    expect(startChannel).toHaveBeenCalledWith("discord");
+    expect(startChannel).toHaveBeenCalledWith(
+      "telegram",
+      undefined,
+      expect.objectContaining({ lifecycleAbortSignal: expect.anything() }),
+    );
+    expect(startChannel).toHaveBeenCalledWith(
+      "discord",
+      undefined,
+      expect.objectContaining({ lifecycleAbortSignal: expect.anything() }),
+    );
     expect(startRootCounts).toEqual([1, 1]);
     expect(setState).not.toHaveBeenCalled();
   });
@@ -5589,6 +5627,69 @@ describe("deferred channel reload abort generation", () => {
     }
   });
 
+  it.each(["commit entry", "publication edge"] as const)(
+    "fences a superseded generation at the runtime %s after active work drains",
+    async (abortPoint) => {
+      const channels = {
+        start: vi.fn(async () => {}),
+        stop: vi.fn(async () => {}),
+      };
+      const commitReached = createDeferredVoid();
+      const releaseCommit = createDeferredVoid();
+      const publish = vi.fn(async (commit: () => Promise<void>) => {
+        if (abortPoint === "publication edge") {
+          commitReached.resolve();
+          await releaseCommit.promise;
+        }
+        await commit();
+      });
+      const reloadPlugins: NonNullable<ReloadHandlerParams["reloadPlugins"]> = async (params) => {
+        await params.beforeReplace(new Set(["whatsapp"]));
+        if (abortPoint === "commit entry") {
+          commitReached.resolve();
+          await releaseCommit.promise;
+        }
+        await params.commitRuntime();
+        return {
+          restartChannels: new Set(),
+          activeChannels: new Set(["whatsapp"]),
+        };
+      };
+      const handlers = createReloadHandlersForTest(undefined, channels, reloadPlugins);
+      hoisted.activeTaskBlockers.push({
+        taskId: `task-blocking-${abortPoint}`,
+        status: "running",
+        runtime: "subagent",
+      });
+      vi.useFakeTimers();
+
+      try {
+        const reloadPromise = handlers.applyHotReload(
+          createPluginReloadPlan(),
+          {},
+          { publish, isCurrent: () => true },
+        );
+        const reloadRejected = expect(reloadPromise).rejects.toThrow(
+          "config hot reload cancelled by config supersession or in-process restart",
+        );
+        await vi.advanceTimersByTimeAsync(10);
+        hoisted.activeTaskBlockers.length = 0;
+        await vi.advanceTimersByTimeAsync(500);
+        await commitReached.promise;
+
+        createReloadHandlersForTest();
+        releaseCommit.resolve();
+        await reloadRejected;
+
+        expect(publish).toHaveBeenCalledTimes(abortPoint === "publication edge" ? 1 : 0);
+        expect(handlers.setState).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+        hoisted.activeTaskBlockers.length = 0;
+      }
+    },
+  );
+
   it("does not mark a managed reload applied when restart aborts its deferral", async () => {
     const initialConfig = {
       gateway: { reload: {} },
@@ -5696,7 +5797,11 @@ describe("deferred channel reload abort generation", () => {
       await expect(reloadPromise).resolves.toBeUndefined();
 
       expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
-      expect(channels.start).toHaveBeenCalledWith("whatsapp");
+      expect(channels.start).toHaveBeenCalledWith(
+        "whatsapp",
+        undefined,
+        expect.objectContaining({ lifecycleAbortSignal: expect.anything() }),
+      );
     } finally {
       vi.useRealTimers();
       hoisted.activeTaskBlockers.length = 0;
