@@ -11,11 +11,11 @@ const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
 function settingsKeyForGateway(gatewayUrl: string): string {
-  return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+  return `${SETTINGS_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
 function currentGatewaySelectionKeyForPage(pageUrl: string): string {
-  return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${normalizeGatewayTokenScope(pageUrl)}`;
+  return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${gatewayOriginScope(pageUrl)}`;
 }
 
 type ScopedSessionSelection = {
@@ -30,6 +30,7 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
 };
 
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
   normalizeSidebarEntries,
@@ -49,7 +50,6 @@ import {
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
-import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { normalizePinnedAgentIds } from "./settings-normalizers.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
@@ -263,9 +263,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
  */
 export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
   const { effectiveUrl } = deriveDefaultGatewayUrl();
-  if (
-    normalizeGatewayTokenScope(settings.gatewayUrl) === normalizeGatewayTokenScope(effectiveUrl)
-  ) {
+  if (gatewayOriginScope(settings.gatewayUrl) === gatewayOriginScope(effectiveUrl)) {
     return settings;
   }
   const session = loadGatewaySessionSelection(effectiveUrl);
@@ -303,7 +301,7 @@ function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: stri
   if (!storedUrl) {
     return false;
   }
-  return normalizeGatewayTokenScope(storedUrl) === normalizeGatewayTokenScope(targetUrl);
+  return gatewayOriginScope(storedUrl) === gatewayOriginScope(targetUrl);
 }
 
 function readSettingsForGateway(
@@ -324,7 +322,7 @@ function readSettingsForGateway(
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
-  return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+  return `${TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
 function resolveScopedSessionSelection(
@@ -332,7 +330,7 @@ function resolveScopedSessionSelection(
   parsed: PersistedUiSettings,
   fallback: ScopedSessionSelection,
 ): ScopedSessionSelection {
-  const scope = normalizeGatewayTokenScope(gatewayUrl);
+  const scope = gatewayOriginScope(gatewayUrl);
   const scoped = parsed.sessionsByGateway?.[scope];
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
@@ -385,9 +383,7 @@ export function resolveGatewayTokenForUrlEdit(
   nextGatewayUrl: string,
   currentToken: string,
 ): string {
-  if (
-    normalizeGatewayTokenScope(currentGatewayUrl) === normalizeGatewayTokenScope(nextGatewayUrl)
-  ) {
+  if (gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl)) {
     return currentToken;
   }
   // Gateway tokens stay session-scoped across endpoint edits.
@@ -613,7 +609,7 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
-  const scope = normalizeGatewayTokenScope(next.gatewayUrl);
+  const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
   const chatFollowUpMode = normalizeChatFollowUpModeOverride(next.chatFollowUpMode);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
