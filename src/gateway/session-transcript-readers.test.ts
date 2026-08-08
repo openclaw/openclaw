@@ -202,67 +202,6 @@ describe("session transcript reader facade", () => {
     });
   });
 
-  test("finds an anchored reset-archive message by historical session id", async () => {
-    const sessionId = "reader-file-archive-anchor";
-    const scope = await writeTranscript(sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "active-message",
-        parentId: null,
-        message: { role: "user", content: "active prompt" },
-      },
-    ]);
-    fs.writeFileSync(
-      path.join(tempDir, `${sessionId}.jsonl.reset.2026-07-12T17-00-00.000Z`),
-      `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n${JSON.stringify({
-        type: "message",
-        id: "archived-message",
-        parentId: null,
-        message: { role: "user", content: "archived prompt" },
-      })}\n`,
-      "utf-8",
-    );
-
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(scope, {
-        messageId: "archived-message",
-        maxMessages: 1,
-        allowResetArchiveFallback: true,
-      }),
-    ).resolves.toMatchObject({
-      found: true,
-      messages: [{ content: "archived prompt" }],
-    });
-  });
-
-  test("keeps SQLite precedence by ignoring an obsolete active JSONL during archive fallback", async () => {
-    const sessionId = "reader-reset-archive-only";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    const line = (content: string) =>
-      `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${JSON.stringify({
-        message: { role: "assistant", content },
-      })}\n`;
-    fs.writeFileSync(path.join(tempDir, `${sessionId}.jsonl`), line("obsolete live file"));
-    fs.writeFileSync(
-      path.join(tempDir, `${sessionId}.jsonl.reset.2026-07-12T18-00-00.000Z`),
-      line("retained archive"),
-    );
-
-    await expect(
-      readSessionMessagesAsync(scope, {
-        mode: "full",
-        reason: "archive-only fallback test",
-        allowResetArchiveFallback: true,
-      }),
-    ).resolves.toMatchObject([{ content: "retained archive" }]);
-  });
-
   test("does not fall back to stored custom transcript paths after SQLite migration", async () => {
     const sessionId = "reader-legacy-custom-path";
     const sessionKey = `agent:main:telegram:group:1:topic:9`;

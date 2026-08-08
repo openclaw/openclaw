@@ -33,6 +33,7 @@ type TranscriptIndexDatabase = Pick<
   | "session_transcript_active_events"
   | "session_transcript_fts"
   | "session_transcript_index_state"
+  | "transcript_event_identities"
   | "transcript_events"
 >;
 

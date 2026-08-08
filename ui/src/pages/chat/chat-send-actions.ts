@@ -1,6 +1,11 @@
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatTranscriptRevision,
+} from "../../lib/chat/chat-types.ts";
+import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { loadChatBranches, loadChatHistory, type ChatState } from "./chat-history.ts";
 import {
@@ -11,6 +16,7 @@ import {
 import {
   admitQueuedMessageForSession,
   isVolatileQueuedMessage,
+  readQueuedMessageById,
   updateQueuedMessage,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
@@ -21,11 +27,8 @@ import {
   reconnectSafeQueuedSendState,
   setChatError,
 } from "./chat-send-queue-state.ts";
-import {
-  isActiveLeafChangedError,
-  requestChatSend,
-  resolveDisplayedLeafEntryId,
-} from "./chat-send-request.ts";
+import { isActiveLeafChangedError, requestChatSend } from "./chat-send-request.ts";
+import { resolveDisplayedTranscriptRevision } from "./chat-transcript-revision.ts";
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
@@ -43,7 +46,7 @@ function applyChatSendError(state: ChatState, err: unknown, canApplyError: () =>
   if (canApplyError()) {
     setChatError(state, error);
     if (isActiveLeafChangedError(err)) {
-      void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+      void Promise.all([loadChatHistory(state, { force: true }), loadChatBranches(state)]);
     }
   }
   return error;
@@ -64,18 +67,17 @@ export async function sendChatMessageWithGeneratedRunId(
     setChatError(state, null);
   }
   const runId = options.runId ?? generateUUID();
-  // Direct sends fail closed on the authoritative leaf; restored drains omit it.
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
+  // Direct sends capture the rendered generation and leaf in one synchronous read.
+  // Queued sends pass their durable submit-time revision through this helper.
+  const transcriptRevision =
+    options.transcriptRevision ??
+    (options.expectedRunId ? undefined : resolveDisplayedTranscriptRevision(state));
   try {
     return await requestChatSend(state, {
       message: msg,
       attachments,
       runId,
-      ...(options.expectedLeafEntryId !== undefined
-        ? { expectedLeafEntryId: options.expectedLeafEntryId }
-        : expectedLeafEntryId !== undefined
-          ? { expectedLeafEntryId }
-          : {}),
+      ...(transcriptRevision ? { transcriptRevision } : {}),
       ...(options.expectedRunId ? { expectedRunId: options.expectedRunId } : {}),
       ...(options.queueMode ? { queueMode: options.queueMode } : {}),
     });
@@ -92,6 +94,7 @@ function findStoredOutbox(host: ChatHost, id: string) {
 const resetRetryState = (
   entry: ChatQueueItem,
   sendState: ChatQueueItem["sendState"],
+  transcriptRevision?: ChatTranscriptRevision,
 ): ChatQueueItem => ({
   ...entry,
   sendAttempts: 0,
@@ -99,6 +102,7 @@ const resetRetryState = (
   sendRequestStartedAtMs: undefined,
   sendRunId: entry.sendState === "failed" ? generateUUID() : entry.sendRunId,
   sendState,
+  ...(transcriptRevision ? { transcriptRevision } : {}),
 });
 
 export const steerSendDependencies: SteerSendDependencies = {
@@ -129,7 +133,7 @@ export const flushChatQueueForEvent = (host: ChatHost) =>
 export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
-  const item = host.chatQueue.find((entry) => entry.id === id);
+  let item = host.chatQueue.find((entry) => entry.id === id);
   if (
     !item ||
     item.pendingRunId ||
@@ -159,6 +163,35 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
     return;
   }
+  if (
+    item.sendState === "failed" &&
+    item.transcriptRevision &&
+    !item.localCommandName &&
+    visibleSessionMatches(host, item.sessionKey ?? host.sessionKey, item.agentId)
+  ) {
+    const failedRunId = item.sendRunId;
+    const failedAttempts = item.sendAttempts;
+    // A revision-bound retry is a new user-approved attempt. Wait for authoritative
+    // history before capturing its revision so Retry cannot reuse a rejected token.
+    if (!(await loadChatHistory(host as unknown as ChatState))) {
+      return;
+    }
+    const refreshed = readQueuedMessageById(host, id);
+    if (
+      !refreshed ||
+      refreshed.sendState !== "failed" ||
+      refreshed.sendRunId !== failedRunId ||
+      refreshed.sendAttempts !== failedAttempts
+    ) {
+      return;
+    }
+    item = refreshed;
+  }
+  const transcriptRevision =
+    !item.localCommandName &&
+    visibleSessionMatches(host, item.sessionKey ?? host.sessionKey, item.agentId)
+      ? resolveDisplayedTranscriptRevision(host as unknown as ChatState)
+      : undefined;
   let outbox = findStoredOutbox(host, item.id);
   if (!outbox) {
     const wasVolatile = isVolatileQueuedMessage(host, item.id);
@@ -171,7 +204,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
         canSendVolatileQueueItem(host, item)
       ) {
         const retry = updateVolatileQueuedMessage(host, id, (entry) =>
-          resetRetryState(entry, undefined),
+          resetRetryState(entry, undefined, transcriptRevision),
         );
         if (!retry) {
           setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
@@ -188,7 +221,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     }
   }
   const retry = updateQueuedMessage(host, id, (entry) =>
-    resetRetryState(entry, reconnectSafeQueuedSendState(host)),
+    resetRetryState(entry, reconnectSafeQueuedSendState(host), transcriptRevision),
   );
   if (!retry) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);

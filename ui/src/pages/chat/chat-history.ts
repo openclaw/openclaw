@@ -274,7 +274,7 @@ export type ChatState = {
   chatHistoryPagination?: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
-  /** Active leaf of the history snapshot currently rendered by this pane. */
+  /** Rendered branch precondition: null means authoritative empty; undefined means unknown. */
   chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
@@ -931,6 +931,7 @@ type InFlightChatHistoryRequest = {
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
+  force?: boolean;
   startup?: boolean;
 };
 
@@ -1019,6 +1020,7 @@ function requestSharedChatHistory(
   requestAgentId: string | undefined,
   consumerOwner: object,
   isCurrentConsumer: () => boolean,
+  forceNewRequest: boolean,
 ): Promise<ChatHistoryResult> {
   let registry = sharedChatHistoryRequests.get(client);
   if (!registry) {
@@ -1035,7 +1037,7 @@ function requestSharedChatHistory(
     isCurrent: isCurrentConsumer,
     retryDeadlineMs: Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS,
   };
-  if (!shared || existingOwner) {
+  if (!shared || existingOwner || forceNewRequest) {
     const consumers = new Set([consumer]);
     const shouldContinue = () => [...consumers].some((entry) => entry.isCurrent());
     // A pane joining older shared work still owns a full retry window. Otherwise
@@ -1164,32 +1166,6 @@ function ownsClearChatView(state: ClearChatHistoryState, owner: ClearChatViewOwn
   );
 }
 
-function clearPostResetBranchPrecondition(
-  state: ClearChatHistoryState,
-  target: {
-    client: NonNullable<ClearChatHistoryState["client"]>;
-    connectionEpoch: number;
-    sessionKey: string;
-    agentId?: string;
-  },
-  history: ChatHistoryResult | undefined,
-) {
-  if (
-    !history ||
-    !Object.hasOwn(history.sessionInfo ?? {}, "activeLeafEntryId") ||
-    history.sessionInfo?.activeLeafEntryId !== null ||
-    state.client !== target.client ||
-    state.connectionEpoch !== target.connectionEpoch ||
-    !state.connected ||
-    !visibleSessionMatches(state, target.sessionKey, target.agentId)
-  ) {
-    return;
-  }
-  // Reset can leave old branch metadata visible after the transcript becomes
-  // empty. The first post-reset send must establish the new branch itself.
-  delete state.chatDisplayedLeafEntryId;
-}
-
 export async function clearChatHistory(
   state: ClearChatHistoryState,
 ): Promise<ClearChatHistoryResult> {
@@ -1241,13 +1217,7 @@ export async function clearChatHistory(
         // ambiguous reset may already have destroyed. Clearing first also
         // prevents history loading from preserving a pre-reset optimistic tail.
         resetChatHistoryProjection(state, agentParams.agentId);
-        const history = await loadChatHistory(state);
-        historyRefreshed = Boolean(history);
-        clearPostResetBranchPrecondition(
-          state,
-          { client, connectionEpoch, sessionKey, agentId: agentParams.agentId },
-          history,
-        );
+        historyRefreshed = Boolean(await loadChatHistory(state));
       }
       if (ownsClearChatView(state, feedbackOwner)) {
         setChatError(
@@ -1285,12 +1255,7 @@ export async function clearChatHistory(
     clearToolStream: true,
     clearRunStatus: !hadActiveRun,
   });
-  const history = await loadChatHistory(state);
-  clearPostResetBranchPrecondition(
-    state,
-    { client, connectionEpoch, sessionKey, agentId: agentParams.agentId },
-    history,
-  );
+  await loadChatHistory(state);
   if (ownsClearChatView(state, originalViewOwner)) {
     scheduleChatScroll(state);
   }
@@ -1442,9 +1407,10 @@ export async function loadChatHistory(
   const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
   const requests = getChatHistoryPaneRequests(state);
   const inFlight = requests.inFlightHistory;
-  // Live events replace the rendered array while their snapshot is pending;
-  // only stable session and connection ownership may start another request.
+  // Live events normally share the rendered pane's pending snapshot. A server
+  // rejection can force a post-rejection request that fences the older result.
   if (
+    opts.force !== true &&
     inFlight?.key === requestKey &&
     inFlight.client === client &&
     inFlight.connectionEpoch === connectionEpoch
@@ -1465,6 +1431,7 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     method,
+    opts.force === true,
   ).finally(() => {
     if (requests.inFlightHistory?.promise === promise) {
       requests.inFlightHistory = undefined;
@@ -1544,6 +1511,7 @@ async function loadChatHistoryUncached(
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
+  forceNewRequest: boolean,
 ): Promise<ChatHistoryResult | undefined> {
   const ownership = beginChatHistoryRequest(
     state,
@@ -1586,6 +1554,7 @@ async function loadChatHistoryUncached(
       requestAgentId,
       state as object,
       () => shouldApplyChatHistoryResult(state, ownership),
+      forceNewRequest,
     );
     if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {

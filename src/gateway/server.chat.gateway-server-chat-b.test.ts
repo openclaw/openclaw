@@ -20,6 +20,7 @@ import {
   patchSessionEntry,
   replaceTranscriptEvents,
   replaceSessionEntry,
+  switchSessionBranch,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
@@ -211,11 +212,27 @@ async function writeMainSessionTranscript(
   }
   // These fixtures always seed a complete fresh transcript. Replace it in one
   // transaction so large history cases do not pay one SQLite commit per event.
+  // Give message rows stable identities so history fixtures expose a valid branch token;
+  // identity-gap coverage deletes the indexed identity explicitly.
   const transcriptEvents = events
     .filter((event) => typeof event !== "string" || event.trim())
-    .map((event) => (typeof event === "string" ? JSON.parse(event) : event)) as Parameters<
-    typeof replaceTranscriptEvents
-  >[1];
+    .map((event, index) => {
+      const parsed = typeof event === "string" ? JSON.parse(event) : event;
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        Object.hasOwn(parsed, "message")
+      ) {
+        const record = parsed as Record<string, unknown>;
+        if (!(typeof record.id === "string" && record.id.trim())) {
+          const identified = Object.assign({}, record);
+          identified.id = `gateway-chat-fixture-${index}`;
+          return identified;
+        }
+      }
+      return parsed;
+    }) as Parameters<typeof replaceTranscriptEvents>[1];
   await replaceTranscriptEvents(
     {
       agentId: opts?.agentId ?? "main",
@@ -2354,6 +2371,113 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       releaseMutation.resolve();
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send rejects a stale rendered generation after branch switch while admission waits", async () => {
+    const { sessionDir, storePath } = openDirectChatSession();
+    const performBranchSwitch = createDeferred();
+    const sourceSessionId = "sess-before-branch-switch";
+    let mutation: Promise<void> | undefined;
+    let switchedSessionId: string | undefined;
+    try {
+      await writeStoredMainSession({ sessionId: sourceSessionId });
+      const transcriptScope = {
+        agentId: "main",
+        sessionId: sourceSessionId,
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "displayed-leaf",
+        message: { role: "assistant", content: "displayed" },
+        now: 1,
+        parentId: null,
+      });
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "inactive-leaf",
+        message: { role: "assistant", content: "inactive" },
+        now: 2,
+        parentId: "displayed-leaf",
+      });
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "background-leaf",
+        message: { role: "assistant", content: "NO_REPLY" },
+        now: 3,
+        parentId: "displayed-leaf",
+      });
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      });
+
+      const mutationStarted = createDeferred();
+      mutation = runExclusiveSessionLifecycleMutation({
+        scope: storePath,
+        identities: ["agent:main:main", sourceSessionId],
+        run: async () => {
+          mutationStarted.resolve();
+          await performBranchSwitch.promise;
+          const switched = await switchSessionBranch({
+            agentId: "main",
+            leafEntryId: "inactive-leaf",
+            sessionKey: "agent:main:main",
+            storePath,
+          });
+          if (switched.status !== "created") {
+            throw new Error(`expected branch switch, got ${switched.status}`);
+          }
+          switchedSessionId = switched.entry.sessionId;
+        },
+      });
+      await mutationStarted.promise;
+
+      const sendResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext();
+      const runId = "idem-branch-switch-during-admission";
+      const send = Promise.resolve(
+        callDirectChat("chat.send", {
+          id: "send",
+          params: {
+            sessionKey: "main",
+            sessionId: sourceSessionId,
+            expectedLeafEntryId: "displayed-leaf",
+            message: "do not enter the switched branch",
+            idempotencyKey: runId,
+          },
+          respond: ((ok, payload, error) => {
+            sendResponses.push({ ok, payload, error });
+          }) as RespondFn,
+          context,
+        }),
+      );
+      await waitForFast(() => {
+        expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      performBranchSwitch.resolve();
+      await mutation;
+      await send;
+
+      expect(switchedSessionId).toBeDefined();
+      expect(switchedSessionId).not.toBe(sourceSessionId);
+      expect(sendResponses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+          error: expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: expect.objectContaining({ reason: "active-leaf-changed" }),
+          }),
+        },
+      ]);
+      expect(context.addChatRun).not.toHaveBeenCalled();
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      performBranchSwitch.resolve();
+      await Promise.allSettled(mutation ? [mutation] : []);
       resetDirectChatSession();
     }
   });
@@ -5437,6 +5561,63 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.message.get keeps archive visibility checks on the anchored source", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionId = "sess-archive-source-stable";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      const sessionStartedAt = Date.now() - 1_000;
+      await writeSessionStore({
+        entries: {
+          main: { sessionId, updatedAt: Date.now(), sessionStartedAt },
+        },
+      });
+      await writeMainSessionTranscript(
+        [
+          createTextTranscriptEvent("user", "pre-reset", {
+            id: "pre-reset-active",
+            parentId: null,
+          }),
+          JSON.stringify({
+            type: "reset",
+            id: "active-reset-only",
+            parentId: "pre-reset-active",
+            timestamp: new Date(sessionStartedAt).toISOString(),
+            reason: "new",
+          }),
+        ],
+        sessionId,
+      );
+      await fs.writeFile(
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
+        [
+          JSON.stringify({ type: "session", version: 1, id: sessionId }),
+          JSON.stringify(
+            createTextTranscriptEvent("assistant", "archive source-stable", {
+              id: "msg-archive-source-stable",
+              timestamp: sessionStartedAt + 500,
+            }),
+          ),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const history = await rpcReq<{
+        messages?: unknown[];
+        sessionInfo?: { activeLeafEntryId?: string | null };
+      }>(ws, "chat.history", { sessionKey: "main", limit: 100 });
+      expect(history.ok).toBe(true);
+      expect(history.payload?.messages).toEqual([]);
+      expect(history.payload?.sessionInfo?.activeLeafEntryId).toBe("active-reset-only");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-archive-source-stable",
+      });
+      expect(full.ok).toBe(true);
+      expect(JSON.stringify(full.message)).toContain("archive source-stable");
+    });
+  });
+
   test("chat.message.get accepts the selected agent for global sessions", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
@@ -5649,6 +5830,49 @@ describe("gateway server chat", () => {
       );
       expect(ready.ok).toBe(true);
       expect(JSON.stringify(ready.payload?.messages)).toContain("ready after rebuild");
+    });
+  });
+
+  test("chat.history returns retryable unavailable when the branch token cannot be identified", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript([
+        createTextTranscriptEvent("user", "identified", {
+          id: "history-identified",
+          parentId: null,
+        }),
+        createTextTranscriptEvent("assistant", "unidentified tail", {
+          id: "history-unidentified-tail",
+          parentId: "history-identified",
+        }),
+      ]);
+      openOpenClawAgentDatabase({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      })
+        .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?")
+        .run("sess-main", "history-unidentified-tail");
+
+      for (const request of [
+        { limit: 1 },
+        { messageId: "history-identified" },
+        { messageId: "history-unidentified-tail" },
+        { messageId: "history-missing" },
+      ]) {
+        const unavailable = await rpcReq(ws, "chat.history", {
+          sessionKey: "main",
+          ...request,
+        });
+
+        expect(unavailable.ok).toBe(false);
+        expect(unavailable.error).toMatchObject({
+          code: "UNAVAILABLE",
+          message:
+            "session branch token is unavailable; retry shortly, then reset the session if it persists",
+          details: { method: "chat.history", reason: "active-leaf-unavailable" },
+          retryable: true,
+        });
+      }
     });
   });
 

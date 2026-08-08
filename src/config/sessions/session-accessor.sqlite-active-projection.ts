@@ -23,8 +23,9 @@ type ActiveTranscriptDatabase = Pick<
   | "transcript_events"
 >;
 
-type CurrentTranscriptProjection = {
+export type CurrentTranscriptProjection = {
   database: OpenClawAgentDatabase;
+  hasTranscriptEvents: boolean;
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
 };
@@ -95,7 +96,12 @@ export function withCurrentProjectionSnapshot<T>(
       if (!snapshot) {
         return {
           kind: "value" as const,
-          value: read({ database, resolved, state: EMPTY_PROJECTION_STATE }),
+          value: read({
+            database,
+            hasTranscriptEvents: false,
+            resolved,
+            state: EMPTY_PROJECTION_STATE,
+          }),
         };
       }
       if (
@@ -105,7 +111,7 @@ export function withCurrentProjectionSnapshot<T>(
       ) {
         return {
           kind: "value" as const,
-          value: read({ database, resolved, state: snapshot.state }),
+          value: read({ database, hasTranscriptEvents: true, resolved, state: snapshot.state }),
         };
       }
       return { kind: "unavailable" as const };

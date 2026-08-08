@@ -138,8 +138,9 @@ export const ChatSendParamsSchema = closedObject({
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
   suppressCommandInterpretation: Type.Optional(Type.Boolean()),
-  // Client's believed active-branch leaf entry id. Legacy targetless steering
-  // requires this immutable fence and may reject; null means an authoritative empty transcript.
+  // Client's displayed logical branch/CAS token; null means authoritative empty.
+  // With a matching sessionId, ordinary same-path ancestors remain valid only
+  // within the reset epoch. Legacy targetless steering binds it to one exact owner.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   // Optional for wire compatibility. Modern/durable steer clients should always
   // send this exact run precondition so a retry cannot move to a successor run.

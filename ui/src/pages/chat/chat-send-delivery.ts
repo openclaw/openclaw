@@ -308,8 +308,8 @@ async function sendQueuedChatMessage(
           runId,
           sessionKey,
           agentId: prepared.agentId,
-          ...(options?.expectedLeafEntryId !== undefined
-            ? { expectedLeafEntryId: options.expectedLeafEntryId }
+          ...(prepared.transcriptRevision
+            ? { transcriptRevision: prepared.transcriptRevision }
             : {}),
           ...(prepared.replyToId ? { replyToId: prepared.replyToId } : {}),
         });
@@ -545,7 +545,7 @@ async function sendQueuedChatMessage(
       restoreComposer(host, options ?? {});
       if (activeLeafChanged) {
         void Promise.all([
-          loadChatHistory(host as unknown as ChatState),
+          loadChatHistory(host as unknown as ChatState, { force: true }),
           loadChatBranches(host as unknown as ChatState),
         ]);
       }

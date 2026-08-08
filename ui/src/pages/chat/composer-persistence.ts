@@ -160,7 +160,11 @@ function queueItemVersionMatches(
     stored.sendAttempts === canonicalExpected.sendAttempts &&
     stored.sendState === canonicalExpected.sendState &&
     stored.agentId === canonicalExpected.agentId &&
-    stored.sessionKey === canonicalExpected.sessionKey,
+    stored.sessionKey === canonicalExpected.sessionKey &&
+    stored.steerTargetRunId === canonicalExpected.steerTargetRunId &&
+    stored.transcriptRevision?.sessionId === canonicalExpected.transcriptRevision?.sessionId &&
+    stored.transcriptRevision?.expectedLeafEntryId ===
+      canonicalExpected.transcriptRevision?.expectedLeafEntryId,
   );
 }
 

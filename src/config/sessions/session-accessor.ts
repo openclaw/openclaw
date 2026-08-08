@@ -223,6 +223,8 @@ export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,
 } from "./session-accessor.transcript-turn.js";
+export { readSessionTranscriptGuardState } from "./session-accessor.sqlite-active-path.js";
+export type { SessionTranscriptGuardState } from "./session-accessor.sqlite-reset-window.js";
 export {
   readClosedTranscriptTurn,
   type ClosedTranscriptTurnReadResult,
@@ -239,6 +241,7 @@ export {
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
+  readSessionTranscriptMessageEventSnapshot,
   readSessionTranscriptMessageEvents,
   readSessionTranscriptVisibleMessageDelta,
   SessionTranscriptProjectionUnavailableError,

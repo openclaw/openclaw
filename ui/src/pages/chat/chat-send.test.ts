@@ -3480,8 +3480,9 @@ describe("handleSendChat", () => {
       },
       chatMessage: "tighten the plan",
       chatRunId: "run-1",
-      chatDisplayedLeafEntryId: "leaf-active",
+      chatDisplayedLeafEntryId: "leaf-before-steer",
       chatStream: "Working...",
+      currentSessionId: "session-before-steer",
       sessionKey: "agent:main:main",
       settings: { chatFollowUpMode: "steer" },
     });
@@ -3496,6 +3497,9 @@ describe("handleSendChat", () => {
           message: "tighten the plan",
           deliver: false,
           queueMode: "steer",
+          expectedLeafEntryId: "leaf-before-steer",
+          expectedRunId: "run-1",
+          sessionId: "session-before-steer",
         }),
       ),
     );
@@ -4442,7 +4446,7 @@ describe("handleSendChat", () => {
     command.resolve({
       action: "refresh",
       content: "Model set to `gpt-5-mini`.",
-      pendingCurrentRun: true,
+      pendingCurrentRunId: "stale-command-run",
       sessionPatch: {
         modelOverride: { kind: "qualified", value: "openai/gpt-5-mini" },
       },
@@ -7061,6 +7065,7 @@ describe("handleSendChat", () => {
         },
       },
       chatDisplayedLeafEntryId: "leaf-rendered",
+      currentSessionId: "session-rendered",
       chatBranches: [],
       chatBranchesSessionKey: "agent:main",
       chatBranchesConnectionEpoch: 0,
@@ -7078,7 +7083,77 @@ describe("handleSendChat", () => {
 
     expect(
       findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "foreground send"),
-    ).toMatchObject({ expectedLeafEntryId: "leaf-rendered" });
+    ).toMatchObject({
+      expectedLeafEntryId: "leaf-rendered",
+      sessionId: "session-rendered",
+    });
+  });
+
+  it("keeps the rendered session and leaf paired across an async settings wait", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "settings-delayed send payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-switch",
+      chatMessage: "stay on the rendered branch",
+      currentSessionId: "session-before-switch",
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+    });
+
+    const send = handleSendChat(host);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    expect(host.chatQueue[0]?.transcriptRevision).toEqual({
+      expectedLeafEntryId: "leaf-before-switch",
+      sessionId: "session-before-switch",
+    });
+
+    host.currentSessionId = "session-after-switch";
+    settingsPatch.resolve(true);
+    await send;
+
+    expect(
+      findRequestPayload(
+        host.request as unknown as MockCallSource,
+        "chat.send",
+        "settings-delayed send",
+      ),
+    ).toMatchObject({
+      expectedLeafEntryId: "leaf-before-switch",
+      sessionId: "session-before-switch",
+    });
+  });
+
+  it("does not pair a captured leaf with a session discovered after submit", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "generation-delayed send payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-session",
+      chatMessage: "keep the leaf without borrowing a generation",
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+    });
+
+    const send = handleSendChat(host);
+    expect(await raceWithMacrotask(send)).toBe("pending");
+    host.currentSessionId = "session-discovered-later";
+    settingsPatch.resolve(true);
+    await send;
+
+    const payload = findRequestPayload(
+      host.request as unknown as MockCallSource,
+      "chat.send",
+      "generation-delayed send",
+    );
+    expect(payload.expectedLeafEntryId).toBe("leaf-before-session");
+    expect(payload).not.toHaveProperty("sessionId");
   });
 
   it("attaches an authoritative empty displayed leaf to a foreground send", async () => {
@@ -7100,7 +7175,7 @@ describe("handleSendChat", () => {
     ).toHaveProperty("expectedLeafEntryId", null);
   });
 
-  it("omits the active leaf when draining a restored outbox", async () => {
+  it("retains the rendered revision when draining a restored outbox", async () => {
     const host = makeChatHost({
       client: null,
       connected: false,
@@ -7110,8 +7185,13 @@ describe("handleSendChat", () => {
       ],
       chatBranchesSessionKey: "agent:main",
       chatMessage: "send after reconnect",
+      currentSessionId: "session-before-reconnect",
     });
     await handleSendChat(host);
+    expect(host.chatQueue[0]?.transcriptRevision).toEqual({
+      expectedLeafEntryId: "leaf-current",
+      sessionId: "session-before-reconnect",
+    });
 
     const request = makeRequestMock({
       "chat.history": idleChatHistory(),
@@ -7122,12 +7202,53 @@ describe("handleSendChat", () => {
     });
     host.client = clientWithRequest(request);
     host.connected = true;
+    host.currentSessionId = "session-after-branch-switch";
 
     await retryReconnectableQueuedChatSends(host);
 
     expect(
       findRequestPayload(request as unknown as MockCallSource, "chat.send", "restored send"),
-    ).not.toHaveProperty("expectedLeafEntryId");
+    ).toMatchObject({
+      expectedLeafEntryId: "leaf-current",
+      sessionId: "session-before-reconnect",
+    });
+  });
+
+  it("keeps legacy restored outbox rows without a branch precondition", async () => {
+    const request = makeRequestMock({
+      "chat.history": idleChatHistory(),
+      "chat.send": (params: unknown) => {
+        const payload = requireRecord(params, "legacy restored send payload");
+        return { runId: payload.idempotencyKey, status: "ok" };
+      },
+    });
+    const host = makeChatHost({
+      client: clientWithRequest(request),
+      connected: true,
+      currentSessionId: "session-current",
+      chatQueue: [
+        {
+          id: "legacy-restored",
+          text: "legacy queued message",
+          createdAt: 1,
+          sendAttempts: 0,
+          sendRunId: "legacy-restored-run",
+          sendState: "waiting-reconnect",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "legacy restored send",
+    );
+    expect(payload).not.toHaveProperty("expectedLeafEntryId");
+    expect(payload.sessionId).toBe("session-current");
   });
 
   it("preserves a foreground leaf past an earlier outbox row", async () => {
@@ -7168,17 +7289,50 @@ describe("handleSendChat", () => {
     expect(sends[1]).toMatchObject({ expectedLeafEntryId: "leaf-before-queue" });
   });
 
-  it("parks an active-leaf rejection, restores the draft, and refreshes branch state", async () => {
+  it("waits for authoritative history before retrying an active-leaf rejection", async () => {
+    const staleHistory = createDeferred<unknown>();
+    const refreshedHistory = createDeferred<unknown>();
+    const preRejectionHistory = {
+      messages: [],
+      sessionInfo: row("agent:main", {
+        activeLeafEntryId: "leaf-from-pre-send-load",
+        hasActiveRun: false,
+        sessionId: "session-from-pre-send-load",
+        status: "done",
+      }),
+    };
+    const authoritativeHistory = {
+      messages: [],
+      sessionInfo: row("agent:main", {
+        activeLeafEntryId: "leaf-after-switch",
+        hasActiveRun: false,
+        sessionId: "session-after-switch",
+        status: "done",
+      }),
+    };
+    let historyRequests = 0;
+    let sendAttempts = 0;
     const host = makeChatHost({
       requestHandlers: {
-        "chat.send": () => {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "active branch changed; review and resend",
-            details: { reason: "active-leaf-changed" },
-          });
+        "chat.send": (params: unknown) => {
+          sendAttempts += 1;
+          if (sendAttempts === 1) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "active branch changed; review and resend",
+              details: { reason: "active-leaf-changed" },
+            });
+          }
+          const payload = requireRecord(params, "retried branch send payload");
+          return { runId: payload.idempotencyKey, status: "started" };
         },
-        "chat.history": idleChatHistory(),
+        "chat.history": () => {
+          historyRequests += 1;
+          if (historyRequests === 1) {
+            return staleHistory.promise;
+          }
+          return historyRequests === 2 ? refreshedHistory.promise : authoritativeHistory;
+        },
         "sessions.branches.list": { branches: [] },
       },
       chatDisplayedLeafEntryId: "leaf-stale",
@@ -7187,14 +7341,14 @@ describe("handleSendChat", () => {
       ],
       chatBranchesSessionKey: "agent:main",
       chatMessage: "stale branch prompt",
+      currentSessionId: "session-before-switch",
     });
 
+    const staleLoad = loadChatHistory(host as unknown as Parameters<typeof loadChatHistory>[0]);
+    await waitForFast(() => expect(historyRequests).toBe(1));
     await handleSendChat(host);
     await waitForFast(() => {
-      expect(host.request).toHaveBeenCalledWith("chat.history", {
-        sessionKey: "agent:main",
-        limit: 100,
-      });
+      expect(historyRequests).toBe(2);
       expect(host.request).toHaveBeenCalledWith("sessions.branches.list", {
         sessionKey: "agent:main",
       });
@@ -7208,6 +7362,38 @@ describe("handleSendChat", () => {
       }),
     ]);
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+
+    const retry = retryQueuedChatMessage(host, host.chatQueue[0]!.id);
+    expect(await raceWithMacrotask(retry)).toBe("pending");
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatQueue[0]?.transcriptRevision).toEqual({
+      expectedLeafEntryId: "leaf-stale",
+      sessionId: "session-before-switch",
+    });
+
+    staleHistory.resolve(preRejectionHistory);
+    await staleLoad;
+    expect(await raceWithMacrotask(retry)).toBe("pending");
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    expect(host.chatDisplayedLeafEntryId).toBe("leaf-stale");
+    expect(host.currentSessionId).toBe("session-before-switch");
+
+    refreshedHistory.resolve(authoritativeHistory);
+    await retry;
+
+    const sends = host.request.mock.calls
+      .filter(([method]) => method === "chat.send")
+      .map(([, params]) => requireRecord(params, "branch send payload"));
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toMatchObject({
+      expectedLeafEntryId: "leaf-after-switch",
+      sessionId: "session-after-switch",
+    });
+    expect(historyRequests).toBe(3);
+    expect(listStoredChatOutboxes(host)[0]?.queue[0]?.transcriptRevision).toEqual({
+      expectedLeafEntryId: "leaf-after-switch",
+      sessionId: "session-after-switch",
+    });
   });
 
   it("marks validation failures visible and restores the composer", async () => {
@@ -7232,6 +7418,98 @@ describe("handleSendChat", () => {
     });
   });
 
+  it("rebinds a failed pre-clear retry to the authoritative reset boundary", async () => {
+    let historyRequests = 0;
+    let sendAttempts = 0;
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          sendAttempts += 1;
+          if (sendAttempts === 1) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "active branch changed; review and resend",
+              details: { reason: "active-leaf-changed" },
+            });
+          }
+          const payload = requireRecord(params, "post-clear retry payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+        "chat.history": () => {
+          historyRequests += 1;
+          const cleared = historyRequests > 1;
+          return {
+            messages: [],
+            sessionInfo: row("agent:main", {
+              activeLeafEntryId: cleared ? "reset-after-clear" : "leaf-before-clear",
+              sessionId: cleared ? "session-after-clear" : "session-before-clear",
+            }),
+          };
+        },
+        "sessions.branches.list": { branches: [] },
+        "sessions.reset": { ok: true },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-clear",
+      chatMessage: "retry after clear",
+      currentSessionId: "session-before-clear",
+    });
+
+    await handleSendChat(host);
+    await waitForFast(() => expect(historyRequests).toBe(1));
+    await waitForFast(() => expect(host.chatLoading).toBe(false));
+    const failedId = host.chatQueue[0]?.id ?? "missing-failed-pre-clear-send";
+    expect(host.chatQueue[0]).toMatchObject({
+      id: failedId,
+      sendState: "failed",
+      transcriptRevision: {
+        expectedLeafEntryId: "leaf-before-clear",
+        sessionId: "session-before-clear",
+      },
+    });
+
+    host.chatMessage = "/clear";
+    await handleSendChat(host);
+
+    expect(historyRequests).toBe(2);
+    expect(host.chatDisplayedLeafEntryId).toBe("reset-after-clear");
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({ id: failedId, sendState: "failed" }),
+    ]);
+
+    await retryQueuedChatMessage(host, failedId);
+
+    // Manual retry refreshes the displayed revision, then the durable drain
+    // performs its separate authoritative delivery reconciliation.
+    expect(historyRequests).toBe(4);
+    expect(host.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "agent:main",
+      limit: 100,
+    });
+    expect(host.request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "agent:main",
+      limit: 1000,
+    });
+    const sends = host.request.mock.calls
+      .filter(([method]) => method === "chat.send")
+      .map(([, params]) => requireRecord(params, "post-clear send payload"));
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toMatchObject({
+      expectedLeafEntryId: "reset-after-clear",
+      sessionId: "session-after-clear",
+    });
+    expect(sends[1]).not.toMatchObject({
+      expectedLeafEntryId: "leaf-before-clear",
+      sessionId: "session-before-clear",
+    });
+    expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+      id: failedId,
+      transcriptRevision: {
+        expectedLeafEntryId: "reset-after-clear",
+        sessionId: "session-after-clear",
+      },
+    });
+  });
+
   it("clears chat state when /clear resets chat history", async () => {
     const host = makeChatHost({
       requestHandlers: {
@@ -7239,7 +7517,10 @@ describe("handleSendChat", () => {
         "chat.history": {
           messages: [],
           thinkingLevel: null,
-          sessionInfo: { activeLeafEntryId: null },
+          sessionInfo: {
+            activeLeafEntryId: "reset-after-clear",
+            sessionId: "session-after-clear",
+          },
         },
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "post-clear send payload");
@@ -7260,14 +7541,17 @@ describe("handleSendChat", () => {
     expect(host.chatRunError).toBeNull();
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
-    expect(host.chatDisplayedLeafEntryId).toBeUndefined();
+    expect(host.chatDisplayedLeafEntryId).toBe("reset-after-clear");
 
     host.chatMessage = "after clear";
     await handleSendChat(host);
 
     expect(
       findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "post-clear send"),
-    ).not.toHaveProperty("expectedLeafEntryId");
+    ).toMatchObject({
+      expectedLeafEntryId: "reset-after-clear",
+      sessionId: "session-after-clear",
+    });
   });
 
   it("preserves the replacement route leaf when post-clear history resolves late", async () => {
@@ -7636,7 +7920,7 @@ describe("handleSendChat", () => {
           "chat.send": { status: "started", runId: "run-1", messageSeq: 2 },
         }),
       ),
-      chatRunId: "run-1",
+      chatRunId: "stale-pane-run",
       chatMessage: "/steer tighten the plan",
       sessionKey: "agent:main:main",
       sessionsResult: createSessionsResult([
@@ -7655,10 +7939,20 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.text).toBe("/steer tighten the plan");
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+    expect(host.chatQueue[0]?.steerTargetRunId).toBe("run-1");
+    expect(host.chatRunId).toBe("stale-pane-run");
   });
 
   it("steers a queued message into the active run without replacing run tracking", async () => {
-    const original = { id: "queued-1", text: "tighten the plan", createdAt: 1 };
+    const original = {
+      id: "queued-1",
+      text: "tighten the plan",
+      createdAt: 1,
+      transcriptRevision: {
+        expectedLeafEntryId: "leaf-queued",
+        sessionId: "session-queued",
+      },
+    };
     const host = makeChatHost({
       requestHandlers: {
         "chat.send": { status: "started", runId: "steer-run" },
@@ -7667,6 +7961,7 @@ describe("handleSendChat", () => {
       chatDisplayedLeafEntryId: "leaf-active",
       chatStream: "Working...",
       chatQueue: [original],
+      currentSessionId: "session-active",
       sessionKey: "agent:main:main",
     });
     expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
@@ -7686,6 +7981,7 @@ describe("handleSendChat", () => {
       message: "tighten the plan",
       deliver: false,
       queueMode: "steer",
+      sessionId: "session-active",
       expectedRunId: "run-1",
       expectedLeafEntryId: "leaf-active",
       idempotencyKey,
@@ -7698,6 +7994,7 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.kind).toBe("steered");
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
     expect(host.chatQueue[0]?.sendRunId).toBe(idempotencyKey);
+    expect(host.chatQueue[0]?.steerTargetRunId).toBe("run-1");
   });
 
   it("steers a queued message when only the session row reports an active run", async () => {
@@ -7713,6 +8010,7 @@ describe("handleSendChat", () => {
           hasActiveRun: true,
           activeRunIds: ["active-run"],
           activeLeafEntryId: "leaf-active",
+          sessionId: "session-active",
           status: "running",
         }),
       ]),
@@ -7731,6 +8029,8 @@ describe("handleSendChat", () => {
       message: "tighten the plan",
       deliver: false,
       queueMode: "steer",
+      sessionId: "session-active",
+      expectedLeafEntryId: "leaf-active",
       expectedRunId: "active-run",
     });
     expect(host.chatRunId).toBeNull();
@@ -7739,6 +8039,7 @@ describe("handleSendChat", () => {
         kind: "steered",
         pendingRunId: "steer-run",
         sendRunId: payload.idempotencyKey,
+        steerTargetRunId: "active-run",
         text: original.text,
       }),
     ]);
@@ -8582,14 +8883,23 @@ describe("handleSendChat", () => {
       const steering = steerQueuedChatMessage(host, original.id);
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       expect(host.chatQueue).toHaveLength(1);
-      expect(host.chatQueue[0]?.pendingRunId).toBe("active-run");
+      expect(host.chatQueue[0]).toMatchObject({
+        pendingRunId: "active-run",
+        steerTargetRunId: "active-run",
+      });
       expect(peer.chatQueue).toHaveLength(1);
-      expect(peer.chatQueue[0]?.sendState).toBe("steering");
+      expect(peer.chatQueue[0]).toMatchObject({
+        sendState: "steering",
+        steerTargetRunId: "active-run",
+      });
       await steerQueuedChatMessage(peer, original.id);
       expect(request).toHaveBeenCalledTimes(1);
       stopLatePeer = subscribeChatOutboxProjection(latePeer);
       expect(latePeer.chatQueue).toHaveLength(1);
-      expect(latePeer.chatQueue[0]?.sendState).toBe("steering");
+      expect(latePeer.chatQueue[0]).toMatchObject({
+        sendState: "steering",
+        steerTargetRunId: "active-run",
+      });
       await retryQueuedChatMessage(peer, original.id);
       expect(request).toHaveBeenCalledTimes(1);
       expect(loadChatComposerSnapshot(host, host.sessionKey)?.queue[0]?.sendState).toBe(
@@ -8655,6 +8965,10 @@ describe("handleSendChat", () => {
       sendState: "waiting-idle" as const,
       sessionKey: "agent:main:main",
       agentId: "main",
+      transcriptRevision: {
+        expectedLeafEntryId: "leaf-before-steer",
+        sessionId: "session-before-steer",
+      },
     };
     const host = makeChatHost({
       requestHandlers: {
@@ -8673,6 +8987,7 @@ describe("handleSendChat", () => {
       chatRunId: "active-run",
       chatDisplayedLeafEntryId: "leaf-active",
       chatQueue: [original],
+      currentSessionId: "session-active",
       sessionKey: original.sessionKey,
     });
     expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
@@ -8686,8 +9001,10 @@ describe("handleSendChat", () => {
         sendError: "no active turn to steer",
         sendRunId: original.sendRunId,
         sendState: "failed",
+        steerTargetRunId: "active-run",
       }),
     ]);
+    expect(host.chatQueue[0]?.transcriptRevision).toBeUndefined();
     expect(host.lastError).toBe("no active turn to steer");
 
     host.chatRunId = null;
@@ -8711,6 +9028,10 @@ describe("handleSendChat", () => {
     expect(payloads.map((payload) => payload.expectedLeafEntryId)).toEqual([
       "leaf-active",
       "leaf-advanced-during-tool-work",
+    ]);
+    expect(payloads.map((payload) => payload.sessionId)).toEqual([
+      "session-active",
+      "session-active",
     ]);
   });
 
@@ -8754,6 +9075,10 @@ describe("handleSendChat", () => {
       sendState: "failed" as const,
       steerTargetRunId: "active-run",
       sessionKey: "agent:main:main",
+      transcriptRevision: {
+        expectedLeafEntryId: "stale-queued-leaf",
+        sessionId: "stale-queued-session",
+      },
     };
     const host = makeChatHost({
       requestHandlers: {
@@ -8771,6 +9096,7 @@ describe("handleSendChat", () => {
           activeLeafEntryId: "leaf-advanced-during-tool-work",
           activeRunIds: ["active-run"],
           hasActiveRun: true,
+          sessionId: "session-current",
           status: "running",
         }),
       ]),
@@ -8785,7 +9111,55 @@ describe("handleSendChat", () => {
       expectedRunId: "active-run",
       idempotencyKey: original.sendRunId,
       queueMode: "steer",
+      sessionId: "session-current",
     });
+  });
+
+  it("does not borrow displayed revision state for a different exact steer run", async () => {
+    const original = {
+      id: "restored-run-without-revision",
+      text: "continue the target turn",
+      createdAt: 1,
+      kind: "steered" as const,
+      sendRunId: "stable-steer-request",
+      sendState: "failed" as const,
+      steerTargetRunId: "target-run",
+      sessionKey: "agent:main:main",
+    };
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": { status: "started", runId: original.sendRunId },
+      },
+      chatRunId: "displayed-run",
+      chatDisplayedLeafEntryId: "displayed-leaf",
+      chatQueue: [original],
+      currentSessionId: "displayed-session",
+      sessionKey: original.sessionKey,
+      sessionsResult: createSessionsResult([
+        row(original.sessionKey, {
+          activeRunIds: ["target-run"],
+          hasActiveRun: true,
+          sessionId: "target-session",
+          status: "running",
+        }),
+      ]),
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await retryQueuedChatMessage(host, original.id);
+
+    const payload = findRequestPayload(
+      host.request as unknown as MockCallSource,
+      "chat.send",
+      "exact steer without target revision payload",
+    );
+    expect(payload).toMatchObject({
+      expectedRunId: "target-run",
+      idempotencyKey: original.sendRunId,
+      queueMode: "steer",
+    });
+    expect(payload).not.toHaveProperty("expectedLeafEntryId");
+    expect(payload).not.toHaveProperty("sessionId");
   });
 
   it("does not guess among multiple server-reported active runs", async () => {
