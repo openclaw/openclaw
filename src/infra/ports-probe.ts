@@ -66,3 +66,19 @@ export async function probePortUsage(
   }
   return sawUnknown ? "unknown" : "free";
 }
+
+/**
+ * Throws when the port is provably busy but no owning PID was found.
+ * Returns silently when the port is free or the probe is inconclusive.
+ * @param errorMessage - Custom error message; when omitted a generic message is used.
+ */
+export async function throwIfPortBusyWithoutOwner(
+  port: number,
+  errorMessage?: string,
+): Promise<void> {
+  if ((await probePortUsage(port)) === "busy") {
+    throw new Error(
+      errorMessage ?? `Port ${port} is in use but the owning process could not be identified.`,
+    );
+  }
+}
