@@ -16,6 +16,11 @@ import type { CodexSystemPromptReport } from "./attempt-context.js";
 import { attemptTerminal } from "./attempt-terminal.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification, JsonValue } from "./protocol.js";
+import {
+  CodexRealtimeAudioPeer,
+  type CodexRealtimeAudioPeerCallbacks,
+  type CodexRealtimeAudioPeerContract,
+} from "./realtime-voice-webrtc-peer.runtime.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import { prepareCodexAttemptContext } from "./run-attempt-context.js";
 import { createCodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -35,6 +40,7 @@ const CODEX_REALTIME_AUDIO_RPC_BYTES = 4_800;
 const CODEX_REALTIME_MAX_QUEUED_AUDIO_BYTES =
   CODEX_REALTIME_SAMPLE_RATE_HZ * CODEX_REALTIME_CHANNELS * 2 * 2;
 const CODEX_REALTIME_AUDIO_RPC_TIMEOUT_MS = 10_000;
+const CODEX_REALTIME_DEFAULT_V3_MODEL = "gpt-live-1-codex";
 
 type CodexRealtimeVersion = "v1" | "v2" | "v3";
 
@@ -43,6 +49,18 @@ type RealtimeCompletion = {
   resolve: (reason: RealtimeVoiceCloseReason) => void;
 };
 
+type RealtimeDeferred = {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  settled: boolean;
+};
+
+type CodexRealtimeAudioPeerFactory = (
+  callbacks: CodexRealtimeAudioPeerCallbacks,
+  signal: AbortSignal,
+) => Promise<CodexRealtimeAudioPeerContract>;
+
 function createCompletion(): RealtimeCompletion {
   let resolve!: (reason: RealtimeVoiceCloseReason) => void;
   const promise = new Promise<RealtimeVoiceCloseReason>((settle) => {
@@ -50,6 +68,36 @@ function createCompletion(): RealtimeCompletion {
   });
   return { promise, resolve };
 }
+
+function createDeferred(): RealtimeDeferred {
+  let resolvePromise!: () => void;
+  let rejectPromise!: (error: Error) => void;
+  const deferred: RealtimeDeferred = {
+    promise: new Promise<void>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    }),
+    resolve: () => {
+      if (!deferred.settled) {
+        deferred.settled = true;
+        resolvePromise();
+      }
+    },
+    reject: (error) => {
+      if (!deferred.settled) {
+        deferred.settled = true;
+        rejectPromise(error);
+      }
+    },
+    settled: false,
+  };
+  void deferred.promise.catch(() => undefined);
+  return deferred;
+}
+
+const createCodexRealtimeAudioPeer: CodexRealtimeAudioPeerFactory = async (callbacks, signal) => {
+  return CodexRealtimeAudioPeer.create({ callbacks, signal });
+};
 
 function asRecord(value: JsonValue | undefined): Record<string, JsonValue> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -83,8 +131,12 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   readonly completion = createCompletion();
   private connected = false;
   private terminal = false;
+  private startAccepted = false;
   private stopRequested = false;
   private responseTerminalEmitted = false;
+  private transport: "websocket" | "webrtc" = "websocket";
+  private audioPeer?: CodexRealtimeAudioPeerContract;
+  private answerApplied?: RealtimeDeferred;
   private audioQueue: Buffer[] = [];
   private queuedAudioBytes = 0;
   private activeAudioBytes = 0;
@@ -95,6 +147,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     private readonly threadId: string,
     private readonly request: RealtimeVoiceBridgeCreateRequest,
     private readonly signal: AbortSignal,
+    private readonly createAudioPeer: CodexRealtimeAudioPeerFactory = createCodexRealtimeAudioPeer,
   ) {}
 
   async connect(): Promise<void> {
@@ -110,12 +163,37 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const version = readRealtimeVersion(providerConfig.version);
     const instructions = this.request.instructions?.trim();
     try {
+      this.transport = version === "v3" ? "webrtc" : "websocket";
+      let transport: { type: "websocket" } | { type: "webrtc"; sdp: string } = {
+        type: "websocket",
+      };
+      if (this.transport === "webrtc") {
+        const peer = await this.createAudioPeer(
+          {
+            onAudio: (audio) => {
+              if (!this.terminal) {
+                this.request.onAudio(audio);
+              }
+            },
+            onError: (error) => this.fail(error),
+          },
+          this.signal,
+        );
+        if (this.terminal) {
+          peer.close();
+          throw new Error("Codex realtime voice session closed during peer startup");
+        }
+        this.audioPeer = peer;
+        const sdp = await peer.createOffer();
+        this.answerApplied = createDeferred();
+        transport = { type: "webrtc", sdp };
+      }
       await this.client.request(
         "thread/realtime/start",
         {
           threadId: this.threadId,
           outputModality: "audio",
-          transport: { type: "websocket" },
+          transport,
           version,
           includeStartupContext: true,
           ...(instructions
@@ -123,23 +201,37 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
               ? { initialItems: [{ role: "developer", text: instructions }] }
               : { prompt: instructions }
             : {}),
-          ...(model ? { model } : {}),
+          ...(model
+            ? { model }
+            : version === "v3"
+              ? { model: CODEX_REALTIME_DEFAULT_V3_MODEL }
+              : {}),
           ...(voice ? { voice } : {}),
         },
         { signal: this.signal },
       );
+      this.startAccepted = true;
+      if (this.answerApplied) {
+        await this.answerApplied.promise;
+      }
       if (this.terminal) {
         throw new Error("Codex realtime voice session closed during startup");
       }
       this.connected = true;
+      this.request.onReady?.();
     } catch (error) {
       this.fail(error);
+      await this.stop();
       throw error;
     }
   }
 
   sendAudio(audio: Buffer): void {
     if (!this.connected || this.terminal || audio.length === 0) {
+      return;
+    }
+    if (this.transport === "webrtc") {
+      this.audioPeer?.sendAudio(audio);
       return;
     }
     if (
@@ -206,8 +298,16 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     switch (notification.method) {
       case "thread/realtime/started":
-        this.request.onReady?.();
         return;
+      case "thread/realtime/sdp": {
+        const sdp = readString(params, "sdp");
+        if (!sdp || this.transport !== "webrtc") {
+          this.fail(new Error("Codex realtime returned an invalid WebRTC SDP answer"));
+          return;
+        }
+        void this.applyRealtimeAnswer(sdp);
+        return;
+      }
       case "thread/realtime/transcript/delta": {
         const role = readRealtimeRole(readString(params, "role"));
         const delta = readString(params, "delta");
@@ -234,6 +334,9 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       case "thread/realtime/outputAudio/delta": {
+        if (this.transport === "webrtc") {
+          return;
+        }
         const audio = asRecord(params?.audio);
         const data = readString(audio, "data");
         if (data) {
@@ -267,8 +370,24 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.fail(reason instanceof Error ? reason : new Error(String(reason)));
   }
 
+  private async applyRealtimeAnswer(sdp: string): Promise<void> {
+    const answerApplied = this.answerApplied;
+    const peer = this.audioPeer;
+    if (!answerApplied || !peer || answerApplied.settled) {
+      return;
+    }
+    try {
+      await peer.applyAnswer(sdp);
+      answerApplied.resolve();
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      answerApplied.reject(normalized);
+      this.fail(normalized);
+    }
+  }
+
   private async stop(): Promise<void> {
-    if (this.stopRequested || !this.connected) {
+    if (this.stopRequested || !this.startAccepted) {
       return;
     }
     this.stopRequested = true;
@@ -354,6 +473,9 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     this.terminal = true;
     this.connected = false;
+    this.answerApplied?.reject(new Error("Codex realtime voice session closed during startup"));
+    this.audioPeer?.close();
+    this.audioPeer = undefined;
     this.audioQueue = [];
     this.queuedAudioBytes = 0;
     this.activeAudioBytes = 0;
@@ -368,7 +490,8 @@ export const realtimeVoiceSessionTesting = {
     threadId: string,
     request: RealtimeVoiceBridgeCreateRequest,
     signal: AbortSignal,
-  ) => new CodexAppServerRealtimeVoiceBridge(client, threadId, request, signal),
+    createAudioPeer?: CodexRealtimeAudioPeerFactory,
+  ) => new CodexAppServerRealtimeVoiceBridge(client, threadId, request, signal, createAudioPeer),
 };
 
 function readOptionalString(value: unknown): string | undefined {

@@ -328,14 +328,30 @@ export function enableCodexRealtimeConversation(
   if (appServer.start.transport !== "stdio") {
     throw new Error("Codex realtime requires app-server.transport=stdio");
   }
-  const openAiApiKey = readNonEmptyString(providerConfig.apiKey);
-  if (!openAiApiKey) {
-    throw new Error("Codex realtime requires an explicitly selected OpenAI Platform API key");
+  const version = readNonEmptyString(providerConfig.version) ?? "v3";
+  if (version !== "v1" && version !== "v2" && version !== "v3") {
+    throw new Error('Codex realtime version must be "v1", "v2", or "v3"');
   }
   const args = appServer.start.args;
   const featureEnabled = args.some(
     (arg, index) => arg === "--enable" && args[index + 1] === "realtime_conversation",
   );
+  // Realtime V3 is the ChatGPT subscription path. Codex app-server owns that
+  // OAuth session and negotiates the WebRTC call; only legacy V1/V2 websocket
+  // sessions require an explicitly selected OpenAI Platform key.
+  if (version === "v3") {
+    if (featureEnabled) {
+      return appServer;
+    }
+    return {
+      ...appServer,
+      start: { ...appServer.start, args: [...args, "--enable", "realtime_conversation"] },
+    };
+  }
+  const openAiApiKey = readNonEmptyString(providerConfig.apiKey);
+  if (!openAiApiKey) {
+    throw new Error("Codex realtime V1/V2 requires an explicitly selected OpenAI Platform API key");
+  }
   const selectedKeyAlreadyApplied =
     appServer.start.requiresRealtimeOpenAiApiKeyEnv === true &&
     appServer.start.env?.OPENAI_API_KEY === openAiApiKey;

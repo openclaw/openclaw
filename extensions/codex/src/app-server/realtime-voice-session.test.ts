@@ -7,6 +7,19 @@ describe("Codex app-server realtime voice bridge", () => {
   it("uses Realtime V3 on the bound thread and projects native media events", async () => {
     const requestRpc = vi.fn(async () => ({}));
     const client = { request: requestRpc } as unknown as CodexAppServerClient;
+    let peerCallbacks:
+      | Parameters<NonNullable<Parameters<typeof realtimeVoiceSessionTesting.createBridge>[4]>>[0]
+      | undefined;
+    const peer = {
+      createOffer: vi.fn(async () => "v=offer\r\n"),
+      applyAnswer: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+    };
+    const createAudioPeer = vi.fn(async (callbacks: NonNullable<typeof peerCallbacks>) => {
+      peerCallbacks = callbacks;
+      return peer;
+    });
     const onAudio = vi.fn();
     const onClearAudio = vi.fn();
     const onTranscript = vi.fn();
@@ -29,9 +42,16 @@ describe("Codex app-server realtime voice bridge", () => {
       "thread-1",
       request,
       new AbortController().signal,
+      createAudioPeer,
     );
 
-    await bridge.connect();
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(requestRpc).toHaveBeenCalledOnce());
+    bridge.handleNotification({
+      method: "thread/realtime/sdp",
+      params: { threadId: "thread-1", sdp: "v=answer\r\n" },
+    });
+    await connecting;
     bridge.sendAudio(Buffer.from([1, 0, 2, 0]));
     bridge.handleNotification({
       method: "thread/realtime/started",
@@ -45,13 +65,7 @@ describe("Codex app-server realtime voice bridge", () => {
       method: "thread/realtime/transcript/done",
       params: { threadId: "thread-1", role: "assistant", text: "Hi there" },
     });
-    bridge.handleNotification({
-      method: "thread/realtime/outputAudio/delta",
-      params: {
-        threadId: "thread-1",
-        audio: { data: Buffer.from([3, 4]).toString("base64"), sampleRate: 24_000 },
-      },
-    });
+    peerCallbacks?.onAudio(Buffer.from([3, 4]));
     bridge.handleNotification({
       method: "thread/realtime/itemAdded",
       params: { threadId: "thread-1", item: { type: "input_audio_buffer.speech_started" } },
@@ -63,28 +77,19 @@ describe("Codex app-server realtime voice bridge", () => {
       {
         threadId: "thread-1",
         outputModality: "audio",
-        transport: { type: "websocket" },
+        transport: { type: "webrtc", sdp: "v=offer\r\n" },
         version: "v3",
         includeStartupContext: true,
         initialItems: [{ role: "developer", text: "Keep replies brief." }],
+        model: "gpt-live-1-codex",
         voice: "verse",
       },
       { signal: expect.any(AbortSignal) },
     );
-    expect(requestRpc).toHaveBeenNthCalledWith(
-      2,
-      "thread/realtime/appendAudio",
-      {
-        threadId: "thread-1",
-        audio: {
-          data: Buffer.from([1, 0, 2, 0]).toString("base64"),
-          sampleRate: 24_000,
-          numChannels: 1,
-          samplesPerChannel: 2,
-        },
-      },
-      { signal: expect.any(AbortSignal), timeoutMs: 10_000 },
-    );
+    expect(createAudioPeer).toHaveBeenCalledOnce();
+    expect(peer.applyAnswer).toHaveBeenCalledWith("v=answer\r\n");
+    expect(peer.sendAudio).toHaveBeenCalledWith(Buffer.from([1, 0, 2, 0]));
+    expect(requestRpc).not.toHaveBeenCalledWith("thread/realtime/appendAudio", expect.anything());
     expect(onReady).toHaveBeenCalledOnce();
     expect(onTranscript).toHaveBeenNthCalledWith(1, "assistant", "Hi", false);
     expect(onTranscript).toHaveBeenNthCalledWith(2, "assistant", "Hi there", true);
@@ -164,7 +169,7 @@ describe("Codex app-server realtime voice bridge", () => {
       client,
       "thread-1",
       {
-        providerConfig: {},
+        providerConfig: { version: "v2" },
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),
         onEvent,
@@ -212,7 +217,7 @@ describe("Codex app-server realtime voice bridge", () => {
       client,
       "thread-1",
       {
-        providerConfig: {},
+        providerConfig: { version: "v2" },
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),
         onError,

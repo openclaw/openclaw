@@ -6,7 +6,10 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveProviderAuthProfileApiKey } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isProviderAuthProfileConfigured,
+  resolveProviderAuthProfileApiKey,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   convertPcmToMulaw8k,
   mulawToPcm,
@@ -21,6 +24,30 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveRealtimeVersion(providerConfig: Record<string, unknown>): "v1" | "v2" | "v3" {
+  const version = normalizeOptionalString(providerConfig.version) ?? "v3";
+  if (version === "v1" || version === "v2" || version === "v3") {
+    return version;
+  }
+  throw new Error('Codex realtime version must be "v1", "v2", or "v3"');
+}
+
+function hasOpenAIChatGptSubscription(cfg: OpenClawConfig | undefined): boolean {
+  if (
+    Object.values(cfg?.auth?.profiles ?? {}).some(
+      (profile) => profile.provider === "openai" && profile.mode === "oauth",
+    )
+  ) {
+    return true;
+  }
+  return isProviderAuthProfileConfigured({
+    provider: "openai",
+    cfg,
+    profileTypes: ["oauth"],
+    includeExternalCliAuth: false,
+  });
 }
 
 function hasOpenAIPlatformApiKey(
@@ -144,12 +171,21 @@ async function resolveBoundVoiceRun(params: {
   }
   const workspaceDir = params.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = params.runtime.agent.resolveAgentDir(cfg, agentId);
+  const version = resolveRealtimeVersion(params.request.providerConfig);
+  const providerConfig = { ...params.request.providerConfig };
+  if (version === "v3") {
+    // V3 uses the app-server's selected ChatGPT subscription profile. Do not let
+    // an ambient or legacy Platform key silently replace that OAuth identity.
+    delete providerConfig.apiKey;
+  } else {
+    providerConfig.apiKey = await resolveOpenAIPlatformApiKey({
+      request: params.request,
+      agentDir,
+    });
+  }
   const realtimeRequest = {
     ...params.request,
-    providerConfig: {
-      ...params.request.providerConfig,
-      apiKey: await resolveOpenAIPlatformApiKey({ request: params.request, agentDir }),
-    },
+    providerConfig,
   };
   const timeoutMs = params.runtime.agent.resolveAgentTimeoutMs({ cfg });
   try {
@@ -345,6 +381,8 @@ export function buildCodexRealtimeVoiceProvider(options: {
     id: "codex",
     label: "Codex Realtime",
     aliases: ["codex-realtime"],
+    defaultModel: "gpt-live-1-codex",
+    models: ["gpt-live-1-codex", "gpt-realtime-1.5"],
     autoSelectOrder: 40,
     capabilities: {
       transports: ["provider-websocket"],
@@ -376,7 +414,10 @@ export function buildCodexRealtimeVoiceProvider(options: {
         ? { apiKey: normalizeOptionalString(rawConfig.apiKey) }
         : {}),
     }),
-    isConfigured: ({ cfg, providerConfig }) => hasOpenAIPlatformApiKey(cfg, providerConfig),
+    isConfigured: ({ cfg, providerConfig }) =>
+      resolveRealtimeVersion(providerConfig) === "v3"
+        ? hasOpenAIChatGptSubscription(cfg)
+        : hasOpenAIPlatformApiKey(cfg, providerConfig),
     createBridge: (request) => new CodexBoundRealtimeVoiceBridge(options.runtime, request),
   };
 }
