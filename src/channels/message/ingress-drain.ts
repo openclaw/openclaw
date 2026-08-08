@@ -16,6 +16,7 @@ import {
 } from "./ingress-claim-owner.js";
 import {
   activeClaimKey,
+  createIngressDispatchQuiescence,
   IngressAdoptionLostError,
   isIngressAdoptionLostError,
   resolveLaneKey,
@@ -25,6 +26,7 @@ import {
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
 export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
+import { armIngressStallWatchdog } from "./ingress-drain-stall-watchdog.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -108,6 +110,12 @@ export type CreateChannelIngressDrainOptions<
   ) => boolean;
   ownerId?: string;
   adoptionStallTimeoutMs?: number;
+  /**
+   * Bounded wait for an aborted pre-adoption dispatch to exit before its claim
+   * is released for retry. Prevents a re-claim from racing an abort-ignoring
+   * callback. Defaults to DEFAULT_INGRESS_STALL_QUIESCE_MS.
+   */
+  stallQuiesceMs?: number;
   claimLeaseMs?: number;
   /**
    * Whether a claimed event keeps occupying its ingress serialization lane after
@@ -233,7 +241,7 @@ export function createChannelIngressDrain<
   const markLeaseReclaimed = (state: ActiveHandlerState<TPayload, TMetadata>) => {
     // Guillotine-style closed flag: late onAdopted throws IngressAdoptionLostError.
     // Do not release/fail — another owner holds the claim token.
-    if (state.phase === "settled" || state.guillotined || state.superseded) {
+    if (state.phase === "settled") {
       return;
     }
     state.guillotined = true;
@@ -251,7 +259,7 @@ export function createChannelIngressDrain<
     // Keep lease alive until tombstone commits (includes complete-retry wedge).
     const intervalMs = Math.max(1, Math.floor(claimLeaseMs / 3));
     state.claimRefreshTimer = setInterval(() => {
-      if (state.phase === "settled" || state.guillotined || state.superseded) {
+      if (state.phase === "settled") {
         clearClaimRefresh(state);
         return;
       }
@@ -435,37 +443,17 @@ export function createChannelIngressDrain<
   };
 
   const armStallWatchdog = (state: ActiveHandlerState<TPayload, TMetadata>) => {
-    clearStallTimer(state);
-    state.stallTimer = setTimeout(() => {
-      // Pre-adoption only (dispatching OR deferred). Timer is not cleared by deferral.
-      if (state.phase !== "dispatching" && state.phase !== "deferred") {
-        return;
-      }
-      const ageMs = now() - state.startedAt;
-      const displayId = state.eventId.replace(/^0+(?=\d)/, "") || state.eventId;
-      const message = `Channel ingress claim→adoption stalled for event ${displayId} on lane ${state.laneKey} after ${ageMs}ms; marking failed (handler-timeout).`;
-      // Closed guillotine flag — catch must not string-sniff errors.
-      state.guillotined = true;
-      clearStallTimer(state);
-      log(message);
-      try {
-        state.abortController.abort(new Error(message));
-      } catch {
-        // AbortController.abort is not fallible in practice.
-      }
-      // Same bounded-retry/hold-ownership policy as tombstone: a fail write
-      // error must not falsely settle (would stop heartbeat and wedge recovery).
-      void state
-        .settleOnce(async () => {
-          await failClaim(state.claim, "handler-timeout", message);
-        })
-        .catch((err: unknown) => {
-          log(
-            `ingress drain: failed to dead-letter stalled event ${displayId}; holding claim: ${formatError(err)}`,
-          );
-        });
-    }, adoptionStallTimeoutMs);
-    state.stallTimer.unref?.();
+    armIngressStallWatchdog(state, {
+      adoptionStallTimeoutMs,
+      stallQuiesceMs: options.stallQuiesceMs,
+      retryPolicy: options.retryPolicy,
+      now,
+      log,
+      formatError,
+      clearStallTimer,
+      failClaim,
+      releaseClaim,
+    });
   };
 
   const createLifecycle = (
@@ -476,9 +464,11 @@ export function createChannelIngressDrain<
       onAdopted: async () => {
         // Lost adoption is loud: guillotine/supersede already tombstoned/failed the claim.
         if (state.guillotined) {
+          state.quiescence.markDeferredSettled();
           throw new IngressAdoptionLostError("guillotined");
         }
         if (state.superseded) {
+          state.quiescence.markDeferredSettled();
           throw new IngressAdoptionLostError("superseded");
         }
         if (state.phase === "adopted" || state.phase === "settled") {
@@ -486,6 +476,7 @@ export function createChannelIngressDrain<
           return;
         }
         // Complete at adoption, not settle — frees the lane for later events.
+        state.quiescence.markDeferredSettled();
         state.phase = "adopted";
         clearStallTimer(state);
         await state.settleOnce(async () => {
@@ -497,6 +488,7 @@ export function createChannelIngressDrain<
           return;
         }
         // Deferred holds the claim; watchdog remains armed until adoption or abandon.
+        state.quiescence.markDeferred();
         state.phase = "deferred";
         if (deferredLaneOccupancy === "release") {
           if (laneOwnerByKey.get(state.laneKey) === state) {
@@ -521,8 +513,10 @@ export function createChannelIngressDrain<
           return;
         }
         if (state.guillotined || state.superseded) {
+          state.quiescence.markDeferredSettled();
           return;
         }
+        state.quiescence.markDeferredSettled();
         clearStallTimer(state);
         await state.settleOnce(async () => {
           await applyFailureDisposition(state.claim, error);
@@ -533,8 +527,10 @@ export function createChannelIngressDrain<
           return;
         }
         if (state.guillotined || state.superseded) {
+          state.quiescence.markDeferredSettled();
           return;
         }
+        state.quiescence.markDeferredSettled();
         clearStallTimer(state);
         await state
           .settleOnce(async () => {
@@ -577,6 +573,7 @@ export function createChannelIngressDrain<
       guillotined: false,
       superseded: false,
       task: Promise.resolve(),
+      quiescence: createIngressDispatchQuiescence(),
       settleOnce: async () => {},
     } as ActiveHandlerState<TPayload, TMetadata>;
     state.settleOnce = createSettleOwner(state);
@@ -654,6 +651,8 @@ export function createChannelIngressDrain<
         await state.settleOnce(async () => {
           await applyFailureDisposition(claim, err);
         });
+      } finally {
+        state.quiescence.markDispatchSettled();
       }
     })();
 
@@ -807,7 +806,9 @@ export function createChannelIngressDrain<
     drainOnce,
     activeLaneKeys: () => new Set(laneOwnerByKey.keys()),
     waitForIdle: async () => {
-      const tasks = [...activeByClaim.values()].map((state) => state.task);
+      const tasks = [...activeByClaim.values()].flatMap((state) =>
+        state.stallSettlementTask ? [state.task, state.stallSettlementTask] : [state.task],
+      );
       await Promise.allSettled(tasks);
     },
     dispose: () => {
