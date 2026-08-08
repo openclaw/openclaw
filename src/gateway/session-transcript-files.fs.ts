@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   formatSessionArchiveTimestamp,
+  parseSessionArchiveSourceFileName,
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
@@ -300,7 +301,6 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
-  clearSessionTranscriptResetArchiveDiscoveryCache();
   // Notify the session transcript subscribers (memory index, sessions-history
   // HTTP, etc.) that a mutation landed on a session-owned path. Without this
   // emit the memory sync's incremental path never learns the new archive
@@ -310,8 +310,16 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   // chat inject, command execution) already emit here; archive was the sole
   // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
   // files only surfaced in the index after a full reindex.
-  emitSessionTranscriptUpdate({ sessionFile: archived });
+  emitSessionTranscriptArchiveMutation(archived, filePath);
   return archived;
+}
+
+function emitSessionTranscriptArchiveMutation(sessionFile: string, sourceFile?: string): void {
+  clearSessionTranscriptResetArchiveDiscoveryCache();
+  emitSessionTranscriptUpdate({ sessionFile });
+  if (sourceFile && sourceFile !== sessionFile) {
+    emitSessionTranscriptUpdate({ sessionFile: sourceFile });
+  }
 }
 
 export function archiveSessionTranscriptPaths(opts: {
@@ -460,6 +468,9 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   rules: SessionArchiveCleanupRule[];
   nowMs?: number;
+  dryRun?: boolean;
+  excludeCanonicalPaths?: ReadonlySet<string>;
+  onRemoveFile?: (canonicalPath: string) => void;
 }): Promise<{ removed: number; scanned: number }> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
@@ -480,17 +491,31 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (timestamp == null) {
           continue;
         }
+        const fullPath = path.join(dir, entry);
+        const sourceFileName = parseSessionArchiveSourceFileName(entry, rule.reason);
+        if (opts.excludeCanonicalPaths?.has(canonicalizePathForComparison(fullPath))) {
+          break;
+        }
         scanned += 1;
         if (now - timestamp > rule.olderThanMs) {
-          const fullPath = path.join(dir, entry);
           const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
           if (stat?.isFile()) {
-            const removedFile = await ignoreMissingArchivePath(async () => {
-              await fs.promises.rm(fullPath);
-              return true;
-            }, false);
-            if (removedFile) {
+            if (opts.dryRun) {
+              opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
               removed += 1;
+            } else {
+              const removedFile = await ignoreMissingArchivePath(async () => {
+                await fs.promises.rm(fullPath);
+                return true;
+              }, false);
+              if (removedFile) {
+                emitSessionTranscriptArchiveMutation(
+                  fullPath,
+                  sourceFileName ? path.join(dir, sourceFileName) : undefined,
+                );
+                opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
+                removed += 1;
+              }
             }
           }
         }

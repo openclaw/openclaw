@@ -6,6 +6,10 @@
  */
 export * from "./session-history.js";
 export type {
+  SessionArchivedTranscriptFileCleanupParams,
+  SessionArchivedTranscriptFileCleanupResult,
+} from "./session-archive-accessor.js";
+export type {
   BranchSessionFromCompactionCheckpointParams,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
@@ -172,6 +176,7 @@ export {
   applySessionStoreProjection,
   branchSessionFromCompactionCheckpoint,
   cleanupPluginHostSessionStore,
+  cleanupSessionArchivedTranscriptFiles,
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle,
   preserveTemporarySessionMapping,
