@@ -1,5 +1,6 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import type { AnyAgentTool } from "./common.js";
 
@@ -9,6 +10,8 @@ type GatewayToolCallerIdentity = {
   /** Host-signed capability for the scheduled run's existing self-management surface. */
   cronSelfManagementJobId?: string;
   cronToolsAllowCapture?: "final-executable-surface";
+  /** One-shot Gateway-owned proof for a freshly resolved configured-MCP cap. */
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -49,6 +52,9 @@ export async function withGatewayToolCallerIdentity<T>(
         : {}),
       ...(identity.cronToolsAllowCapture === "final-executable-surface"
         ? { cronToolsAllowCapture: identity.cronToolsAllowCapture }
+        : {}),
+      ...(identity.cronCreatorAuthorityGrant
+        ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
         : {}),
       ...(identity.turnSourceChannel?.trim()
         ? { turnSourceChannel: identity.turnSourceChannel.trim() }
