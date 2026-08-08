@@ -85,6 +85,8 @@ describe("context-engine host parameter projection", () => {
   beforeEach(() => {
     registerLegacyContextEngine();
     resetContextEngineRuntimeQuarantineForTests();
+    // Silence the legacy host-param diagnostic by default; tests that assert on it re-spy.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -356,5 +358,89 @@ describe("context-engine host parameter projection", () => {
       { sessionId: "session-1", messages: [message] },
       { sessionId: "session-2", messages: [message] },
     ]);
+  });
+
+  it("warns once when an undeclared engine is resolved during the legacy window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [] });
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const warningMessage = warnSpy.mock.calls[0]?.[0] ?? "";
+    expect(warningMessage).toContain("context-engine-legacy-host-param-default");
+    expect(warningMessage).toContain(engineId);
+    expect(warningMessage).toContain("sessionKey");
+    expect(warningMessage).toContain("runtimeSettings");
+    expect(warningMessage).toContain("2026-08-12");
+    expect(warningMessage).toContain("info.acceptedHostParams");
+  });
+
+  it("does not warn for engines that declare acceptedHostParams", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engineId = registerProbeEngine({
+      acceptedHostParams: ["sessionKey", "prompt", "runtimeSettings"],
+      assembleCalls: [],
+      compactCalls: [],
+    });
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for undeclared engines after the legacy window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-13T00:00:00Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [] });
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("stays silent and keeps legacy projection for undeclared engines before the warning window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T23:59:59Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const assembleCalls: Array<Record<string, unknown>> = [];
+    const compactCalls: Array<Record<string, unknown>> = [];
+    const engineId = registerProbeEngine({ assembleCalls, compactCalls });
+
+    await invokeHostParamMethods(
+      await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } }),
+    );
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    // Pre-warning clocks still project: the diagnostic window must not change
+    // what undeclared engines receive before warningStarts.
+    for (const call of [...assembleCalls, ...compactCalls]) {
+      expect(call).not.toHaveProperty("sessionKey");
+      expect(call).not.toHaveProperty("runtimeSettings");
+    }
+    expect(assembleCalls[0]).not.toHaveProperty("prompt");
+    expect(compactCalls[0]).not.toHaveProperty("sessionTarget");
+    expect(compactCalls[0]).not.toHaveProperty("runtimeContext");
+    expect(compactCalls[0]).toHaveProperty("sessionId", "session-1");
+  });
+
+  it("deduplicates the warning across repeated resolves of fresh factory instances", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Each resolve invokes the plugin factory again, producing a fresh engine
+    // instance. Dedup must key on the stable registration identity, not the
+    // factory-returned object.
+    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [] });
+
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+    await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });
