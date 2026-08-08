@@ -51,8 +51,15 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
   initialMs: 250,
   maxMs: 30_000,
   factor: 2,
-  jitter: 0,
+  jitter: 0.1,
 };
+
+// Per-connection phase offset prevents thundering herd when backoff reaches the
+// maxMs cap. computeBackoff applies positive-only jitter before clamping to
+// maxMs, so once the exponential base exceeds maxMs every worker gets the same
+// capped value. This offset shifts each worker's delay by a random fraction of
+// the cap, preserving spread through prolonged outages.
+const MAX_BACKOFF_CAP_PHASE_MS = 3_000;
 
 const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 const DEFAULT_ADMISSION_DEADLINE_MS = 120_000;
@@ -81,6 +88,8 @@ export class WorkerConnection {
   private readonly admissionTimeoutMs: number;
   private readonly admissionDeadlineMs: number;
   private readonly requestTimeoutMs: number;
+  // Randomized once per connection to decorrelate reconnect timing at the backoff cap.
+  private readonly reconnectPhaseOffsetMs = Math.floor(Math.random() * MAX_BACKOFF_CAP_PHASE_MS);
 
   constructor(private readonly options: WorkerConnectionOptions) {
     this.admissionTimeoutMs = resolvePositiveTimeout(
@@ -220,11 +229,18 @@ export class WorkerConnection {
       if (attempt > 0) {
         this.transition({ kind: "reconnecting", attempt });
         try {
+          const backoffPolicy = this.options.reconnectBackoff ?? DEFAULT_RECONNECT_BACKOFF;
+          const backoffMs = computeBackoff(backoffPolicy, attempt);
+          // When using the default policy and the exponential base reaches maxMs,
+          // computeBackoff's positive-only jitter is fully clamped, so every worker
+          // gets the same capped delay. Add the per-connection phase offset only
+          // in that case to preserve spread through prolonged outages.
+          const cappedPhaseMs =
+            this.options.reconnectBackoff == null && backoffMs >= backoffPolicy.maxMs
+              ? this.reconnectPhaseOffsetMs
+              : 0;
           await sleepWithAbort(
-            Math.min(
-              computeBackoff(this.options.reconnectBackoff ?? DEFAULT_RECONNECT_BACKOFF, attempt),
-              remainingMs,
-            ),
+            Math.min(backoffMs + cappedPhaseMs, remainingMs),
             this.reconnectAbort.signal,
           );
         } catch (error) {
