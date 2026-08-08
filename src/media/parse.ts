@@ -514,6 +514,29 @@ function collectMarkdownImageSegments(params: { line: string; media: string[] })
 }
 
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
+
+/** True when a line contains at least one MEDIA: directive the normal parser would accept. */
+function lineHasAcceptableMediaDirective(line: string): boolean {
+  if (!line.trimStart().toUpperCase().startsWith("MEDIA:")) {
+    return false;
+  }
+  for (const match of line.matchAll(MEDIA_TOKEN_RE)) {
+    const payload = match[1];
+    if (payload == null) {
+      continue;
+    }
+    const unwrapped = unwrapQuoted(payload);
+    const parts = unwrapped ? [unwrapped] : payload.split(/\s+/).filter(Boolean);
+    for (const part of parts) {
+      const candidate = normalizeMediaSource(cleanCandidate(part));
+      if (isValidMedia(candidate, unwrapped ? { allowSpaces: true } : undefined)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function splitMediaFromOutput(
   raw: string,
   options: SplitMediaFromOutputOptions = {},
@@ -578,7 +601,7 @@ export function splitMediaFromOutput(
       if (
         extractMediaDirectives &&
         onFencedMediaTokenSkipped &&
-        line.trimStart().toUpperCase().startsWith("MEDIA:")
+        lineHasAcceptableMediaDirective(line)
       ) {
         onFencedMediaTokenSkipped(line);
       }

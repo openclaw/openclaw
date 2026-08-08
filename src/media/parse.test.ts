@@ -353,6 +353,12 @@ describe("splitMediaFromOutput", () => {
       expect(result.text).toContain("MEDIA:/home/user/x.png");
     });
 
+    it("does not notify for empty or invalid fenced MEDIA examples (#41966)", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput("```\nMEDIA:\nMEDIA: example\n```", { onFencedMediaTokenSkipped });
+      expect(onFencedMediaTokenSkipped).not.toHaveBeenCalled();
+    });
+
     it("does not notify when extractMediaDirectives is false", () => {
       const onFencedMediaTokenSkipped = vi.fn();
       splitMediaFromOutput(

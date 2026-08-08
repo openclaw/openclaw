@@ -1153,6 +1153,24 @@ describe("deliverOutboundPayloads", () => {
     expect(JSON.stringify(batch)).not.toMatch(/mediaTokenSkippedInFence/);
   });
 
+  it("does not warn for invalid fenced MEDIA examples (#41966)", async () => {
+    fencedMediaLogWarn.mockClear();
+    const fenced = "Example only:\n```\nMEDIA:\nMEDIA: example\n```\nEnd.";
+    const batch = await prepareOutboundPayloadBatch({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: fenced }],
+      deps: { matrix: vi.fn() },
+    });
+    const accepted = batch.entries.filter((e) => e.status === "accepted");
+    expect(accepted).toHaveLength(1);
+    expect(fencedMediaLogWarn).not.toHaveBeenCalled();
+    expect(JSON.stringify(batch)).not.toMatch(
+      /mediaTokenSkippedInFence|fencedSkippedMediaDirectives/,
+    );
+  });
+
   it("finalizes owner state only after a chunked batch completes", async () => {
     const sendMatrix = vi
       .fn()
