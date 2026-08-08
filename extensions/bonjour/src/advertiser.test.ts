@@ -265,6 +265,66 @@ describe("gateway bonjour advertiser", () => {
     await expect(started.stop()).resolves.toBeUndefined();
   });
 
+  it.each([
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci",
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\n1:name=/",
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\r\n1:name=/",
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci/openclaw\n",
+  ])("auto-disables Bonjour for a Cloudflare Cloudchamber marker: %s", async (cgroup) => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "readFileSync").mockReturnValue(cgroup);
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
+  it.each([
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci.service\n",
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci-extra\n",
+    "0::/cloudchamber_v2/00000000-0000-0000-0000-000000000000_oci\tjunk\n",
+  ])(
+    "does not treat a non-terminal Cloudchamber _oci marker as a container: %s",
+    async (cgroup) => {
+      enableAdvertiserUnitMode();
+      vi.spyOn(fs, "existsSync").mockReturnValue(false);
+      vi.spyOn(fs, "readFileSync").mockReturnValue(cgroup);
+      const destroy = vi.fn().mockResolvedValue(undefined);
+      const advertise = vi.fn().mockResolvedValue(undefined);
+      mockCiaoService({ advertise, destroy });
+
+      const started = await startAdvertiser({
+        gatewayPort: 18789,
+        sshPort: 2222,
+      });
+
+      expect(createService).toHaveBeenCalledTimes(1);
+      await started.stop();
+    },
+  );
+
+  it("does not treat cloudchamber.service as a container marker", async () => {
+    enableAdvertiserUnitMode();
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "readFileSync").mockReturnValue("0::/system.slice/cloudchamber.service\n");
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).toHaveBeenCalledTimes(1);
+    await started.stop();
+  });
+
   it("honors explicit Bonjour opt-in inside detected containers", async () => {
     enableAdvertiserUnitMode();
     vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "0");
