@@ -204,19 +204,33 @@ export function registerCronEditCommand(cron: Command) {
               "Isolated jobs cannot use --system-event; use --message, --command, or --session main.",
             );
           }
+          const nonBlankDeliveryFlag = (value: unknown): value is string =>
+            typeof value === "string" && value.trim() !== "";
           const hasExplicitChatDelivery =
             typeof opts.channel === "string" ||
             typeof opts.to === "string" ||
             typeof opts.account === "string" ||
             typeof opts.threadId === "string";
-          if (
-            sessionTarget === "main" &&
-            typeof opts.systemEvent === "string" &&
-            hasExplicitChatDelivery
-          ) {
-            throw new Error(
-              "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
-            );
+          // Only non-blank set+clear pairs defer to the mutex validator.
+          // Blank values (e.g. --thread-id '' --clear-thread-id) normalize away
+          // before that mutex, so they must keep the main-job fail-closed guard.
+          // An unrelated --clear-* also must not suppress it
+          // (e.g. --channel telegram --clear-to on an existing main job).
+          const hasMatchingDeliveryClearPair =
+            (nonBlankDeliveryFlag(opts.channel) && Boolean(opts.clearChannel)) ||
+            (nonBlankDeliveryFlag(opts.to) && Boolean(opts.clearTo)) ||
+            (nonBlankDeliveryFlag(opts.account) && Boolean(opts.clearAccount)) ||
+            (nonBlankDeliveryFlag(opts.threadId) && Boolean(opts.clearThreadId));
+          if (hasExplicitChatDelivery && !hasMatchingDeliveryClearPair) {
+            // Fail before RPC for existing main jobs too — not only when the
+            // edit also passes --session main --system-event.
+            const effectiveSessionTarget =
+              sessionTarget ?? (await readExistingCronJob()).sessionTarget;
+            if (effectiveSessionTarget === "main") {
+              throw new Error(
+                "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+              );
+            }
           }
           const hasWebhookDelivery = typeof opts.webhook === "string";
           const deliveryModeFlagCount = [

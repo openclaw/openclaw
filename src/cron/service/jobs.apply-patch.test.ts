@@ -345,6 +345,94 @@ describe("applyJobPatch delivery merge", () => {
       }),
     ).toBeNull();
   });
+
+  it("rejects concrete chat delivery on main instead of silently dropping it", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+        },
+      }),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+
+  it("rejects mode-only announce delivery patches on main instead of stripping them", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: { mode: "announce" },
+      }),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+
+  it("rejects completion-delivery patches on main instead of silently dropping them", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        delivery: {
+          mode: "announce",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/complete",
+          },
+        },
+      }),
+    ).toThrow('cron channel delivery config is only supported for sessionTarget="isolated"');
+  });
+
+  it("allows null-clear delivery patches on main without treating them as unsupported chat delivery", () => {
+    const job = makeJob({
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+      delivery: undefined,
+    });
+
+    applyJobPatch(job, {
+      delivery: {
+        channel: null,
+        to: null,
+        threadId: null,
+        accountId: null,
+        completionDestination: null,
+      },
+    });
+
+    expect(job.delivery).toBeUndefined();
+  });
+
+  it("clears inherited announce delivery when retargeting to main without a delivery patch", () => {
+    const job = makeJob({
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
+
+    applyJobPatch(job, {
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    expect(job.sessionTarget).toBe("main");
+    expect(job.delivery).toBeUndefined();
+  });
 });
 
 describe("applyJobPatch failure alert merge", () => {

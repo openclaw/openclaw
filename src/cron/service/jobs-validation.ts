@@ -7,7 +7,7 @@ import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
-import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
+import type { CronDelivery, CronDeliveryPatch, CronJob, CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 
 /** Validates that session target and payload kind form a supported cron job shape. */
@@ -280,7 +280,7 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-export function hasConcreteFailureDestination(
+function hasConcreteFailureDestination(
   destination: CronDelivery["failureDestination"] | undefined,
 ): boolean {
   return Boolean(
@@ -290,6 +290,88 @@ export function hasConcreteFailureDestination(
       destination.accountId !== undefined ||
       destination.mode !== undefined),
   );
+}
+
+/**
+ * Chat-route fields from stored delivery or an incoming patch.
+ * Patch clears use `null`, so the classifier must accept that shape.
+ */
+type ChatDeliveryTargetFields = {
+  channel?: CronDelivery["channel"] | null;
+  to?: CronDelivery["to"] | null;
+  threadId?: CronDelivery["threadId"] | null;
+  accountId?: CronDelivery["accountId"] | null;
+};
+
+/** True when delivery names a chat route (channel/to/thread/account), not just mode/bestEffort. */
+function hasConcreteChatDeliveryTarget(delivery: ChatDeliveryTargetFields | undefined): boolean {
+  if (!delivery) {
+    return false;
+  }
+  return (
+    (typeof delivery.channel === "string" && delivery.channel.trim() !== "") ||
+    (typeof delivery.to === "string" && delivery.to.trim() !== "") ||
+    (delivery.threadId !== undefined &&
+      delivery.threadId !== null &&
+      String(delivery.threadId).trim() !== "") ||
+    (typeof delivery.accountId === "string" && delivery.accountId.trim() !== "")
+  );
+}
+
+/**
+ * True when an incoming delivery patch asks for main-unsupported announce/chat
+ * routing (including completion destinations). Used so retarget-to-main without
+ * a delivery patch can still clear inherited announce delivery.
+ */
+function patchRequestsUnsupportedMainDelivery(delivery: CronDeliveryPatch | undefined): boolean {
+  if (!delivery) {
+    return false;
+  }
+  if (delivery.mode === "webhook") {
+    return false;
+  }
+  if (hasConcreteChatDeliveryTarget(delivery)) {
+    return true;
+  }
+  if (delivery.mode === "announce") {
+    return true;
+  }
+  if ("completionDestination" in delivery && delivery.completionDestination != null) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Main-session delivery policy after merge: reject explicit unsupported chat
+ * patches, otherwise strip inherited announce/chat routing (retarget cleanup).
+ */
+export function applyMainSessionDeliveryPolicy(job: CronJob, patch: CronJobPatch): void {
+  if (
+    job.sessionTarget === "main" &&
+    job.delivery?.mode !== "webhook" &&
+    hasConcreteFailureDestination(job.delivery?.failureDestination)
+  ) {
+    throw new Error(
+      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
+    );
+  }
+  if (job.sessionTarget !== "main" || job.delivery?.mode === "webhook") {
+    return;
+  }
+  // Fail closed only for explicit unsupported delivery patches. Retargeting
+  // an isolated announce job onto main without a delivery patch must still
+  // clear inherited chat routing (historical cleanup contract).
+  if (patchRequestsUnsupportedMainDelivery(patch.delivery)) {
+    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  }
+  // Strip inherited announce delivery and benign shells (bestEffort-only /
+  // empty failureDestination opt-outs) so those edits stay no-ops.
+  const failureDestination = job.delivery?.failureDestination;
+  job.delivery =
+    failureDestination && !hasConcreteFailureDestination(failureDestination)
+      ? { mode: "none", failureDestination }
+      : undefined;
 }
 
 export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
