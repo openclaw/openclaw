@@ -249,7 +249,6 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
           model: "asymmetric-embedder",
           queryInputType: "query",
           documentInputType: "passage",
-          queryInstructionTemplate: true,
         },
       },
     }
