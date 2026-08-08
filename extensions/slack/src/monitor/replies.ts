@@ -2,6 +2,11 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+  warnFencedMediaSkipsForAcceptedOutboundDelivery,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -183,16 +188,32 @@ export async function deliverReplies(params: {
       ...(params.metadata ? { metadata: params.metadata } : {}),
     });
   };
-  for (const payload of params.replies) {
-    if (payload.isReasoning === true) {
-      continue;
-    }
+  const candidateReplies = params.replies.filter((payload) => payload.isReasoning !== true);
+  const outboundPlan = createOutboundPayloadPlan(candidateReplies, {
+    cfg: params.cfg,
+    surface: "slack",
+  });
+  const normalizedReplies = projectOutboundPayloadPlanForDelivery(outboundPlan);
+  for (let projectedIndex = 0; projectedIndex < normalizedReplies.length; projectedIndex++) {
+    const payload = normalizedReplies[projectedIndex]!;
+    const planEntry = outboundPlan[projectedIndex];
     const threadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: params.replyToMode,
       payloadReplyToId: payload.replyToId,
       replyThreadTs: params.replyThreadTs,
     });
     const reply = resolveSendableOutboundReplyParts(payload);
+    // Direct Slack delivery bypasses prepareOutboundPayloadBatch; emit shared
+    // fenced MEDIA diagnostic on accepted text (#41966).
+    if (planEntry) {
+      warnFencedMediaSkipsForAcceptedOutboundDelivery([
+        {
+          text: reply.text ?? "",
+          mediaTokenSkippedInFence: planEntry.mediaTokenSkippedInFence,
+          fencedSkippedMediaDirectives: planEntry.fencedSkippedMediaDirectives,
+        },
+      ]);
+    }
     const textRaw =
       reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
         ? reply.trimmedText

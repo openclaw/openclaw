@@ -2,6 +2,11 @@
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+  warnFencedMediaSkipsForAcceptedOutboundDelivery,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -335,7 +340,14 @@ export async function deliverReplies(params: {
     accountId,
     chatType: params.chatType,
   });
-  for (const payload of replies) {
+  const outboundPlan = createOutboundPayloadPlan(replies, {
+    cfg: params.cfg,
+    surface: "signal",
+  });
+  const normalizedReplies = projectOutboundPayloadPlanForDelivery(outboundPlan);
+  for (let projectedIndex = 0; projectedIndex < normalizedReplies.length; projectedIndex++) {
+    const payload = normalizedReplies[projectedIndex]!;
+    const planEntry = outboundPlan[projectedIndex];
     const deliveryResults: Array<{
       channel: "signal";
       messageId: string;
@@ -352,6 +364,17 @@ export async function deliverReplies(params: {
         targetAuthorUuid: accountUuid,
       }) ?? presentationPayload;
     const reply = resolveSendableOutboundReplyParts(deliveredPayload);
+    // Direct Signal delivery bypasses prepareOutboundPayloadBatch; emit shared
+    // fenced MEDIA diagnostic on accepted text (#41966).
+    if (planEntry) {
+      warnFencedMediaSkipsForAcceptedOutboundDelivery([
+        {
+          text: reply.text ?? "",
+          mediaTokenSkippedInFence: planEntry.mediaTokenSkippedInFence,
+          fencedSkippedMediaDirectives: planEntry.fencedSkippedMediaDirectives,
+        },
+      ]);
+    }
     const nextNativeReply = createSignalNativeReplyResolver({
       payload: deliveredPayload,
       replyContext: params.replyContext,
