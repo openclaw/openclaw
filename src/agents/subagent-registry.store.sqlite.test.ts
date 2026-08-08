@@ -94,6 +94,7 @@ describe("subagent registry sqlite store", () => {
         requesterTurnRunId: "run-requester",
         requesterTurnYielded: true,
         retireAfterRequesterTurn: true,
+        expectedRequesterLifecycleRevision: "revision-1",
         endedReason: "subagent-error",
         execution: {
           status: "terminal",
@@ -113,17 +114,20 @@ describe("subagent registry sqlite store", () => {
           afterRequesterYield: true,
           rearmGeneration: 3,
           lastError: "provider timeout",
+          lifecycleMismatch: "requester_replaced",
           retireAfterSettle: true,
         },
       });
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
+      const { db } = openOpenClawStateDatabase();
       const restored = loadSubagentRegistryFromSqlite();
       expect(restored.get(run.runId)).toMatchObject({
         runId: run.runId,
         childSessionKey: run.childSessionKey,
         requesterSessionKey: run.requesterSessionKey,
+        expectedRequesterLifecycleRevision: "revision-1",
         task: run.task,
         requesterTurnRunId: "run-requester",
         requesterTurnYielded: true,
@@ -221,10 +225,12 @@ describe("subagent registry sqlite store", () => {
   it("keeps the complete payload authoritative over stale derived state columns", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
+        expectedRequesterLifecycleRevision: "revision-1",
         requesterSettleWake: {
           status: "dispatching",
           attemptCount: 2,
           batchRunIds: ["run-one"],
+          lifecycleMismatch: "requester_replaced",
         },
       });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
@@ -251,6 +257,7 @@ describe("subagent registry sqlite store", () => {
       expect(restored?.completion?.resultText).toBe("done");
       expect(restored?.delivery).toMatchObject({ status: "pending", lastError: "retry later" });
       expect(restored?.requesterSettleWake).toEqual(run.requesterSettleWake);
+      expect(restored?.expectedRequesterLifecycleRevision).toBe("revision-1");
       expect(restored?.execution.outcome?.status).toBe("ok");
       const sessionListRun = loadSubagentSessionListRunsFromSqlite().get(run.runId);
       expect(sessionListRun?.execution.outcome?.status).toBe("ok");
@@ -317,6 +324,64 @@ describe("subagent registry sqlite store", () => {
       expect(loadSubagentRegistryFromSqlite().get(run.runId)?.completion).toMatchObject({
         resultText: "NO_REPLY",
         fallbackResultText: "legacy retained result",
+      });
+    });
+  });
+
+  it("reads pre-upgrade payloads without lifecycle fields and round-trips current rows", async () => {
+    await withTempStateEnv(async () => {
+      const legacy = createRun({
+        expectedRequesterLifecycleRevision: "revision-1",
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          lifecycleMismatch: "requester_replaced",
+        },
+      });
+      saveSubagentRegistryToSqlite(new Map([[legacy.runId, legacy]]));
+
+      // Simulate a row written before the lifecycle fence shipped: the
+      // canonical payload predates the lifecycle fields, so hydration must
+      // not invent a captured revision or a mismatch outcome.
+      const { db } = openOpenClawStateDatabase();
+      const row = db
+        .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+        .get(legacy.runId) as { payload_json: string };
+      const legacyPayload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      delete legacyPayload.expectedRequesterLifecycleRevision;
+      const settleWake = legacyPayload.requesterSettleWake;
+      if (settleWake && typeof settleWake === "object") {
+        delete (settleWake as Record<string, unknown>).lifecycleMismatch;
+      }
+      db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+        JSON.stringify(legacyPayload),
+        legacy.runId,
+      );
+      closeOpenClawStateDatabaseForTest();
+
+      const restored = loadSubagentRegistryFromSqlite().get(legacy.runId);
+      expect(restored?.expectedRequesterLifecycleRevision).toBeUndefined();
+      expect(restored?.requesterSettleWake?.lifecycleMismatch).toBeUndefined();
+
+      // New rows written after the upgrade round-trip the lifecycle fields.
+      const current = createRun({
+        runId: "run-current",
+        childSessionKey: "agent:main:subagent:current",
+        expectedRequesterLifecycleRevision: "revision-1",
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          lifecycleMismatch: "requester_replaced",
+        },
+      });
+      saveSubagentRegistryToSqlite(new Map([[current.runId, current]]));
+      expect(loadSubagentRegistryFromSqlite().get(current.runId)).toMatchObject({
+        expectedRequesterLifecycleRevision: "revision-1",
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          lifecycleMismatch: "requester_replaced",
+        },
       });
     });
   });

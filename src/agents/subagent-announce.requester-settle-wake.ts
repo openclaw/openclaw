@@ -59,6 +59,14 @@ const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Set<string>();
 
+const REQUESTER_LIFECYCLE_CHANGED_ANNOUNCE_RE =
+  /session .* changed (?:while starting expected work|before expected work could start)/i;
+
+function isRequesterLifecycleChangedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return REQUESTER_LIFECYCLE_CHANGED_ANNOUNCE_RE.test(message);
+}
+
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
   requireVisibleReply: boolean;
@@ -155,7 +163,31 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
       : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
     ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
+    ...(source?.lifecycleMismatch !== undefined
+      ? { lifecycleMismatch: source.lifecycleMismatch }
+      : {}),
   };
+}
+
+function fenceRequesterSettleWakeBatch(params: {
+  batchRunIds: readonly string[];
+  state: RequesterSettleWakeBatchState;
+  mismatch: NonNullable<RequesterSettleWakeState["lifecycleMismatch"]>;
+  requesterSessionKey: string;
+  transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
+}): void {
+  const reason =
+    params.mismatch === "requester_replaced"
+      ? "requester lifecycle was replaced before the subagent completion settled; stale completion retained without delivery"
+      : "requester session entry is unavailable; completion retained without delivery";
+  params.transitionBatch(params.batchRunIds, {
+    ...params.state,
+    lifecycleMismatch: params.mismatch,
+    lastError: `${params.mismatch}: ${reason} (requester=${params.requesterSessionKey})`,
+  });
+  logWarn(
+    `requester settle wake fenced (${params.mismatch}); retaining ${params.batchRunIds.length} run(s) without delivery`,
+  );
 }
 
 function deferRequesterSettleWakeBatch(params: {
@@ -271,8 +303,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
 
-  const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
-  const selectedState = readSharedBatchState(settledBatch);
+  let batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
+  let selectedState = readSharedBatchState(settledBatch);
+  if (selectedState.lifecycleMismatch) {
+    // Already fenced; retain the explicit mismatch outcome without retrying.
+    return false;
+  }
   if (hasUnsettledDescendants) {
     if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
       deferRequesterSettleWakeBatch({
@@ -283,39 +319,75 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     }
     return false;
   }
-  const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
-  const hasUndeliveredRequiredCompletion = requiredSettled.some(
-    (entry) => entry.delivery?.status !== "delivered",
+  const maybeCompleteWithoutWake = (
+    batch: readonly SubagentRunRecord[],
+    state: RequesterSettleWakeBatchState,
+  ): boolean => {
+    const requiredSettled = batch.filter((entry) => entry.expectsCompletionMessage === true);
+    const hasUndeliveredRequiredCompletion = requiredSettled.some(
+      (entry) => entry.delivery?.status !== "delivered",
+    );
+    // A yielded batch owns a rearm generation even when its child settles later.
+    // Otherwise a delivered single child clears the batch before its requester wakes.
+    const yieldedAfterDelivery =
+      state.afterRequesterYield === true ||
+      (state.requesterYieldBatch === true && state.rearmGeneration !== undefined);
+    if (
+      requiredSettled.length === 0 ||
+      (requiredSettled.length < 2 && !hasUndeliveredRequiredCompletion && !yieldedAfterDelivery) ||
+      getSubagentDepthFromSessionStore(requesterSessionKey) >= 1
+    ) {
+      completeRequesterSettleWakeBatch({
+        runIds: batch.map((entry) => entry.runId).toSorted(),
+        state,
+        completeBatch,
+      });
+      return true;
+    }
+    return false;
+  };
+  if (maybeCompleteWithoutWake(settledBatch, selectedState)) {
+    return false;
+  }
+  const { entry: requesterEntry } = loadRequesterSessionEntry(requesterSessionKey);
+  if (!hasUsableSessionEntry(requesterEntry)) {
+    fenceRequesterSettleWakeBatch({
+      batchRunIds,
+      state: selectedState,
+      mismatch: "requester_missing",
+      requesterSessionKey,
+      transitionBatch: params.transitionBatch,
+    });
+    return false;
+  }
+  const currentRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
+  const matchingEntries = settledBatch.filter(
+    (entry) => entry.expectedRequesterLifecycleRevision === currentRequesterLifecycleRevision,
   );
-  // A yielded batch owns a rearm generation even when its child settles later.
-  // Otherwise a delivered single child clears the batch before its requester wakes.
+  const mismatchedEntries = settledBatch.filter(
+    (entry) => entry.expectedRequesterLifecycleRevision !== currentRequesterLifecycleRevision,
+  );
+  if (mismatchedEntries.length > 0) {
+    fenceRequesterSettleWakeBatch({
+      batchRunIds: mismatchedEntries.map((entry) => entry.runId).toSorted(),
+      state: readSharedBatchState(mismatchedEntries),
+      mismatch: "requester_replaced",
+      requesterSessionKey,
+      transitionBatch: params.transitionBatch,
+    });
+  }
+  if (matchingEntries.length === 0) {
+    return false;
+  }
+  settledBatch = matchingEntries;
+  batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
+  selectedState = readSharedBatchState(settledBatch);
+  if (maybeCompleteWithoutWake(settledBatch, selectedState)) {
+    return false;
+  }
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
-  if (
-    requiredSettled.length === 0 ||
-    (requiredSettled.length < 2 &&
-      !hasUndeliveredRequiredCompletion &&
-      !requesterYieldedAfterDelivery) ||
-    getSubagentDepthFromSessionStore(requesterSessionKey) >= 1
-  ) {
-    completeRequesterSettleWakeBatch({
-      runIds: batchRunIds,
-      state: selectedState,
-      completeBatch,
-    });
-    return false;
-  }
-
-  const { entry: requesterEntry } = loadRequesterSessionEntry(requesterSessionKey);
-  if (!hasUsableSessionEntry(requesterEntry)) {
-    completeRequesterSettleWakeBatch({
-      runIds: batchRunIds,
-      state: selectedState,
-      completeBatch,
-    });
-    return false;
-  }
 
   const findings = buildChildCompletionFindings(
     dedupeLatestChildCompletionRows(
@@ -416,9 +488,23 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         directIdempotencyKey: buildAnnounceIdempotencyKey(
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),
+        // Bind the delivery to the lifecycle revision validated above: the
+        // gateway re-checks it at final admission, so a reset between this
+        // preflight and admission cannot inject the wake into a replacement.
+        expectedRequesterLifecycleRevision: currentRequesterLifecycleRevision,
         signal: params.signal,
       });
     } catch (error) {
+      if (isRequesterLifecycleChangedError(error)) {
+        fenceRequesterSettleWakeBatch({
+          batchRunIds,
+          state,
+          mismatch: "requester_replaced",
+          requesterSessionKey,
+          transitionBatch: params.transitionBatch,
+        });
+        return false;
+      }
       // A transport exception can arrive after gateway admission. Replay the
       // same persisted idempotency key; only a known no-turn result may rotate it.
       const lastError = error instanceof Error ? error.message : String(error);

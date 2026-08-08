@@ -144,6 +144,7 @@ async function resolveQueueEmbeddedAgentMessageOutcome(
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
+  expectedRequesterLifecycleRevision?: string;
   expectFinal?: boolean;
   timeoutMs?: number;
 }): Promise<unknown> {
@@ -156,6 +157,11 @@ async function runAnnounceAgentCall(params: {
         params.agentParams.inputProvenance,
       ),
       delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
+      ...(params.expectedRequesterLifecycleRevision !== undefined
+        ? {
+            expectedRequesterLifecycleRevision: params.expectedRequesterLifecycleRevision,
+          }
+        : {}),
       timeoutMs: params.timeoutMs,
     },
   );
@@ -857,6 +863,7 @@ async function sendSubagentAnnounceDirectly(params: {
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  expectedRequesterLifecycleRevision?: string;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
@@ -1116,6 +1123,7 @@ async function sendSubagentAnnounceDirectly(params: {
                   }
                 : undefined,
             expectFinal: true,
+            expectedRequesterLifecycleRevision: params.expectedRequesterLifecycleRevision,
             timeoutMs: announceTimeoutMs,
           });
         },
@@ -1338,6 +1346,7 @@ export async function deliverSubagentAnnouncement(params: {
   requireVisibleReply?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  expectedRequesterLifecycleRevision?: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
@@ -1486,6 +1495,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
+        expectedRequesterLifecycleRevision: params.expectedRequesterLifecycleRevision,
         isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
         isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
         requesterIsSubagent: params.requesterIsSubagent,

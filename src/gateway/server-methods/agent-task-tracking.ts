@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { loadRequesterLifecycleRevision } from "../../agents/subagent-requester-lifecycle.js";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -168,6 +169,12 @@ export async function registerPluginSubagentRunFromGateway(params: {
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
   const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
+  // Snapshot the accepting lifecycle before the lazy registry import: a reset
+  // interleaving with the await must not re-tag this admission.
+  const requesterLifecycleRevision =
+    params.requester !== undefined
+      ? loadRequesterLifecycleRevision(requesterSessionKey)
+      : undefined;
   const { registerSubagentRun } = await import("../../agents/subagent-registry.js");
   registerSubagentRun({
     runId: params.runId,
@@ -180,6 +187,9 @@ export async function registerPluginSubagentRunFromGateway(params: {
     cleanup: "keep",
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
     expectsCompletionMessage: params.requester !== undefined,
+    ...(requesterLifecycleRevision !== undefined
+      ? { expectedRequesterLifecycleRevision: requesterLifecycleRevision }
+      : {}),
     spawnMode: "run",
   });
 }
