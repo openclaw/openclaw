@@ -204,13 +204,15 @@ describe("Buzz reconnect history catch-up", () => {
     relayMocks.connected = true;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          self: RELAY_PUBLIC_KEY,
-          software: "https://github.com/block/buzz",
-        }),
-      })),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              self: RELAY_PUBLIC_KEY,
+              software: "https://github.com/block/buzz",
+            }),
+          ),
+      ),
     );
   });
 
