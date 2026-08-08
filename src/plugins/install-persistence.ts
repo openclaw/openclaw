@@ -26,7 +26,7 @@ import { reconcileNpmPluginLoadPath, type PluginInstallUpdate } from "./installs
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validateManifestSchemaValue } from "./schema-validator.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { buildPluginSnapshotReport } from "./status.js";
 import {
@@ -464,7 +464,7 @@ function resolvePluginConfigEnablement(params: {
   }
   const entry = params.config.plugins?.entries?.[params.pluginId];
   const hasConfig = isRecord(entry) && Object.hasOwn(entry, "config");
-  const result = validateJsonSchemaValue({
+  const result = validateManifestSchemaValue({
     schema: manifest.configSchema,
     cacheKey: manifest.schemaCacheKey ?? manifest.manifestPath,
     value: hasConfig ? entry.config : {},
