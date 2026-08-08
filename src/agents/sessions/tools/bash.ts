@@ -9,6 +9,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { Type } from "typebox";
 import { toErrorObject } from "../../../infra/errors.js";
 import { formatDurationSeconds } from "../../../infra/format-time/format-duration.js";
+import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { spawnCommand } from "../../../process/exec.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
@@ -61,6 +62,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
  */
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
   return {
+    createTextDecoder: createWindowsOutputDecoder,
     exec: (command, cwd, { onData, signal, timeout, env }) => {
       return new Promise((resolve, reject) => {
         const shellConfig = getBashShellConfig(options?.shellPath);
@@ -325,7 +327,10 @@ export function createBashToolDefinition(
       resolveBashTimeoutMs(timeout);
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
       const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);
-      const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
+      const output = new OutputAccumulator({
+        tempFilePrefix: "openclaw-bash",
+        createTextDecoder: ops.createTextDecoder,
+      });
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
       let updateDirty = false;
