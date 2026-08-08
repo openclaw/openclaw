@@ -1,8 +1,10 @@
 // Control UI chat module owns low-level WebRTC offer and media-message helpers.
+import { readResponseTextWithLimit } from "../../lib/response-body.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import type { RealtimeTalkVideoFrame } from "./realtime-talk-video.ts";
 
 const REALTIME_WEBRTC_OFFER_TIMEOUT_MS = 30_000;
+const REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
 const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 
@@ -90,14 +92,24 @@ export class RealtimeTalkWebRtcOfferExchange {
         throw error;
       }
       if (!params.isCurrent()) {
+        void response.body?.cancel().catch(() => undefined);
         return undefined;
       }
       if (!response.ok) {
+        void response.body?.cancel().catch(() => undefined);
         throw new Error(`Realtime WebRTC setup failed (${response.status})`);
       }
       let answer: string;
       try {
-        answer = await response.text();
+        // OpenAI's server path caps SDP answers at 256 KiB. Custom providers
+        // remain uncapped because the generic WebRTC session contract declares no shared limit.
+        answer =
+          params.session.provider === "openai"
+            ? await readResponseTextWithLimit(response, {
+                maxBytes: REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES,
+                tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${REALTIME_WEBRTC_SDP_ANSWER_MAX_BYTES} bytes`,
+              })
+            : await response.text();
       } catch (error) {
         if (!params.isCurrent()) {
           return undefined;
