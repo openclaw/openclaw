@@ -148,15 +148,42 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
+function hasTerminalOnlyMainRestartRecoveryAggregate(
+  entry: SessionEntry,
+  lifecycleGeneration: string,
+): boolean {
+  const state = entry.mainRestartRecovery;
+  const runs = entry.restartRecoveryRuns;
+  if (
+    !state ||
+    !runs?.length ||
+    entry.restartRecoveryDeliveryRunId !== undefined ||
+    state.reservation !== undefined ||
+    state.foregroundClaims !== undefined ||
+    state.tombstone !== undefined
+  ) {
+    return false;
+  }
+  const terminalRunIds = new Set(entry.restartRecoveryTerminalRunIds ?? []);
+  return runs.every(
+    (run) => run.lifecycleGeneration !== lifecycleGeneration && terminalRunIds.has(run.runId),
+  );
+}
+
 // A healthy session can retain lifecycle fences after its final recovery owner
-// clears. With no active delivery or aggregate, those fences no longer own work.
-function hasOrphanedMainRestartRecoveryFences(entry: SessionEntry, sessionKey: string): boolean {
+// clears. With no active delivery or aggregate owner, those fences no longer own work.
+function hasOrphanedMainRestartRecoveryFences(
+  entry: SessionEntry,
+  sessionKey: string,
+  lifecycleGeneration: string,
+): boolean {
   return (
     (entry.status === "running" &&
       entry.abortedLastRun !== true &&
       entry.restartRecoveryRuns !== undefined &&
-      entry.mainRestartRecovery === undefined &&
       entry.restartRecoveryDeliveryRunId === undefined &&
+      (entry.mainRestartRecovery === undefined ||
+        hasTerminalOnlyMainRestartRecoveryAggregate(entry, lifecycleGeneration)) &&
       isMainRestartRecoveryCandidate(entry, sessionKey)) ||
     // Sessions that are not running were permanently unadmittable while holding
     // recovery residue, returning "changed while starting work" forever
@@ -237,7 +264,8 @@ function inspectMainSessionRecoveryForAdmission(params: {
     params.entry.status === "running" &&
     params.entry.abortedLastRun !== true &&
     params.entry.mainRestartRecovery &&
-    params.entry.restartRecoveryRuns?.length
+    params.entry.restartRecoveryRuns?.length &&
+    !hasTerminalOnlyMainRestartRecoveryAggregate(params.entry, params.lifecycleGeneration)
   ) {
     // Standalone callers may use another process generation. Any admitted
     // recovery fence remains authoritative until Gateway lifecycle settlement.
@@ -467,7 +495,7 @@ export function transitionMainSessionRecovery(
     case "claim_foreground": {
       if (
         entry.sessionId === command.sessionId &&
-        hasOrphanedMainRestartRecoveryFences(entry, command.sessionKey)
+        hasOrphanedMainRestartRecoveryFences(entry, command.sessionKey, command.lifecycleGeneration)
       ) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
