@@ -19,7 +19,8 @@ export async function notifyGatewayPluginMetadataChanged(
       method: "plugins.refresh",
       params: {},
       timeoutMs: 1_000,
-      localPortOverride: resolveGatewayPort(config),
+      // Match ignoreEnvUrlOverride: use the configured local port, not OPENCLAW_GATEWAY_PORT.
+      localPortOverride: resolveGatewayPort(config, {}),
       ignoreEnvUrlOverride: true,
       requiredMethods: ["plugins.refresh"],
       scopes: ["operator.admin"],
