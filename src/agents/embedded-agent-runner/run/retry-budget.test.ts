@@ -8,10 +8,10 @@ import {
 } from "./retry-budget.js";
 
 describe("run retry budget", () => {
-  it("allows more than 32 progressing continuations", () => {
+  it("bounds progressing continuations at the dispatched-attempt cap", () => {
     const budget = createRunRetryBudget(32);
 
-    for (let step = 0; step < 33; step += 1) {
+    for (let step = 0; step < 32; step += 1) {
       beginRunAttempt(budget);
       recordRunRetry(
         budget,
@@ -24,10 +24,13 @@ describe("run retry budget", () => {
           toolMetas: [{ toolName: "read", meta: `step=${step}`, isError: false }],
         }),
       );
+      // The refund keeps attemptsCounted at zero, but the dispatched-attempt
+      // wall still trips once maxAttempts model calls have been sent.
+      expect(isRunRetryBudgetExhausted(budget)).toBe(step >= 31);
     }
 
-    expect(budget).toEqual({ attemptsDispatched: 33, attemptsCounted: 0, maxAttempts: 32 });
-    expect(isRunRetryBudgetExhausted(budget)).toBe(false);
+    expect(budget).toEqual({ attemptsDispatched: 32, attemptsCounted: 0, maxAttempts: 32 });
+    expect(isRunRetryBudgetExhausted(budget)).toBe(true);
   });
 
   it("still stops 32 retries that make no progress", () => {
