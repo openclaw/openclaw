@@ -210,7 +210,9 @@ describe("searchKeyword trigram fallback", () => {
       query: "成语",
     });
     expect(results.map((row) => row.id)).toContain("1");
-    expect(results[0]?.textScore).toBe(1);
+    // LIKE substring fallback carries no BM25 ranking signal, so textScore is 0
+    // (recall only); the hybrid merge must not treat it as a perfect match.
+    expect(results[0]?.textScore).toBe(0);
   });
 
   itWithTrigramFts("finds short Japanese and Korean queries with substring fallback", async () => {
@@ -352,8 +354,9 @@ describe("searchKeyword FTS MATCH fallback", () => {
       // LIKE fallback should find "Agent" in the first row
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.id).toBe("1");
-      // Fallback results have textScore=1 (no BM25 ranking)
-      expect(results[0]?.textScore).toBe(1);
+      // LIKE fallback has no BM25 ranking, so textScore is 0 (recall only) and
+      // cannot inflate the hybrid merge into a spurious finalScore = 1.0.
+      expect(results[0]?.textScore).toBe(0);
     } finally {
       db.close();
     }

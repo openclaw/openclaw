@@ -4531,6 +4531,84 @@ describe("memory index", () => {
     expect(results[0]).toMatchObject({ score: 0.9, textScore: 0.1 });
   });
 
+  it("preserves LIKE fallback body lexical ordering through manager normalization", async () => {
+    // LIKE fallback body hits carry textScore = 0 (no BM25, recall only) but
+    // boost mode still derives a lexical score. The manager's path-only
+    // sentinel (textScore === 0) must not erase that boost-derived score
+    // during normalization, or every fallback body hit ties at zero. See #120603.
+    const cfg = createCfg({
+      minScore: 0,
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    const manager = await getPersistentManager(cfg);
+    type FallbackKeywordHit = {
+      id: string;
+      path: string;
+      startLine: number;
+      endLine: number;
+      score: number;
+      snippet: string;
+      source: "memory";
+      textScore: number;
+      pathScore: number;
+      exactPathSpecificity: 0;
+      likeFallbackBody?: boolean;
+    };
+    const internal = manager as unknown as {
+      mergeKeywordSearchHits: (
+        resultSets: FallbackKeywordHit[][],
+        exactPathQuery?: string,
+      ) => Array<FallbackKeywordHit>;
+    };
+
+    const merged = internal.mergeKeywordSearchHits(
+      [
+        [
+          {
+            id: "strong",
+            path: "memory/strong.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.69,
+            snippet: "strong fallback body",
+            source: "memory",
+            textScore: 0,
+            pathScore: 0,
+            exactPathSpecificity: 0,
+            likeFallbackBody: true,
+          },
+          {
+            id: "weak",
+            path: "memory/weak.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.35,
+            snippet: "weak fallback body",
+            source: "memory",
+            textScore: 0,
+            pathScore: 0,
+            exactPathSpecificity: 0,
+            likeFallbackBody: true,
+          },
+        ],
+      ],
+      "fallback query",
+    );
+
+    expect(merged).toHaveLength(2);
+    const byId = new Map(merged.map((entry) => [entry.id, entry]));
+    // textScore stays 0 (fallback contributes no BM25 to hybrid contentScore).
+    expect(byId.get("strong")?.textScore).toBe(0);
+    expect(byId.get("weak")?.textScore).toBe(0);
+    // The flag survives normalization so the path-only sentinel excludes them.
+    expect(byId.get("strong")?.likeFallbackBody).toBe(true);
+    expect(byId.get("weak")?.likeFallbackBody).toBe(true);
+    // Boost-derived scores survive normalization (not reset to pathScore = 0).
+    expect(byId.get("strong")?.score).toBeCloseTo(0.69);
+    expect(byId.get("weak")?.score).toBeCloseTo(0.35);
+    expect(byId.get("strong")?.score).toBeGreaterThan(byId.get("weak")?.score ?? 0);
+  });
+
   it("bounds the merged six-term fallback candidate set", async () => {
     forceNoProvider = true;
     const cfg = createCfg({

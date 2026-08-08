@@ -654,7 +654,7 @@ export async function searchKeyword(params: {
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
-}): Promise<Array<SearchRowResult & { textScore: number }>> {
+}): Promise<Array<SearchRowResult & { textScore: number; likeFallbackBody?: boolean }>> {
   if (params.limit <= 0) {
     return [];
   }
@@ -735,7 +735,14 @@ export async function searchKeyword(params: {
   }
 
   return rows.map((row) => {
-    const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
+    // LIKE fallback only confirms substring recall — it has no BM25 ranking, so
+    // treating it as a perfect text match (textScore = 1) let weak substring
+    // hits combine with vectorScore in the hybrid merge and produce spurious
+    // finalScore = 1.0 for non-identical content. Score these as a zero text
+    // signal so only the vector score contributes to contentScore; boost mode
+    // still derives a lexicalBoost from query/text overlap via
+    // scoreFallbackKeywordResult below.
+    const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 0;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
           query: params.query,
@@ -754,6 +761,9 @@ export async function searchKeyword(params: {
         textScore,
         snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
         source: row.source,
+        // Mark LIKE fallback body hits so the manager's path-only sentinel
+        // (textScore === 0) does not erase the boost-derived lexical score.
+        ...(usedMatch ? {} : { likeFallbackBody: true }),
       },
       readChunkProvenance(params.db, row.id),
     );

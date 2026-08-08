@@ -642,6 +642,46 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.textScore).toBeCloseTo(1);
   });
 
+  it("mergeHybridResults does not produce finalScore = 1.0 for LIKE-fallback keyword hits", async () => {
+    // LIKE substring fallback (FTS5 MATCH throws, or substring-only query)
+    // scores textScore = 0 because it carries no BM25 ranking signal. Even
+    // when the same chunk is a perfect vector neighbor (vectorScore = 1), the
+    // merged contentScore must stay below 1.0 so non-identical content is not
+    // reported as a near-duplicate. See #115001.
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      vector: [
+        {
+          id: "a",
+          path: "memory/a.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "vec-a",
+          vectorScore: 1,
+        },
+      ],
+      keyword: [
+        {
+          id: "a",
+          path: "memory/a.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "kw-a",
+          textScore: 0,
+        },
+      ],
+    });
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.textScore).toBe(0);
+    // 0.7 * 1 (vector) + 0.3 * 0 (LIKE recall only) = 0.7, strictly below 1.0.
+    expect(merged[0]?.score).toBeCloseTo(0.7);
+    expect(merged[0]?.score).toBeLessThan(1);
+  });
+
   const vectorResult = (id: string, path: string, vectorScore: number) => ({
     id,
     path,
