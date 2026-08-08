@@ -31,6 +31,7 @@ async function createRealtimeServer(params?: {
   onUpgrade?: (headers: Record<string, string | string[] | undefined>) => void;
   onBinary?: (payload: Buffer) => void;
   onText?: (payload: unknown) => void;
+  requiredProtocol?: string;
 }) {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
@@ -38,6 +39,14 @@ async function createRealtimeServer(params?: {
 
   server.on("upgrade", (request, socket, head) => {
     params?.onUpgrade?.(request.headers);
+    if (
+      params?.requiredProtocol &&
+      request.headers["sec-websocket-protocol"] !== params.requiredProtocol
+    ) {
+      socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(request, socket, head, (ws) => {
       clients.add(ws);
       ws.on("close", () => clients.delete(ws));
@@ -660,6 +669,33 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await session.connect();
 
     expect(seenAuthHeaders).toEqual(["Bearer resolved-token"]);
+    session.close();
+  });
+
+  it("negotiates configured WebSocket subprotocols", async () => {
+    const seenProtocols: Array<string | string[] | undefined> = [];
+    const server = await createRealtimeServer({
+      requiredProtocol: "binary",
+      onUpgrade: (headers) => {
+        seenProtocols.push(headers["sec-websocket-protocol"]);
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: {},
+      url: server.url,
+      protocols: ["binary"],
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+
+    expect(seenProtocols).toEqual(["binary"]);
+    const socket = Reflect.get(session, "ws") as WebSocket;
+    expect(socket.protocol).toBe("binary");
     session.close();
   });
 
