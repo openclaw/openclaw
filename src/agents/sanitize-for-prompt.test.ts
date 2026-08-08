@@ -23,6 +23,14 @@ function hasLoneSurrogate(value: string): boolean {
   return false;
 }
 
+function extractPromptData(block: string): string {
+  const match = block.match(/<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/);
+  if (!match?.[1]) {
+    throw new Error("Expected prompt data block");
+  }
+  return match[1];
+}
+
 describe("sanitizeForPromptLiteral (OC-19 hardening)", () => {
   it("strips ASCII control chars (CR/LF/NUL/tab)", () => {
     expect(sanitizeForPromptLiteral("/tmp/a\nb\rc\x00d\te")).toBe("/tmp/abcde");
@@ -106,6 +114,27 @@ describe("wrapPromptDataBlock", () => {
     expect(block).not.toContain("\nabcdef\n");
   });
 
+  it("keeps raw-input maxChars behavior without a non-empty truncation marker", () => {
+    const withoutMarker = extractPromptData(
+      wrapPromptDataBlock({
+        label: "Data",
+        text: "<<tail",
+        maxChars: 2,
+      }),
+    );
+    const withEmptyMarker = extractPromptData(
+      wrapPromptDataBlock({
+        label: "Data",
+        text: "<<tail",
+        maxChars: 2,
+        truncationMarker: "",
+      }),
+    );
+
+    expect(withoutMarker).toBe("&lt;&lt;");
+    expect(withEmptyMarker).toBe(withoutMarker);
+  });
+
   it("does not split surrogate pairs when applying max char limits", () => {
     const block = wrapPromptDataBlock({
       label: "Data",
@@ -116,6 +145,34 @@ describe("wrapPromptDataBlock", () => {
     expect(block).toContain(`\n${"a".repeat(3)}\n`);
     expect(hasLoneSurrogate(block)).toBe(false);
   });
+
+  it("budgets a truncation marker after sanitizing removable text", () => {
+    const block = wrapPromptDataBlock({
+      label: "Data",
+      text: `${"\0".repeat(20)}useful-result`,
+      maxChars: 12,
+      truncationMarker: "[cut]",
+    });
+
+    expect(block).toContain("\nuseful-[cut]\n");
+  });
+
+  it.each([10, 11, 12])(
+    "budgets a truncation marker after escaping with %i chars without splitting entities",
+    (maxChars) => {
+      const payload = extractPromptData(
+        wrapPromptDataBlock({
+          label: "Data",
+          text: "<".repeat(20),
+          maxChars,
+          truncationMarker: "[cut]",
+        }),
+      );
+
+      expect(payload).toBe("&lt;[cut]");
+      expect(payload.length).toBeLessThanOrEqual(maxChars);
+    },
+  );
 });
 
 describe("wrapUntrustedPromptDataBlock", () => {

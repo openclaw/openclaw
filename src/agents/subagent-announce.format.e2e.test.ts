@@ -32,7 +32,7 @@ import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-ou
 type AgentCallRequest = {
   method?: string;
   params?: Record<string, unknown> & {
-    internalEvents?: Array<{ type?: string; taskLabel?: string }>;
+    internalEvents?: Array<{ type?: string; taskLabel?: string; result?: string }>;
   };
 };
 type RequesterResolution = {
@@ -558,6 +558,27 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
+  });
+
+  it("bounds an oversized leaf result only at the parent announcement prompt", async () => {
+    const oversizedResult = `<${"<".repeat(6_000)}-unbounded-tail`;
+    readLatestAssistantReplyMock.mockResolvedValue(oversizedResult);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-oversized-result",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = getAgentCall();
+    const msg = call.params?.message as string;
+    const projectedResult = msg.match(/<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)?.[1];
+    expect(projectedResult?.length).toBeLessThanOrEqual(6_000);
+    expect(projectedResult?.endsWith("\n[child result truncated]")).toBe(true);
+    expect(projectedResult).not.toContain("unbounded-tail");
+    expect(call.params?.internalEvents?.[0]?.result).toBe(oversizedResult);
   });
 
   it("includes success status when outcome is ok", async () => {
