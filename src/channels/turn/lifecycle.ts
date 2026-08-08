@@ -24,7 +24,7 @@ import {
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
-import { runPreparedChannelTurnCore } from "./execution.js";
+import { runPreparedChannelTurnCore, trackTurnAdoptionLifecycle } from "./execution.js";
 import type {
   AssembledChannelTurn,
   ChannelEventDeliveryAdapter,
@@ -364,9 +364,16 @@ async function dispatchChannelTurnWithDeliveryOwner(
     | [params: RoutedAssembledChannelTurn, ownership: "routed-delivery"]
 ): Promise<ChannelTurnResult> {
   const [params, ownership] = args;
-  const replyPipeline = resolveAssembledReplyPipeline(params);
-  const turnAdoptionLifecycle =
+  const untrackedTurnAdoptionLifecycle =
     params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  const turnAdoptionLifecycle = untrackedTurnAdoptionLifecycle
+    ? trackTurnAdoptionLifecycle(untrackedTurnAdoptionLifecycle)
+    : undefined;
+  // Thread the tracked lifecycle into the reply lane too, so onAdopted calls
+  // made by the dispatcher are observed by the pre-adoption abandonment guard.
+  const replyPipeline = resolveAssembledReplyPipeline(
+    turnAdoptionLifecycle ? { ...params, turnAdoptionLifecycle } : params,
+  );
   const delivery =
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
   const pendingDeliveryAttempts: PendingChannelDeliveryAttempt[] = [];
