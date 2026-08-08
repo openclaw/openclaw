@@ -426,6 +426,9 @@ export class MeetingSessionRuntime<
         normalizeMeetingBrowserHealthRefreshOutcome(
           await this.options.refreshBrowserHealth(session, options),
         ))());
+    if (session.state !== "active") {
+      return refreshOutcome;
+    }
     if (session.browserLeft === true && this.options.getBrowser(session)?.tab) {
       session.browserLeft = undefined;
     }

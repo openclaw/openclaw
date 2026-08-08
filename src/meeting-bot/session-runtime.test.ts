@@ -459,6 +459,58 @@ describe("MeetingSessionRuntime status cleanup ordering", () => {
     expect(refreshStatus).not.toHaveBeenCalled();
   });
 
+  it("preserves terminal speech health when an in-flight status refresh finishes late", async () => {
+    let finishRefresh!: () => void;
+    let markRefreshStarted!: () => void;
+    const refreshStarted = new Promise<void>((resolve) => {
+      markRefreshStarted = resolve;
+    });
+    const refreshFinished = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    let runtime!: ReturnType<typeof createTestRuntime>["runtime"];
+    ({ runtime } = createTestRuntime({
+      refreshBrowserHealth: async () => {
+        markRefreshStarted();
+        await refreshFinished;
+        return false;
+      },
+      refreshStatus: async (session) => {
+        await runtime.refreshBrowserHealth(session, { force: true });
+      },
+      releaseBrowserTab: async (session) => {
+        if (session.browser) {
+          session.browser.tab = undefined;
+        }
+        return true;
+      },
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "late-refresh-tab", openedByPlugin: true },
+          health: { inCall: true, micMuted: false, speechReady: true },
+        };
+        return {};
+      },
+    }));
+    const { session } = await runtime.join({
+      url: "https://meeting.example/late-status-refresh",
+      agentId: "main",
+    });
+
+    const status = runtime.status(session.id);
+    await refreshStarted;
+    await runtime.leave(session.id);
+    expect(session.browser?.health).toMatchObject({ inCall: false, speechReady: false });
+
+    finishRefresh();
+    await expect(status).resolves.toMatchObject({
+      found: true,
+      session: { state: "ended" },
+    });
+    expect(session.browser?.health).toMatchObject({ inCall: false, speechReady: false });
+  });
+
   it("releases a tab recovered while terminal transcript capture is pending", async () => {
     let finishFinalCapture!: () => void;
     let markFinalCaptureStarted!: () => void;
