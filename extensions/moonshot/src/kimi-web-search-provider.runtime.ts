@@ -11,14 +11,13 @@ import {
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readConfiguredSecretString,
   readPositiveIntegerParam,
-  readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
+  resolveWebSearchProviderCredential,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderSetupContext,
@@ -48,7 +47,7 @@ const KIMI_WEB_SEARCH_TOOL = {
 } as const;
 
 type KimiConfig = {
-  apiKey?: string;
+  apiKey?: unknown;
   baseUrl?: string;
   model?: string;
 };
@@ -97,10 +96,11 @@ function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
 }
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
-  return (
-    readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
-    readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
-  );
+  return resolveWebSearchProviderCredential({
+    credentialValue: kimi?.apiKey,
+    path: "plugins.entries.moonshot.config.webSearch.apiKey",
+    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+  });
 }
 
 function resolveKimiModel(kimi?: KimiConfig): string {
@@ -361,7 +361,7 @@ export async function executeKimiWebSearchProviderTool(
     return {
       error: "missing_kimi_api_key",
       message:
-        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure plugins.entries.moonshot.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (kimi) needs a Moonshot API key. Configure plugins.entries.moonshot.config.webSearch.apiKey, or set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment. If plugins.entries.moonshot.config.webSearch.apiKey contains an unavailable SecretRef, repair or remove that SecretRef; KIMI_API_KEY and MOONSHOT_API_KEY are ignored until then. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }

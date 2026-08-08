@@ -6,6 +6,8 @@ import { testing } from "../test-api.js";
 import { createKimiWebSearchProvider } from "./kimi-web-search-provider.js";
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
+const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
+const kimiSecretRefApiKeyEnv = ["KIMI_WEB_SEARCH_REF", "KEY"].join("_");
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -14,9 +16,12 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-async function executeKimiSearch(query: string): Promise<Record<string, unknown>> {
+async function executeKimiSearch(
+  query: string,
+  config: OpenClawConfig = {},
+): Promise<Record<string, unknown>> {
   const provider = createKimiWebSearchProvider();
-  const tool = provider.createTool({ config: {}, searchConfig: {} });
+  const tool = provider.createTool({ config, searchConfig: {} });
   if (!tool) {
     throw new Error("Expected tool definition");
   }
@@ -51,6 +56,106 @@ describe("kimi web search provider", () => {
         "use web_fetch for a specific URL or the browser tool",
       );
     });
+  });
+
+  it("resolves configured env SecretRef apiKey", () => {
+    const configuredApiKey = {
+      source: "env",
+      provider: "default",
+      id: kimiSecretRefApiKeyEnv,
+    };
+
+    withEnv(
+      {
+        [kimiSecretRefApiKeyEnv]: "sample",
+        [kimiApiKeyEnv]: undefined,
+        [moonshotApiKeyEnv]: undefined,
+      },
+      () => {
+        expect(testing.resolveKimiApiKey({ apiKey: configuredApiKey })).toBe("sample");
+      },
+    );
+  });
+
+  it("explains recovery when a configured env SecretRef is missing", async () => {
+    const configuredApiKey = {
+      source: "env",
+      provider: "default",
+      id: kimiSecretRefApiKeyEnv,
+    };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync(
+      {
+        [kimiSecretRefApiKeyEnv]: undefined,
+        [kimiApiKeyEnv]: "dummy",
+        [moonshotApiKeyEnv]: "example",
+      },
+      async () => {
+        const result = await executeKimiSearch("kimi missing configured SecretRef", {
+          plugins: {
+            entries: {
+              moonshot: {
+                config: { webSearch: { apiKey: configuredApiKey } },
+              },
+            },
+          },
+        });
+
+        expect(result.error).toBe("missing_kimi_api_key");
+        expectStringFieldContains(result, "message", "repair or remove that SecretRef");
+        expectStringFieldContains(
+          result,
+          "message",
+          "KIMI_API_KEY and MOONSHOT_API_KEY are ignored until then",
+        );
+        expect(fetchMock).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("resolves configured env SecretRef apiKey through plugin config", async () => {
+    const configuredApiKey = {
+      source: "env",
+      provider: "default",
+      id: kimiSecretRefApiKeyEnv,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        search_results: [{ url: "https://example.test/kimi" }],
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { content: "Kimi configured ref answer." },
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync(
+      {
+        [kimiSecretRefApiKeyEnv]: "sample",
+        [kimiApiKeyEnv]: undefined,
+        [moonshotApiKeyEnv]: undefined,
+      },
+      async () => {
+        const result = await executeKimiSearch("kimi configured SecretRef search", {
+          plugins: {
+            entries: {
+              moonshot: {
+                config: { webSearch: { apiKey: configuredApiKey } },
+              },
+            },
+          },
+        });
+
+        const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+        expect(result).not.toHaveProperty("error");
+        expect(requestInit?.headers).toMatchObject({ Authorization: "Bearer sample" });
+      },
+    );
   });
 
   it("uses configured model and base url overrides with sane defaults", () => {
