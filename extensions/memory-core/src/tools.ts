@@ -1,5 +1,5 @@
 // Memory Core plugin module implements tools behavior.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemorySearchStaleness,
   stripMemoryAnnotationCarriers,
@@ -51,6 +51,7 @@ import {
   getMemoryCorpusSupplementResult,
   getMemoryManagerContextWithPurpose,
   loadMemoryToolRuntime,
+  MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE,
   MemoryGetSchema,
   MemorySearchSchema,
   searchMemoryCorpusSupplements,
@@ -66,10 +67,17 @@ type MemoryManagerSearchOptions = NonNullable<
 > &
   MemorySearchDeadlineControlOptions;
 type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
+type MemorySearchToolCooldownFailure = {
+  error: string;
+  code?: typeof MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE;
+};
 
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
-const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
+const memorySearchToolCooldowns = new Map<
+  string,
+  MemorySearchToolCooldownFailure & { until: number }
+>();
 
 /**
  * Validate the model-authored corpus argument against the tool's closed enum.
@@ -132,7 +140,7 @@ function resolveMemorySearchToolCooldownKey(options: {
   return options.agentId ?? options.agentSessionKey ?? "default";
 }
 
-function readMemorySearchToolCooldown(key: string): { error: string } | undefined {
+function readMemorySearchToolCooldown(key: string): MemorySearchToolCooldownFailure | undefined {
   const entry = memorySearchToolCooldowns.get(key);
   if (!entry) {
     return undefined;
@@ -141,13 +149,20 @@ function readMemorySearchToolCooldown(key: string): { error: string } | undefine
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
-  return { error: entry.error };
+  return {
+    error: entry.error,
+    ...(entry.code ? { code: entry.code } : {}),
+  };
 }
 
-function recordMemorySearchToolCooldown(key: string, error: string): void {
+function recordMemorySearchToolCooldown(
+  key: string,
+  failure: MemorySearchToolCooldownFailure,
+): void {
   memorySearchToolCooldowns.set(key, {
     until: Date.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
-    error,
+    error: failure.error,
+    ...(failure.code ? { code: failure.code } : {}),
   });
 }
 
@@ -541,7 +556,12 @@ export function createMemorySearchTool(options: {
           const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
           const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
           if (cooldown && !shouldQuerySupplements) {
-            return jsonResult(buildMemorySearchUnavailableResult(cooldown.error));
+            return jsonResult(
+              buildMemorySearchUnavailableResult(
+                cooldown.error,
+                cooldown.code ? { code: cooldown.code } : undefined,
+              ),
+            );
           }
           const memoryManagerPurpose = options.oneShotCliRun ? "cli" : undefined;
           const memoryManagersToClose = new Set<ActiveMemoryManagerContext["manager"]>();
@@ -581,10 +601,9 @@ export function createMemorySearchTool(options: {
               : null;
             const memory = memorySetup?.context ?? null;
             if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
-              recordMemorySearchToolCooldown(
-                cooldownKey,
-                memory.error ?? "memory search unavailable",
-              );
+              recordMemorySearchToolCooldown(cooldownKey, {
+                error: memory.error ?? "memory search unavailable",
+              });
               return jsonResult(buildMemorySearchUnavailableResult(memory.error));
             }
 
@@ -876,15 +895,29 @@ export function createMemorySearchTool(options: {
           if (callerSignal?.aborted) {
             throw resolveMemorySearchAbortError(callerSignal);
           }
-          const unavailablePhase = failedUnavailablePhase ?? activeUnavailablePhase;
+          const unavailablePhase =
+            failedUnavailablePhase ??
+            activeUnavailablePhase ??
+            (requestedCorpus === "wiki" ? "supplement" : "memory");
           const shouldRecordCooldown =
             requestedCorpus !== "wiki" &&
             (requestedCorpus !== "all" || unavailablePhase === "memory");
           const message = formatErrorMessage(error);
+          const extractedCode = extractErrorCode(error);
+          const code =
+            unavailablePhase === "memory" &&
+            extractedCode === MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE
+              ? MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE
+              : undefined;
           if (shouldRecordCooldown) {
-            recordMemorySearchToolCooldown(cooldownKey, message);
+            recordMemorySearchToolCooldown(cooldownKey, {
+              error: message,
+              ...(code ? { code } : {}),
+            });
           }
-          return jsonResult(buildMemorySearchUnavailableResult(message));
+          return jsonResult(
+            buildMemorySearchUnavailableResult(message, code ? { code } : undefined),
+          );
         }
       },
   });

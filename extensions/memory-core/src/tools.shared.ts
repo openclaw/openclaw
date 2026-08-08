@@ -27,6 +27,21 @@ type MemoryToolOptions = {
   withLease?: PluginStateLeaseRunner;
 };
 
+// Mirrors the core session error contract without crossing the plugin boundary.
+export const MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE =
+  "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
+
+type MemorySearchUnavailableOverrides = {
+  warning?: string;
+  action?: string;
+  code?: typeof MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE;
+};
+
+const CANONICAL_SESSION_MIGRATION_WARNING =
+  "Memory search is unavailable because the session catalog requires canonical-key migration.";
+const CANONICAL_SESSION_MIGRATION_ACTION =
+  "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.";
+
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
 
 export const MemorySearchSchema = Type.Object({
@@ -120,19 +135,18 @@ export function createMemoryTool(params: {
 
 export function buildMemorySearchUnavailableResult(
   error: string | undefined,
-  overrides?: {
-    warning?: string;
-    action?: string;
-  },
+  overrides?: MemorySearchUnavailableOverrides,
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
+  const canonicalMigrationGuidance = resolveMemorySearchCanonicalMigrationGuidance(overrides?.code);
   const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
   const isMissingNodeSqlite = /missing node:sqlite|no such built-?in module: node:sqlite/.test(
     normalizedReason,
   );
   const warning =
     overrides?.warning ??
+    canonicalMigrationGuidance?.warning ??
     (isQuotaError
       ? "Memory search is unavailable because the embedding provider quota is exhausted."
       : isMissingNodeSqlite
@@ -140,6 +154,7 @@ export function buildMemorySearchUnavailableResult(
         : "Memory search is unavailable due to an embedding/provider error.");
   const action =
     overrides?.action ??
+    canonicalMigrationGuidance?.action ??
     (isQuotaError
       ? "Top up or switch embedding provider, then retry memory_search."
       : isMissingNodeSqlite
@@ -157,6 +172,18 @@ export function buildMemorySearchUnavailableResult(
       action,
       error: reason,
     },
+  };
+}
+
+function resolveMemorySearchCanonicalMigrationGuidance(
+  code: typeof MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE | undefined,
+) {
+  if (code !== MEMORY_SEARCH_CANONICAL_SESSION_MIGRATION_CODE) {
+    return undefined;
+  }
+  return {
+    warning: CANONICAL_SESSION_MIGRATION_WARNING,
+    action: CANONICAL_SESSION_MIGRATION_ACTION,
   };
 }
 
