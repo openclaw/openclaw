@@ -1393,6 +1393,11 @@ describe("verify-pr-hosted-gates", () => {
     expect(() => parseArgs(requiredCliArgs.with(5, "zero"))).toThrow(
       "Expected --pr <positive-integer>.",
     );
+    for (const value of ["1e3", "0x10"]) {
+      expect(() => parseArgs(requiredCliArgs.with(5, value))).toThrow(
+        "Expected --pr <positive-integer>.",
+      );
+    }
     expect(() => parseArgs(requiredCliArgs.with(requiredCliArgs.length - 1, "-h"))).toThrow(
       "Expected --output <value>.",
     );
