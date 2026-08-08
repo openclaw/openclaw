@@ -19,13 +19,12 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../cron-status.ts";
-import { toNumber } from "../format.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
-import { parseCronEveryMs } from "./decimal.ts";
+import { parseCronDecimal, parseCronEveryMs } from "./decimal.ts";
 import { loadCronFailingCount } from "./scope.ts";
 
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
@@ -316,8 +315,8 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     if (!form.scheduleExact) {
       const staggerAmount = form.staggerAmount.trim();
       if (staggerAmount) {
-        const stagger = toNumber(staggerAmount, 0);
-        if (stagger <= 0) {
+        const stagger = parseCronDecimal(staggerAmount);
+        if (stagger === undefined || stagger <= 0) {
           errors.staggerAmount = "cron.errors.staggerAmountInvalid";
         }
       }
@@ -332,8 +331,8 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   if (!form.payloadLocked && form.payloadKind === "agentTurn") {
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
-      const timeout = toNumber(timeoutRaw, Number.NaN);
-      if (!Number.isFinite(timeout) || timeout < 0) {
+      const timeout = parseCronDecimal(timeoutRaw);
+      if (timeout === undefined || timeout < 0) {
         errors.timeoutSeconds = "cron.errors.timeoutInvalid";
       }
     }
@@ -349,15 +348,15 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   if (form.failureAlertMode === "custom") {
     const afterRaw = form.failureAlertAfter.trim();
     if (afterRaw) {
-      const after = toNumber(afterRaw, 0);
-      if (!Number.isFinite(after) || after <= 0) {
+      const after = parseCronDecimal(afterRaw);
+      if (after === undefined || after <= 0) {
         errors.failureAlertAfter = "Failure alert threshold must be greater than 0.";
       }
     }
     const cooldownRaw = form.failureAlertCooldownSeconds.trim();
     if (cooldownRaw) {
-      const cooldown = toNumber(cooldownRaw, -1);
-      if (!Number.isFinite(cooldown) || cooldown < 0) {
+      const cooldown = parseCronDecimal(cooldownRaw);
+      if (cooldown === undefined || cooldown < 0) {
         errors.failureAlertCooldownSeconds = "Cooldown must be 0 or greater.";
       }
     }
@@ -889,8 +888,8 @@ function buildCronSchedule(form: CronFormState) {
   if (!staggerAmount) {
     return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined };
   }
-  const staggerValue = toNumber(staggerAmount, 0);
-  if (staggerValue <= 0) {
+  const staggerValue = parseCronDecimal(staggerAmount);
+  if (staggerValue === undefined || staggerValue <= 0) {
     throw new Error(t("cron.errors.invalidStaggerAmount"));
   }
   const staggerMs = form.staggerUnit === "minutes" ? staggerValue * 60_000 : staggerValue * 1_000;
@@ -930,8 +929,8 @@ function buildCronPayload(form: CronFormState) {
   }
   const timeoutRaw = form.timeoutSeconds.trim();
   if (timeoutRaw) {
-    const timeoutSeconds = toNumber(timeoutRaw, Number.NaN);
-    if (Number.isFinite(timeoutSeconds) && timeoutSeconds >= 0) {
+    const timeoutSeconds = parseCronDecimal(timeoutRaw);
+    if (timeoutSeconds !== undefined && timeoutSeconds >= 0) {
       payload.timeoutSeconds = timeoutSeconds;
     }
   }
@@ -963,9 +962,9 @@ function buildFailureAlert(form: CronFormState, existing?: CronJob["failureAlert
     return existing !== undefined ? null : undefined;
   }
   const existingConfig = existing && typeof existing === "object" ? existing : undefined;
-  const after = toNumber(form.failureAlertAfter.trim(), 0);
+  const after = parseCronDecimal(form.failureAlertAfter.trim()) ?? 0;
   const cooldownRaw = form.failureAlertCooldownSeconds.trim();
-  const cooldownSeconds = cooldownRaw.length > 0 ? toNumber(cooldownRaw, 0) : undefined;
+  const cooldownSeconds = cooldownRaw.length > 0 ? parseCronDecimal(cooldownRaw) : undefined;
   const cooldownMs =
     cooldownSeconds !== undefined && Number.isFinite(cooldownSeconds) && cooldownSeconds >= 0
       ? Math.floor(cooldownSeconds * 1000)
