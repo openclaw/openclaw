@@ -268,6 +268,7 @@ const awsMacosPackageManagerScriptTargets = new Set([
   "scripts/restart-mac.sh",
 ]);
 const minimumBlacksmithCrabboxVersion = [0, 22, 0];
+const minimumStructuredBrokerAuthCrabboxVersion = [0, 26, 1];
 const minimumBrokeredDaytonaCrabboxVersion = [0, 40, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
@@ -813,8 +814,6 @@ function requestedWorkload(commandArgs) {
   return normalizeCrabboxWorkload(raw);
 }
 
-let managedBrokerAuthConfiguredCache;
-
 function crabboxProviderReadiness(providerName, versionText, targetContext) {
   const canonicalProvider = canonicalProviderName(providerName);
   if (
@@ -837,9 +836,10 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
       recovery: "update Crabbox, then retry",
     };
   }
-  if (["aws", "azure", "daytona"].includes(canonicalProvider) && !managedBrokerAuthConfigured()) {
+  if (["aws", "azure", "daytona"].includes(canonicalProvider) && !managedBrokerConfigured()) {
     return {
       ready: false,
+      brokerAuthFailure: true,
       reason: "managed Crabbox broker auth unavailable",
       recovery: `run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry`,
     };
@@ -853,10 +853,15 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
   }
   doctorArgs.push("--json");
   const doctor = checkedOutput(binary, doctorArgs);
+  const legacyFailure = legacyBrokerAuthFailure(versionText);
+  if (legacyFailure) {
+    return legacyFailure;
+  }
   if (doctor.status !== 0) {
     const diagnostic = compactDiagnosticText(doctor.text);
     return {
       ready: false,
+      brokerAuthFailure: doctorReportsBrokerAuthFailure(doctor.stdout),
       reason: `doctor exited ${doctor.status}${diagnostic ? `: ${diagnostic}` : ""}`,
       recovery: `run \`${recoveryCommand(doctorArgs)}\``,
     };
@@ -870,6 +875,37 @@ function compactDiagnosticText(value, maxLength = 500) {
     return compact;
   }
   return `${compact.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function doctorReportsBrokerAuthFailure(stdout) {
+  try {
+    const checks = JSON.parse(stdout)?.checks;
+    return (
+      Array.isArray(checks) &&
+      checks.some((check) => check?.status === "failed" && check?.details?.class === "broker_auth")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function legacyBrokerAuthFailure(versionText) {
+  // Crabbox <0.26.1 did not classify auth in doctor JSON, so its standalone
+  // whoami result remains authoritative even when doctor reports success.
+  if (satisfiesMinimumCrabboxVersion(versionText, minimumStructuredBrokerAuthCrabboxVersion)) {
+    return null;
+  }
+  const whoami = checkedOutput(binary, ["whoami"]);
+  if (whoami.status === 0) {
+    return null;
+  }
+  const diagnostic = compactDiagnosticText(whoami.text);
+  return {
+    ready: false,
+    brokerAuthFailure: true,
+    reason: `whoami exited ${whoami.status}${diagnostic ? `: ${diagnostic}` : ""}`,
+    recovery: `run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry`,
+  };
 }
 
 function formatProviderReadiness(readiness) {
@@ -916,21 +952,14 @@ function directCloudOverrideEnabled(providerName) {
   );
 }
 
-function managedBrokerAuthConfigured() {
-  if (managedBrokerAuthConfiguredCache !== undefined) {
-    return managedBrokerAuthConfiguredCache;
-  }
+function managedBrokerConfigured() {
   const parsed = resolvedCrabboxConfig();
-  if (
-    !parsed?.coordinator ||
-    parsed?.brokerMode !== "managed" ||
-    parsed?.brokerAuth !== "configured"
-  ) {
-    managedBrokerAuthConfiguredCache = false;
-    return managedBrokerAuthConfiguredCache;
-  }
-  managedBrokerAuthConfiguredCache = checkedOutput(binary, ["whoami"]).status === 0;
-  return managedBrokerAuthConfiguredCache;
+  const brokerAuth = parsed?.brokerAuth;
+  return Boolean(
+    parsed?.coordinator &&
+    parsed?.brokerMode === "managed" &&
+    (brokerAuth === "configured" || brokerAuth === "command"),
+  );
 }
 
 function enforceBrokeredDaytonaVersion(
@@ -957,14 +986,33 @@ function enforceBrokeredDaytonaVersion(
   process.exit(2);
 }
 
-function enforceBrokeredCloud(commandArgs, providerName, explicitProviderRequested) {
-  if (
-    !shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested) ||
-    managedBrokerAuthConfigured()
-  ) {
+function enforceBrokeredCloud(
+  commandArgs,
+  providerName,
+  explicitProviderRequested,
+  routedReadiness,
+) {
+  if (!shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested)) {
     return;
   }
   const canonicalProvider = canonicalProviderName(providerName);
+  const readiness =
+    routedReadiness ??
+    crabboxProviderReadiness(canonicalProvider, version.text, effectiveTargetContext(commandArgs));
+  // Explicit provider intent may bypass general provider readiness, but never
+  // Crabbox doctor's authoritative broker-auth failure.
+  if (readiness.ready || readiness.brokerAuthFailure !== true) {
+    return;
+  }
+  if (readiness.reason !== "managed Crabbox broker auth unavailable") {
+    console.error(
+      `[crabbox] provider=${canonicalProvider} failed readiness for OpenClaw proof: ${readiness.reason}`,
+    );
+    if (readiness.recovery) {
+      console.error(`[crabbox] recovery: ${readiness.recovery}`);
+    }
+    process.exit(2);
+  }
   const instructions = [
     `[crabbox] provider=${canonicalProvider} requires a configured managed Crabbox broker for OpenClaw proof.`,
     `[crabbox] run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry.`,
@@ -3750,7 +3798,12 @@ if (canonicalProvider === "blacksmith-testbox") {
 
 const explicitProviderRequested = Boolean(commandProviderValue);
 enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text, explicitProviderRequested);
-enforceBrokeredCloud(normalizedArgs, provider, explicitProviderRequested);
+enforceBrokeredCloud(
+  normalizedArgs,
+  provider,
+  explicitProviderRequested,
+  providerSelection.readiness?.get(canonicalProvider),
+);
 
 if (canonicalProvider === "blacksmith-testbox") {
   const envProviderLocal = process.env.CRABBOX_PROVIDER?.trim();
