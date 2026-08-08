@@ -211,6 +211,7 @@ describe("channel ingress drain", () => {
         now: () => clock,
         claimLeaseMs: 3_000,
         adoptionStallTimeoutMs: 2_000,
+        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         deferredLaneOccupancy: "release",
         dispatchClaimedEvent: async () => ({ kind: "deferred" }),
       });
@@ -440,6 +441,39 @@ describe("channel ingress drain", () => {
     });
   });
 
+  it("requeues a pre-adoption stall under the default retry policy instead of losing it", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 10_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-stall-requeue", { text: "user message" }, { laneKey: "l1" });
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 5_000,
+        // No retryPolicy override: defaults must preserve the inbound message.
+        dispatchClaimedEvent: async () => {
+          await new Promise(() => {});
+        },
+      });
+
+      await drain.drainOnce();
+      clock += 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await drain.waitForIdle();
+
+      // The stalled event must NOT be dead-lettered: it was never handled, so
+      // destroying it silently loses a user message.
+      const failed = await queue.listFailed?.();
+      expect(failed ?? []).toHaveLength(0);
+
+      // It is still queued (pending retry), so the payload survives.
+      const reenqueue = await queue.enqueue("evt-stall-requeue", { text: "user message" });
+      expect(reenqueue.kind).not.toBe("failed");
+      drain.dispose();
+    });
+  });
+
   it("watchdog only guillotines pre-adoption stalls with handler-timeout", async () => {
     await withTempState(async (stateDir) => {
       let clock = 10_000;
@@ -450,6 +484,7 @@ describe("channel ingress drain", () => {
         queue,
         now: () => clock,
         adoptionStallTimeoutMs: 5_000,
+        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         dispatchClaimedEvent: async () => {
           // Never adopt, never return — stall until watchdog.
           await new Promise(() => {});
@@ -481,6 +516,7 @@ describe("channel ingress drain", () => {
         queue,
         now: () => clock,
         adoptionStallTimeoutMs: 5_000,
+        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         dispatchClaimedEvent: async (_event, lifecycle) => {
           lifecycle.onDeferred();
           // Stay deferred without adoption — watchdog must still fire.
