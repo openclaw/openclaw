@@ -471,6 +471,6 @@ describe("mergeChannelProgressDraftLine", () => {
       status: "completed",
       toolName: "bash",
     });
-    expect(merged[0].text).toBe("🛠️ echo hi");
+    expect(merged[0]?.text).toBe("🛠️ echo hi");
   });
 });
