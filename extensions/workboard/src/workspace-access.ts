@@ -69,7 +69,15 @@ export const WORKBOARD_REQUIRED_WORKER_TOOLS = [
 ] as const;
 
 export function resolveWorkboardAgentWorkspace(config: WorkboardConfig, agentId?: string): string {
-  return resolveAgentWorkspaceDir(config, agentId ?? resolveDefaultAgentId(config));
+  return resolveAgentWorkspaceDir(config, resolveWorkboardDispatchAgentId(config, agentId));
+}
+
+/**
+ * Owner of a card with no explicit `agentId`. Workspace roots, sandbox authority,
+ * and the worker session key must all name the same agent, so they share this rule.
+ */
+export function resolveWorkboardDispatchAgentId(config: WorkboardConfig, agentId?: string): string {
+  return agentId ?? resolveDefaultAgentId(config);
 }
 
 export function resolveConfiguredWorkboardWorkspaceAccess(params: {

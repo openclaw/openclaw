@@ -9,6 +9,7 @@ import {
   resolveAgentWorkboardWorkspaceRuntime,
   resolveConfiguredWorkboardWorkspaceAccess,
   resolveWorkboardAgentWorkspace,
+  resolveWorkboardDispatchAgentId,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
@@ -118,6 +119,7 @@ export function createWorkboardDispatchHandler(params: {
           boardId: typeof boardId === "string" ? boardId : undefined,
           ...(maxStarts !== undefined ? { maxStarts } : {}),
           materializeWorktree: true,
+          resolveDefaultAgentId: () => resolveWorkboardDispatchAgentId(context.getRuntimeConfig()),
           resolveAgentWorkspace: (agentId) =>
             resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
           resolveAgentWorkspaceRuntime: (

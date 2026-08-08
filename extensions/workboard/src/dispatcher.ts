@@ -8,6 +8,7 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import {
   assertRestrictedWorkboardTarget,
@@ -37,6 +38,14 @@ type WorkboardDispatchStartOptions = {
   provider?: string;
   ownerId?: string;
   boardId?: string;
+  /**
+   * Owner for cards with no explicit `agentId`. Workboard already resolves their
+   * workspace and sandbox authority through the same rule, so the worker session
+   * must land in that agent's SQLite store. Resolved lazily and per card: it reads
+   * config and throws when no agent is configured, which must fail one card rather
+   * than the whole dispatch.
+   */
+  resolveDefaultAgentId?: () => string;
   now?: number;
   materializeWorktree?: boolean;
   resolveAgentWorkspace?: (agentId?: string) => string;
@@ -95,11 +104,48 @@ function cardHasActiveClaim(card: WorkboardCard, now: number): boolean {
   return Boolean(claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now }));
 }
 
-function buildSessionKey(card: WorkboardCard): string {
+/**
+ * Owner used for both the worker session key and dispatch capacity accounting.
+ * Resolved once per dispatch: an unassigned card that runs as the default agent
+ * must occupy that agent's single worker slot, or it can start alongside a card
+ * explicitly assigned to the same agent and write the same workspace.
+ */
+function resolveDispatchDefaultAgentId(resolveDefaultAgentId: (() => string) | undefined): {
+  agentId?: string;
+  error?: string;
+} {
+  if (!resolveDefaultAgentId) {
+    return {};
+  }
+  try {
+    const agentId = resolveDefaultAgentId().trim();
+    return agentId ? { agentId } : {};
+  } catch (error) {
+    return { error: formatErrorMessage(error) };
+  }
+}
+
+function resolveDispatchAgentId(
+  card: WorkboardCard,
+  defaultAgentId: string | undefined,
+): string | undefined {
+  // Cards persist whatever agent id they were created with, so canonicalize before
+  // it becomes a capacity owner: `MAIN` and `main` route to one agent store and
+  // workspace and must not each claim a worker slot. Only a non-empty id is
+  // normalized — `normalizeAgentId` maps blank to `main`, which would reinstate the
+  // implicit-main default this dispatch deliberately fails closed on.
+  const explicitAgentId = card.agentId?.trim();
+  return explicitAgentId ? normalizeAgentId(explicitAgentId) : defaultAgentId || undefined;
+}
+
+// Sessions live in per-agent SQLite stores, so an unscoped key has no store to
+// resolve and every worker start fails. Callers that cannot name an owner get a
+// start failure instead of a key the session runtime will reject. `agentId` is
+// already canonical from resolveDispatchAgentId.
+function buildSessionKey(card: WorkboardCard, agentId: string): string {
   const boardId = sanitizeSessionSegment(cardBoardId(card), "default");
   const cardId = sanitizeSessionSegment(card.id, "card");
-  const suffix = `subagent:workboard-${boardId}-${cardId}`;
-  return card.agentId ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}` : suffix;
+  return `agent:${agentId}:subagent:workboard-${boardId}-${cardId}`;
 }
 
 function buildExecution(params: {
@@ -237,11 +283,16 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
   );
 }
 
-function resolveDispatchOwner(card: WorkboardCard, now: number, ownerOverride?: string): string {
+function resolveDispatchOwner(
+  card: WorkboardCard,
+  now: number,
+  ownerOverride: string | undefined,
+  defaultAgentId: string | undefined,
+): string {
   return (
     ownerOverride ||
     (cardHasActiveClaim(card, now) ? card.metadata?.claim?.ownerId : undefined) ||
-    card.agentId ||
+    resolveDispatchAgentId(card, defaultAgentId) ||
     DEFAULT_DISPATCH_OWNER
   );
 }
@@ -251,6 +302,7 @@ function selectStartableCards(
   limit: number,
   candidates: WorkboardCard[],
   ownerOverride: string | undefined,
+  defaultAgentId: string | undefined,
   now: number,
 ): WorkboardCard[] {
   if (limit <= 0) {
@@ -270,8 +322,10 @@ function selectStartableCards(
       continue;
     }
     // A grace-protected running claim still occupies its actual worker, even
-    // after the lease expires and the card's assigned agent differs.
-    const owner = claim?.ownerId ?? resolveDispatchOwner(card, now);
+    // after the lease expires and the card's assigned agent differs. Claim owners
+    // stay verbatim: an explicit ownerId is an arbitrary worker identity, not an
+    // agent id, so normalizing it here would merge unrelated workers.
+    const owner = claim?.ownerId ?? resolveDispatchOwner(card, now, undefined, defaultAgentId);
     runningByOwner.set(owner, (runningByOwner.get(owner) ?? 0) + 1);
   }
   const selected: WorkboardCard[] = [];
@@ -283,7 +337,7 @@ function selectStartableCards(
         entry.status === "ready" && !cardHasActiveClaim(entry, now) && !cardIsArchived(entry),
     )
     .toSorted(sortReadyCards)) {
-    const owner = resolveDispatchOwner(card, now, ownerOverride);
+    const owner = resolveDispatchOwner(card, now, ownerOverride, defaultAgentId);
     if ((runningByOwner.get(owner) ?? 0) > 0) {
       continue;
     }
@@ -336,21 +390,40 @@ async function runWorkboardDispatch(
   const cards = await params.store.list();
   const candidates = await params.store.list({ boardId });
   const ownerOverride = params.options?.ownerId?.trim() || undefined;
+  const defaultAgent = resolveDispatchDefaultAgentId(params.options?.resolveDefaultAgentId);
   const startedOwners = new Set<string>();
   // Allow one fallback per worker slot without draining the queue during an outage.
   const maxAttempts = maxStarts * 2;
   let acceptedStarts = 0;
   let attemptedStarts = 0;
 
-  for (const card of selectStartableCards(cards, maxStarts, candidates, ownerOverride, now)) {
-    const ownerId = resolveDispatchOwner(card, now, ownerOverride);
+  for (const card of selectStartableCards(
+    cards,
+    maxStarts,
+    candidates,
+    ownerOverride,
+    defaultAgent.agentId,
+    now,
+  )) {
+    const ownerId = resolveDispatchOwner(card, now, ownerOverride, defaultAgent.agentId);
     if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
     if (startedOwners.has(ownerId)) {
       continue;
     }
-    const sessionKey = buildSessionKey(card);
+    const dispatchAgentId = resolveDispatchAgentId(card, defaultAgent.agentId);
+    if (!dispatchAgentId) {
+      startFailures.push({
+        cardId: card.id,
+        title: card.title,
+        error:
+          defaultAgent.error ??
+          "card has no agentId and no default agent was resolved for this dispatch",
+      });
+      continue;
+    }
+    const sessionKey = buildSessionKey(card, dispatchAgentId);
     let claimValue = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;
@@ -389,7 +462,7 @@ async function runWorkboardDispatch(
           await assertCanonicalWorkboardRootAccess(implicitWorkspaceCwd, workspaceAccess);
           await assertRestrictedWorkboardTarget({
             root: implicitWorkspaceCwd,
-            agentId: card.agentId,
+            agentId: dispatchAgentId,
             sessionKey,
             modelProvider: params.options?.provider,
             modelId: params.options?.model,
@@ -422,7 +495,7 @@ async function runWorkboardDispatch(
           await assertCanonicalWorkboardRootAccess(canonicalSourcePath, workspaceAccess);
           await assertRestrictedWorkboardTarget({
             root: canonicalSourcePath,
-            agentId: card.agentId,
+            agentId: dispatchAgentId,
             sessionKey,
             modelProvider: params.options?.provider,
             modelId: params.options?.model,
@@ -470,7 +543,7 @@ async function runWorkboardDispatch(
         await assertRestrictedWorkboardTarget({
           root: runCwd,
           // Claim may populate agentId; keep the sessionKey target identity.
-          agentId: card.agentId,
+          agentId: dispatchAgentId,
           sessionKey,
           modelProvider: params.options?.provider,
           modelId: params.options?.model,

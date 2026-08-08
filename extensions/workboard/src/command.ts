@@ -17,6 +17,7 @@ import {
   resolveAgentWorkboardWorkspaceRuntime,
   resolveCommandWorkboardWorkspaceAccess,
   resolveWorkboardAgentWorkspace,
+  resolveWorkboardDispatchAgentId,
   type WorkboardTargetWorkspaceRuntime,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
@@ -105,6 +106,7 @@ async function handleWorkboardCommand(params: {
   args?: string;
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
+  resolveDefaultAgentId?: () => string;
   resolveAgentWorkspace?: (agentId?: string) => string;
   resolveAgentWorkspaceRuntime?: (
     agentId: string | undefined,
@@ -195,6 +197,9 @@ async function handleWorkboardCommand(params: {
       worktrees: params.api.runtime.worktrees,
       options: {
         materializeWorktree: true,
+        ...(params.resolveDefaultAgentId
+          ? { resolveDefaultAgentId: params.resolveDefaultAgentId }
+          : {}),
         resolveAgentWorkspace: params.resolveAgentWorkspace,
         resolveAgentWorkspaceRuntime: params.resolveAgentWorkspaceRuntime,
         workspaceAccess,
@@ -229,6 +234,7 @@ export function registerWorkboardCommand(params: {
         args: ctx.args,
         senderIsOwner: ctx.senderIsOwner,
         gatewayClientScopes: ctx.gatewayClientScopes,
+        resolveDefaultAgentId: () => resolveWorkboardDispatchAgentId(ctx.config),
         resolveAgentWorkspace: (agentId) => resolveWorkboardAgentWorkspace(ctx.config, agentId),
         resolveAgentWorkspaceRuntime: (agentId, sessionKey, workspaceDir, modelProvider, modelId) =>
           resolveAgentWorkboardWorkspaceRuntime({

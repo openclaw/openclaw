@@ -52,7 +52,12 @@ describe("Workboard dispatcher lifecycle races", () => {
     const result = await dispatchAndStartWorkboardCards({
       store,
       subagent: { run },
-      options: { maxStarts: 1, boardId: "ops", workspaceAccess: { unrestricted: true } },
+      options: {
+        resolveDefaultAgentId: () => "main",
+        maxStarts: 1,
+        boardId: "ops",
+        workspaceAccess: { unrestricted: true },
+      },
     });
 
     expect(run).not.toHaveBeenCalled();
@@ -110,7 +115,11 @@ describe("Workboard dispatcher lifecycle races", () => {
     const result = await dispatchAndStartWorkboardCards({
       store,
       subagent: { run },
-      options: { maxStarts: 1, workspaceAccess: { unrestricted: true } },
+      options: {
+        resolveDefaultAgentId: () => "main",
+        maxStarts: 1,
+        workspaceAccess: { unrestricted: true },
+      },
     });
 
     expect(result.startFailures.map((failure) => failure.cardId)).toEqual([first.id, second.id]);

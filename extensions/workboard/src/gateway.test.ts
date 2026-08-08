@@ -374,15 +374,20 @@ describe("workboard gateway methods", () => {
     registerWorkboardGatewayMethods({ api, store });
 
     const respond = vi.fn();
-    await methods.get("workboard.cards.dispatch")?.handler({ respond } as never);
+    await methods.get("workboard.cards.dispatch")?.handler({
+      respond,
+      context: { getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }) },
+    } as never);
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       started: [expect.objectContaining({ cardId: card.id, runId: "run-card" })],
     });
+    // Unassigned cards run under the configured default agent, the same owner
+    // their workspace and sandbox authority resolve to.
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: `subagent:workboard-default-${card.id}`,
+        sessionKey: `agent:main:subagent:workboard-default-${card.id}`,
       }),
     );
   });
