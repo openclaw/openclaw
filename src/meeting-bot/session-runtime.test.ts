@@ -364,15 +364,20 @@ describe("MeetingSessionRuntime probe join health", () => {
   );
 
   it.each([
-    { launched: false, reusable: false },
-    { launched: true, reusable: true },
+    { launched: false, tracked: false, browserLeft: undefined, reusable: false },
+    { launched: false, tracked: false, browserLeft: true, reusable: false },
+    { launched: false, tracked: true, browserLeft: undefined, reusable: true },
+    { launched: true, tracked: false, browserLeft: true, reusable: true },
   ])(
-    "reports confirmed target loss as non-reusable when launched=$launched",
-    async ({ launched, reusable }) => {
+    "reports browser reuse when launched=$launched tracked=$tracked browserLeft=$browserLeft",
+    async ({ launched, tracked, browserLeft, reusable }) => {
       const { runtime } = createTestRuntime({
         releaseBrowserTab: async () => true,
         joinTransport: async ({ session }) => {
-          session.browser = { launched };
+          session.browser = {
+            launched,
+            tab: tracked ? { targetId: "manual-tab", openedByPlugin: false } : undefined,
+          };
           return {};
         },
       });
@@ -380,7 +385,7 @@ describe("MeetingSessionRuntime probe join health", () => {
         url: "https://meeting.example/missing-browser",
         agentId: "main",
       });
-      session.browserLeft = true;
+      session.browserLeft = browserLeft;
 
       expect(
         runtime.isReusableSession(session, {

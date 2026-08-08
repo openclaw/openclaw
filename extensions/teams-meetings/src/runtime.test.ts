@@ -394,8 +394,11 @@ describe("Microsoft Teams meeting session flow", () => {
     });
   });
 
-  it("replaces a targetless manual session when a matching tab is opened again", async () => {
-    const harness = runtimeHarness({ tabOpen: true });
+  it.each([
+    { initialTabOpen: true, scenario: "after the tracked tab disappears" },
+    { initialTabOpen: false, scenario: "after initial discovery finds no tab" },
+  ])("replaces a targetless manual session $scenario", async ({ initialTabOpen }) => {
+    const harness = runtimeHarness({ tabOpen: initialTabOpen });
     const runtime = new TeamsMeetingsRuntime({
       config: resolveTeamsMeetingsConfig({
         defaultMode: "transcribe",
@@ -405,15 +408,26 @@ describe("Microsoft Teams meeting session flow", () => {
       runtime: harness.runtime,
       logger,
     });
-    const first = await runtime.join({ url: URL, mode: "transcribe" });
+    const joined = initialTabOpen
+      ? await runtime.join({ url: URL, mode: "transcribe" })
+      : undefined;
     harness.closeTab();
 
-    await runtime.status(first.session.id);
-    expect(first.session).toMatchObject({
-      state: "active",
-      browserLeft: true,
-      chrome: { browserTab: undefined },
+    const missing = await runtime.testListen({
+      url: URL,
+      mode: "transcribe",
+      timeoutMs: 1_000,
     });
+    const first = joined?.session ?? missing.session;
+    expect(missing).toMatchObject({
+      createdSession: !initialTabOpen,
+      listenTimedOut: false,
+      listenVerified: false,
+      session: { chrome: { browserTab: undefined, launched: false }, state: "active" },
+    });
+    if (initialTabOpen) {
+      expect(missing.session.chrome?.health?.status).toBe("browser-tab-missing");
+    }
 
     harness.setTargetId("teams-tab-reopened");
     harness.setCaptionText("Caption from the reopened manual tab");
@@ -434,8 +448,13 @@ describe("Microsoft Teams meeting session flow", () => {
         chrome: { browserTab: { targetId: "teams-tab-reopened" }, launched: false },
       },
     });
-    expect(retried.session.id).not.toBe(first.session.id);
-    expect(first.session).toMatchObject({ state: "ended", browserLeft: true });
+    expect(retried.session.id).not.toBe(first.id);
+    expect(first).toMatchObject({ state: "ended" });
+    expect(harness.gatewayRequest).not.toHaveBeenCalledWith(
+      "browser.request",
+      expect.objectContaining({ path: "/tabs/open" }),
+      expect.anything(),
+    );
   });
 
   it("waits for an in-flight recovery before terminal cleanup", async () => {

@@ -243,11 +243,10 @@ export class MeetingSessionRuntime<
     const browser = this.options.isBrowserTransport(session.transport)
       ? this.options.getBrowser(session)
       : undefined;
-    const missingRetainedBrowser =
-      browser?.launched === false && browser.tab === undefined && session.browserLeft === true;
+    const missingUnmanagedBrowserTarget = browser?.launched === false && browser.tab === undefined;
     return (
       session.state === "active" &&
-      !missingRetainedBrowser &&
+      !missingUnmanagedBrowserTarget &&
       this.options.sameMeetingUrl(session.url, resolved.url) &&
       session.transport === resolved.transport &&
       session.mode === resolved.mode &&
