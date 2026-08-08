@@ -270,6 +270,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   }
   if (
     matchesChat &&
+    state.chatHistoryAnchorActive !== true &&
     source?.phase === "message" &&
     source.message === undefined &&
     source.messageId === undefined &&
