@@ -3,12 +3,15 @@
  * The adapter and wrapper both consult this map so later execution can use the
  * normalized payload selected by hook processing.
  */
+import type { AgentToolResult } from "./runtime/index.js";
+
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
 const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 const batchAdmittedToolCallIds = new Set<string>();
+const loopWarningsByToolCallId = new Map<string, string>();
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -102,12 +105,70 @@ export function consumeBatchAdmittedToolCall(toolCallId: string, runId?: string)
   return admitted;
 }
 
+/** Attach a bounded loop warning to the model-visible result of the admitted call. */
+export function recordLoopWarningForToolCall(
+  toolCallId: string,
+  warning: string,
+  runId?: string,
+): void {
+  loopWarningsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), warning);
+}
+
+/** Consume pending warning guidance even when no model-visible result can be emitted. */
+export function consumeLoopWarningForToolCall(
+  toolCallId: string,
+  runId?: string,
+): string | undefined {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const warning = loopWarningsByToolCallId.get(key);
+  loopWarningsByToolCallId.delete(key);
+  return warning;
+}
+
+export function appendLoopWarningToToolResult(
+  result: AgentToolResult<unknown>,
+  toolCallId: string,
+  runId?: string,
+): AgentToolResult<unknown> {
+  const warning = consumeLoopWarningForToolCall(toolCallId, runId);
+  if (!warning) {
+    return result;
+  }
+  return {
+    ...result,
+    content: [...(result.content ?? []), { type: "text", text: `Tool loop warning: ${warning}` }],
+  };
+}
+
+/** Preserve the original error kind while carrying warning guidance to agent-core. */
+export function appendLoopWarningToError(
+  error: unknown,
+  toolCallId: string,
+  runId?: string,
+): unknown {
+  const warning = consumeLoopWarningForToolCall(toolCallId, runId);
+  if (!warning) {
+    return error;
+  }
+  const warningText = `Tool loop warning: ${warning}`;
+  if (error instanceof Error) {
+    error.message = `${error.message}\n\n${warningText}`;
+    return error;
+  }
+  return new Error(`${String(error)}\n\n${warningText}`);
+}
+
 /** Remove unused batch-admission markers when their embedded run ends. */
 export function clearBatchAdmittedToolCallsForRun(runId: string): void {
   const prefix = `${runId}:`;
   for (const key of batchAdmittedToolCallIds) {
     if (key.startsWith(prefix)) {
       batchAdmittedToolCallIds.delete(key);
+    }
+  }
+  for (const key of loopWarningsByToolCallId.keys()) {
+    if (key.startsWith(prefix)) {
+      loopWarningsByToolCallId.delete(key);
     }
   }
 }
@@ -120,4 +181,5 @@ export function resetAdjustedParamsByToolCallIdForTests(): void {
   startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
   batchAdmittedToolCallIds.clear();
+  loopWarningsByToolCallId.clear();
 }
