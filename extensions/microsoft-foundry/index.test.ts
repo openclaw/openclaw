@@ -3,7 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, execAz, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
   promptApiKeyEndpointAndModel,
@@ -386,6 +386,48 @@ describe("microsoft-foundry plugin", () => {
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
     );
   });
+
+  it("bounds synchronous Azure CLI commands with SIGKILL", () => {
+    execFileSyncMock.mockReturnValue("ok");
+
+    execAz(["version", "--output", "none"]);
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "az",
+      ["version", "--output", "none"],
+      expect.objectContaining({
+        encoding: "utf-8",
+        timeout: 30_000,
+        killSignal: "SIGKILL",
+      }),
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "terminates a SIGTERM-immune synchronous child at timeout",
+    async () => {
+      const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const startedAt = Date.now();
+      let timeoutError: unknown;
+
+      try {
+        real.execFileSync(
+          process.execPath,
+          ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+          { encoding: "utf-8", timeout: 500, killSignal: "SIGKILL" },
+        );
+      } catch (error) {
+        timeoutError = error;
+      }
+
+      expect(timeoutError).toMatchObject({
+        code: "ETIMEDOUT",
+        signal: "SIGKILL",
+        status: null,
+      });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    },
+  );
 
   it("fails clearly when the selected Azure subscription is not in the enabled list", async () => {
     const provider = registerProvider();
