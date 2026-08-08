@@ -868,7 +868,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         const { flowsListCommand } = await loadFlowsCommands();
         await flowsListCommand(
           {
-            json: Boolean(opts.json),
+            json: Boolean(opts.json || tasksCmd.opts().json),
             status: opts.status as string | undefined,
           },
           defaultRuntime,
@@ -887,7 +887,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         await flowsShowCommand(
           {
             lookup,
-            json: Boolean(opts.json),
+            json: Boolean(opts.json || tasksCmd.opts().json),
           },
           defaultRuntime,
         );

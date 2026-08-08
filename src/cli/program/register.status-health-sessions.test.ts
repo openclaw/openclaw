@@ -140,7 +140,7 @@ vi.mock("../../runtime.js", () => ({
 
 describe("registerStatusHealthSessionsCommands", () => {
   async function runCli(args: string[]) {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     registerStatusHealthSessionsCommands(program);
     await program.parseAsync(args, { from: "user" });
   }
@@ -656,15 +656,61 @@ describe("registerStatusHealthSessionsCommands", () => {
     expect(tasksAuditCommand).not.toHaveBeenCalled();
   });
 
-  it("routes tasks flow commands through the TaskFlow handlers", async () => {
-    await runCli(["tasks", "flow", "list", "--json", "--status", "blocked"]);
-    expectCommandOptions(flowsListCommand, {});
+  it.each([
+    {
+      description: "list inherits JSON from the tasks command",
+      args: ["tasks", "--json", "flow", "list", "--status", "blocked"],
+      handler: flowsListCommand,
+      options: { json: true, status: "blocked" },
+    },
+    {
+      description: "show inherits JSON from the tasks command",
+      args: ["tasks", "--json", "flow", "show", "flow-123"],
+      handler: flowsShowCommand,
+      options: { json: true, lookup: "flow-123" },
+    },
+    {
+      description: "list preserves its own JSON flag and status filter",
+      args: ["tasks", "flow", "list", "--json", "--status", "blocked"],
+      handler: flowsListCommand,
+      options: { json: true, status: "blocked" },
+    },
+    {
+      description: "show preserves its own JSON flag",
+      args: ["tasks", "flow", "show", "flow-123", "--json"],
+      handler: flowsShowCommand,
+      options: { json: true, lookup: "flow-123" },
+    },
+    {
+      description: "list keeps its status when both JSON flag positions are used",
+      args: ["tasks", "--json", "flow", "list", "--json", "--status", "blocked"],
+      handler: flowsListCommand,
+      options: { json: true, status: "blocked" },
+    },
+    {
+      description: "show accepts JSON in both parent and child positions",
+      args: ["tasks", "--json", "flow", "show", "flow-123", "--json"],
+      handler: flowsShowCommand,
+      options: { json: true, lookup: "flow-123" },
+    },
+    {
+      description: "list keeps human-readable output without either JSON flag",
+      args: ["tasks", "flow", "list", "--status", "blocked"],
+      handler: flowsListCommand,
+      options: { json: false, status: "blocked" },
+    },
+    {
+      description: "show keeps human-readable output without either JSON flag",
+      args: ["tasks", "flow", "show", "flow-123"],
+      handler: flowsShowCommand,
+      options: { json: false, lookup: "flow-123" },
+    },
+  ])("routes tasks flow command when $description", async ({ args, handler, options }) => {
+    await runCli(args);
+    expectCommandOptions(handler, options);
+  });
 
-    await runCli(["tasks", "flow", "show", "flow-123", "--json"]);
-    expectCommandOptions(flowsShowCommand, {
-      lookup: "flow-123",
-    });
-
+  it("routes tasks flow cancellation through its TaskFlow handler", async () => {
     await runCli(["tasks", "flow", "cancel", "flow-123"]);
     expectCommandOptions(flowsCancelCommand, {
       lookup: "flow-123",
