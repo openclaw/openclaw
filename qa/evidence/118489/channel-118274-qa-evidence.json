@@ -1,0 +1,128 @@
+{
+  "kind": "openclaw.qa.evidence-summary",
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-04T04:58:08.113Z",
+  "evidenceMode": "slim",
+  "entries": [
+    {
+      "test": {
+        "kind": "qa-scenario",
+        "id": "qa-channel-failed-tool-terminal-finalization",
+        "title": "QA channel final reply after a failed terminal tool",
+        "source": {
+          "path": "qa/scenarios/channels/qa-channel-failed-tool-terminal-finalization.yaml"
+        }
+      },
+      "coverage": [
+        {
+          "id": "agent-runtime.failure-recovery-empty-response-recovery",
+          "role": "primary"
+        },
+        {
+          "id": "agent-runtime.failure-recovery-retry-policy",
+          "role": "secondary"
+        },
+        {
+          "id": "channels.qa-channel-final-reply",
+          "role": "secondary"
+        }
+      ],
+      "refs": [
+        {
+          "kind": "code",
+          "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+        },
+        {
+          "kind": "code",
+          "path": "src/agents/embedded-agent-runner/run/code-mode-repair.ts"
+        },
+        {
+          "kind": "code",
+          "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+        }
+      ],
+      "result": {
+        "status": "pass"
+      }
+    }
+  ],
+  "profile": "qa-channel",
+  "scorecard": {
+    "filters": {
+      "surface": null,
+      "category": null
+    },
+    "run": {
+      "evidenceEntryCount": 1
+    },
+    "categories": {
+      "total": 1,
+      "fulfilled": 0,
+      "partial": 1,
+      "missing": 0,
+      "fulfillmentPercent": 0
+    },
+    "features": {
+      "total": 26,
+      "fulfilled": 1,
+      "partial": 0,
+      "missing": 25,
+      "fulfillmentPercent": 3.8
+    },
+    "coverageIds": {
+      "total": 26,
+      "fulfilled": 1,
+      "missing": 25,
+      "fulfillmentPercent": 3.8
+    },
+    "categoryReports": [
+      {
+        "id": "agent-runtime.tool-calls-and-response-handling",
+        "surfaceId": "agent-runtime",
+        "name": "Tool Calls and Response Handling",
+        "status": "partial",
+        "features": {
+          "total": 26,
+          "fulfilled": 1,
+          "partial": 0,
+          "missing": 25,
+          "fulfillmentPercent": 3.8
+        },
+        "coverageIds": {
+          "total": 26,
+          "fulfilled": 1,
+          "missing": 25,
+          "fulfillmentPercent": 3.8,
+          "secondaryOnly": 1
+        },
+        "missingCoverageIds": [
+          "agent-runtime.failure-recovery",
+          "agent-runtime.failure-recovery-evidence",
+          "agent-runtime.failure-recovery-no-fake-progress",
+          "agent-runtime.failure-recovery-reasoning-only-recovery",
+          "agent-runtime.failure-recovery-retry-policy",
+          "agent-runtime.tool-apply-patch",
+          "agent-runtime.tool-approvals",
+          "agent-runtime.tool-artifacts",
+          "agent-runtime.tool-ask-user",
+          "agent-runtime.tool-codex-native-workspace-read",
+          "agent-runtime.tool-continuity",
+          "agent-runtime.tool-edit",
+          "agent-runtime.tool-evidence",
+          "agent-runtime.tool-followthrough",
+          "agent-runtime.tool-fs-list",
+          "agent-runtime.tool-fs-read",
+          "agent-runtime.tool-fs-write",
+          "agent-runtime.tool-grep",
+          "agent-runtime.tool-no-fake-progress",
+          "agent-runtime.tool-prompt-compatibility",
+          "agent-runtime.tool-safety",
+          "agent-runtime.tool-switching",
+          "agent-runtime.tool-task-followthrough",
+          "agent-runtime.usage-and-response-reporting-subagents",
+          "agent-runtime.usage-and-response-reporting-synthesis"
+        ]
+      }
+    ]
+  }
+}
