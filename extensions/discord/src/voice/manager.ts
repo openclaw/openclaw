@@ -36,7 +36,10 @@ import {
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
-import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
+import {
+  listDiscordVoiceParticipantStates,
+  resolveDiscordVoiceIngressContextWithParticipants,
+} from "./participant-context.js";
 import {
   discordRealtimeVoiceRequiresVerifiedOwner,
   DiscordRealtimeVoiceSession,
@@ -386,7 +389,7 @@ export class DiscordVoiceManager {
           continue;
         }
         logVoiceVerbose(`autoJoin: joining guild ${entry.guildId} channel ${entry.channelId}`);
-        const requester = this.resolveAutomaticRequester();
+        const requester = this.resolvePresentAutomaticRequester(entry);
         const result = await this.join(
           {
             guildId: entry.guildId,
@@ -451,6 +454,34 @@ export class DiscordVoiceManager {
       }
     }
     return undefined;
+  }
+
+  private resolvePresentAutomaticRequester(params: {
+    guildId: string;
+    channelId: string;
+  }): { senderId: string; senderIsOwner: true } | undefined {
+    const voiceStates = listDiscordVoiceParticipantStates({
+      client: this.params.client,
+      ...params,
+    });
+    if (!voiceStates) {
+      return undefined;
+    }
+    let requester: { senderId: string; senderIsOwner: true } | undefined;
+    for (const state of voiceStates) {
+      const candidate = this.resolveAutomaticRequester(state.user_id);
+      if (!candidate || candidate.senderId === requester?.senderId) {
+        continue;
+      }
+      if (requester) {
+        logger.warn(
+          `discord voice: automatic direct-agent owner binding is ambiguous guild=${params.guildId} channel=${params.channelId}`,
+        );
+        return undefined;
+      }
+      requester = candidate;
+    }
+    return requester;
   }
 
   async join(
@@ -535,7 +566,6 @@ export class DiscordVoiceManager {
     const existing = this.sessions.get(guildId);
     const requester = options?.requester ?? existing?.requester;
     if (
-      options?.automatic === true &&
       isDiscordRealtimeVoiceMode(voiceMode) &&
       (!requester?.senderId.trim() || !requester.senderIsOwner)
     ) {
@@ -1124,7 +1154,7 @@ export class DiscordVoiceManager {
       logger.warn(
         `discord voice: rejoining allowed voice channel guild=${guildId} channel=${target.channelId}`,
       );
-      const requester = existing?.requester ?? this.resolveAutomaticRequester();
+      const requester = existing?.requester ?? this.resolvePresentAutomaticRequester(target);
       await this.join(target, { automatic: true, ...(requester ? { requester } : {}) });
     }
   }
