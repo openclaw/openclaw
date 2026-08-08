@@ -1,4 +1,5 @@
 // Memory Core plugin module owns memory and session source indexing.
+import path from "node:path";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -10,10 +11,12 @@ import {
   listMemoryFiles,
   MEMORY_INDEX_FTS_TABLE,
   runWithConcurrency,
+  statRegularFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
 import {
+  hasMemorySourceMetadataDrift,
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
@@ -42,6 +45,38 @@ function createSessionSyncYield(total: number): () => Promise<void> {
 }
 
 export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyncOps {
+  protected async markMemorySourceStateDirty(): Promise<boolean> {
+    if (!this.sources.has("memory") || this.closed) {
+      return false;
+    }
+    const files = await listMemoryFiles(
+      this.workspaceDir,
+      this.settings.extraPaths,
+      this.settings.multimodal,
+    );
+    const fileMetadata = await runWithConcurrency(
+      files.map((file) => async () => {
+        const regularFile = await statRegularFile(file);
+        if (regularFile.missing) {
+          throw new Error("memory source changed during status inspection");
+        }
+        return {
+          path: path.relative(this.workspaceDir, file).replace(/\\/g, "/"),
+          mtime: regularFile.stat.mtimeMs,
+          size: regularFile.stat.size,
+        };
+      }),
+      this.getIndexConcurrency(),
+    );
+    const existingRows = loadMemorySourceFileState({
+      db: this.db,
+      source: "memory",
+    }).rows;
+    const dirty = hasMemorySourceMetadataDrift({ files: fileMetadata, existingRows });
+    this.dirty ||= dirty;
+    return dirty;
+  }
+
   protected override async syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;

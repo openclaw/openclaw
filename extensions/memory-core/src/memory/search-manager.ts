@@ -264,6 +264,7 @@ type MemorySearchManagerParams = {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemorySearchManagerPurpose;
+  inspectSourceState?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
 };

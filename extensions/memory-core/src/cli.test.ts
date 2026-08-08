@@ -504,6 +504,12 @@ describe("memory cli", () => {
     await runMemoryCli(["status"]);
 
     expect(getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "status",
+      inspectSourceState: true,
+    });
 
     expect(probeVectorAvailability).not.toHaveBeenCalled();
     expectLogged(log, "Vector store: ready");

@@ -522,6 +522,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: MemoryIndexManagerPurpose;
+    inspectSourceState?: boolean;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
     const agentId = normalizeAgentId(params.agentId);
@@ -545,6 +546,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: MemoryIndexManagerPurpose;
+    inspectSourceState?: boolean;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
     const { cfg, agentId } = params;
@@ -586,6 +588,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             purpose: params.purpose,
             acquireLocalService: params.acquireLocalService,
           });
+          if (params.inspectSourceState && manager.sources.has("memory")) {
+            try {
+              await manager.markMemorySourceStateDirty();
+            } catch (err) {
+              manager.dirty = true;
+              log.warn(`memory status source inspection failed: ${formatErrorMessage(err)}`);
+            }
+          }
           // Lightweight dirty-file detection for status mode: check for unindexed
           // session files on disk without triggering a full sync. This runs before
           // any caller reads manager.status(), so the dirty flag is accurate when

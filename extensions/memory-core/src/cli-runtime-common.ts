@@ -158,6 +158,7 @@ async function withMemoryManagerForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemoryManagerPurpose;
+  inspectSourceState?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
   run: (manager: MemoryManager) => Promise<void>;
@@ -168,6 +169,9 @@ async function withMemoryManagerForAgent(params: {
   };
   if (params.purpose) {
     managerParams.purpose = params.purpose;
+  }
+  if (params.inspectSourceState) {
+    managerParams.inspectSourceState = true;
   }
   if (params.acquireLocalService) {
     managerParams.acquireLocalService = params.acquireLocalService;
@@ -192,6 +196,7 @@ export async function withMemoryCommand(params: {
   allAgents?: boolean;
   diagnosticsToStderr?: boolean;
   purpose?: MemoryManagerPurpose;
+  inspectSourceState?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
@@ -209,6 +214,7 @@ export async function withMemoryCommand(params: {
       cfg,
       agentId,
       purpose: params.purpose,
+      inspectSourceState: params.inspectSourceState,
       acquireLocalService: params.acquireLocalService,
       withLease: params.withLease,
       run: async (manager) => params.run({ manager, cfg, agentId }),

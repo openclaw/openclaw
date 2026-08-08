@@ -191,6 +191,7 @@ export async function runMemoryStatus(
     allAgents: true,
     diagnosticsToStderr: Boolean(opts.json),
     purpose: opts.index ? "cli" : "status",
+    inspectSourceState: !opts.index,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
       const deep = Boolean(opts.deep || opts.index);
