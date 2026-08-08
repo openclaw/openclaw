@@ -1,7 +1,7 @@
 // Docker E2E aggregate scheduler.
 // Builds shared Docker images, prepares one OpenClaw npm tarball, assigns lanes
 // to bare/functional images, and runs lanes through weighted resource pools.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -28,7 +28,10 @@ import {
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mjs";
 import { sleep } from "./lib/sleep.mjs";
-import { validatePrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
+import {
+  createPrepublishPluginRegistryArtifact,
+  validatePrepublishPluginRegistryArtifact,
+} from "./prepublish-plugin-registry-artifact.mjs";
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
@@ -267,6 +270,51 @@ function commandEnv(extra = {}) {
     .filter(Boolean);
   env.PATH = [...new Set(pathEntries)].join(path.delimiter);
   return env;
+}
+
+function resolveDockerRepositoryHead(params) {
+  const result = (params.spawnSync ?? spawnSync)("git", ["rev-parse", "HEAD"], {
+    cwd: params.cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout?.trim() || undefined : undefined;
+}
+
+export function prepareLocalPrepublishPluginRegistry(params) {
+  if (
+    !params.enabled ||
+    !params.plan.needs.prepublishPluginRegistry ||
+    params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR
+  ) {
+    return;
+  }
+  const sourceSha = (params.resolveGitHead ?? resolveDockerRepositoryHead)({
+    cwd: params.repoRoot,
+  });
+  if (!sourceSha) {
+    throw new Error("cannot resolve repository HEAD for the local prepublish plugin registry");
+  }
+  const packageJson = JSON.parse(
+    (params.readFileSync ?? fs.readFileSync)(path.join(params.repoRoot, "package.json"), "utf8"),
+  );
+  const candidateVersion = packageJson?.version;
+  if (typeof candidateVersion !== "string" || !candidateVersion.trim()) {
+    throw new Error("root package.json must declare a candidate version");
+  }
+  const outputDir = path.join(params.logDir, "prepublish-plugin-registry");
+  (params.rmSync ?? fs.rmSync)(outputDir, { force: true, recursive: true });
+  const artifact = (params.createArtifact ?? createPrepublishPluginRegistryArtifact)({
+    candidateVersion,
+    outputDir,
+    repoRoot: params.repoRoot,
+    requiredPackages: params.plan.requiredPrepublishPluginPackages,
+    sourceSha,
+  });
+  params.baseEnv.OPENCLAW_DOCKER_E2E_SELECTED_SHA = sourceSha;
+  params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION = candidateVersion;
+  params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR = outputDir;
+  params.baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 = artifact.manifestSha256;
 }
 
 function shellQuote(value) {
@@ -1469,6 +1517,10 @@ async function main() {
   const preflightCleanup = parseBool(process.env.OPENCLAW_DOCKER_ALL_PREFLIGHT_CLEANUP, true);
   const timingsEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_TIMINGS, true);
   const buildEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_BUILD, true);
+  const preparePrepublishPluginRegistry = parseBool(
+    process.env.OPENCLAW_DOCKER_ALL_PREPARE_PREPUBLISH_PLUGIN_REGISTRY,
+    false,
+  );
   const allowFrozenTargetScenarioOmissions = parseBool(
     process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS,
     false,
@@ -1542,15 +1594,15 @@ async function main() {
       allowFrozenTargetScenarioOmissions,
       candidatePackageRoot: ROOT_DIR,
     });
-  if (plan.needs.prepublishPluginRegistry && process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR) {
+  if (plan.needs.prepublishPluginRegistry && baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR) {
     baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR = path.resolve(
-      process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
+      baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
     );
     validatePrepublishPluginRegistryArtifact({
       artifactDir: baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
-      expectedCandidateVersion: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION,
-      expectedManifestSha256: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256,
-      expectedSourceSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
+      expectedCandidateVersion: baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION,
+      expectedManifestSha256: baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256,
+      expectedSourceSha: baseEnv.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
       requiredPackages: plan.requiredPrepublishPluginPackages,
     });
   } else {
@@ -1651,6 +1703,14 @@ async function main() {
       `resolved zero runnable Docker lanes; frozen target does not support: ${omittedUnsupportedLanes.join(", ")}`,
     );
   }
+
+  prepareLocalPrepublishPluginRegistry({
+    baseEnv,
+    enabled: preparePrepublishPluginRegistry,
+    logDir,
+    plan,
+    repoRoot: ROOT_DIR,
+  });
 
   await runPhase(
     phases,

@@ -26,6 +26,7 @@ import {
   githubWorkflowRerunCommand,
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
+  prepareLocalPrepublishPluginRegistry,
   resolveDockerPreflightPlatform,
   runCleanupSmokePhase,
   runShellCaptureCommand,
@@ -162,6 +163,51 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stderr).toContain("unknown argument: --bogus");
     expect(result.stderr).toContain("Usage: node scripts/test-docker-all.mjs [--plan-json]");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("prepares a plan-scoped local prerelease plugin registry when explicitly enabled", () => {
+    const baseEnv: NodeJS.ProcessEnv = {};
+    const removed: Array<{ options: { force: boolean; recursive: boolean }; path: string }> = [];
+    const created: unknown[] = [];
+    prepareLocalPrepublishPluginRegistry({
+      baseEnv,
+      createArtifact: (params) => {
+        created.push(params);
+        return { manifestSha256: "a".repeat(64) };
+      },
+      enabled: true,
+      logDir: "/artifacts/docker",
+      plan: {
+        needs: { prepublishPluginRegistry: true },
+        requiredPrepublishPluginPackages: ["@openclaw/codex", "@openclaw/discord"],
+      },
+      readFileSync: () => JSON.stringify({ version: "2026.8.1" }),
+      repoRoot: "/repo",
+      resolveGitHead: () => "b".repeat(40),
+      rmSync: (file, options) => removed.push({ options, path: file }),
+    });
+
+    expect(removed).toEqual([
+      {
+        options: { force: true, recursive: true },
+        path: "/artifacts/docker/prepublish-plugin-registry",
+      },
+    ]);
+    expect(created).toEqual([
+      {
+        candidateVersion: "2026.8.1",
+        outputDir: "/artifacts/docker/prepublish-plugin-registry",
+        repoRoot: "/repo",
+        requiredPackages: ["@openclaw/codex", "@openclaw/discord"],
+        sourceSha: "b".repeat(40),
+      },
+    ]);
+    expect(baseEnv).toMatchObject({
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: "b".repeat(40),
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: "2026.8.1",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "/artifacts/docker/prepublish-plugin-registry",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: "a".repeat(64),
+    });
   });
 
   it("plans from an isolated release harness without installed dependencies", () => {

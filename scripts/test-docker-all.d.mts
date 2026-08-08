@@ -2,6 +2,26 @@ export function parseDockerAllCliArgs(argv: unknown): {
   help: boolean;
   planJson: boolean;
 };
+export function prepareLocalPrepublishPluginRegistry(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  createArtifact?: (params: {
+    candidateVersion: string;
+    outputDir: string;
+    repoRoot: string;
+    requiredPackages: string[];
+    sourceSha: string;
+  }) => { manifestSha256: string };
+  enabled: boolean;
+  logDir: string;
+  plan: {
+    needs: { prepublishPluginRegistry: boolean };
+    requiredPrepublishPluginPackages: string[];
+  };
+  readFileSync?: (path: string, encoding: "utf8") => string;
+  repoRoot: string;
+  resolveGitHead?: (params: { cwd: string }) => string | undefined;
+  rmSync?: (path: string, options: { force: boolean; recursive: boolean }) => void;
+}): void;
 export function describeDockerSchedulerLimits(parallelism: unknown, options: unknown): string;
 export function canStartSchedulerLane(
   candidate: unknown,

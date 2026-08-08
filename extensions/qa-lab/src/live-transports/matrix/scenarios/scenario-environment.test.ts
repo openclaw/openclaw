@@ -523,4 +523,105 @@ describe("matrix scenario environment", () => {
     expect(waitForConfigRestartSettle).not.toHaveBeenCalled();
     expect(gateway.call.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(1);
   });
+
+  it("requires a fresh account start when the pre-restart status read fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let configReadCount = 0;
+    let statusReadCount = 0;
+    const mutateState = vi.fn(async () => undefined);
+    const gateway = {
+      baseUrl: "http://127.0.0.1:12345",
+      runtimeEnv: {},
+      tempRoot: "/tmp/matrix-qa",
+      workspaceDir: "/tmp/matrix-qa/workspace",
+      restartAfterStateMutation: vi.fn(
+        async (
+          mutate: (context: {
+            configPath: string;
+            runtimeEnv: NodeJS.ProcessEnv;
+            stateDir: string;
+            tempRoot: string;
+          }) => Promise<void>,
+        ) => {
+          await mutate({
+            configPath: "/tmp/matrix-qa/config.json",
+            runtimeEnv: {},
+            stateDir: "/tmp/matrix-qa/state",
+            tempRoot: "/tmp/matrix-qa",
+          });
+        },
+      ),
+      call: vi.fn(async (method: string) => {
+        if (method === "config.get") {
+          configReadCount += 1;
+          if (configReadCount === 1) {
+            return { config: {} };
+          }
+          if (configReadCount === 2) {
+            return { hash: "config-hash" };
+          }
+          return {
+            appliedConfigHash: "config-hash",
+            configRevisionHash: "config-hash",
+            hash: "config-hash",
+          };
+        }
+        if (method === "config.patch") {
+          return { hash: "config-hash", noop: true, ok: true };
+        }
+        if (method === "channels.status") {
+          statusReadCount += 1;
+          if (statusReadCount === 3) {
+            throw new Error("status temporarily unavailable");
+          }
+          return {
+            channelAccounts: {
+              matrix: [
+                {
+                  accountId: "sut",
+                  connected: true,
+                  healthState: "healthy",
+                  lastStartAt: statusReadCount === 4 ? 900 : 1_100,
+                  restartPending: false,
+                  running: true,
+                },
+              ],
+            },
+          };
+        }
+        throw new Error(`unexpected gateway method ${method}`);
+      }),
+    };
+    const environment = createMatrixQaScenarioEnvironment({
+      accountId: "sut",
+      harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
+      observedEvents: [],
+      provisioning: {
+        driver: { accessToken: "fixture", userId: "@driver:test" },
+        observer: { accessToken: "fixture", userId: "@observer:test" },
+        roomId: "!room:test",
+        sut: { accessToken: "fixture", userId: "@sut:test" },
+        topology: { rooms: [] },
+      } as never,
+    });
+    const prepared = await environment.prepareFlow({
+      config: {},
+      gateway,
+      outputDir: "/tmp/matrix-qa/output",
+      scenarioId: "matrix-state-restart",
+      scenarioTitle: "Matrix state restart",
+      timeoutMs: 2_000,
+      waitForConfigRestartSettle: vi.fn(),
+    });
+
+    const restarting = prepared.scenarioContext.restartGatewayAfterStateMutation?.(mutateState, {
+      timeoutMs: 2_000,
+    });
+    await vi.runAllTimersAsync();
+    await restarting;
+
+    expect(mutateState).toHaveBeenCalledOnce();
+    expect(statusReadCount).toBe(5);
+  });
 });

@@ -355,9 +355,15 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         if (!restart) {
           throw new Error("Matrix persisted-state scenario requires Gateway restart support");
         }
+        const waitAccountId = opts?.waitAccountId ?? params.accountId;
+        const restartStartedAt = Date.now();
+        const beforeRestartAt = (
+          await readMatrixAccountStatuses(input.gateway).catch(() => [])
+        ).find((account) => account.accountId === waitAccountId)?.lastStartAt;
         await restart(async ({ stateDir }) => await mutateState({ stateDir }));
         await waitForMatrixAccountReady({
-          accountId: opts?.waitAccountId ?? params.accountId,
+          afterStartAt: beforeRestartAt ?? restartStartedAt - 1,
+          accountId: waitAccountId,
           deadline: Date.now() + (opts?.timeoutMs ?? input.timeoutMs),
           gateway: input.gateway,
         });

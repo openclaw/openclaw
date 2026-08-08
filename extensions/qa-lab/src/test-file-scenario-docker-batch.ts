@@ -65,7 +65,7 @@ export async function runDockerE2eBatch(params: {
   repoRoot: string;
   runCommand: (command: QaScenarioCommandExecution) => Promise<QaScenarioCommandResult>;
   scenarios: readonly QaDockerScenario[];
-}): Promise<QaDockerBatchResult[]> {
+}): Promise<{ packageTgz?: string; results: QaDockerBatchResult[] }> {
   const selected = params.scenarios.map((scenario) => ({
     lane: dockerE2eLaneName(scenario)!,
     scenario,
@@ -76,7 +76,16 @@ export async function runDockerE2eBatch(params: {
   const logPath = path.join(params.outputDir, `docker-e2e-batch-${batchId}.log`);
   await fs.mkdir(dockerOutputDir, { recursive: true });
   const summaryPath = path.join(dockerOutputDir, "summary.json");
+  const generatedPackageTgz = path.join(
+    dockerOutputDir,
+    "openclaw-package",
+    "openclaw-current.tgz",
+  );
+  const inheritedPackageTgz = params.env.OPENCLAW_CURRENT_PACKAGE_TGZ?.trim();
   await fs.rm(summaryPath, { force: true });
+  if (!inheritedPackageTgz) {
+    await fs.rm(generatedPackageTgz, { force: true });
+  }
   let commandResult: QaScenarioCommandResult;
   try {
     commandResult = await params.runCommand({
@@ -90,6 +99,7 @@ export async function runDockerE2eBatch(params: {
         OPENCLAW_DOCKER_ALL_LANES: laneNames.join(","),
         OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS: String(params.commandTimeoutMs),
         OPENCLAW_DOCKER_ALL_LOG_DIR: dockerOutputDir,
+        OPENCLAW_DOCKER_ALL_PREPARE_PREPUBLISH_PLUGIN_REGISTRY: "1",
         OPENCLAW_DOCKER_ALL_PROFILE: "all",
         OPENCLAW_DOCKER_ALL_TIMINGS_FILE: path.join(dockerOutputDir, "lane-timings.json"),
       },
@@ -132,7 +142,7 @@ export async function runDockerE2eBatch(params: {
         (failure) =>
           !laneNames.some((laneName) => laneMatches(laneName, failure.name, resolvedLaneNames)),
       ));
-  return selected.map(({ lane, scenario }) => {
+  const results = selected.map(({ lane, scenario }) => {
     const matchingLanes = lanes.filter((result) =>
       laneMatches(lane, result.name, resolvedLaneNames),
     );
@@ -158,4 +168,12 @@ export async function runDockerE2eBatch(params: {
     }
     return result;
   });
+  const packageTgz = inheritedPackageTgz
+    ? path.resolve(params.repoRoot, inheritedPackageTgz)
+    : generatedPackageTgz;
+  const packageExists = await fs
+    .access(packageTgz)
+    .then(() => true)
+    .catch(() => false);
+  return { ...(packageExists ? { packageTgz } : {}), results };
 }

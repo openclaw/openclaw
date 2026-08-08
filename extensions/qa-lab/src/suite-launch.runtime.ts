@@ -75,6 +75,10 @@ type QaUnifiedSuiteResult = {
   summaryPath: string;
 };
 
+type QaScriptScenario = QaTestFileScenario & {
+  execution: Extract<QaTestFileScenario["execution"], { kind: "script" }>;
+};
+
 type QaSuiteExecutionPlan = {
   expectedCells: QaScenarioExecutionCell[];
   scenarios: QaSeedScenarioWithSource[];
@@ -91,6 +95,9 @@ type QaSuiteExecutionPlan = {
 
 const MAX_SHARED_FLOW_PARTITIONS = 4;
 const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
+// Audited scripts still launch gateways and subprocesses. Keep tail fanout at
+// the maturity workflow's proven host concurrency instead of oversubscribing it.
+const MAX_PARALLEL_SCRIPT_CONCURRENCY = 3;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
@@ -805,7 +812,8 @@ async function runUnifiedQaSuite(params: {
   const sharedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
-  const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const serialScriptPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const parallelScriptPartitionTasks: QaUnifiedPartitionTask[] = [];
   const unavailableChannelCredentialDetails = new Map<string, string>();
   if (params.plan.channelGroups.length > 0) {
     const channelGroups = params.plan.channelGroups;
@@ -1137,16 +1145,32 @@ async function runUnifiedQaSuite(params: {
       testFilePartitionTasks.push(createTestFilePartitionTask(concurrentTestFileScenariosByKind));
     }
   }
-  const scriptScenarios = params.plan.testFileScenariosByKind.get("script");
+  const scriptScenarios = params.plan.testFileScenariosByKind
+    .get("script")
+    ?.filter((scenario): scenario is QaScriptScenario => scenario.execution.kind === "script");
   if (scriptScenarios?.length) {
     if (failFast) {
       for (const scenario of scriptScenarios) {
-        scriptPartitionTasks.push(createTestFilePartitionTask(new Map([["script", [scenario]]])));
+        serialScriptPartitionTasks.push(
+          createTestFilePartitionTask(new Map([["script", [scenario]]])),
+        );
       }
     } else {
-      scriptPartitionTasks.push(
-        createTestFilePartitionTask(new Map([["script", scriptScenarios]])),
+      const serialScenarios = scriptScenarios.filter(
+        (scenario) => scenario.execution.parallelSafe !== true,
       );
+      if (serialScenarios.length > 0) {
+        serialScriptPartitionTasks.push(
+          createTestFilePartitionTask(new Map([["script", serialScenarios]])),
+        );
+      }
+      for (const scenario of scriptScenarios) {
+        if (scenario.execution.parallelSafe === true) {
+          parallelScriptPartitionTasks.push(
+            createTestFilePartitionTask(new Map([["script", [scenario]]])),
+          );
+        }
+      }
     }
   }
   const concurrentPartitionTasks = [
@@ -1297,13 +1321,24 @@ async function runUnifiedQaSuite(params: {
       : await runWeightedUnifiedPartitionTasks(retryingTasks, maxWeight);
   };
   const concurrentPartitionResults = await runPartitionTasks(concurrentPartitionTasks, concurrency);
-  // Script scenarios may rebuild the checkout's shared dist tree. Wait until every
-  // flow Gateway has stopped so package postbuild cannot invalidate its loaded chunks.
-  const scriptPartitionResults =
+  // Unmarked scripts may rebuild the shared dist tree. Keep them grouped and
+  // exclusive after every flow Gateway stops, then parallelize only audited peers.
+  const serialScriptPartitionResults =
     failFast && concurrentPartitionResults.some(partitionFailed)
       ? []
-      : await runPartitionTasks(scriptPartitionTasks, 1);
-  const partitionResults = [...concurrentPartitionResults, ...scriptPartitionResults];
+      : await runPartitionTasks(serialScriptPartitionTasks, 1);
+  const parallelScriptPartitionResults =
+    failFast && serialScriptPartitionResults.some(partitionFailed)
+      ? []
+      : await runPartitionTasks(
+          parallelScriptPartitionTasks,
+          Math.min(concurrency, MAX_PARALLEL_SCRIPT_CONCURRENCY),
+        );
+  const partitionResults = [
+    ...concurrentPartitionResults,
+    ...serialScriptPartitionResults,
+    ...parallelScriptPartitionResults,
+  ];
   for (const partitionResult of partitionResults) {
     for (const scenarioResult of partitionResult.scenarioResults) {
       const results = scenarioResultsById.get(scenarioResult.scenarioId) ?? [];

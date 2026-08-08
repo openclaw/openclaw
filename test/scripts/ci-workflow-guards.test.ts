@@ -5465,6 +5465,46 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe(true);
   });
 
+  it("provides the shallow QA checkout an exact protocol comparison base", () => {
+    const workflow = readQaProfileEvidenceWorkflow();
+    const validateJob = workflow.jobs.validate_selected_ref;
+    const validateStep = expectDefined(
+      validateJob.steps.find((step: WorkflowStep) => step.name === "Validate selected ref"),
+      "QA profile selected-ref validation step",
+    );
+    const runJob = workflow.jobs.run_qa_profile;
+    const fetchStep = expectDefined(
+      runJob.steps.find((step: WorkflowStep) => step.name === "Fetch protocol comparison base"),
+      "QA profile protocol-base fetch step",
+    );
+    const runStep = expectDefined(
+      runJob.steps.find((step: WorkflowStep) => step.name === "Run QA profile"),
+      "QA profile run step",
+    );
+
+    expect(validateJob.outputs.protocol_base_revision).toBe(
+      "${{ steps.validate.outputs.protocol_base_revision }}",
+    );
+    expect(validateStep.run).toContain(
+      'protocol_base_revision="$(git rev-parse "${selected_revision}^1")"',
+    );
+    expect(validateStep.run).toContain(
+      'echo "protocol_base_revision=$protocol_base_revision" >> "$GITHUB_OUTPUT"',
+    );
+    expect(fetchStep.env.PROTOCOL_SINCE_BASE_SHA).toBe(
+      "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}",
+    );
+    expect(fetchStep.run).toContain(
+      '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/qa-protocol-base"',
+    );
+    expect(fetchStep.run).toContain(
+      "timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --no-recurse-submodules --depth=1 origin",
+    );
+    expect(runStep.env.PROTOCOL_SINCE_BASE_SHA).toBe(
+      "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}",
+    );
+  });
+
   it.skipIf(process.platform !== "linux")(
     "classifies QA timeouts only from isolated supervisor diagnostics",
     () => {

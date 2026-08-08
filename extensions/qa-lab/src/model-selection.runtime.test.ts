@@ -55,6 +55,21 @@ describe("qa model selection runtime", () => {
     });
   });
 
+  it("keeps the live alternate distinct from an OAuth-preferred primary", () => {
+    loadAuthProfileStoreForRuntime.mockReturnValue({
+      profiles: {
+        "openai:user@example.com": {
+          provider: "openai",
+          type: "oauth",
+        },
+      },
+    });
+
+    expect(defaultQaRuntimeModelForMode("live-frontier", { alternate: true })).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+  });
+
   it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
     loadAuthProfileStoreForRuntime.mockReturnValue({
       profiles: {

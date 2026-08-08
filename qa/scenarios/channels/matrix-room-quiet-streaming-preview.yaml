@@ -14,6 +14,7 @@ scenario:
     retryCount: 0
     config:
       matrixConfigOverrides:
+        blockStreaming: false
         streaming: quiet
 
 flow:

@@ -302,6 +302,44 @@ describe("Slack live QA runtime helpers", () => {
     expect(recallText).not.toContain("TESTNONCE");
   });
 
+  it("scopes MPIM event dedupe proof to marker-bearing replies", () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.verifyObserved
+    ) {
+      throw new Error("expected Slack MPIM message scenario with an observation verifier");
+    }
+    const seedMarker = /SLACK_QA_MPIM_SEED_[A-Z0-9]+/u.exec(run.input)?.[0];
+    if (!seedMarker) {
+      throw new Error("missing Slack MPIM seed marker");
+    }
+    const markerReply = {
+      channelId: "C_MPIM",
+      text: `${seedMarker}_BOT_TESTNONCE`,
+      ts: "2.000000",
+    };
+
+    expect(
+      run.verifyObserved({
+        finalMessage: markerReply,
+        messages: [
+          { channelId: "C_MPIM", text: "non-marker commentary", ts: "1.500000" },
+          markerReply,
+        ],
+      }),
+    ).toContain("one MPIM reply");
+    expect(() =>
+      run.verifyObserved?.({
+        finalMessage: markerReply,
+        messages: [markerReply, { ...markerReply, ts: "2.500000" }],
+      }),
+    ).toThrow("got 2 marker response(s)");
+  });
+
   it("rejects an MPIM seed reply without text before sending the recall turn", async () => {
     const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
     if (

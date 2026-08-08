@@ -125,13 +125,14 @@ export const slackQaMpimAppMentionDedupeScenario: SlackQaScenarioImplementation 
         throw new Error("Slack QA channel has no human member yielding a C-prefixed MPIM");
       },
       verifyObserved: ({ messages }) => {
-        const uniqueReplies = new Map(messages.map((message) => [message.ts, message]));
-        const matchingReplies = [...uniqueReplies.values()].filter((message) =>
-          message.text.includes(seedMarker),
+        const matchingReplies = new Map(
+          messages
+            .filter((message) => message.text.includes(seedMarker))
+            .map((message) => [message.ts, message]),
         );
-        if (uniqueReplies.size !== 1 || matchingReplies.length !== 1) {
+        if (matchingReplies.size !== 1) {
           throw new Error(
-            `expected one MPIM response with the marker, got ${uniqueReplies.size} response(s) and ${matchingReplies.length} marker match(es)`,
+            `expected one MPIM response with the marker, got ${matchingReplies.size} marker response(s)`,
           );
         }
         return "one MPIM reply observed after message/app_mention twin delivery";

@@ -799,16 +799,41 @@ describe("qa test file scenario runner", () => {
 
   it("preserves individual Docker lane success without generic producer evidence", async () => {
     const repoRoot = await makeTempRepo("qa-script-docker-individual-no-producer-evidence-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "docker-individual");
+    const commands: QaScenarioCommandExecution[] = [];
     const result = await runQaTestFileScenarios({
       repoRoot,
-      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "docker-individual"),
+      outputDir,
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.6-luna",
       failFast: true,
       scenarios: [makeDockerE2eScenario("docker-gateway-network", "gateway-network")],
-      runCommand: async () => ({ exitCode: 0, stdout: "Docker lane passed\n", stderr: "" }),
+      runCommand: async (command) => {
+        commands.push(command);
+        const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
+        if (!logDir) {
+          throw new Error("missing Docker scheduler log dir");
+        }
+        await fs.writeFile(
+          path.join(logDir, "summary.json"),
+          `${JSON.stringify({
+            failures: [],
+            lanes: [{ elapsedSeconds: 1, name: "gateway-network", status: 0 }],
+            selectedLanes: ["gateway-network"],
+          })}\n`,
+          "utf8",
+        );
+        return { exitCode: 0, stdout: "Docker lane passed\n", stderr: "" };
+      },
     });
 
+    expect(commands[0]).toMatchObject({
+      args: ["scripts/test-docker-all.mjs"],
+      env: {
+        OPENCLAW_DOCKER_ALL_LANES: "gateway-network",
+        OPENCLAW_DOCKER_ALL_PREPARE_PREPUBLISH_PLUGIN_REGISTRY: "1",
+      },
+    });
     expect(result.results[0]).toMatchObject({
       scenario: { id: "docker-gateway-network" },
       status: "pass",
@@ -1010,6 +1035,7 @@ describe("qa test file scenario runner", () => {
         OPENCLAW_DOCKER_ALL_LANES:
           "openai-chat-tools,bundled-plugin-install-uninstall,gateway,gateway-network",
         OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS: "1800000",
+        OPENCLAW_DOCKER_ALL_PREPARE_PREPUBLISH_PLUGIN_REGISTRY: "1",
       },
     });
     expect(result.results).toMatchObject([
@@ -1019,6 +1045,66 @@ describe("qa test file scenario runner", () => {
       { scenario: { id: "failing-lane" }, status: "fail" },
     ]);
     expect(result.results[3]?.failureMessage).toBe("gateway-network exited with 1");
+  });
+
+  it("reuses the Docker batch package for later script producers", async () => {
+    const repoRoot = await makeTempRepo("qa-script-docker-package-reuse-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "docker-package-reuse");
+    const packageTgz = path.join(
+      outputDir,
+      "docker-e2e-1800000ms",
+      "openclaw-package",
+      "openclaw-current.tgz",
+    );
+    await fs.mkdir(path.dirname(packageTgz), { recursive: true });
+    await fs.writeFile(packageTgz, "stale package", "utf8");
+    const commands: QaScenarioCommandExecution[] = [];
+    await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [
+        makeDockerE2eScenario("docker-lane", "gateway"),
+        makeTestFileScenario("script", "scripts/evidence-producer.ts"),
+      ],
+      runCommand: async (command) => {
+        commands.push(command);
+        if (command.args[0] === "scripts/test-docker-all.mjs") {
+          const exists = await fs.access(packageTgz).then(
+            () => true,
+            () => false,
+          );
+          expect(exists).toBe(false);
+          const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
+          if (!logDir) {
+            throw new Error("missing Docker scheduler log dir");
+          }
+          const producedPackageTgz = path.join(logDir, "openclaw-package", "openclaw-current.tgz");
+          await fs.mkdir(path.dirname(producedPackageTgz), { recursive: true });
+          await fs.writeFile(producedPackageTgz, "package fixture", "utf8");
+          await fs.writeFile(
+            path.join(logDir, "summary.json"),
+            `${JSON.stringify({
+              failures: [],
+              lanes: [{ elapsedSeconds: 1, name: "gateway", status: 0 }],
+              selectedLanes: ["gateway"],
+            })}\n`,
+            "utf8",
+          );
+        } else {
+          await writeScriptProducerEvidence({ outputDir, status: "pass" });
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(commands).toHaveLength(2);
+    expect(commands[1]?.env).toMatchObject({
+      OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD: "0",
+      OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
+      OPENCLAW_NPM_ONBOARD_HOST_BUILD: "0",
+    });
   });
 
   it("uses script scenario timeout overrides when running producer commands", async () => {

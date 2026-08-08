@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,7 +15,14 @@ import { startLocalOtlpReceiver } from "./otel-test-support.js";
 
 const execFileAsync = promisify(execFile);
 const PACKAGE_NAME = "@openclaw/diagnostics-otel";
-const PACKAGE_VERSION = "2026.7.2";
+const PACKAGE_VERSION = (
+  JSON.parse(
+    readFileSync(
+      path.resolve(import.meta.dirname, "../../../../extensions/diagnostics-otel/package.json"),
+      "utf8",
+    ),
+  ) as { version: string }
+).version;
 
 type MutableConfig = {
   diagnostics?: unknown;

@@ -1966,6 +1966,152 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("runs audited script producers concurrently after serial workspace owners", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-parallel-scripts-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultFlowImplementation || !defaultTestFileImplementation) {
+      throw new Error("expected default QA suite mock implementations");
+    }
+    let releaseFlow!: () => void;
+    let releaseSerialScript!: () => void;
+    let releaseParallelScripts!: () => void;
+    const flowBlocked = new Promise<void>((resolve) => {
+      releaseFlow = resolve;
+    });
+    const serialScriptBlocked = new Promise<void>((resolve) => {
+      releaseSerialScript = resolve;
+    });
+    const parallelScriptsBlocked = new Promise<void>((resolve) => {
+      releaseParallelScripts = resolve;
+    });
+    let markFlowStarted!: () => void;
+    let markSerialScriptStarted!: () => void;
+    const flowStarted = new Promise<void>((resolve) => {
+      markFlowStarted = resolve;
+    });
+    const serialScriptStarted = new Promise<void>((resolve) => {
+      markSerialScriptStarted = resolve;
+    });
+    const parallelScriptIds: string[] = [];
+    let activeParallelScripts = 0;
+    let maxActiveParallelScripts = 0;
+    runQaFlowSuite.mockImplementationOnce(async (params) => {
+      markFlowStarted();
+      await flowBlocked;
+      return await defaultFlowImplementation(params);
+    });
+    runQaTestFileScenarios.mockImplementation(async (params) => {
+      const scenarioIds = params.scenarios.map((scenario: QaTestFileScenario) => scenario.id);
+      if (scenarioIds.includes("docker-npm-onboard-channel-agent")) {
+        markSerialScriptStarted();
+        await serialScriptBlocked;
+      } else {
+        parallelScriptIds.push(...scenarioIds);
+        activeParallelScripts += 1;
+        maxActiveParallelScripts = Math.max(maxActiveParallelScripts, activeParallelScripts);
+        try {
+          await parallelScriptsBlocked;
+        } finally {
+          activeParallelScripts -= 1;
+        }
+      }
+      return await defaultTestFileImplementation(params);
+    });
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/parallel-scripts",
+      concurrency: 8,
+      scenarioIds: [
+        "dm-chat-baseline",
+        "docker-npm-onboard-channel-agent",
+        "remote-log-tailing",
+        "gateway-smoke",
+        "logging-file-boundary",
+        "diagnostic-events-boundary",
+      ],
+    });
+    await flowStarted;
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+
+    releaseFlow();
+    await serialScriptStarted;
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    expect(parallelScriptIds).toEqual([]);
+
+    releaseSerialScript();
+    await vi.waitFor(() => {
+      expect(parallelScriptIds).toHaveLength(3);
+    });
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(4);
+    expect(maxActiveParallelScripts).toBe(3);
+
+    releaseParallelScripts();
+    await runPromise;
+    expect(parallelScriptIds.toSorted()).toEqual([
+      "diagnostic-events-boundary",
+      "gateway-smoke",
+      "logging-file-boundary",
+      "remote-log-tailing",
+    ]);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(5);
+    expect(maxActiveParallelScripts).toBe(3);
+  });
+
+  it("records an audited script failure without discarding a concurrent sibling", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-parallel-script-failure-");
+    const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultTestFileImplementation) {
+      throw new Error("expected default QA test-file mock implementation");
+    }
+    runQaTestFileScenarios.mockImplementation(async (params) => {
+      if (
+        params.scenarios.some((scenario: QaTestFileScenario) => scenario.id === "gateway-smoke")
+      ) {
+        throw new Error("audited producer failed");
+      }
+      return await defaultTestFileImplementation(params);
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/parallel-script-failure",
+      concurrency: 3,
+      scenarioIds: ["remote-log-tailing", "gateway-smoke"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(result.result.scenarios).toMatchObject([
+      { name: "Remote gateway log tailing", status: "pass" },
+      {
+        name: "Gateway smoke evidence",
+        status: "fail",
+        details: "suite partition failed: audited producer failed",
+      },
+    ]);
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries: Array<{
+        result: { failure?: { reason?: string }; status: string };
+        test: { id: string };
+      }>;
+    };
+    expect(evidence.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          result: expect.objectContaining({
+            failure: { reason: "suite partition failed: audited producer failed" },
+            status: "fail",
+          }),
+          test: expect.objectContaining({ id: "gateway-smoke" }),
+        }),
+      ]),
+    );
+  });
+
   it("keeps multiple isolated flow scenarios in separate serial partitions", async () => {
     const repoRoot = await makeTempRepo("qa-suite-serial-isolated-");
     await runQaSuite({
