@@ -3,7 +3,9 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -41,6 +43,7 @@ import {
   insertRegistryWorktree,
   listRegistryWorktrees,
   updateRegistryWorktree,
+  WorktreeRemovalContentionError,
 } from "./registry.js";
 import {
   abortWorktreeRemoval,
@@ -55,6 +58,8 @@ import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeOwnerKind,
   ManagedWorktreeRecord,
+  ManagedWorktreeRunEndCleanup,
+  ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
 } from "./types.js";
 
@@ -908,6 +913,7 @@ export class ManagedWorktreeService {
     reason: string;
     force?: boolean;
     claimToken?: string;
+    runEndCleanup?: ManagedWorktreeRunEndCleanup;
   }): Promise<RemoveManagedWorktreeResult> {
     const record = this.requireLiveRecord(params.id);
     const force = params.force ?? false;
@@ -972,7 +978,13 @@ export class ManagedWorktreeService {
       await requireGit(record.repoRoot, ["worktree", "prune"]);
       await removeEmptyParents(path.dirname(record.path), await this.worktreesRoot());
       const removedAt = this.now();
-      updateRegistryWorktree(this.env, record.id, { removedAt, snapshotRef });
+      // Persist the run-end outcome atomically with finalization: a post-finalize
+      // write could race a restore plus newer cleanup and overwrite the newer fact.
+      updateRegistryWorktree(this.env, record.id, {
+        removedAt,
+        snapshotRef,
+        ...(params.runEndCleanup ? { runEndCleanup: params.runEndCleanup } : {}),
+      });
       finalizeWorktreeRemoval(this.env, record.id);
       return {
         removed: true,
@@ -1046,12 +1058,49 @@ export class ManagedWorktreeService {
   async removeIfLossless(id: string): Promise<boolean> {
     const record = this.requireLiveRecord(id);
     const claimToken = randomUUID();
+    const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
+      // Retained/failed writes happen after this remover released or aborted its
+      // claim, so a racing remover may have finalized the row; the live-row
+      // condition keeps a winner's removed-lossless authoritative. The winning
+      // removal itself persists its outcome atomically inside remove()'s
+      // finalization update, never through this path.
+      updateRegistryWorktree(
+        this.env,
+        id,
+        {
+          runEndCleanup: {
+            outcome,
+            at: this.now(),
+            ...(outcome === "failed"
+              ? { reason: truncateUtf16Safe(formatErrorMessage(error), 500) }
+              : {}),
+          },
+        },
+        { onlyIfLive: true },
+      );
+    };
+    // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
+    // QA and operators observe this product-boundary fact through worktrees.list.
     try {
       claimWorktreeRemoval(this.env, { worktreeId: id, token: claimToken, force: false });
-    } catch {
-      // A live run lease or a competing remover holds the worktree; a lossless
-      // auto-cleanup must not race it.
-      return false;
+    } catch (error) {
+      if (error instanceof WorktreeRemovalContentionError) {
+        if (error.kind === "finalized") {
+          // The winning remover owns the terminal cleanup fact; a late contender
+          // must return without replacing it with a false retained/failed outcome.
+          return false;
+        }
+        // A live run lease or a competing remover holds the worktree; a lossless
+        // auto-cleanup must not race it.
+        recordOutcome("retained-busy");
+        return false;
+      }
+      try {
+        recordOutcome("failed", error);
+      } catch {
+        // Preserve the claim failure when the same infrastructure blocks recording it.
+      }
+      throw error;
     }
     try {
       const status = await requireGit(record.path, ["status", "--porcelain"]);
@@ -1066,16 +1115,36 @@ export class ManagedWorktreeService {
         record.path,
         getRegistryWorktreeProvisionedPaths(this.env, record.id),
       );
-      if (status || unpushed || ignoredDrift) {
+      const retainedOutcome = status
+        ? "retained-dirty"
+        : unpushed
+          ? "retained-unpushed"
+          : ignoredDrift
+            ? "retained-provisioned-drift"
+            : undefined;
+      if (retainedOutcome) {
         abortWorktreeRemoval(this.env, id, claimToken);
+        recordOutcome(retainedOutcome);
         return false;
       }
     } catch (error) {
       abortWorktreeRemoval(this.env, id, claimToken);
+      recordOutcome("failed", error);
       throw error;
     }
-    await this.release(id);
-    await this.remove({ id, reason: "run-end", claimToken });
+    try {
+      await this.release(id);
+      await this.remove({
+        id,
+        reason: "run-end",
+        claimToken,
+        runEndCleanup: { outcome: "removed-lossless", at: this.now() },
+      });
+    } catch (error) {
+      abortWorktreeRemoval(this.env, id, claimToken);
+      recordOutcome("failed", error);
+      throw error;
+    }
     return true;
   }
 

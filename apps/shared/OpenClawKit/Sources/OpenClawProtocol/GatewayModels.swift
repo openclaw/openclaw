@@ -2944,6 +2944,7 @@ public struct WorktreeRecord: Codable, Sendable {
     public let createdat: Int
     public let lastactiveat: Int
     public let removedat: Int?
+    public let runendcleanup: AnyCodable?
 
     public init(
         id: String,
@@ -2958,7 +2959,8 @@ public struct WorktreeRecord: Codable, Sendable {
         snapshotref: String? = nil,
         createdat: Int,
         lastactiveat: Int,
-        removedat: Int? = nil)
+        removedat: Int? = nil,
+        runendcleanup: AnyCodable? = nil)
     {
         self.id = id
         self.name = name
@@ -2973,6 +2975,7 @@ public struct WorktreeRecord: Codable, Sendable {
         self.createdat = createdat
         self.lastactiveat = lastactiveat
         self.removedat = removedat
+        self.runendcleanup = runendcleanup
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2989,6 +2992,7 @@ public struct WorktreeRecord: Codable, Sendable {
         case createdat = "createdAt"
         case lastactiveat = "lastActiveAt"
         case removedat = "removedAt"
+        case runendcleanup = "runEndCleanup"
     }
 }
 
