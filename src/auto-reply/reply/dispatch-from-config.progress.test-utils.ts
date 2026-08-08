@@ -1458,6 +1458,48 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("continues flushing direct failed progress after a callback rejects", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "on",
+    };
+    const dispatcher = createDispatcher();
+    const firstFailure = { phase: "end", name: "exec", status: "failed", exitCode: 1 } as const;
+    const secondFailure = {
+      phase: "end",
+      name: "read",
+      status: "error",
+      exitCode: 2,
+    } as const;
+    const onCommandOutput = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("presentation failed"))
+      .mockResolvedValueOnce(undefined);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:direct:U1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onCommandOutput?.(firstFailure);
+        await opts?.onCommandOutput?.(secondFailure);
+        return undefined;
+      },
+      replyOptions: { onCommandOutput },
+    });
+
+    expect(onCommandOutput).toHaveBeenNthCalledWith(1, firstFailure);
+    expect(onCommandOutput).toHaveBeenNthCalledWith(2, secondFailure);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("drops buffered failed tool payloads after confirmed final delivery", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

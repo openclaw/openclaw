@@ -9,6 +9,8 @@ import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { defaultRuntime } from "../../runtime.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -203,7 +205,13 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       if (isDispatchOperationAborted()) {
         return;
       }
-      await deliver();
+      try {
+        await deliver();
+      } catch (error) {
+        defaultRuntime.error?.(
+          `dispatch-from-config: buffered failed progress delivery failed: ${formatErrorMessage(error)}`,
+        );
+      }
     }
   };
   const hasPendingFailedProgressDeliveries = () =>
