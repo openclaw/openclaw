@@ -235,19 +235,29 @@ export function resolveContextTokensForModelFromCache(
   const explicitProvider = params.provider?.trim();
 
   if (ref && explicitProvider) {
-    const configuredWindow = resolveConfiguredRuntimeContextTokens(
-      params.cfg,
-      explicitProvider,
-      params.modelProvider,
-      ref.model,
-    );
+    // Gateway-style refs arrive provider-self-prefixed (`kilocode/kilo-auto/balanced`
+    // under provider `kilocode`) while config and discovery key the bare id. Without
+    // the bare retry every lookup below misses and the model silently falls back to
+    // the default window instead of its real one (#116010).
+    const bareRefModel = resolveProviderQualifiedModel(ref.provider, ref.model);
+    const resolveConfiguredForRef = (cfg: OpenClawConfig | null | undefined) =>
+      resolveConfiguredRuntimeContextTokens(
+        cfg,
+        explicitProvider,
+        params.modelProvider,
+        ref.model,
+      ) ??
+      (bareRefModel
+        ? resolveConfiguredRuntimeContextTokens(
+            cfg,
+            explicitProvider,
+            params.modelProvider,
+            bareRefModel,
+          )
+        : undefined);
+    const configuredWindow = resolveConfiguredForRef(params.cfg);
     const sourceConfig = params.sourceCfg === undefined ? params.cfg : params.sourceCfg;
-    const sourceConfiguredWindow = resolveConfiguredRuntimeContextTokens(
-      sourceConfig,
-      explicitProvider,
-      params.modelProvider,
-      ref.model,
-    );
+    const sourceConfiguredWindow = resolveConfiguredForRef(sourceConfig);
     const extraParamSources = resolveModelExtraParamSources({
       config: params.cfg,
       provider: ref.provider,
