@@ -256,6 +256,7 @@ export type RegisteredMemorySearchManager = MemorySearchManager;
 
 type MemoryRuntimeQmdConfig = {
   command?: string;
+  fallback?: "builtin" | "none";
 };
 
 type MemoryRuntimeBackendConfig =
@@ -280,6 +281,7 @@ export type MemoryPluginRuntime = {
         | "transient-status"
         | "pending-create-wait"
         | "fallback-builtin"
+        | "qmd-unavailable"
         | "recent-failure-cooldown";
       qmdIdentityHash?: string;
       failureCode?: "qmd-unavailable";
