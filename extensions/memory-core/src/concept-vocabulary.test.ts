@@ -1,6 +1,10 @@
 // Memory Core tests cover concept vocabulary plugin behavior.
 import { describe, expect, it } from "vitest";
-import { deriveConceptTags, summarizeConceptTagScriptCoverage } from "./concept-vocabulary.js";
+import {
+  deriveConceptTags,
+  summarizeConceptTagScriptCoverage,
+  isJunkConceptTag,
+} from "./concept-vocabulary.js";
 
 describe("concept vocabulary", () => {
   it("extracts Unicode-aware concept tags for common European languages", () => {
@@ -114,6 +118,103 @@ describe("concept vocabulary", () => {
       cjkEntryCount: 1,
       mixedEntryCount: 1,
       otherEntryCount: 1,
+    });
+  });
+
+  // New tests for issue #111923: Dreaming REM phase extracts junk topics
+  describe("junk topic filtering (issue #111923)", () => {
+    it("filters out stop words like 'kept' and 'theme'", () => {
+      const tags = deriveConceptTags({
+        path: "memory/2026-08-01.md",
+        snippet: "The theme kept appearing in the conversation about the project.",
+      });
+
+      expect(tags).not.toContain("kept");
+      expect(tags).not.toContain("theme");
+      expect(tags).toContain("project");
+      expect(tags).toContain("conversation");
+      expect(tags).toContain("appearing");
+    });
+
+    it("filters out bare numbers like '1.00'", () => {
+      const tags = deriveConceptTags({
+        path: "memory/2026-08-01.md",
+        snippet: "The price was 1.00 and the total came to 42.50 for the items.",
+      });
+
+      expect(tags).not.toContain("1.00");
+      expect(tags).not.toContain("42.50");
+      expect(tags).toContain("price");
+      expect(tags).toContain("total");
+      expect(tags).toContain("items");
+    });
+
+    it("filters out number ranges like '51-54'", () => {
+      const tags = deriveConceptTags({
+        path: "memory/2026-08-01.md",
+        snippet: "Pages 51-54 discuss the router configuration and backup procedures.",
+      });
+
+      expect(tags).not.toContain("51-54");
+      expect(tags).toContain("pages");
+      expect(tags).toContain("discuss");
+      expect(tags).toContain("router");
+      expect(tags).toContain("configuration");
+      expect(tags).toContain("backup");
+      expect(tags).toContain("procedures");
+    });
+
+    it("filters out pure integers", () => {
+      const tags = deriveConceptTags({
+        path: "memory/2026-08-01.md",
+        snippet: "There were 42 items and 7 categories in the database.",
+      });
+
+      expect(tags).not.toContain("42");
+      expect(tags).not.toContain("7");
+      expect(tags).toContain("items");
+      expect(tags).toContain("categories");
+      expect(tags).toContain("database");
+    });
+
+    it("extracts meaningful topics from REM phase sample data", () => {
+      // Simulate REM phase extraction on sample data that might contain junk
+      const tags = deriveConceptTags({
+        path: "memory/2026-08-01.md",
+        snippet:
+          "User discussed router configuration and backup strategies. The theme kept recurring. Pages 51-54 and section 1.00 were referenced.",
+      });
+
+      // Verify junk is filtered
+      expect(tags).not.toContain("kept");
+      expect(tags).not.toContain("theme");
+      expect(tags).not.toContain("1.00");
+      expect(tags).not.toContain("51-54");
+
+      // Verify meaningful topics are extracted (limited to MAX_CONCEPT_TAGS=8)
+      expect(tags).toContain("router");
+      expect(tags).toContain("configuration");
+      expect(tags).toContain("backup");
+      expect(tags).toContain("strategies");
+      expect(tags).toContain("discussed");
+      expect(tags).toContain("recurring");
+      // Note: "referenced" may be cut off due to MAX_CONCEPT_TAGS limit
+    });
+  });
+
+  describe("isJunkConceptTag (REM aggregation filter)", () => {
+    it("filters legacy persisted junk tags", () => {
+      expect(isJunkConceptTag("kept")).toBe(true);
+      expect(isJunkConceptTag("theme")).toBe(true);
+      expect(isJunkConceptTag("1.00")).toBe(true);
+      expect(isJunkConceptTag("42")).toBe(true);
+      expect(isJunkConceptTag("51-54")).toBe(true);
+    });
+
+    it("allows meaningful tags", () => {
+      expect(isJunkConceptTag("router")).toBe(false);
+      expect(isJunkConceptTag("configuration")).toBe(false);
+      expect(isJunkConceptTag("backup")).toBe(false);
     });
   });
 });

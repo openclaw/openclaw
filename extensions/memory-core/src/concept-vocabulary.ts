@@ -39,6 +39,7 @@ const LANGUAGE_STOP_WORDS = {
     "have",
     "into",
     "just",
+    "kept",
     "line",
     "lines",
     "long",
@@ -71,6 +72,7 @@ const LANGUAGE_STOP_WORDS = {
     "than",
     "that",
     "their",
+    "theme",
     "there",
     "these",
     "they",
@@ -340,17 +342,29 @@ function normalizeConceptToken(rawToken: string, fromGlossary = false): string |
   if (!normalized || !containsLetterOrNumber(normalized) || normalized.length > 32) {
     return null;
   }
+
+  // Filter out bare numbers, dates, and number ranges (e.g., "1.00", "51-54", "2024-01-01")
+  if (/^\d+$/.test(normalized)) {
+    return null;
+  }
+  if (/^\d+\.\d+$/.test(normalized)) {
+    return null;
+  }
+  if (/^\d+-\d+$/.test(normalized)) {
+    return null;
+  }
   if (
-    /^\d+$/.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}$/u.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}\.[\p{L}\p{N}]+$/u.test(normalized)
   ) {
     return null;
   }
+
   const script = classifyConceptTagScript(normalized);
   // Glossary entries are an explicit allowlist of short technical terms (e.g. "kv", "s3"); they
   // bypass the per-script minimum length that would otherwise discard them.
-  if (!fromGlossary && normalized.length < minimumTokenLengthForScript(script)) {
+  const minLength = minimumTokenLengthForScript(script);
+  if (!fromGlossary && normalized.length < minLength) {
     return null;
   }
   if (isKanaOnlyToken(normalized) && normalized.length < 3) {
@@ -360,6 +374,31 @@ function normalizeConceptToken(rawToken: string, fromGlossary = false): string |
     return null;
   }
   return normalized;
+}
+
+/**
+ * Returns true when a concept tag is junk (stop word, bare number, or number
+ * range) and should be excluded from REM aggregation. Shares the same policy
+ * as normalizeConceptToken so legacy persisted tags are filtered consistently.
+ */
+export function isJunkConceptTag(tag: string): boolean {
+  const normalized = tag.toLowerCase().trim();
+  if (!normalized) {
+    return true;
+  }
+  if (CONCEPT_STOP_WORDS.has(normalized)) {
+    return true;
+  }
+  if (/^\d+$/.test(normalized)) {
+    return true;
+  }
+  if (/^\d+\.\d+$/.test(normalized)) {
+    return true;
+  }
+  if (/^\d+-\d+$/.test(normalized)) {
+    return true;
+  }
+  return false;
 }
 
 // Only entries shorter than their script's minimum token length rely on the glossary bypass, and

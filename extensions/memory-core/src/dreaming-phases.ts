@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isJunkConceptTag } from "./concept-vocabulary.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   normalizeDailyIngestionState,
@@ -1210,7 +1211,7 @@ function buildRemReflections(
   const tagStats = new Map<string, { count: number; evidence: Set<string> }>();
   for (const entry of entries) {
     for (const tag of entry.conceptTags) {
-      if (!tag || REM_REFLECTION_TAG_BLACKLIST.has(tag.toLowerCase())) {
+      if (!tag || REM_REFLECTION_TAG_BLACKLIST.has(tag.toLowerCase()) || isJunkConceptTag(tag)) {
         continue;
       }
       const stat = tagStats.get(tag) ?? { count: 0, evidence: new Set<string>() };
