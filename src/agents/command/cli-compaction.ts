@@ -568,7 +568,12 @@ async function compactNativeHarnessCliTranscript(params: {
   return { compacted: true, result };
 }
 
-/** Runs pre-turn compaction for a CLI session and returns the updated session entry. */
+export type CliTurnCompactionLifecycleOutcome = {
+  sessionEntry: SessionEntry | undefined;
+  compacted: boolean;
+};
+
+/** Runs post-turn compaction for a CLI session and returns its transcript mutation outcome. */
 export async function runCliTurnCompactionLifecycle(params: {
   cfg: OpenClawConfig;
   sessionId: string;
@@ -588,10 +593,10 @@ export async function runCliTurnCompactionLifecycle(params: {
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
-}): Promise<SessionEntry | undefined> {
+}): Promise<CliTurnCompactionLifecycleOutcome> {
   const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
   if (!params.storePath || !contextTokenBudget) {
-    return params.sessionEntry;
+    return { sessionEntry: params.sessionEntry, compacted: false };
   }
 
   const sessionManager = cliCompactionDeps.openSessionManager({
@@ -626,7 +631,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     !preemptiveCompaction.shouldCompact &&
     currentTokenCount <= preemptiveCompaction.promptBudgetBeforeReserve
   ) {
-    return params.sessionEntry;
+    return { sessionEntry: params.sessionEntry, compacted: false };
   }
 
   const resolvedBackend = cliCompactionDeps.resolveCliBackendConfig(params.provider, params.cfg);
@@ -643,7 +648,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
   ) {
     log.info(`CLI backend "${params.provider}" owns native compaction — deferring to backend`);
-    return params.sessionEntry;
+    return { sessionEntry: params.sessionEntry, compacted: false };
   }
 
   let compacted = false;
@@ -760,33 +765,37 @@ export async function runCliTurnCompactionLifecycle(params: {
   }
 
   if (nativeFallbackNeedsBindingClear && !compacted && params.sessionStore && params.storePath) {
-    return (
-      (await cliCompactionDeps.clearCliSessionInStore({
+    return {
+      sessionEntry:
+        (await cliCompactionDeps.clearCliSessionInStore({
+          provider: params.provider,
+          sessionKey: params.sessionKey,
+          sessionStore: params.sessionStore,
+          storePath: params.storePath,
+          expectedSessionId: params.sessionId,
+        })) ?? params.sessionEntry,
+      compacted: false,
+    };
+  }
+
+  if (!compacted || !params.sessionStore || !params.storePath) {
+    return { sessionEntry: params.sessionEntry, compacted };
+  }
+
+  return {
+    sessionEntry:
+      (await cliCompactionDeps.recordCliCompactionInStore({
         provider: params.provider,
         sessionKey: params.sessionKey,
         sessionStore: params.sessionStore,
         storePath: params.storePath,
+        tokensAfter:
+          nativeCompactionResult?.result?.tokensAfter ?? contextCompactionOutcome?.tokensAfter,
+        newSessionId:
+          nativeCompactionResult?.result?.sessionId ?? contextCompactionOutcome?.successorSessionId,
         expectedSessionId: params.sessionId,
-      })) ?? params.sessionEntry
-    );
-  }
-
-  if (!compacted || !params.sessionStore || !params.storePath) {
-    return params.sessionEntry;
-  }
-
-  return (
-    (await cliCompactionDeps.recordCliCompactionInStore({
-      provider: params.provider,
-      sessionKey: params.sessionKey,
-      sessionStore: params.sessionStore,
-      storePath: params.storePath,
-      tokensAfter:
-        nativeCompactionResult?.result?.tokensAfter ?? contextCompactionOutcome?.tokensAfter,
-      newSessionId:
-        nativeCompactionResult?.result?.sessionId ?? contextCompactionOutcome?.successorSessionId,
-      expectedSessionId: params.sessionId,
-    })) ?? params.sessionEntry
-  );
+      })) ?? params.sessionEntry,
+    compacted: true,
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

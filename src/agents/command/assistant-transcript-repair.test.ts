@@ -39,9 +39,10 @@ const state = vi.hoisted(() => ({
   normalizeProviderModelIdWithRuntimeMock: vi.fn(
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
-  runCliTurnCompactionLifecycleMock: vi.fn(
-    async (params: CliCompactionParams) => params.sessionEntry,
-  ),
+  runCliTurnCompactionLifecycleMock: vi.fn(async (params: CliCompactionParams) => ({
+    sessionEntry: params.sessionEntry,
+    compacted: false,
+  })),
   deliverAgentCommandResultMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   persistCliTurnTranscriptMock: vi.fn(),
@@ -249,7 +250,10 @@ beforeEach(async () => {
   state.loadManifestModelCatalogMock.mockReturnValue([]);
   state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => undefined);
   state.runCliTurnCompactionLifecycleMock.mockImplementation(
-    async (params: CliCompactionParams) => params.sessionEntry,
+    async (params: CliCompactionParams) => ({
+      sessionEntry: params.sessionEntry,
+      compacted: false,
+    }),
   );
   state.persistCliTurnTranscriptMock.mockImplementation(
     async (...args: Parameters<PersistCliTurnTranscript>) =>

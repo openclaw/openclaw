@@ -69,11 +69,11 @@ import {
   buildBootstrapTruncationReportMeta,
 } from "../bootstrap-budget.js";
 import {
+  hasCompletedBootstrapTurn as hasCompletedBootstrapTurnImpl,
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
-import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
   resolveCliAuthBindingFingerprint,
@@ -119,6 +119,7 @@ import {
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
+import { prepareCliBootstrapContext } from "./bootstrap-context.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
@@ -170,6 +171,7 @@ type RunCliAgentPrepareParams = RunCliAgentParams & {
 };
 
 const prepareDeps = {
+  hasCompletedBootstrapTurn: hasCompletedBootstrapTurnImpl,
   isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
@@ -838,24 +840,6 @@ export async function prepareCliRunContext(
     ? resolveAutoCliSessionReseedHistoryChars(contextWindowInfo.tokens)
     : undefined;
 
-  const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles: resolvedContextFiles } = isSideQuestion
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await prepareDeps.resolveBootstrapContextForRun({
-        workspaceDir,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        chatType: runtimeChatType,
-        agentId: sessionAgentId,
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-        warn: prepareDeps.makeBootstrapWarn({
-          sessionLabel,
-          workspaceDir,
-          warn: (message) => cliBackendLog.warn(message),
-        }),
-      });
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt. Only a declared native-tool backend can complete
   // the file-based ritual; other backends receive limited guidance.
@@ -869,24 +853,39 @@ export async function prepareCliRunContext(
       backendResolved.nativeToolMode === "selectable") &&
     selectedNativeToolsProvideFileAccess &&
     params.disableTools !== true;
-  const bootstrapRouting =
-    isSideQuestion || !canTransportSystemPrompt(backendResolved.config)
-      ? undefined
-      : await resolveWorkspaceBootstrapRouting({
-          isWorkspaceBootstrapPending: prepareDeps.isWorkspaceBootstrapPending,
-          bootstrapFiles,
-          bootstrapFilesProvideAccess: false,
-          bootstrapContextRunKind: params.bootstrapContextRunKind,
-          trigger: params.trigger,
-          sessionKey: params.sessionKey,
-          isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-          isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
-          effectiveWorkspace: workspaceDir,
-          resolvedWorkspace,
-          hasBootstrapFileAccess,
-        });
-  const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
-  const includeBootstrapInSystemContext = bootstrapRouting?.includeBootstrapInSystemContext ?? true;
+  const {
+    bootstrapFiles,
+    bootstrapMode,
+    contextFiles: resolvedContextFiles,
+    includeBootstrapInSystemContext,
+    sessionTarget: bootstrapSessionTarget,
+    shouldRecordCompletedBootstrapTurn,
+  } = await prepareCliBootstrapContext({
+    bootstrapContextMode: params.bootstrapContextMode,
+    bootstrapContextRunKind: params.bootstrapContextRunKind,
+    canTransportSystemPrompt: canTransportSystemPrompt(backendResolved.config),
+    chatType: runtimeChatType,
+    config: params.config,
+    currentInboundEventKind: params.currentInboundEventKind,
+    deps: {
+      hasCompletedBootstrapTurn: prepareDeps.hasCompletedBootstrapTurn,
+      isWorkspaceBootstrapPending: prepareDeps.isWorkspaceBootstrapPending,
+      makeBootstrapWarn: prepareDeps.makeBootstrapWarn,
+      resolveBootstrapContextForRun: prepareDeps.resolveBootstrapContextForRun,
+    },
+    hasBootstrapFileAccess,
+    isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
+    isSideQuestion,
+    resolvedWorkspace,
+    sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
+    storePath: params.storePath,
+    trigger: params.trigger,
+    warn: (message) => cliBackendLog.warn(message),
+    workspaceDir,
+  });
   const contextFiles = includeBootstrapInSystemContext
     ? resolvedContextFiles
     : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
@@ -1708,6 +1707,7 @@ export async function prepareCliRunContext(
     const preparedParams: RunCliAgentParams = {
       ...params,
       config: contextEngineConfig,
+      sessionTarget: bootstrapSessionTarget,
       prompt: preparedPrompt,
       transcriptPrompt: finalizedTranscriptPrompt,
       ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
@@ -1738,6 +1738,7 @@ export async function prepareCliRunContext(
       systemPromptReport,
       claudeSkillsPluginArgs: claudeSkillsPlugin.args,
       bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
+      ...(shouldRecordCompletedBootstrapTurn ? { shouldRecordCompletedBootstrapTurn: true } : {}),
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
       heartbeatPrompt,
       authEpoch,

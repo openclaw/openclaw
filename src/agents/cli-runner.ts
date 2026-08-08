@@ -40,6 +40,11 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "./cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import {
+  finalizeRunnerOwnedPendingCliBootstrapCompletion,
+  setPendingCliBootstrapCompletion,
+  type PendingCliBootstrapCompletion,
+} from "./cli-bootstrap-completion.js";
 import type { CliOutput } from "./cli-output.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
 import { shouldUseClaudeLiveSession } from "./cli-runner/claude-live-session.js";
@@ -76,7 +81,7 @@ import {
 import {
   bootstrapHarnessContextEngine,
   finalizeHarnessContextEngineTurn,
-  runHarnessContextEngineMaintenance,
+  runHarnessContextEngineMaintenanceWithOutcome,
 } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -419,6 +424,7 @@ async function persistCliAssistantTranscript(params: {
   };
 }): Promise<{
   owned: boolean;
+  persisted: boolean;
   terminalAnchor?: import("../config/sessions/session-accessor.js").TranscriptEntryAnchor;
 }> {
   const { runParams } = params;
@@ -426,6 +432,7 @@ async function persistCliAssistantTranscript(params: {
     const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
     return {
       owned: true,
+      persisted: false,
       ...(admission ? { terminalAnchor: admission } : {}),
     };
   }
@@ -433,11 +440,12 @@ async function persistCliAssistantTranscript(params: {
     const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
     return {
       owned: false,
+      persisted: false,
       ...(admission ? { terminalAnchor: admission } : {}),
     };
   }
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
-    return { owned: false };
+    return { owned: false, persisted: false };
   }
   try {
     const result = await appendExactAssistantMessageToSessionTranscript({
@@ -467,12 +475,19 @@ async function persistCliAssistantTranscript(params: {
     });
     if (!result.ok) {
       log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
-      return { owned: result.code === "blocked" || result.code === "session-rebound" };
+      return {
+        owned: result.code === "blocked" || result.code === "session-rebound",
+        persisted: false,
+      };
     }
-    return { owned: true, ...(result.anchor ? { terminalAnchor: result.anchor } : {}) };
+    return {
+      owned: true,
+      persisted: true,
+      ...(result.anchor ? { terminalAnchor: result.anchor } : {}),
+    };
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
-    return { owned: false };
+    return { owned: false, persisted: false };
   }
 }
 
@@ -487,6 +502,17 @@ async function notifyCliUserMessagePersisted(
     log.warn(`${context} notification failed: ${formatErrorMessage(err)}`);
   }
 }
+
+type CliDeferredTurnMaintenanceOutcomePromise = Parameters<
+  NonNullable<
+    Parameters<typeof runHarnessContextEngineMaintenanceWithOutcome>[0]["onDeferredMaintenance"]
+  >
+>[1];
+
+const cliDeferredTurnMaintenanceOutcomes = new WeakMap<
+  PreparedCliRunContext,
+  CliDeferredTurnMaintenanceOutcomePromise
+>();
 
 async function finalizeCliContextEngineTurn(params: {
   context: PreparedCliRunContext;
@@ -529,6 +555,7 @@ async function finalizeCliContextEngineTurn(params: {
     withSessionManagerRewriteLock: <T>(operation: () => Promise<T> | T) => Promise<T>;
   }) => {
     let deferredTurnMaintenance: Promise<void> | undefined;
+    let deferredTurnMaintenanceOutcome: CliDeferredTurnMaintenanceOutcomePromise | undefined;
     const result = await finalizeHarnessContextEngineTurn({
       contextEngine: context.contextEngine,
       promptError: false,
@@ -546,17 +573,23 @@ async function finalizeCliContextEngineTurn(params: {
       providerId: runParams.provider,
       modelId: context.modelId,
       runMaintenance: async (maintenanceParams) =>
-        await runHarnessContextEngineMaintenance({
+        await runHarnessContextEngineMaintenanceWithOutcome({
           ...maintenanceParams,
           withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
-          onDeferredMaintenance: (promise) => {
+          onDeferredMaintenance: (promise, outcome) => {
             deferredTurnMaintenance = promise;
+            deferredTurnMaintenanceOutcome = outcome;
           },
         }),
       warn: (message) => log.warn(message),
     });
-    if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
+    if (
+      result.postTurnFinalizationSucceeded &&
+      deferredTurnMaintenance &&
+      deferredTurnMaintenanceOutcome
+    ) {
       context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
+      cliDeferredTurnMaintenanceOutcomes.set(context, deferredTurnMaintenanceOutcome);
     }
   };
   const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
@@ -585,6 +618,48 @@ async function finalizeCliContextEngineTurn(params: {
       withSessionManagerRewriteLock: async (operation) => await operation(),
     });
   }
+}
+
+/** Transfers completion to the transcript owner after all rewrite-capable work settles. */
+function handleCompletedCliBootstrapTurn(
+  context: PreparedCliRunContext,
+  runnerTranscriptPersisted: boolean,
+): { handled: boolean; pending?: PendingCliBootstrapCompletion } {
+  // Post-output transcript/finalization awaits can race with cancellation. Never
+  // let an aborted turn suppress workspace context on the next eligible turn.
+  if (
+    context.shouldRecordCompletedBootstrapTurn !== true ||
+    context.params.abortSignal?.aborted === true
+  ) {
+    return { handled: false };
+  }
+  const sessionTarget = context.params.sessionTarget;
+  if (!sessionTarget) {
+    return { handled: false };
+  }
+  const maintenanceOutcome = cliDeferredTurnMaintenanceOutcomes.get(context);
+  if (maintenanceOutcome) {
+    cliDeferredTurnMaintenanceOutcomes.delete(context);
+  }
+  return {
+    handled: false,
+    pending: {
+      maintenanceSettledWithoutRewrite: maintenanceOutcome
+        ? maintenanceOutcome
+            .then((outcome) => outcome.status === "completed" && !outcome.changed)
+            .catch((error: unknown) => {
+              log.warn(
+                `failed to settle CLI bootstrap completion entry: ${formatErrorMessage(error)}`,
+              );
+              return false;
+            })
+        : Promise.resolve(true),
+      runId: context.params.runId,
+      sessionTarget,
+      sessionManager: context.params.sessionManager,
+      transcriptOwner: runnerTranscriptPersisted ? "runner" : "caller",
+    },
+  };
 }
 
 /** Prepares and runs one CLI-backed agent turn. */
@@ -677,6 +752,12 @@ async function runCliAgentInternal(
         finalAssistantRawText: finalText,
       },
     };
+  }
+  // Preparation reads transcript/bootstrap state and must observe all rewrites
+  // from the preceding same-session turn.
+  if (!params.isolatedCompletion) {
+    await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
+    assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
   let context: PreparedCliRunContext;
@@ -806,11 +887,6 @@ export async function runPreparedCliAgent(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
   const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
-  // Prior turn maintenance can rewrite transcript entries after finalization.
-  // Reads for the next same-session inference must observe that rewrite.
-  if (!isolatedCompletion) {
-    await waitForDeferredTurnMaintenanceForSession(params.sessionKey ?? params.sessionId);
-  }
   const historyMessages = needsHookHistory
     ? await loadCliSessionHistoryMessages({
         sessionId: params.sessionId,
@@ -1273,6 +1349,10 @@ export async function runPreparedCliAgent(
     effectiveCliSessionId?: string;
     bindingFlushOk?: boolean;
     assistantTranscriptOwned?: boolean;
+    bootstrapCompletion?: {
+      handled: boolean;
+      pending?: PendingCliBootstrapCompletion;
+    };
     usedHistoryPrompt: boolean;
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
@@ -1359,7 +1439,7 @@ export async function runPreparedCliAgent(
       ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
     });
 
-    return {
+    const result: EmbeddedAgentRunResult = {
       payloads,
       meta: {
         durationMs: Date.now() - context.started,
@@ -1373,6 +1453,12 @@ export async function runPreparedCliAgent(
             }
           : {}),
         systemPromptReport: context.systemPromptReport,
+        ...(context.shouldRecordCompletedBootstrapTurn === true &&
+        resultParams.bootstrapCompletion?.handled !== true &&
+        resultParams.bootstrapCompletion?.pending !== undefined &&
+        params.abortSignal?.aborted !== true
+          ? { bootstrapContextCompletionPending: true as const }
+          : {}),
         ...(yielded ? { yielded: true, livenessState: "paused" as const, stopReason } : {}),
         executionTrace: {
           winnerProvider: params.provider,
@@ -1463,6 +1549,13 @@ export async function runPreparedCliAgent(
         ? { messagingToolSourceReplyPayloads: resultParams.output.messagingToolSourceReplyPayloads }
         : {}),
     };
+    if (
+      result.meta.bootstrapContextCompletionPending === true &&
+      resultParams.bootstrapCompletion?.pending
+    ) {
+      setPendingCliBootstrapCompletion(result, resultParams.bootstrapCompletion.pending);
+    }
+    return result;
   };
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
@@ -1507,7 +1600,7 @@ export async function runPreparedCliAgent(
       try {
         await assertSuccessfulCliRuntimeBindingCurrent(context);
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
-        const assistantTranscript = await persistCliAssistantTranscript({
+        const assistantTranscriptPersistence = await persistCliAssistantTranscript({
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
@@ -1519,7 +1612,7 @@ export async function runPreparedCliAgent(
           context,
           historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
           assistantText,
-          terminalAnchor: assistantTranscript.terminalAnchor,
+          terminalAnchor: assistantTranscriptPersistence.terminalAnchor,
           output,
         });
         // A stateless backend may emit an id, but it never becomes continuity.
@@ -1541,11 +1634,16 @@ export async function runPreparedCliAgent(
           ctx: hookContext,
           hookRunner,
         });
+        const bootstrapCompletion = handleCompletedCliBootstrapTurn(
+          context,
+          assistantTranscriptPersistence.persisted,
+        );
         return buildCliRunResult({
           output,
           effectiveCliSessionId,
           bindingFlushOk,
-          assistantTranscriptOwned: assistantTranscript.owned,
+          assistantTranscriptOwned: assistantTranscriptPersistence.owned,
+          bootstrapCompletion,
           usedHistoryPrompt,
         });
       } catch (error) {
@@ -1787,6 +1885,7 @@ export async function runPreparedCliAgent(
   let runResult: EmbeddedAgentRunResult | undefined;
   let runError: unknown;
   let runFailed = false;
+  let cleanupSucceeded = true;
   try {
     runResult = await executeRun();
   } catch (error) {
@@ -1796,6 +1895,7 @@ export async function runPreparedCliAgent(
   try {
     await context.preparedBackend.cleanup?.();
   } catch (cleanupError) {
+    cleanupSucceeded = false;
     if (!deliveredMessagingSideEffect) {
       if (runFailed) {
         cliBackendLog.warn(
@@ -1815,6 +1915,19 @@ export async function runPreparedCliAgent(
   if (!runResult) {
     throw new Error("CLI run completed without a result");
   }
+  void finalizeRunnerOwnedPendingCliBootstrapCompletion({
+    result: runResult,
+    transcriptStable: cleanupSucceeded,
+    isStillEligible: () => {
+      if (params.abortSignal?.aborted === true) {
+        return false;
+      }
+      if (params.lifecycleGeneration) {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
+      return true;
+    },
+  });
   return runResult;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

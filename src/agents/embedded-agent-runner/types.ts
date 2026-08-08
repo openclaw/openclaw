@@ -183,6 +183,8 @@ export type EmbeddedAgentRunMeta = {
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
   terminalReply?: AgentRunTerminalReplySnapshot;
+  /** CLI continuation marker awaiting the command owner's canonical transcript commit. */
+  bootstrapContextCompletionPending?: true;
   yielded?: boolean;
   error?: {
     kind:

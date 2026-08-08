@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { setPendingCliBootstrapCompletion } from "../../agents/cli-bootstrap-completion.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -431,6 +432,58 @@ describe("runCliAgentWithLifecycle", () => {
     });
 
     expect(result.payloads).toEqual([{ text: "Visible answer" }]);
+  });
+
+  it("returns the completed CLI reply while deferred bootstrap maintenance is pending", async () => {
+    const result = {
+      payloads: [{ text: "Visible answer" }],
+      meta: { durationMs: 1, bootstrapContextCompletionPending: true },
+    } satisfies EmbeddedAgentRunResult;
+    let releaseMaintenance: ((settledWithoutRewrite: boolean) => void) | undefined;
+    const maintenanceSettledWithoutRewrite = new Promise<boolean>((resolve) => {
+      releaseMaintenance = resolve;
+    });
+    const appendCustomEntry = vi.fn();
+    setPendingCliBootstrapCompletion(result, {
+      maintenanceSettledWithoutRewrite,
+      runId: "run-deferred-bootstrap",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/sessions.json",
+      },
+      sessionManager: { appendCustomEntry },
+    });
+    cliDispatchState.runCliAgentMock.mockResolvedValueOnce(result);
+
+    const reply = runCliAgentWithLifecycle({
+      runId: "run-deferred-bootstrap",
+      provider: "claude-cli",
+      runParams: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-deferred-bootstrap",
+      },
+    });
+    let replySettled = false;
+    void reply.then(() => {
+      replySettled = true;
+    });
+    await vi.waitFor(() => expect(replySettled).toBe(true));
+    expect(appendCustomEntry).not.toHaveBeenCalled();
+    await expect(reply).resolves.toEqual(result);
+
+    releaseMaintenance?.(true);
+    await maintenanceSettledWithoutRewrite;
+    await vi.waitFor(() => expect(appendCustomEntry).toHaveBeenCalledOnce());
   });
 
   it("keeps the captured lifecycle generation on start and terminal events", async () => {

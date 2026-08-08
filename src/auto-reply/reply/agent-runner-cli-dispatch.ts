@@ -1,6 +1,7 @@
 // Builds CLI runtime dispatch inputs for agent runner executions.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { finalizePendingCliBootstrapCompletion } from "../../agents/cli-bootstrap-completion.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
@@ -22,7 +23,11 @@ import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
-import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  emitAgentEvent,
+  withAgentRunLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
@@ -629,6 +634,19 @@ async function runCliAgentWithLifecycleInternal(
           payloads: [{ text: durableReasoningText, isReasoning: true }, ...(result.payloads ?? [])],
         }
       : result;
+    void finalizePendingCliBootstrapCompletion({
+      result: resultWithReasoning,
+      transcriptStable: true,
+      isStillEligible: () => {
+        if (params.runParams.abortSignal?.aborted === true) {
+          return false;
+        }
+        if (params.lifecycleGeneration) {
+          assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        }
+        return true;
+      },
+    });
     if (cliText) {
       emitAgentEvent({
         runId: params.runId,

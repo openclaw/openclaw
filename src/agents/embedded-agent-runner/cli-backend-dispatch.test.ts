@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { setPendingCliBootstrapCompletion } from "../cli-bootstrap-completion.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
@@ -92,7 +93,8 @@ beforeEach(() => {
   transcriptRecorder.noteToolEvent.mockReset();
   transcriptRecorder.noteAssistantText.mockReset();
   transcriptRecorder.flushAssistantSnapshot.mockReset();
-  transcriptRecorder.finalize.mockClear();
+  transcriptRecorder.finalize.mockReset();
+  transcriptRecorder.finalize.mockResolvedValue(undefined);
   createCliDispatchTranscriptRecorder.mockClear();
 });
 
@@ -379,6 +381,16 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     },
   );
 
+  it("forwards room-event classification into CLI bootstrap routing", async () => {
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({ currentInboundEventKind: "room_event" }),
+    );
+
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      currentInboundEventKind: "room_event",
+    });
+  });
+
   // Fail-closed tool policy: only a non-empty named allowlist is expressible
   // on the CLI surface. Every other embedded tool state keeps the passthrough
   // so no closed state silently widens.
@@ -578,6 +590,79 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       }),
     );
     expect(transcriptRecorder.finalize).toHaveBeenCalledWith("recall summary");
+  });
+
+  it("finalizes a pending bootstrap marker after the transcript mirror commits", async () => {
+    const appendCustomEntry = vi.fn();
+    const result = cliRunResult({ bootstrapContextCompletionPending: true });
+    setPendingCliBootstrapCompletion(result, {
+      maintenanceSettledWithoutRewrite: Promise.resolve(true),
+      runId: "run-cli-dispatch-bootstrap",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "recall-session",
+        sessionKey: "agent:main:recall",
+        storePath: "/tmp/recall/sessions.json",
+      },
+      sessionManager: { appendCustomEntry },
+    });
+    runCliAgent.mockResolvedValue(result);
+
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
+
+    expect(transcriptRecorder.finalize).toHaveBeenCalledWith("recall summary");
+    await vi.waitFor(() => expect(appendCustomEntry).toHaveBeenCalledOnce());
+  });
+
+  it("does not finalize a pending bootstrap marker when transcript mirroring fails", async () => {
+    const appendCustomEntry = vi.fn();
+    const result = cliRunResult({ bootstrapContextCompletionPending: true });
+    setPendingCliBootstrapCompletion(result, {
+      maintenanceSettledWithoutRewrite: Promise.resolve(true),
+      runId: "run-cli-dispatch-bootstrap-mirror-failure",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "recall-session",
+        sessionKey: "agent:main:recall",
+        storePath: "/tmp/recall/sessions.json",
+      },
+      sessionManager: { appendCustomEntry },
+    });
+    runCliAgent.mockResolvedValue(result);
+    transcriptRecorder.finalize.mockRejectedValueOnce(new Error("transcript mirror failed"));
+
+    await expect(runEmbeddedAgentViaCliBackendIfEligible(baseRunParams())).rejects.toThrow(
+      "transcript mirror failed",
+    );
+    expect(appendCustomEntry).not.toHaveBeenCalled();
+  });
+
+  it("does not finalize a pending bootstrap marker after the dispatched run aborts", async () => {
+    const abortController = new AbortController();
+    const appendCustomEntry = vi.fn();
+    const result = cliRunResult({ bootstrapContextCompletionPending: true });
+    setPendingCliBootstrapCompletion(result, {
+      maintenanceSettledWithoutRewrite: Promise.resolve(true),
+      runId: "run-cli-dispatch-bootstrap-abort",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "recall-session",
+        sessionKey: "agent:main:recall",
+        storePath: "/tmp/recall/sessions.json",
+      },
+      sessionManager: { appendCustomEntry },
+    });
+    runCliAgent.mockImplementationOnce(async () => {
+      abortController.abort(new Error("recall timeout"));
+      return result;
+    });
+
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({ abortSignal: abortController.signal }),
+    );
+    await Promise.resolve();
+
+    expect(appendCustomEntry).not.toHaveBeenCalled();
   });
 
   it("flushes the assistant snapshot the moment the run aborts", async () => {

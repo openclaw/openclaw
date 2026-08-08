@@ -26,6 +26,7 @@ import {
   resolveTestModelAliasFromPair,
   resolveTestModelRefFromString,
 } from "./agent-command.live-model-switch.test-helpers.js";
+import { setPendingCliBootstrapCompletion } from "./cli-bootstrap-completion.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -57,6 +58,7 @@ const state = vi.hoisted(() => ({
   emitAcpLifecycleEndMock: vi.fn(),
   emitAcpLifecycleErrorMock: vi.fn(),
   persistCliTurnTranscriptMock: vi.fn(),
+  persistCompletedBootstrapTurnMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
   resolveAcpAgentPolicyErrorMock: vi.fn(),
@@ -147,9 +149,19 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (body: string) => body,
+  resolveCliTranscriptReplyText: vi.fn(() => ""),
   runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
   sessionFileHasContent: vi.fn(async () => false),
 }));
+
+vi.mock("./bootstrap-files.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bootstrap-files.js")>();
+  return {
+    ...actual,
+    persistCompletedBootstrapTurn: (...args: unknown[]) =>
+      state.persistCompletedBootstrapTurnMock(...args),
+  };
+});
 
 vi.mock("./command/attempt-execution.shared.js", async () => {
   const actual = await vi.importActual<typeof import("./command/attempt-execution.shared.js")>(
@@ -699,7 +711,7 @@ function makeSuccessResult(provider: string, model: string) {
       durationMs: 100,
       aborted: false,
       stopReason: "end_turn",
-      agentMeta: { provider, model },
+      agentMeta: { sessionId: "session-1", provider, model },
     },
   };
 }
@@ -939,7 +951,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      async (params: { sessionEntry?: unknown }) => ({
+        sessionEntry: params.sessionEntry,
+        compacted: false,
+      }),
     );
     state.authProfileStoreMock = { profiles: {} };
     state.sessionEntryMock = undefined;
@@ -2030,7 +2045,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       kind: "persisted",
       sessionEntry: rotatedEntry,
     });
-    state.runCliTurnCompactionLifecycleMock.mockResolvedValue(rotatedEntry);
+    state.runCliTurnCompactionLifecycleMock.mockResolvedValue({
+      sessionEntry: rotatedEntry,
+      compacted: false,
+    });
 
     await runBasicAgentCommand();
 
@@ -2050,6 +2068,232 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
   });
 
+  it("records CLI bootstrap completion after the post-run transcript commit", async () => {
+    setupSingleAttemptFallback();
+    setupStoredSession();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.meta.bootstrapContextCompletionPending = true;
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: state.sessionEntryMock,
+    });
+
+    await runBasicAgentCommand();
+
+    expect(state.persistCompletedBootstrapTurnMock).toHaveBeenCalledOnce();
+    expectRecordFields(mockCallArg(state.persistCompletedBootstrapTurnMock), {
+      runner: "cli",
+      sessionTarget: {
+        agentId: "default",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
+    });
+    expect(state.persistCliTurnTranscriptMock.mock.invocationCallOrder[0]).toBeLessThan(
+      state.persistCompletedBootstrapTurnMock.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(state.runCliTurnCompactionLifecycleMock.mock.invocationCallOrder[0]).toBeLessThan(
+      state.persistCompletedBootstrapTurnMock.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
+
+  it("keeps CLI bootstrap completion pending until post-run compaction settles", async () => {
+    setupSingleAttemptFallback();
+    setupStoredSession();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.meta.bootstrapContextCompletionPending = true;
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: state.sessionEntryMock,
+    });
+    let settleCompaction:
+      | ((value: { sessionEntry?: SessionEntry; compacted: boolean }) => void)
+      | undefined;
+    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(
+      async () =>
+        await new Promise<{ sessionEntry?: SessionEntry; compacted: boolean }>((resolve) => {
+          settleCompaction = resolve;
+        }),
+    );
+
+    const command = runBasicAgentCommand();
+    await vi.waitFor(() => expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce());
+    expect(state.persistCompletedBootstrapTurnMock).not.toHaveBeenCalled();
+
+    settleCompaction?.({ sessionEntry: state.sessionEntryMock, compacted: false });
+    await command;
+
+    expect(state.persistCompletedBootstrapTurnMock).toHaveBeenCalledOnce();
+  });
+
+  it("delivers the completed reply while deferred bootstrap maintenance is pending", async () => {
+    setupSingleAttemptFallback();
+    setupStoredSession();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.meta.bootstrapContextCompletionPending = true;
+    let releaseMaintenance: ((settledWithoutRewrite: boolean) => void) | undefined;
+    const maintenanceSettledWithoutRewrite = new Promise<boolean>((resolve) => {
+      releaseMaintenance = resolve;
+    });
+    setPendingCliBootstrapCompletion(result, {
+      maintenanceSettledWithoutRewrite,
+      runId: "session-1",
+      sessionTarget: {
+        agentId: "default",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
+    });
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: state.sessionEntryMock,
+    });
+
+    const command = runBasicAgentCommand();
+    await vi.waitFor(() => expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce());
+    expect(state.persistCompletedBootstrapTurnMock).not.toHaveBeenCalled();
+    await command;
+
+    releaseMaintenance?.(true);
+    await maintenanceSettledWithoutRewrite;
+    await vi.waitFor(() => expect(state.persistCompletedBootstrapTurnMock).toHaveBeenCalledOnce());
+  });
+
+  it("does not record CLI bootstrap completion after post-run compaction", async () => {
+    setupSingleAttemptFallback();
+    setupStoredSession();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.meta.bootstrapContextCompletionPending = true;
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: state.sessionEntryMock,
+    });
+    state.runCliTurnCompactionLifecycleMock.mockResolvedValueOnce({
+      sessionEntry: state.sessionEntryMock,
+      compacted: true,
+    });
+
+    await runBasicAgentCommand();
+
+    expect(state.persistCompletedBootstrapTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not record CLI bootstrap completion when deferred maintenance settles after compaction", async () => {
+    setupSingleAttemptFallback();
+    setupStoredSession();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.meta.bootstrapContextCompletionPending = true;
+    let releaseMaintenance: (() => void) | undefined;
+    const maintenanceSettledWithoutRewrite = new Promise<boolean>((resolve) => {
+      releaseMaintenance = () => resolve(true);
+    });
+    setPendingCliBootstrapCompletion(result, {
+      maintenanceSettledWithoutRewrite,
+      runId: "session-1",
+      sessionTarget: {
+        agentId: "default",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
+    });
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: state.sessionEntryMock,
+    });
+    state.runCliTurnCompactionLifecycleMock.mockResolvedValueOnce({
+      sessionEntry: state.sessionEntryMock,
+      compacted: true,
+    });
+
+    await runBasicAgentCommand();
+    releaseMaintenance?.();
+    await maintenanceSettledWithoutRewrite;
+
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+    expect(state.persistCompletedBootstrapTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not record CLI bootstrap completion when post-run transcript persistence fails", async () => {
+    setupSingleAttemptFallback();
+    setupStoredSession();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.meta.bootstrapContextCompletionPending = true;
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockRejectedValue(new Error("transcript write failed"));
+
+    await runBasicAgentCommand();
+
+    expect(state.persistCompletedBootstrapTurnMock).not.toHaveBeenCalled();
+  });
+
   it("skips post-run persistence after the session is deleted", async () => {
     setupSingleAttemptFallback();
     setupStoredSession();
@@ -2064,6 +2308,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       winnerProvider: "openai",
       winnerModel: "gpt-5.4",
     };
+    result.meta.bootstrapContextCompletionPending = true;
     state.runAgentAttemptMock.mockResolvedValue(result);
     state.persistCliTurnTranscriptMock.mockResolvedValue({
       kind: "session-rebound",
@@ -2073,6 +2318,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.persistCompletedBootstrapTurnMock).not.toHaveBeenCalled();
     expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
     expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });

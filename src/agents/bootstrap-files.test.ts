@@ -25,9 +25,11 @@ import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
+  persistCompletedBootstrapTurn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
+  trackPendingBootstrapCompletionSettlement,
 } from "./bootstrap-files.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
@@ -710,6 +712,45 @@ describe("hasCompletedBootstrapTurn", () => {
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
 
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+  });
+
+  it("persists a completion marker through the canonical helper", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+
+    persistCompletedBootstrapTurn({
+      sessionTarget,
+      runId: "run-bootstrap-complete",
+      runner: "cli",
+    });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+  });
+
+  it("waits for an in-flight same-session marker settlement before reading continuation state", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    let releaseSettlement: (() => void) | undefined;
+    const settlementGate = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    const settlement = settlementGate.then(() => {
+      persistCompletedBootstrapTurn({
+        sessionTarget,
+        runId: "run-bootstrap-settlement",
+        runner: "cli",
+      });
+    });
+    trackPendingBootstrapCompletionSettlement(sessionTarget, settlement);
+
+    let readSettled = false;
+    const completed = hasCompletedBootstrapTurn(sessionTarget).then((value) => {
+      readSettled = true;
+      return value;
+    });
+    await Promise.resolve();
+    expect(readSettled).toBe(false);
+
+    releaseSettlement?.();
+    await expect(completed).resolves.toBe(true);
   });
 
   it("invalidates a completion marker after compaction", async () => {

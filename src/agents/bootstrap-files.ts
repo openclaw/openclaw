@@ -5,7 +5,10 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
-import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
+import {
+  readRecentSessionTranscriptActiveEvents,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
@@ -20,6 +23,7 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
+import { SessionManager } from "./sessions/session-manager.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
@@ -37,6 +41,40 @@ export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
 const seenBootstrapWarnings = new Set<string>();
 const bootstrapWarningOrder: string[] = [];
+const pendingBootstrapCompletionSettlements = new Map<string, Promise<unknown>>();
+
+function bootstrapCompletionSettlementKey(target: SessionTranscriptRuntimeTarget): string {
+  return [target.agentId, target.sessionId, target.sessionKey, target.storePath].join("\u0000");
+}
+
+/** Keeps the next same-session bootstrap decision behind an in-flight marker settlement. */
+export function trackPendingBootstrapCompletionSettlement(
+  sessionTarget: SessionTranscriptRuntimeTarget,
+  settlement: Promise<unknown>,
+): void {
+  const key = bootstrapCompletionSettlementKey(sessionTarget);
+  const previous = pendingBootstrapCompletionSettlements.get(key);
+  const settled = settlement.then(
+    () => undefined,
+    () => undefined,
+  );
+  const tracked = previous ? Promise.all([previous, settled]).then(() => undefined) : settled;
+  pendingBootstrapCompletionSettlements.set(key, tracked);
+  void tracked.then(() => {
+    if (pendingBootstrapCompletionSettlements.get(key) === tracked) {
+      pendingBootstrapCompletionSettlements.delete(key);
+    }
+  });
+}
+
+async function waitForPendingBootstrapCompletionSettlement(
+  sessionTarget: SessionTranscriptRuntimeTarget,
+): Promise<void> {
+  const key = bootstrapCompletionSettlementKey(sessionTarget);
+  while (pendingBootstrapCompletionSettlements.has(key)) {
+    await pendingBootstrapCompletionSettlements.get(key);
+  }
+}
 
 function rememberBootstrapWarning(key: string): boolean {
   // Warning keys include workspace/session/message so repeated setup failures
@@ -77,8 +115,10 @@ export async function hasCompletedBootstrapTurn(
     return false;
   }
   try {
+    const transcriptTarget = { agentId, sessionId, sessionKey, storePath };
+    await waitForPendingBootstrapCompletionSettlement(transcriptTarget);
     const records = readRecentSessionTranscriptActiveEvents(
-      { agentId, sessionId, sessionKey, storePath },
+      transcriptTarget,
       CONTINUATION_SCAN_MAX_RECORDS,
     );
     for (const entry of records.toReversed()) {
@@ -95,6 +135,22 @@ export async function hasCompletedBootstrapTurn(
   } catch {
     return false;
   }
+}
+
+/** Persists the full-bootstrap marker after the canonical turn commit succeeds. */
+export function persistCompletedBootstrapTurn(params: {
+  sessionTarget: SessionTranscriptRuntimeTarget;
+  sessionManager?: Pick<SessionManager, "appendCustomEntry">;
+  runId: string;
+  runner: "cli";
+}): void {
+  const sessionManager = params.sessionManager ?? SessionManager.open(params.sessionTarget);
+  sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+    timestamp: Date.now(),
+    runId: params.runId,
+    sessionId: params.sessionTarget.sessionId,
+    runner: params.runner,
+  });
 }
 
 /** Builds a session-scoped warning sink that dedupes repeated bootstrap warnings. */

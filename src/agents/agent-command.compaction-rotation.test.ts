@@ -36,9 +36,10 @@ const state = vi.hoisted(() => ({
   normalizeProviderModelIdWithRuntimeMock: vi.fn(
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
-  runCliTurnCompactionLifecycleMock: vi.fn(
-    async (params: CliCompactionParams) => params.sessionEntry,
-  ),
+  runCliTurnCompactionLifecycleMock: vi.fn(async (params: CliCompactionParams) => ({
+    sessionEntry: params.sessionEntry,
+    compacted: false,
+  })),
   deliverAgentCommandResultMock: vi.fn(),
   emitAgentEventMock: vi.fn(),
   deliveryFreshEntries: [] as Array<SessionEntry | undefined>,
@@ -206,7 +207,10 @@ beforeEach(async () => {
   state.loadManifestModelCatalogMock.mockReturnValue([]);
   state.normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => undefined);
   state.runCliTurnCompactionLifecycleMock.mockImplementation(
-    async (params: CliCompactionParams) => params.sessionEntry,
+    async (params: CliCompactionParams) => ({
+      sessionEntry: params.sessionEntry,
+      compacted: false,
+    }),
   );
   state.deliveryFreshEntries = [];
   state.deliverAgentCommandResultMock.mockImplementation(
@@ -608,7 +612,7 @@ describe("agentCommand compaction transcript rotation", () => {
         successorBeforeCleanup,
       );
       params.sessionStore[params.sessionKey] = successorBeforeCleanup;
-      return successorBeforeCleanup;
+      return { sessionEntry: successorBeforeCleanup, compacted: true };
     });
 
     const result = await agentCommand({
@@ -720,7 +724,7 @@ describe("agentCommand compaction transcript rotation", () => {
         pendingFinalDelivery: { kind: "replayable", text },
       });
       abortController.abort(createAgentRunRestartAbortError());
-      return params.sessionEntry;
+      return { sessionEntry: params.sessionEntry, compacted: true };
     });
 
     await expect(

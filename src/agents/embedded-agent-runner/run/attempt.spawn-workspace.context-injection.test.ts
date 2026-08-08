@@ -4,12 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
+import {
+  isPrimaryInteractiveBootstrapRun,
+  resolveBootstrapContextInjection,
+} from "../../bootstrap-routing.js";
 import { limitHistoryTurns } from "../history.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
   assembleAttemptContextEngine,
   type AttemptContextEngine,
-  resolveAttemptBootstrapContext,
 } from "./attempt.context-engine-helpers.js";
 import { resetEmbeddedAttemptHarness } from "./attempt.spawn-workspace.test-support.js";
 
@@ -18,6 +21,8 @@ async function resolveBootstrapContext(params: {
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: "full" | "limited" | "none";
+  currentInboundEventKind?: "user_request" | "room_event";
+  isPrimaryInteractiveRun?: boolean;
   completed?: boolean;
   resolver?: () => Promise<{ bootstrapFiles: unknown[]; contextFiles: unknown[] }>;
 }) {
@@ -31,11 +36,18 @@ async function resolveBootstrapContext(params: {
       contextFiles: [],
     }));
 
-  const result = await resolveAttemptBootstrapContext({
+  const result = await resolveBootstrapContextInjection({
     contextInjectionMode: params.contextInjectionMode ?? "always",
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     bootstrapMode: params.bootstrapMode ?? "none",
+    isPrimaryInteractiveRun:
+      params.isPrimaryInteractiveRun ??
+      isPrimaryInteractiveBootstrapRun({
+        currentInboundEventKind: params.currentInboundEventKind,
+        isPrimaryRun: true,
+        trigger: "user",
+      }),
     hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
   });
@@ -176,6 +188,105 @@ describe("embedded attempt context injection", () => {
 
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md", content: "bootstrap context" }]);
+  });
+
+  it("records an established-workspace turn and skips its continuation", async () => {
+    const resolver = vi.fn(async () => ({
+      bootstrapFiles: [{ name: "AGENTS.md", content: "workspace rules" }],
+      contextFiles: [{ path: "AGENTS.md", content: "workspace rules" }],
+    }));
+
+    const firstTurn = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapContextMode: "full",
+      bootstrapContextRunKind: "default",
+      bootstrapMode: "none",
+      completed: false,
+      resolver,
+    });
+
+    expect(firstTurn.result.isContinuationTurn).toBe(false);
+    expect(firstTurn.result.shouldRecordCompletedBootstrapTurn).toBe(true);
+    expect(firstTurn.result.contextFiles).toEqual([
+      { path: "AGENTS.md", content: "workspace rules" },
+    ]);
+
+    const secondTurn = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapContextMode: "full",
+      bootstrapContextRunKind: "default",
+      bootstrapMode: "none",
+      completed: true,
+      resolver,
+    });
+
+    expect(secondTurn.result.isContinuationTurn).toBe(true);
+    expect(secondTurn.result.shouldRecordCompletedBootstrapTurn).toBe(false);
+    expect(secondTurn.result.contextFiles).toStrictEqual([]);
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it("does not let cron consume or write established-workspace bootstrap state", async () => {
+    const resolver = vi.fn(async () => ({
+      bootstrapFiles: [{ name: "AGENTS.md" }],
+      contextFiles: [{ path: "AGENTS.md" }],
+    }));
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapContextMode: "full",
+      bootstrapContextRunKind: "cron",
+      bootstrapMode: "none",
+      completed: true,
+      resolver,
+    });
+
+    expect(result.isContinuationTurn).toBe(false);
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+    expect(result.contextFiles).toEqual([{ path: "AGENTS.md" }]);
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it("does not let ineligible routing consume or write established-workspace bootstrap state", async () => {
+    const resolver = vi.fn(async () => ({
+      bootstrapFiles: [{ name: "AGENTS.md" }],
+      contextFiles: [{ path: "AGENTS.md" }],
+    }));
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapContextMode: "full",
+      bootstrapContextRunKind: "default",
+      bootstrapMode: "none",
+      isPrimaryInteractiveRun: false,
+      completed: true,
+      resolver,
+    });
+
+    expect(result.isContinuationTurn).toBe(false);
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+    expect(result.contextFiles).toEqual([{ path: "AGENTS.md" }]);
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it("does not let room events consume or write established-workspace bootstrap state", async () => {
+    const resolver = vi.fn(async () => ({
+      bootstrapFiles: [{ name: "AGENTS.md" }],
+      contextFiles: [{ path: "AGENTS.md" }],
+    }));
+    const { result, hasCompletedBootstrapTurn } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapContextMode: "full",
+      bootstrapContextRunKind: "default",
+      bootstrapMode: "none",
+      currentInboundEventKind: "room_event",
+      completed: true,
+      resolver,
+    });
+
+    expect(result.isContinuationTurn).toBe(false);
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+    expect(result.contextFiles).toEqual([{ path: "AGENTS.md" }]);
+    expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
+    expect(resolver).toHaveBeenCalledOnce();
   });
 
   it.each(["heartbeat", "commitment-only"] as const)(

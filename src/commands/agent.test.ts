@@ -92,9 +92,10 @@ vi.mock("../agents/command/session-store.runtime.js", async () => {
 
 vi.mock("../agents/command/cli-compaction.js", () => {
   return {
-    runCliTurnCompactionLifecycle: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
+    runCliTurnCompactionLifecycle: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      sessionEntry: params.sessionEntry,
+      compacted: false,
+    })),
   };
 });
 

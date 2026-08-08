@@ -49,6 +49,9 @@ function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull
   return task;
 }
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
+type DeferredTurnMaintenanceOutcomePromise = Parameters<
+  NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["onDeferredMaintenance"]>
+>[1];
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
@@ -657,7 +660,7 @@ describe("runContextEngineMaintenance", () => {
             });
           }
           return {
-            changed: false,
+            changed: maintenanceCalls === 1,
             bytesFreed: 0,
             rewrittenEntries: 0,
           };
@@ -678,6 +681,7 @@ describe("runContextEngineMaintenance", () => {
           maintain,
         } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
         const deferredPromises: Promise<void>[] = [];
+        const deferredOutcomes: DeferredTurnMaintenanceOutcomePromise[] = [];
 
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
@@ -685,8 +689,9 @@ describe("runContextEngineMaintenance", () => {
           sessionKey,
           sessionFile: "/tmp/session-rerun.jsonl",
           reason: "turn",
-          onDeferredMaintenance: (promise) => {
+          onDeferredMaintenance: (promise, outcome) => {
             deferredPromises.push(promise);
+            deferredOutcomes.push(outcome);
           },
         });
 
@@ -698,8 +703,9 @@ describe("runContextEngineMaintenance", () => {
           sessionKey,
           sessionFile: "/tmp/session-rerun.jsonl",
           reason: "turn",
-          onDeferredMaintenance: (promise) => {
+          onDeferredMaintenance: (promise, outcome) => {
             deferredPromises.push(promise);
+            deferredOutcomes.push(outcome);
           },
         });
         expect(deferredPromises).toHaveLength(2);
@@ -725,6 +731,10 @@ describe("runContextEngineMaintenance", () => {
         releaseSecondMaintenance();
         await secondDeferred;
         expect(secondDeferredSettled).toBe(true);
+        await expect(deferredOutcomes[1]).resolves.toEqual({
+          status: "completed",
+          changed: true,
+        });
 
         const tasks = listTasksForOwnerKey(sessionKey).filter(
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,

@@ -12,8 +12,12 @@
  * to run through the CLI backend on plan limits instead.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { onAgentEvent } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  onAgentEvent,
+} from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { finalizePendingCliBootstrapCompletion } from "../cli-bootstrap-completion.js";
 import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
@@ -190,60 +194,77 @@ async function runEmbeddedAgentViaCliBackend(
     `dispatching embedded run through CLI backend: runId=${params.runId} provider=${dispatch.provider} model=${params.model ?? ""}`,
   );
   let finalAssistantText: string | undefined;
-  try {
-    const result = await runCliAgent({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      chatType: params.chatType,
-      agentId: params.agentId,
-      trigger: params.trigger,
-      sessionFile: dispatch.sessionFile,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      config: params.config,
-      prompt: params.prompt,
-      imagePrompt: params.prompt,
-      media: params.media,
-      provider: dispatch.provider,
-      model: params.model,
-      thinkLevel: params.thinkLevel,
-      timeoutMs: params.timeoutMs,
-      runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,
-      runId: params.runId,
-      lifecycleGeneration: params.lifecycleGeneration,
-      lane: params.lane,
-      extraSystemPrompt: params.extraSystemPrompt,
-      messageChannel: params.messageChannel,
-      messageProvider: params.messageProvider,
-      bootstrapContextMode: params.bootstrapContextMode,
-      bootstrapContextRunKind: params.bootstrapContextRunKind,
-      abortSignal: params.abortSignal,
-      onExecutionPhase: params.onExecutionPhase,
-      cliToolAvailability,
-      // One-shot helper run: fresh CLI process, no warm live session left
-      // behind, and no implicit message sends without an explicit target.
-      disableCliLiveSession: true,
-      cleanupCliLiveSessionOnRunEnd: true,
-      requireExplicitMessageTarget: true,
-      // Deliberately NOT forwarding cleanupBundleMcpOnRunEnd: on the CLI
-      // runner it closes the process-wide loopback MCP server, which a
-      // concurrent main turn or overlapping recall may still be using.
-      // Session-scoped MCP runtimes are retired below instead.
-    });
-    finalAssistantText = result.payloads?.find(
-      (payload) => payload.isReasoning !== true && typeof payload.text === "string",
-    )?.text;
-    return withoutCliSessionBinding(result);
-  } finally {
-    params.abortSignal?.removeEventListener("abort", flushOnAbort);
-    unsubscribe();
-    // Flush before the promise settles: timeout salvage reads the session
-    // file as soon as the caller observes the rejection.
-    await transcript.finalize(finalAssistantText);
-    if (params.cleanupBundleMcpOnRunEnd === true) {
-      await retireDispatchSessionMcpRuntime(params);
+  const result = await (async () => {
+    try {
+      const cliResult = await runCliAgent({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        chatType: params.chatType,
+        agentId: params.agentId,
+        trigger: params.trigger,
+        sessionFile: dispatch.sessionFile,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        config: params.config,
+        prompt: params.prompt,
+        imagePrompt: params.prompt,
+        media: params.media,
+        currentInboundEventKind: params.currentInboundEventKind,
+        provider: dispatch.provider,
+        model: params.model,
+        thinkLevel: params.thinkLevel,
+        timeoutMs: params.timeoutMs,
+        runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,
+        runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        lane: params.lane,
+        extraSystemPrompt: params.extraSystemPrompt,
+        messageChannel: params.messageChannel,
+        messageProvider: params.messageProvider,
+        bootstrapContextMode: params.bootstrapContextMode,
+        bootstrapContextRunKind: params.bootstrapContextRunKind,
+        abortSignal: params.abortSignal,
+        onExecutionPhase: params.onExecutionPhase,
+        cliToolAvailability,
+        // One-shot helper run: fresh CLI process, no warm live session left
+        // behind, and no implicit message sends without an explicit target.
+        disableCliLiveSession: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+        requireExplicitMessageTarget: true,
+        // Deliberately NOT forwarding cleanupBundleMcpOnRunEnd: on the CLI
+        // runner it closes the process-wide loopback MCP server, which a
+        // concurrent main turn or overlapping recall may still be using.
+        // Session-scoped MCP runtimes are retired below instead.
+      });
+      finalAssistantText = cliResult.payloads?.find(
+        (payload) => payload.isReasoning !== true && typeof payload.text === "string",
+      )?.text;
+      return withoutCliSessionBinding(cliResult);
+    } finally {
+      params.abortSignal?.removeEventListener("abort", flushOnAbort);
+      unsubscribe();
+      // Flush before the promise settles: timeout salvage reads the session
+      // file as soon as the caller observes the rejection.
+      await transcript.finalize(finalAssistantText);
+      if (params.cleanupBundleMcpOnRunEnd === true) {
+        await retireDispatchSessionMcpRuntime(params);
+      }
     }
-  }
+  })();
+  void finalizePendingCliBootstrapCompletion({
+    result,
+    transcriptStable: true,
+    isStillEligible: () => {
+      if (params.abortSignal?.aborted === true) {
+        return false;
+      }
+      if (params.lifecycleGeneration) {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
+      return true;
+    },
+  });
+  return result;
 }
 
 /**

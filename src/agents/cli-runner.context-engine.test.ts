@@ -560,6 +560,54 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
+  it("waits for same-session maintenance before preparing the next CLI turn", async () => {
+    let releaseMaintenance: (() => void) | undefined;
+    const maintenanceGate = new Promise<void>((resolve) => {
+      releaseMaintenance = resolve;
+    });
+    let announceMaintenanceStarted: (() => void) | undefined;
+    const maintenanceStarted = new Promise<void>((resolve) => {
+      announceMaintenanceStarted = resolve;
+    });
+    const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async () => {
+      announceMaintenanceStarted?.();
+      await maintenanceGate;
+      return createMaintenanceResult();
+    });
+    const firstContext = buildPreparedContext(
+      createContextEngine({
+        info: {
+          id: "test-background-context-engine",
+          name: "Test background context engine",
+          turnMaintenanceMode: "background",
+        },
+        maintain,
+      }),
+    );
+    firstContext.hadSessionFile = false;
+    const nextContext = buildPreparedContext(createContextEngine());
+    nextContext.params.runId = "run-2";
+    prepareCliRunContextMock.mockResolvedValue(nextContext);
+
+    try {
+      await runPreparedCliAgent(firstContext);
+      await maintenanceStarted;
+
+      const nextRun = runCliAgent(nextContext.params);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+
+      releaseMaintenance?.();
+      await nextRun;
+      expect(prepareCliRunContextMock).toHaveBeenCalledOnce();
+    } finally {
+      releaseMaintenance?.();
+      await firstContext.contextEngineDeferredTurnMaintenance;
+    }
+  });
+
   it("does not dispose background engines when no deferred turn maintenance is queued", async () => {
     const dispose = vi.fn(async () => {});
     const contextEngine = createContextEngine({

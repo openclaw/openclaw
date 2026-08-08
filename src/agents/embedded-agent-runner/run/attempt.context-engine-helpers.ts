@@ -3,11 +3,6 @@
  */
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import {
-  isHeartbeatLifecycleRunKind,
-  type BootstrapContextRunKind,
-  type BootstrapMode,
-} from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
@@ -19,59 +14,6 @@ export {
 } from "../../harness/context-engine-lifecycle.js";
 
 export type AttemptContextEngine = ContextEngine;
-
-type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
-  bootstrapFiles: TBootstrapFile[];
-  contextFiles: TContextFile[];
-};
-
-/**
- * Resolves bootstrap/context files for this attempt and reports whether the
- * caller should persist a completed bootstrap marker. Continuation-skip mode
- * intentionally suppresses reinjection after a full bootstrap turn has already
- * been recorded for the session.
- */
-export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
-  contextInjectionMode: "always" | "continuation-skip" | "never";
-  bootstrapContextMode?: string;
-  bootstrapContextRunKind?: BootstrapContextRunKind;
-  bootstrapMode?: BootstrapMode;
-  hasCompletedBootstrapTurn: () => Promise<boolean>;
-  resolveBootstrapContextForRun: () => Promise<
-    AttemptBootstrapContext<TBootstrapFile, TContextFile>
-  >;
-}): Promise<
-  AttemptBootstrapContext<TBootstrapFile, TContextFile> & {
-    isContinuationTurn: boolean;
-    shouldRecordCompletedBootstrapTurn: boolean;
-  }
-> {
-  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
-  const isContinuationTurn =
-    params.bootstrapMode !== "full" &&
-    params.contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRun &&
-    (await params.hasCompletedBootstrapTurn());
-  // Continuation-skip and explicit never both produce an empty injection set,
-  // but only a clean full bootstrap later records a durable completion marker.
-  const shouldSkipBootstrapInjection =
-    params.contextInjectionMode === "never" || isContinuationTurn;
-  const shouldRecordCompletedBootstrapTurn =
-    !shouldSkipBootstrapInjection &&
-    params.bootstrapContextMode !== "lightweight" &&
-    !isHeartbeatLifecycleRun &&
-    params.bootstrapMode === "full";
-
-  const context = shouldSkipBootstrapInjection
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await params.resolveBootstrapContextForRun();
-
-  return {
-    ...context,
-    isContinuationTurn,
-    shouldRecordCompletedBootstrapTurn,
-  };
-}
 
 /**
  * Builds the compact prompt-cache metadata stored on an attempt result. Empty
