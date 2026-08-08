@@ -593,6 +593,7 @@ describe("createCopilotToolBridge", () => {
       const authProfileStore = { kind: "fake-store" } as never;
       const config = { agents: {} } as never;
       const onToolOutcome = vi.fn();
+      const isTurnTainted = vi.fn(() => true);
 
       await createCopilotToolBridge({
         agentId: "agent-1",
@@ -601,6 +602,7 @@ describe("createCopilotToolBridge", () => {
           runId: "run-1",
           config,
           onToolOutcome,
+          isTurnTainted,
           messageActionTurnCapability: "turn-capability-1",
         } as never,
         createOpenClawCodingTools,
@@ -614,6 +616,7 @@ describe("createCopilotToolBridge", () => {
       expect(opts.runId).toBe("run-1");
       expect(opts.config).toBe(config);
       expect(opts.onToolOutcome).toBe(onToolOutcome);
+      expect(opts.isTurnTainted).toBe(isTurnTainted);
       expect(opts.messageActionTurnCapability).toBe("turn-capability-1");
     });
 
@@ -1717,6 +1720,25 @@ describe("createCopilotToolBridge tool conversion", () => {
       result: sourceResult,
       isError: false,
     });
+  });
+
+  it("keeps per-invocation provenance in the lifecycle completion", async () => {
+    const onToolCompleted = vi.fn();
+    const sourceResult = {
+      content: [{ text: "remote PDF text", type: "text" }],
+      details: {},
+      resultContentSource: "network" as const,
+    };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(makeTool({}, sourceResult), {
+      onToolCompleted,
+    });
+
+    await runSdkTool(sdkTool, { value: "input" }, makeInvocation({ toolCallId: "call-remote" }));
+    await flushAsync();
+
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ result: sourceResult, toolCallId: "call-remote" }),
+    );
   });
 
   it("reports terminal tool results to the harness lifecycle bridge", async () => {
