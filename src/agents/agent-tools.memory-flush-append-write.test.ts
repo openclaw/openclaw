@@ -5,15 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { WriteToolOutputSchema } from "./sessions/tools/write.js";
+import { createWriteTool } from "./sessions/index.js";
 
 const RELATIVE_PATH = "memory/2026-08-08.md";
 
-// Mirror the catalog path: declared schemas are JSON-serialized before the
-// bridge validates results against them.
-const declaredWriteOutputSchema = structuredClone(WriteToolOutputSchema) as Parameters<
-  typeof validateJsonSchemaValue
->[0]["schema"];
+let declaredWriteOutputSchema: Parameters<typeof validateJsonSchemaValue>[0]["schema"];
 
 function baseWriteTool(): AnyAgentTool {
   return {
@@ -41,6 +37,13 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "memory-flush-write-"));
+    // Mirror the catalog path: declared schemas are JSON-serialized before the
+    // bridge validates results against them. Read the schema from the public
+    // tool factory so production internals do not need a test-only export.
+    const writeTool = createWriteTool(root) as unknown as AnyAgentTool;
+    declaredWriteOutputSchema = structuredClone(writeTool.outputSchema) as unknown as Parameters<
+      typeof validateJsonSchemaValue
+    >[0]["schema"];
   });
 
   afterEach(async () => {

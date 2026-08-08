@@ -39,7 +39,7 @@ const writeSchema = Type.Object({
   content: Type.String({ description: "File content." }),
 });
 
-export const WriteToolOutputSchema = Type.Union([
+const WriteToolOutputSchema = Type.Union([
   Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
   Type.Object(
     {
