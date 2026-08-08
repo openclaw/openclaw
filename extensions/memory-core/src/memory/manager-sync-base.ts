@@ -362,8 +362,13 @@ export abstract class MemoryManagerSyncBase {
             ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
           })
         : undefined;
-    // Plain status can compare identity before provider init. Mirror provider
-    // init's empty-model fallback so adapter defaults do not look mismatched.
+    // Plain status runs before provider init. Compare adapter defaults when
+    // deterministic, but defer model identity for discovery-owned providers.
+    const configuredAdapterModel =
+      this.settings.provider === "none"
+        ? ""
+        : resolveEmbeddingProviderFallbackModel(this.settings.provider, "", this.cfg);
+    const configuredFallbackModel = configuredAdapterModel || "fts-only";
     const configuredProvider =
       this.settings.provider === "none"
         ? null
@@ -371,9 +376,7 @@ export abstract class MemoryManagerSyncBase {
             id:
               resolveEmbeddingProviderAdapterId(this.settings.provider, this.cfg) ??
               this.settings.provider,
-            model:
-              this.settings.model.trim() ||
-              resolveEmbeddingProviderFallbackModel(this.settings.provider, "fts-only", this.cfg),
+            model: this.settings.model.trim() || configuredFallbackModel,
           });
     const provider = hasProviderOverride
       ? params.provider!
@@ -403,6 +406,14 @@ export abstract class MemoryManagerSyncBase {
         ? initializedProviderIdentities
         : configuredProviderIdentities;
     const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
+    const configuredProviderModelKnown =
+      this.settings.provider === "none" ||
+      Boolean(
+        this.provider ||
+        configuredIndexIdentity ||
+        this.settings.model.trim() ||
+        configuredAdapterModel,
+      );
     return resolveMemoryIndexIdentityState({
       meta: params && "meta" in params ? params.meta! : this.readMeta(),
       provider,
@@ -412,7 +423,12 @@ export abstract class MemoryManagerSyncBase {
           ? undefined
           : (this.providerKey ?? undefined),
       providerAliases: providerIdentities.slice(1),
-      providerKeyKnown: configuredProviderKeyKnown ? true : params?.providerKeyKnown,
+      providerModelKnown: hasProviderOverride ? true : configuredProviderModelKnown,
+      providerKeyKnown: configuredProviderKeyKnown
+        ? true
+        : configuredProviderModelKnown
+          ? params?.providerKeyKnown
+          : false,
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
