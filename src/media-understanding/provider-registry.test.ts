@@ -7,9 +7,11 @@ import {
 } from "./provider-registry.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+const resolvePluginCapabilityProviderMock = vi.hoisted(() => vi.fn());
 const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProvider: resolvePluginCapabilityProviderMock,
   resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
 }));
 
@@ -33,6 +35,8 @@ function requireMediaProvider(
 
 describe("media-understanding provider registry", () => {
   beforeEach(() => {
+    resolvePluginCapabilityProviderMock.mockReset();
+    resolvePluginCapabilityProviderMock.mockReturnValue(undefined);
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
   });
@@ -70,6 +74,83 @@ describe("media-understanding provider registry", () => {
     expect(provider.defaultModels?.image).toBe("glm-4.6v");
     expect(provider.describeImage).toBeTypeOf("function");
     expect(provider.describeImages).toBeTypeOf("function");
+    expect(provider.extractStructured).toBeTypeOf("function");
+  });
+
+  it("hydrates structured extraction for providers that ship only image hooks", () => {
+    const describeImage = vi.fn();
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "anthropic",
+        capabilities: ["image"],
+        describeImage,
+        describeImages,
+      }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = requireMediaProvider(registry, "anthropic");
+
+    // The provider's own image hooks are preserved...
+    expect(provider.describeImage).toBe(describeImage);
+    expect(provider.describeImages).toBe(describeImages);
+    // ...and structured extraction still falls back to the shared model runtime.
+    expect(provider.extractStructured).toBeTypeOf("function");
+  });
+
+  it("routes hydrated structured extraction through the provider's own describeImages", async () => {
+    // opencode-style: the provider's describeImages carries a request transform
+    // (it strips an unsupported disabled-reasoning payload). Structured
+    // extraction must go through that hook, not the bare shared runtime, or the
+    // fallback resends exactly the payload the hook exists to remove.
+    const describeImages = vi.fn().mockResolvedValue({ text: '{"ok":true}', model: "m" });
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "opencode", capabilities: ["image"], describeImages }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = requireMediaProvider(registry, "opencode");
+
+    const result = await provider.extractStructured?.({
+      input: [
+        { type: "image", buffer: Buffer.from("bytes"), fileName: "a.png", mime: "image/png" },
+      ],
+      instructions: "Extract JSON.",
+      provider: "opencode",
+      model: "gpt-5-nano",
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(describeImages).toHaveBeenCalledTimes(1);
+    expect(result?.parsed).toEqual({ ok: true });
+  });
+
+  it("keeps a provider's bespoke structured extraction implementation", () => {
+    const extractStructured = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "codex",
+        capabilities: ["image"],
+        extractStructured,
+      }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+
+    expect(requireMediaProvider(registry, "codex").extractStructured).toBe(extractStructured);
+  });
+
+  it("does not hydrate structured extraction for providers without image capability", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "deepgram", capabilities: ["audio"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+
+    expect(requireMediaProvider(registry, "deepgram").extractStructured).toBeUndefined();
   });
 
   it("keeps provider id normalization behavior for capability providers", () => {
@@ -80,6 +161,75 @@ describe("media-understanding provider registry", () => {
     const registry = buildMediaUnderstandingRegistry();
 
     expect(requireMediaProvider(registry, "gemini").id).toBe("google");
+  });
+
+  it("resolves the requested provider by id when another provider is already active", () => {
+    // The mixed-active regression (#119773): a warm gateway keeps another media
+    // provider active, Logbook's visionModel names anthropic, and anthropic is
+    // in neither the active set nor tools.media.models -- it must still load.
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+    resolvePluginCapabilityProviderMock.mockReturnValue(
+      createMediaProvider({ id: "anthropic", capabilities: ["image"], describeImages }),
+    );
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "anthropic");
+
+    const anthropic = requireMediaProvider(registry, "anthropic");
+    expect(anthropic.describeImages).toBe(describeImages);
+    expect(anthropic.extractStructured).toBeTypeOf("function");
+    expect(requireMediaProvider(registry, "openai").id).toBe("openai");
+    expect(resolvePluginCapabilityProviderMock).toHaveBeenCalledWith({
+      key: "mediaUnderstandingProviders",
+      providerId: "anthropic",
+      cfg: undefined,
+    });
+  });
+
+  it("does not re-resolve a requested provider already registered under an alias", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "google", capabilities: ["image"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "gemini");
+
+    expect(requireMediaProvider(registry, "gemini").id).toBe("google");
+    expect(resolvePluginCapabilityProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers the resolved provider's own hooks over a config-derived image entry", () => {
+    // Mirrors the cold path's ordering: plugin providers land before config
+    // synthetics, so a provider's request-transforming describeImages survives.
+    const describeImages = vi.fn();
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+    resolvePluginCapabilityProviderMock.mockReturnValue(
+      createMediaProvider({ id: "anthropic", capabilities: ["image"], describeImages }),
+    );
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: { models: [{ id: "claude-sonnet-5", input: ["text", "image"] }] },
+        },
+      },
+    } as never;
+
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg, undefined, "anthropic");
+
+    expect(requireMediaProvider(registry, "anthropic").describeImages).toBe(describeImages);
+  });
+
+  it("leaves an unresolvable requested provider out of the registry", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({ id: "openai", capabilities: ["image"] }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, undefined, "anthropic");
+
+    expect(getMediaUnderstandingProvider("anthropic", registry)).toBeUndefined();
   });
 
   it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {

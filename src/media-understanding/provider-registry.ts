@@ -1,8 +1,12 @@
 import type { OpenClawConfig } from "../config/types.js";
-import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import {
+  resolvePluginCapabilityProvider,
+  resolvePluginCapabilityProviders,
+} from "../plugins/capability-provider-runtime.js";
 import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
+import { createStructuredExtractionWithImageModel } from "./structured-extraction-runtime.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 function mergeProviderIntoRegistry(
@@ -34,13 +38,20 @@ function hydrateModelBackedMediaProvider(
   if (!provider.capabilities?.includes("image")) {
     return provider;
   }
-  if (provider.describeImage && provider.describeImages) {
+  if (provider.describeImage && provider.describeImages && provider.extractStructured) {
     return provider;
   }
+  // Bind structured extraction to the SAME describeImages this provider will
+  // use. A provider can carry a transport-specific request transform there
+  // (opencode strips an unsupported disabled-reasoning payload), and extraction
+  // must go through it rather than the bare shared runtime.
+  const describeImages = provider.describeImages ?? describeImagesWithModel;
   return {
     ...provider,
     describeImage: provider.describeImage ?? describeImageWithModel,
-    describeImages: provider.describeImages ?? describeImagesWithModel,
+    describeImages,
+    extractStructured:
+      provider.extractStructured ?? createStructuredExtractionWithImageModel(describeImages),
   };
 }
 
@@ -51,6 +62,7 @@ export function buildMediaUnderstandingRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
   cfg?: OpenClawConfig,
   preparedProviders?: readonly MediaUnderstandingProvider[],
+  requestedProviderId?: string,
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
   const providers =
@@ -61,6 +73,20 @@ export function buildMediaUnderstandingRegistry(
     });
   for (const provider of providers) {
     mergeProviderIntoRegistry(registry, provider);
+  }
+  // A warm gateway's plural resolve returns only active providers plus
+  // tools.media.models owners; an explicitly requested provider (Logbook's
+  // visionModel) is in neither set, so resolve it by id or a lazy provider
+  // fails as unsupported before any call.
+  if (requestedProviderId && !registry.has(normalizeMediaProviderId(requestedProviderId))) {
+    const requested = resolvePluginCapabilityProvider({
+      key: "mediaUnderstandingProviders",
+      providerId: requestedProviderId,
+      cfg,
+    });
+    if (requested) {
+      mergeProviderIntoRegistry(registry, requested);
+    }
   }
   // Auto-register media-understanding for config providers with image-capable models (#51392)
   for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
