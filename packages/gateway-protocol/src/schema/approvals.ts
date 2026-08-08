@@ -72,6 +72,16 @@ export const PluginApprovalSeveritySchema = Type.Union([
   Type.Literal("critical"),
 ]);
 
+/** Reviewer-safe projection of a plugin-owned external verification choice. */
+export const PluginApprovalExternalResolutionSchema = closedObject({
+  label: Type.String({ minLength: 1, maxLength: 80 }),
+  decisions: Type.Array(ApprovalAllowDecisionSchema, {
+    minItems: 1,
+    maxItems: 2,
+    uniqueItems: true,
+  }),
+});
+
 const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
   minItems: 1,
   maxItems: 3,
@@ -116,6 +126,7 @@ export const PluginApprovalPresentationSchema = closedObject({
   toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   allowedDecisions: ApprovalAllowedDecisionsSchema,
+  externalResolution: Type.Optional(PluginApprovalExternalResolutionSchema),
 });
 
 /** Reviewer-safe OpenClaw system change. Exact operation stays host-local. */
@@ -305,6 +316,9 @@ export type ApprovalDecision = Static<typeof ApprovalDecisionSchema>;
 export type ApprovalAllowDecision = Static<typeof ApprovalAllowDecisionSchema>;
 export type ApprovalTerminalReason = Static<typeof ApprovalTerminalReasonSchema>;
 export type PluginApprovalSeverity = Static<typeof PluginApprovalSeveritySchema>;
+export type PluginApprovalExternalResolution = Static<
+  typeof PluginApprovalExternalResolutionSchema
+>;
 export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
 export type SystemAgentApprovalPresentation = Static<typeof SystemAgentApprovalPresentationSchema>;
