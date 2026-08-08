@@ -46,6 +46,28 @@ Sentinels reduce plaintext exposure across the model-call chain, but they are no
 
 Set `OPENCLAW_SECRET_SENTINELS=off` (also accepts `0` or `false`, case-insensitive) to disable sentinel minting during incident response or compatibility troubleshooting. The kill switch does not disable exact-value redaction registration.
 
+## Ambient provider credentials
+
+A provider credential present in the environment but named by no configuration is still eligible for use by default. This is the documented zero-config `PROVIDER_API_KEY` path, and it is why the paragraph above matters: such a credential is outside the SecretRef sentinel mechanism.
+
+Operators who want a credential used only where configuration references it can opt out:
+
+```json
+{
+  "security": {
+    "allowAmbientProviderKeys": false
+  }
+}
+```
+
+With this set, a credential is eligible only where a provider entry, an auth profile, or a SecretRef names it. Environment variables remain a fully supported place to store keys, alongside file- and command-backed providers; the setting governs whether a key may be consumed without a configuration reference authorizing it, not where it is stored.
+
+Detection is deliberately unaffected. `doctor`, `models list`, and usage reporting continue to observe an ambient credential and report it as present, so opting out makes the credential ineligible rather than invisible.
+
+Opting out also covers platform credential providers, not just `PROVIDER_API_KEY` variables: `AWS_PROFILE`, AWS IAM key pairs, Bedrock bearer tokens, ECS and IRSA container credentials, and Google Application Default Credentials for Vertex. These are ambient in the same sense — the process environment selects them and no configuration names them. Operators on AWS or Vertex who set `allowAmbientProviderKeys: false` should name the provider in configuration first.
+
+The default remains `true`; existing installations are unchanged until they opt in.
+
 ## Agent-access boundary
 
 SecretRefs stop credentials from being persisted in config and generated model files, but they are not a process-isolation boundary. A plaintext credential left on disk in a path the agent can read is still readable via file or shell tools, bypassing API-level redaction.

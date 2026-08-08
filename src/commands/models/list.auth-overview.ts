@@ -141,6 +141,7 @@ export function resolveProviderAuthOverview(params: {
 
   const envKey = resolveEnvApiKey(provider, process.env, {
     config: cfg,
+    inspectOnly: true,
     workspaceDir: params.workspaceDir,
     aliasMap: params.aliasMap,
     candidateMap: params.envCandidateMap,

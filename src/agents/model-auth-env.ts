@@ -40,6 +40,14 @@ export type EnvApiKeyLookupOptions = {
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
   setupProviderFallbackRefs?: readonly string[];
   skipSetupProviderFallback?: boolean;
+  /**
+   * Resolve the credential even when `security.allowAmbientProviderKeys` is false.
+   *
+   * For read-only surfaces — `doctor`, `models list`, usage reporting — which must keep
+   * observing an ambient credential in order to report it as present but not eligible.
+   * Never set this on a path that sends the credential to a provider.
+   */
+  inspectOnly?: boolean;
 };
 
 function resolveAuthEvidence(
@@ -158,6 +166,15 @@ export function resolveEnvApiKey(
   const normalized = aliasMap[normalizedProvider] ?? normalizedProvider;
   const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
   const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
+  // An ambient credential is one no configuration names. Reporting surfaces opt out via
+  // `inspectOnly` so a refused credential stays visible rather than silently disappearing.
+  if (
+    options.inspectOnly !== true &&
+    options.config?.security?.allowAmbientProviderKeys === false
+  ) {
+    return null;
+  }
+
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);

@@ -133,6 +133,7 @@ export function resolveModelAuthLabel(params: {
 
   const envKey = resolveEnvApiKey(providerKey, process.env, {
     config: params.cfg,
+    inspectOnly: true,
     workspaceDir: params.workspaceDir,
   });
   if (envKey?.apiKey) {

@@ -1,3 +1,5 @@
+import { getAiTransportHost } from "./host.js";
+
 // NEVER convert to top-level imports - breaks browser/Vite builds
 let existsSync: typeof import("node:fs").existsSync | null = null;
 let homedir: typeof import("node:os").homedir | null = null;
@@ -222,6 +224,11 @@ export function findEnvKeys(provider: string): string[] | undefined {
  * Will not return API keys for providers that require OAuth tokens.
  */
 export function getEnvApiKey(provider: string): string | undefined {
+  // A credential the host's configuration never names is not eligible for use.
+  // `findEnvKeys` stays ungated so reporting can still show it as present.
+  if (!getAiTransportHost().allowAmbientProviderKey(provider)) {
+    return undefined;
+  }
   const envKeys = findEnvKeys(provider);
   if (envKeys?.[0]) {
     return getEnvValue(envKeys[0]);

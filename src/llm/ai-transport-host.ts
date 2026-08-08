@@ -7,10 +7,20 @@ import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
 } from "../agents/provider-transport-fetch.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAnthropicInlineContentBlocks } from "../media/anthropic-inline-images.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
+
+/**
+ * Ambient provider credentials stay eligible unless the operator opts out. Read per
+ * call rather than captured at module load: the host is configured before the runtime
+ * config snapshot is published, and the setting must follow config reloads.
+ */
+function isAmbientProviderKeyAllowed(): boolean {
+  return getRuntimeConfigSnapshot()?.security?.allowAmbientProviderKeys !== false;
+}
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
 
@@ -25,6 +35,7 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 
 configureAiTransportHost({
   buildModelFetch: buildGuardedModelFetch,
+  allowAmbientProviderKey: () => isAmbientProviderKeyAllowed(),
   resolveSecretSentinel: (value) => {
     const swapped = swapSecretSentinelsInText(value);
     const unknown = swapped.unknown[0];

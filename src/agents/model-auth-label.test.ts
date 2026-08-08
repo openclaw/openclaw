@@ -320,6 +320,9 @@ describe("resolveModelAuthLabel", () => {
     expect(label).toBe("api-key (workspace cloud credentials)");
     expect(mocks.resolveEnvApiKey).toHaveBeenCalledWith("workspace-cloud", process.env, {
       config: cfg,
+      // Labeling is a reporting surface: it must keep observing an ambient credential
+      // so it can be shown as present even when policy refuses it for use.
+      inspectOnly: true,
       workspaceDir: "/tmp/workspace",
     });
   });

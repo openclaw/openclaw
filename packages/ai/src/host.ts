@@ -125,6 +125,12 @@ export interface AiTransportHost {
     timeoutMs?: number,
     options?: { sanitizeSse?: boolean },
   ): typeof fetch | undefined;
+  /**
+   * Reports whether a provider credential that configuration never names may be
+   * consumed. Hosts that own configuration answer from `security.allowAmbientProviderKeys`;
+   * embedding hosts without configuration keep the permissive default.
+   */
+  allowAmbientProviderKey(provider: string): boolean;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
   /** Redacts secrets inside structured tool-result payloads. */
@@ -217,6 +223,7 @@ type ActiveAiTransportHost = Omit<AiTransportHost, "normalizeAnthropicInlineCont
 
 const inertAiTransportHost: ActiveAiTransportHost = {
   buildModelFetch: () => undefined,
+  allowAmbientProviderKey: () => true,
   resolveSecretSentinel: (value) => value,
   redactSecrets: (value) => value,
   redactToolPayloadText: (text) => text,

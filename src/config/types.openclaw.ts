@@ -44,6 +44,19 @@ export type SecurityConfig = {
     /** Accepted security audit findings to omit from active summary/findings. */
     suppressions?: SecurityAuditSuppression[];
   };
+  /**
+   * Allow provider credentials that configuration never names to be used at runtime.
+   *
+   * Defaults to true, preserving the documented zero-config `PROVIDER_API_KEY` path.
+   * When false, a credential is eligible only where configuration references it —
+   * a provider entry, an auth profile, or a SecretRef. Environment variables remain
+   * a fully supported place to store keys; this setting governs whether one may be
+   * consumed without a configuration reference authorizing it.
+   *
+   * Detection is unaffected: `doctor`, `models list`, and usage reporting continue to
+   * observe ambient credentials and report them as present but not eligible.
+   */
+  allowAmbientProviderKeys?: boolean;
   installPolicy?: {
     /**
      * Enable operator-owned install policy. When true without an exec command,

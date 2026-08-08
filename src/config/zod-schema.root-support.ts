@@ -39,6 +39,7 @@ export const TailscaleServiceNameSchema = z
 
 export const SecuritySchema = z
   .strictObject({
+    allowAmbientProviderKeys: z.boolean().optional(),
     audit: z
       .strictObject({
         suppressions: z
