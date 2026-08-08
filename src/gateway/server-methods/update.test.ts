@@ -31,6 +31,8 @@ const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentin
 const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
+const checkUpdateStatusMock = vi.fn();
+const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
 const getUpdateAvailableMock = vi.fn(
@@ -141,13 +143,26 @@ vi.mock("../../infra/package-json.js", () => ({
   readPackageVersion: readPackageVersionMock,
 }));
 
+vi.mock("../../infra/update-check.js", () => ({
+  checkUpdateStatus: checkUpdateStatusMock,
+}));
+
+vi.mock("../../version.js", () => ({
+  get VERSION() {
+    return versionMock.value;
+  },
+}));
+
 vi.mock("../../infra/supervisor-markers.js", () => ({
   detectRespawnSupervisor: detectRespawnSupervisorMock,
 }));
 
-vi.mock("../../infra/update-channels.js", () => ({
-  normalizeUpdateChannel: normalizeUpdateChannelMock,
-}));
+vi.mock("../../infra/update-channels.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/update-channels.js")>(
+    "../../infra/update-channels.js",
+  );
+  return { ...actual, normalizeUpdateChannel: normalizeUpdateChannelMock };
+});
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
@@ -220,6 +235,7 @@ beforeEach(() => {
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();
   readPackageVersionMock.mockResolvedValue("1.0.0");
+  versionMock.value = "1.0.0";
   normalizeUpdateChannelMock.mockReset();
   normalizeUpdateChannelMock.mockReturnValue(null);
   getUpdateAvailableMock.mockReset();
@@ -769,6 +785,20 @@ describe("update.run restart scheduling", () => {
 
   it("forwards stored extended-stable to package managed-service handoff", async () => {
     normalizeUpdateChannelMock.mockReturnValueOnce("extended-stable");
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+
+    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "extended-stable" }),
+    );
+  });
+
+  it("keeps a configless extended-stable package install on that channel", async () => {
+    versionMock.value = "2026.6.33";
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
 

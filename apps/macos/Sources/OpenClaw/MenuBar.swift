@@ -495,7 +495,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         case let .continueLaunch(startUpdater):
             if startUpdater {
-                self.updaterController.start()
+                if OpenClawConfigFile.gatewayUpdateChannel() == nil {
+                    self.updaterController.startAfterResolvingGatewayUpdateChannel()
+                } else {
+                    self.updaterController.start()
+                }
             }
         }
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
@@ -769,11 +773,16 @@ protocol UpdaterProviding: AnyObject {
     var isAvailable: Bool { get }
     var updateStatus: UpdateStatus { get }
     func start()
+    func startAfterResolvingGatewayUpdateChannel()
     func checkForUpdates(_ sender: Any?)
 }
 
 extension UpdaterProviding {
     func start() {}
+
+    func startAfterResolvingGatewayUpdateChannel() {
+        self.start()
+    }
 }
 
 /// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
@@ -801,14 +810,38 @@ import Sparkle
 
 @MainActor
 final class SparkleUpdaterController: NSObject, UpdaterProviding {
+    private static let gatewayUpdateChannelRetryDelayNanoseconds: UInt64 = 5_000_000_000
     private lazy var controller = SPUStandardUpdaterController(
         startingUpdater: false,
         updaterDelegate: self,
         userDriverDelegate: nil)
     let updateStatus = UpdateStatus()
     private var started = false
+    private var gatewayUpdateChannel: String?
+    private var resolvingGatewayUpdateChannel = false
+    private let gatewayUpdateChannelResolver: @MainActor () async -> String?
+    private let gatewayUpdateChannelRetryDelayNanoseconds: UInt64
+    private let onStart: (() -> Void)?
 
-    init(savedAutoUpdate: Bool) {
+    init(
+        savedAutoUpdate: Bool,
+        gatewayUpdateChannelResolver: (@escaping @MainActor () async -> String?)? = nil,
+        gatewayUpdateChannelRetryDelayNanoseconds: UInt64 = Self.gatewayUpdateChannelRetryDelayNanoseconds,
+        onStart: (() -> Void)? = nil)
+    {
+        self.gatewayUpdateChannelResolver = gatewayUpdateChannelResolver ?? {
+            struct UpdateStatusResponse: Decodable {
+                let effectiveChannel: String?
+            }
+            guard let data = try? await GatewayConnection.shared.requestRaw(
+                method: "update.status",
+                timeoutMs: 5000),
+                let response = try? JSONDecoder().decode(UpdateStatusResponse.self, from: data)
+            else { return nil }
+            return OpenClawConfigFile.normalizedGatewayUpdateChannel(response.effectiveChannel)
+        }
+        self.gatewayUpdateChannelRetryDelayNanoseconds = gatewayUpdateChannelRetryDelayNanoseconds
+        self.onStart = onStart
         super.init()
         let updater = self.controller.updater
         updater.automaticallyChecksForUpdates = savedAutoUpdate
@@ -818,7 +851,31 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     func start() {
         guard !self.started else { return }
         self.started = true
-        self.controller.startUpdater()
+        if let onStart = self.onStart {
+            onStart()
+        } else {
+            self.controller.startUpdater()
+        }
+    }
+
+    func startAfterResolvingGatewayUpdateChannel() {
+        guard !self.started, !self.resolvingGatewayUpdateChannel else { return }
+        self.resolvingGatewayUpdateChannel = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.resolvingGatewayUpdateChannel = false }
+            while !self.started {
+                if let channel = await self.gatewayUpdateChannelResolver() {
+                    self.gatewayUpdateChannel = channel
+                    self.start()
+                    return
+                }
+                // Do not start unfiltered after a Gateway timeout: default Sparkle
+                // channels include stable releases. Retry until the Gateway supplies
+                // the verified channel so direct extended-stable installs stay pinned.
+                try? await Task.sleep(nanoseconds: self.gatewayUpdateChannelRetryDelayNanoseconds)
+            }
+        }
     }
 
     var automaticallyChecksForUpdates: Bool {
@@ -874,14 +931,44 @@ func allowedSparkleChannels(forGatewayUpdateChannel channel: String?) -> Set<Str
     switch channel {
     case "beta", "dev":
         ["beta"]
+    case "extended-stable":
+        ["extended-stable"]
     default:
         []
     }
 }
 
+func isSparkleUpdateAllowed(itemChannel: String?, forGatewayUpdateChannel channel: String?) -> Bool {
+    channel != "extended-stable" || itemChannel == "extended-stable"
+}
+
 extension SparkleUpdaterController: SPUUpdaterDelegate {
     func allowedChannels(for _: SPUUpdater) -> Set<String> {
-        allowedSparkleChannels(forGatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+        allowedSparkleChannels(
+            forGatewayUpdateChannel: self.gatewayUpdateChannel ?? OpenClawConfigFile.gatewayUpdateChannel())
+    }
+
+    func bestValidUpdate(in appcast: SUAppcast, for _: SPUUpdater) -> SUAppcastItem? {
+        guard self.gatewayUpdateChannel ?? OpenClawConfigFile.gatewayUpdateChannel() == "extended-stable" else {
+            return nil
+        }
+        let comparator = SUStandardVersionComparator.default
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        // Sparkle always admits the default channel. Filter it here so an
+        // extended-stable Gateway is never prompted to leave its release train.
+        let eligibleItems = appcast.items.filter {
+            guard isSparkleUpdateAllowed(
+                itemChannel: $0.channel,
+                forGatewayUpdateChannel: "extended-stable")
+            else { return false }
+            guard let currentVersion else { return true }
+            return comparator.compareVersion(
+                $0.versionString,
+                toVersion: currentVersion) == .orderedDescending
+        }
+        return eligibleItems.max { left, right in
+            comparator.compareVersion(left.versionString, toVersion: right.versionString) == .orderedAscending
+        }
     }
 
     func updater(_: SPUUpdater, willInstallUpdate item: SUAppcastItem) {

@@ -313,9 +313,14 @@ struct UpdateOrchestrationTests {
             OpenClawConfigFile.normalizedGatewayUpdateChannel("  BETA \n")) == ["beta"])
         #expect(OpenClawConfigFile.normalizedGatewayUpdateChannel(" \n") == nil)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "stable").isEmpty)
-        #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable").isEmpty)
+        #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable") == ["extended-stable"])
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "future").isEmpty)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: nil).isEmpty)
+        #expect(isSparkleUpdateAllowed(itemChannel: nil, forGatewayUpdateChannel: "stable"))
+        #expect(!isSparkleUpdateAllowed(itemChannel: nil, forGatewayUpdateChannel: "extended-stable"))
+        #expect(isSparkleUpdateAllowed(
+            itemChannel: "extended-stable",
+            forGatewayUpdateChannel: "extended-stable"))
     }
 
     #if canImport(Sparkle)
@@ -325,6 +330,24 @@ struct UpdateOrchestrationTests {
         #expect(!updater.isAvailable)
         updater.checkForUpdates(nil)
         #expect(!updater.isAvailable)
+    }
+
+    @Test func `Sparkle retries Gateway channel resolution without starting unfiltered`() async {
+        var channels: [String?] = [nil, "extended-stable"]
+        var starts = 0
+        let updater = SparkleUpdaterController(
+            savedAutoUpdate: false,
+            gatewayUpdateChannelResolver: { channels.removeFirst() },
+            gatewayUpdateChannelRetryDelayNanoseconds: 0,
+            onStart: { starts += 1 })
+
+        updater.startAfterResolvingGatewayUpdateChannel()
+        for _ in 0 ..< 10 where !updater.isAvailable {
+            await Task.yield()
+        }
+
+        #expect(updater.isAvailable)
+        #expect(starts == 1)
     }
     #endif
 
