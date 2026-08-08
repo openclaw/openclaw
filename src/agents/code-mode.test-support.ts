@@ -1,5 +1,6 @@
 import { expect, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import type { CodeModeActivityOwner } from "./code-mode-activity.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
@@ -225,6 +226,7 @@ export function createCodeModeHarness(
   params: {
     agentId?: string;
     catalogRef?: ToolSearchCatalogRef;
+    codeModeActivityOwner?: CodeModeActivityOwner;
     codeModeSkills?: readonly CodeModeSkill[];
     forceRestartSafeTools?: boolean;
   } = {},
@@ -238,6 +240,7 @@ export function createCodeModeHarness(
     sessionId: "session-code-mode",
     sessionKey: params.agentId ? `agent:${params.agentId}:main` : "agent:main:main",
     runId: "run-code-mode",
+    codeModeActivityOwner: params.codeModeActivityOwner,
     catalogRef,
     forceRestartSafeTools: params.forceRestartSafeTools,
     codeModeSkills: params.codeModeSkills,

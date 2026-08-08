@@ -73,6 +73,7 @@ import {
   resolveCliSessionClearReason,
   shouldClearFailedCliSessionBinding,
 } from "../cli-session.js";
+import type { CodeModeActivityOwner } from "../code-mode-activity.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
 import { runEmbeddedAgentInternal } from "../embedded-agent-runner/run-orchestrator.js";
@@ -529,6 +530,7 @@ export async function persistCliTurnTranscript(params: {
 
 export function runAgentAttempt(params: {
   commandRunAccounting?: AgentCommandRunCandidateAccounting;
+  codeModeActivityOwner: CodeModeActivityOwner;
   providerOverride: string;
   modelOverride: string;
   configuredAuthProfileId?: string;
@@ -1273,6 +1275,7 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignature,
   };
   bindEmbeddedRunAccountingObservers(embeddedRunParams, {
+    codeModeActivityOwner: params.codeModeActivityOwner,
     onAgentSubmission: params.commandRunAccounting?.beginAgentSubmission,
     onAttemptObserved: params.commandRunAccounting?.observeEmbeddedAttempt,
     onRuntimeSelected: params.commandRunAccounting?.selectRuntime,

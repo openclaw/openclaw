@@ -1,6 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../shared/deferred.js";
+import {
+  createCodeModeActivityOwner,
+  discardCodeModeRunActivity,
+  registerCodeModeRunActivity,
+  sampleCodeModeRunFinalQuiescence,
+  type CodeModeActivityOwner,
+} from "./code-mode-activity.js";
 import type { SettledBridgeRequest } from "./code-mode-runtime.js";
 import { CodeModeBridgeDispatchQueue } from "./code-mode-state.js";
 import {
@@ -46,12 +53,20 @@ function createHeadlessContext(tools: AnyAgentTool[]): ToolSearchToolContext {
   };
 }
 
+let activityOwner: CodeModeActivityOwner;
+
+beforeEach(() => {
+  activityOwner = createCodeModeActivityOwner();
+});
+
 afterEach(() => {
   resetCodeModeTestState();
+  discardCodeModeRunActivity(activityOwner);
 });
 
 describe("Code Mode cancellation ownership", () => {
   it("does not resume an aborted guest when an active tool ignores cancellation", async () => {
+    registerCodeModeRunActivity(activityOwner);
     const catalogRef = createToolSearchCatalogRef();
     const config = {
       tools: { codeMode: { enabled: true, maxPendingToolCalls: 1, timeoutMs: 30_000 } },
@@ -62,6 +77,7 @@ describe("Code Mode cancellation ownership", () => {
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
       runId: "run-code-mode",
+      codeModeActivityOwner: activityOwner,
       catalogRef,
     };
     const codeModeTools = createCodeModeTools(ctx);
@@ -119,6 +135,7 @@ describe("Code Mode cancellation ownership", () => {
     expect(activeSawAbort).toBe(true);
     expect(queuedTool.execute).not.toHaveBeenCalled();
     expect(lateGuestTool.execute).not.toHaveBeenCalled();
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("non_quiescent");
 
     activeCompletion.resolve();
     await activeFinished.promise;
@@ -129,6 +146,7 @@ describe("Code Mode cancellation ownership", () => {
     expect(queuedTool.execute).not.toHaveBeenCalled();
     expect(lateGuestTool.execute).not.toHaveBeenCalled();
     expect(testing.activeRuns.size).toBe(0);
+    expect(sampleCodeModeRunFinalQuiescence(activityOwner)).toBe("quiescent");
   });
 
   it("does not resume an aborted headless guest when an active tool ignores cancellation", async () => {

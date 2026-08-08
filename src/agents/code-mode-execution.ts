@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { CodeModeOwnedActivityContext } from "./code-mode-activity.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import {
@@ -56,9 +57,11 @@ import { resolveSwarmConfig } from "./swarm-config.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import { ToolInputError } from "./tools/common.js";
 
+type CodeModeToolContext = ToolSearchToolContext & CodeModeOwnedActivityContext;
+
 export async function runExec(params: {
   toolCallId: string;
-  ctx: ToolSearchToolContext;
+  ctx: CodeModeToolContext;
   code: string;
   assistantTurnId?: string;
   language?: CodeModeLanguage;
@@ -264,7 +267,7 @@ async function settleCodeModeResult(params: {
   replaySafety: { safe: boolean };
   parentToolCallId: string;
   codeModeReplayId: string;
-  ctx: ToolSearchToolContext;
+  ctx: CodeModeToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
@@ -283,7 +286,11 @@ async function settleCodeModeResult(params: {
   let pending = params.pending ?? [];
   const bridgeDispatchQueue =
     params.bridgeDispatchQueue ??
-    new CodeModeBridgeDispatchQueue(params.config.maxPendingToolCalls, params.codeModeStats);
+    new CodeModeBridgeDispatchQueue(
+      params.config.maxPendingToolCalls,
+      params.codeModeStats,
+      params.ctx.codeModeActivityOwner,
+    );
   const activeRunId = params.activeRunId ?? `cm_${randomUUID()}`;
   const output = params.output;
   const deliveredOutputCount = params.deliveredOutputCount ?? 0;
@@ -601,7 +608,7 @@ async function settleCodeModeResult(params: {
 
 export async function runWait(params: {
   toolCallId: string;
-  ctx: ToolSearchToolContext;
+  ctx: CodeModeToolContext;
   runId: string;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -621,6 +628,9 @@ export async function runWait(params: {
     (state.ctx.agentId && state.ctx.agentId !== params.ctx.agentId)
   ) {
     throw new ToolInputError("code mode run belongs to a different session.");
+  }
+  if (state.activityOwner !== params.ctx.codeModeActivityOwner) {
+    throw new ToolInputError("code mode run belongs to a different agent run.");
   }
   if (resumingRunIds.has(state.runId)) {
     throw new ToolInputError("code mode run is already being resumed.");

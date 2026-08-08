@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { CodeModeActivityOwner } from "../../code-mode-activity.js";
 import type { CodeModeStats } from "../../code-mode-stats.js";
 import type { AgentSubmissionObserver } from "../../sessions/agent-session-accounting.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -30,6 +31,7 @@ export type EmbeddedRunOpaqueWorkReason =
   | "exec_auto_review_model_completion";
 
 type EmbeddedRunAccountingObservers = {
+  readonly codeModeActivityOwner?: CodeModeActivityOwner;
   onAgentSubmission?: AgentSubmissionObserver;
   onAttemptObserved?: (observation: EmbeddedRunAccountingObservation) => void;
   onRuntimeSelected?: (runtime: "embedded" | "native") => void;
@@ -43,6 +45,7 @@ export function bindEmbeddedRunAccountingObservers<T extends object>(
   value: EmbeddedRunAccountingObservers | undefined,
 ): T {
   if (
+    value?.codeModeActivityOwner ||
     value?.onAgentSubmission ||
     value?.onAttemptObserved ||
     value?.onRuntimeSelected ||

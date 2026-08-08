@@ -22,6 +22,7 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
+import type { CodeModeActivityOwner } from "../code-mode-activity.js";
 import {
   runEmbeddedAgentEntry,
   type EmbeddedAgentRunEntryTerminal,
@@ -79,6 +80,7 @@ export async function runEmbeddedAgentAttempt(params: {
   embeddedSessionState: EmbeddedSessionState;
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
   commandRunAccounting?: RunAccountingAccumulator;
+  codeModeActivityOwner: CodeModeActivityOwner;
 }) {
   const {
     cfg,
@@ -458,6 +460,7 @@ export async function runEmbeddedAgentAttempt(params: {
             effectiveTurnThinkLevel = candidateThinkLevel;
             const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
               commandRunAccounting: candidateAccounting,
+              codeModeActivityOwner: params.codeModeActivityOwner,
               providerOverride,
               modelOverride,
               configuredAuthProfileId,

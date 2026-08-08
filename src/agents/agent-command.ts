@@ -30,6 +30,13 @@ import {
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
+import {
+  createCodeModeActivityOwner,
+  discardCodeModeRunActivity,
+  sampleCodeModeRunFinalQuiescence,
+  waitForCodeModeRunActivitySettlement,
+} from "./code-mode-activity.js";
+import { disposeCodeModeRunsByActivityOwner } from "./code-mode-state.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { repairPendingAssistantTranscriptTurns } from "./command/assistant-transcript-repair.js";
 import {
@@ -185,6 +192,9 @@ async function agentCommandInternal(
     );
   }
 
+  // Command admission owns Code Mode activity independently from optional metrics.
+  // Every candidate shares this owner, and terminal cleanup cannot be skipped by ingress.
+  const codeModeActivityOwner = createCodeModeActivityOwner();
   let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   try {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
@@ -508,6 +518,7 @@ async function agentCommandInternal(
         embeddedSessionState,
         trackInternalModelRunTarget,
         commandRunAccounting,
+        codeModeActivityOwner,
       });
       if (embeddedAttempt.fallbackExhausted) {
         opts.onModelFallbackExhausted?.();
@@ -542,6 +553,14 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
+    if (commandRunAccounting) {
+      commandRunAccounting.observeCodeModeFinalQuiescence(
+        sampleCodeModeRunFinalQuiescence(codeModeActivityOwner),
+      );
+    }
+    disposeCodeModeRunsByActivityOwner(codeModeActivityOwner);
+    await waitForCodeModeRunActivitySettlement(codeModeActivityOwner);
+    discardCodeModeRunActivity(codeModeActivityOwner);
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned

@@ -64,6 +64,7 @@ describe("command run accounting", () => {
       codeModeStats: secondStats,
       codeModeLifecycleObserved: true,
     });
+    accounting.observeCodeModeFinalQuiescence("quiescent");
     second.settle("returned");
     vi.setSystemTime(1_025);
 
@@ -121,7 +122,7 @@ describe("command run accounting", () => {
         lifecycle: {
           maxUnresolvedAtExtraction: 2,
           attemptsWithUnresolved: 2,
-          finalQuiescence: { state: "partial", reasons: ["attempt_extraction_only"] },
+          finalQuiescence: { state: "quiescent" },
         },
       },
     });
@@ -842,10 +843,7 @@ describe("command run accounting", () => {
     missing.settle("returned");
 
     expect(accounting.project().codeMode?.lifecycle).toEqual({
-      finalQuiescence: {
-        state: "partial",
-        reasons: ["attempt_extraction_only", "not_observed"],
-      },
+      finalQuiescence: { state: "unavailable", reasons: ["not_observed"] },
     });
   });
 
