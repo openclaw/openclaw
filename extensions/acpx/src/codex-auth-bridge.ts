@@ -583,6 +583,19 @@ function buildCodexAcpWrapperScript(installedBinPath?: string): string {
     envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
 const codexAuthPath = fileURLToPath(new URL("./codex-home/auth.json", import.meta.url));
 const codexApiKey = (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || "").trim();
+function hasUsableCodexOAuthAuth(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    value.tokens &&
+    typeof value.tokens === "object" &&
+    !Array.isArray(value.tokens) &&
+    typeof value.OPENAI_API_KEY !== "string" &&
+    typeof value.tokens.access_token === "string" &&
+    value.tokens.access_token.trim().length > 0
+  );
+}
 let shouldWriteCodexApiKeyAuth = false;
 if (codexApiKey) {
   if (!existsSync(codexAuthPath)) {
@@ -590,10 +603,7 @@ if (codexApiKey) {
   } else {
     try {
       const existingCodexAuth = JSON.parse(readFileSync(codexAuthPath, "utf8"));
-      shouldWriteCodexApiKeyAuth =
-        !existingCodexAuth ||
-        typeof existingCodexAuth !== "object" ||
-        typeof existingCodexAuth.OPENAI_API_KEY === "string";
+      shouldWriteCodexApiKeyAuth = !hasUsableCodexOAuthAuth(existingCodexAuth);
     } catch {
       shouldWriteCodexApiKeyAuth = true;
     }
@@ -693,6 +703,63 @@ async function readSourceCodexConfig(codexHome: string): Promise<string | undefi
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isCodexOAuthAuth(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value) || !isRecord(value.tokens) || typeof value.OPENAI_API_KEY === "string") {
+    return false;
+  }
+  return (
+    typeof value.tokens.access_token === "string" && value.tokens.access_token.trim().length > 0
+  );
+}
+
+async function readCodexAuthFileIfExists(authPath: string): Promise<unknown | undefined> {
+  try {
+    const { value } = await readJsonFileWithFallback<unknown>(authPath, undefined);
+    return value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function makeCodexAuthFilePrivateIfPossible(authPath: string): Promise<void> {
+  try {
+    await fs.chmod(authPath, 0o600);
+  } catch {
+    // Best effort: auth still lives inside OpenClaw state, and chmod is unavailable on some FSes.
+  }
+}
+
+async function seedIsolatedCodexOAuthAuth(params: {
+  sourceCodexHome: string;
+  codexHome: string;
+}): Promise<void> {
+  const isolatedAuthPath = path.join(params.codexHome, "auth.json");
+  const existingAuth = await readCodexAuthFileIfExists(isolatedAuthPath);
+  if (isCodexOAuthAuth(existingAuth)) {
+    return;
+  }
+
+  const sourceAuth = await readCodexAuthFileIfExists(
+    path.join(params.sourceCodexHome, "auth.json"),
+  );
+  if (!isCodexOAuthAuth(sourceAuth)) {
+    return;
+  }
+
+  await fs.writeFile(isolatedAuthPath, `${JSON.stringify(sourceAuth, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await makeCodexAuthFilePrivateIfPossible(isolatedAuthPath);
+}
+
 async function prepareIsolatedCodexHome(params: {
   baseDir: string;
   workspaceDir: string;
@@ -705,6 +772,7 @@ async function prepareIsolatedCodexHome(params: {
   ];
   const codexHome = path.join(params.baseDir, "codex-home");
   await fs.mkdir(codexHome, { recursive: true });
+  await seedIsolatedCodexOAuthAuth({ sourceCodexHome, codexHome });
   await fs.writeFile(
     path.join(codexHome, "config.toml"),
     renderIsolatedCodexConfig({

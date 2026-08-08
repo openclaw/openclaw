@@ -38,12 +38,14 @@ function restoreEnv(name: keyof typeof previousEnv): void {
 }
 
 function generatedCodexPaths(stateDir: string): {
+  authPath: string;
   configPath: string;
   wrapperPath: string;
 } {
   const baseDir = path.join(stateDir, "acpx");
   const codexHome = path.join(baseDir, "codex-home");
   return {
+    authPath: path.join(codexHome, "auth.json"),
     configPath: path.join(codexHome, "config.toml"),
     wrapperPath: path.join(baseDir, "codex-acp-wrapper.mjs"),
   };
@@ -143,8 +145,9 @@ afterEach(async () => {
 });
 
 describe("prepareAcpxCodexAuthConfig", () => {
-  it("installs an isolated Codex ACP wrapper without synthesizing auth from canonical OpenClaw OAuth", async () => {
+  it("installs an isolated Codex ACP wrapper and seeds OAuth auth from source Codex home", async () => {
     const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
@@ -157,6 +160,15 @@ describe("prepareAcpxCodexAuthConfig", () => {
       "dist",
       "index.js",
     );
+    const sourceAuth = {
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: null,
+      tokens: { access_token: "source-access-token", refresh_token: "source-refresh-token" },
+      last_refresh: "2026-07-06T00:00:00.000Z",
+    };
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(path.join(sourceCodexHome, "auth.json"), `${JSON.stringify(sourceAuth)}\n`);
+    process.env.CODEX_HOME = sourceCodexHome;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
 
     const pluginConfig = resolveAcpxPluginConfig({
@@ -176,7 +188,73 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain(JSON.stringify(installedBinPath));
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
+    expect(JSON.parse(await fs.readFile(generated.authPath, "utf8"))).toEqual(sourceAuth);
+    if (process.platform !== "win32") {
+      const mode = (await fs.stat(generated.authPath)).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
+  });
+
+  it("replaces existing isolated Codex API-key auth with source OAuth auth during preparation", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const sourceAuth = {
+      auth_mode: "chatgpt",
+      OPENAI_API_KEY: null,
+      tokens: { access_token: "source-access-token" },
+      last_refresh: null,
+    };
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(path.join(sourceCodexHome, "auth.json"), `${JSON.stringify(sourceAuth)}\n`);
+    await fs.mkdir(path.dirname(generated.authPath), { recursive: true });
+    await fs.writeFile(
+      generated.authPath,
+      `${JSON.stringify({ OPENAI_API_KEY: "sk-old-api-key", tokens: null })}\n`,
+      { mode: 0o600 },
+    );
+    process.env.CODEX_HOME = sourceCodexHome;
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    expect(JSON.parse(await fs.readFile(generated.authPath, "utf8"))).toEqual(sourceAuth);
+    if (process.platform !== "win32") {
+      const mode = (await fs.stat(generated.authPath)).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
+  });
+
+  it("does not copy malformed source Codex OAuth auth", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceCodexHome, "auth.json"),
+      `${JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: {} })}\n`,
+    );
+    process.env.CODEX_HOME = sourceCodexHome;
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    await expectPathMissing(generated.authPath);
   });
 
   it("keeps generated wrappers usable when chmod is rejected by the state filesystem", async () => {
@@ -392,6 +470,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("writes API-key auth into the isolated Codex ACP home when env auth is present", async () => {
     const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex-without-auth");
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
     const installedBinPath = path.join(root, "codex-acp-bin.js");
@@ -400,6 +479,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       "console.log(JSON.stringify({ codexHome: process.env.CODEX_HOME }));\n",
       "utf8",
     );
+    process.env.CODEX_HOME = sourceCodexHome;
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -462,6 +542,43 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     expect(JSON.parse(await fs.readFile(authPath, "utf8"))).toEqual(existingAuth);
+  });
+
+  it("updates malformed isolated Codex OAuth auth when env auth is present", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex-without-auth");
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const installedBinPath = path.join(root, "codex-acp-bin.js");
+    await fs.writeFile(installedBinPath, "console.log('ok');\n", "utf8");
+    process.env.CODEX_HOME = sourceCodexHome;
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    await fs.writeFile(
+      generated.authPath,
+      `${JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: {} })}\n`,
+      { mode: 0o600 },
+    );
+
+    await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+      env: { ...process.env, OPENAI_API_KEY: "sk-test-api-key" },
+    });
+
+    expect(JSON.parse(await fs.readFile(generated.authPath, "utf8"))).toMatchObject({
+      OPENAI_API_KEY: "sk-test-api-key",
+      tokens: null,
+      last_refresh: null,
+    });
   });
 
   it("updates existing isolated Codex API-key auth when env auth changes", async () => {
@@ -537,7 +654,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(launched.codexHome).toBeNull();
   });
 
-  it("does not copy source Codex auth", async () => {
+  it("does not copy source Codex API-key auth", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
@@ -615,6 +732,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("CODEX_HOME: codexHome");
     expect(wrapper).not.toContain(sourceCodexHome);
+    await expectPathMissing(generated.authPath);
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex-source", "auth.json"));
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
