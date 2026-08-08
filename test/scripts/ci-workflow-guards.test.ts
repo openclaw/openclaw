@@ -5136,10 +5136,59 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(restoreStep.with.path).toContain("packages/*/dist/");
     expect(saveStep.with.path).toContain("packages/*/dist/");
     expect(restoreStep.with.key).toContain("dist-build-v3-");
-    expect(
-      buildArtifactSteps.find((step: WorkflowStep) => step.name === "Pack built runtime artifacts")
-        .run,
-    ).toContain("packages/*/dist");
+    const packStep = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Pack built runtime artifacts",
+    );
+    const uploadStep = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.name === "Upload built runtime artifacts",
+    );
+    expect(packStep.env.COMPATIBILITY_TARGET).toBe(
+      "${{ needs.preflight.outputs.compatibility_target }}",
+    );
+    expect(packStep.run).toContain("[[ -f scripts/dist-runtime-build-artifact.mjs ]]");
+    expect(packStep.run).toContain(
+      'node scripts/dist-runtime-build-artifact.mjs "$RUNNER_TEMP/dist-runtime-build.tar.zst"',
+    );
+    expect(packStep.run).toContain('[[ "$COMPATIBILITY_TARGET" == "true" ]]');
+    expect(packStep.run).toContain("predates the runtime artifact manifest");
+    expect(packStep.run).toContain(
+      'tar --posix -cf "$RUNNER_TEMP/dist-runtime-build.tar.zst" --use-compress-program zstdmt dist dist-runtime packages/*/dist',
+    );
+    expect(packStep.run).toContain(
+      "Current CI target is missing scripts/dist-runtime-build-artifact.mjs",
+    );
+    expect(uploadStep.with.path).toBe("${{ runner.temp }}/dist-runtime-build.tar.zst");
+    const artifactBuilder = readFileSync("scripts/lib/workspace-bootstrap-smoke.mjs", "utf8");
+    for (const requiredPath of [
+      '"openclaw.mjs"',
+      '"package.json"',
+      '"docs/reference/templates"',
+      '"src/agents/templates"',
+      '"dist"',
+      '"dist-runtime"',
+      "TSDOWN_PACKAGE_OUTPUT_ROOTS",
+      '"packages/plugin-sdk/dist"',
+      '"node_modules/@openclaw/"',
+      '"node_modules"',
+    ]) {
+      expect(artifactBuilder).toContain(requiredPath);
+    }
+    expect(artifactBuilder).toContain("runInstalledWorkspaceBootstrapSmoke");
+    expect(artifactBuilder).not.toContain("--import");
+    expect(artifactBuilder).not.toContain("dist-runtime-artifact-resolver-hook");
+    expect(artifactBuilder).toContain("node_modules/@openclaw");
+    expect(artifactBuilder).toContain(
+      '"--frozen-lockfile",\n      "--config.inject-workspace-packages=true",\n      "--ignore-scripts"',
+    );
+    expect(artifactBuilder).toContain("delete gatewayEnv.OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    expect(artifactBuilder).toContain('const BUNDLED_PLUGIN_SMOKE_ID = "acpx"');
+    expect(artifactBuilder).toContain("waitForGatewayPluginLoaded");
+    expect(artifactBuilder).toContain("plugin: ${BUNDLED_PLUGIN_SMOKE_ID}");
+    expect(artifactBuilder).toContain('detached: process.platform !== "win32"');
+    expect(artifactBuilder).toContain('process.kill(processGroupId, "SIGKILL")');
+    expect(artifactBuilder).toContain('"acp", "--help"');
+    expect(artifactBuilder).toContain("/readyz");
+    expect(artifactBuilder).toContain("dist-runtime/extensions/");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/.bundle.hash");
     expect(restoreStep.with.path).toContain("extensions/*/src/host/**/*.bundle.js");
     expect(buildArtifactSteps.map((step: WorkflowStep) => step.name)).not.toContain(
