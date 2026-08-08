@@ -50,6 +50,9 @@ export const hookRunner = {
 export const acquireSessionWriteLockMock = vi.fn(async (_params?: unknown) => ({
   release: vi.fn(async () => {}),
 }));
+export const redriveSuspendedSubagentCompletionsForRequesterMock = vi.fn(
+  async (_requesterSessionKey?: unknown, _lockWindow?: unknown) => ({ matched: 0, redriven: 0 }),
+);
 export const resolveContextEngineMock = vi.fn(async () => ({
   info: { ownsCompaction: true as boolean },
   compact: contextEngineCompactMock,
@@ -567,6 +570,11 @@ export function resetCompactHooksHarnessMocks(): void {
 
   acquireAgentRunPreparedModelRuntimeMock.mockClear();
   acquireSessionWriteLockMock.mockClear();
+  redriveSuspendedSubagentCompletionsForRequesterMock.mockReset();
+  redriveSuspendedSubagentCompletionsForRequesterMock.mockResolvedValue({
+    matched: 0,
+    redriven: 0,
+  });
 
   resolveContextEngineMock.mockReset();
   resolveContextEngineMock.mockResolvedValue({
@@ -811,6 +819,11 @@ export async function loadCompactHooksHarness(): Promise<{
       resolveSessionWriteLockTargetKey,
     };
   });
+
+  vi.doMock("../subagent-completion-redrive.runtime.js", () => ({
+    redriveSuspendedSubagentCompletionsForRequester:
+      redriveSuspendedSubagentCompletionsForRequesterMock,
+  }));
 
   vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
