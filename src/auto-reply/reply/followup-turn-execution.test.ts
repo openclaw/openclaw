@@ -432,6 +432,34 @@ describe("executeFollowupTurn", () => {
     expect(onPlanUpdate).toHaveBeenCalledWith({ title: "quiet plan" });
   });
 
+  it.each([
+    { label: "sync void", callback: () => undefined, expected: true },
+    { label: "async void", callback: async () => undefined, expected: true },
+    { label: "explicit true", callback: () => true, expected: true },
+    { label: "explicit false", callback: () => false, expected: false },
+  ])("classifies $label followup progress", async ({ callback, expected }) => {
+    let observed: boolean | void = undefined;
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      observed = await params.opts?.onPlanUpdate?.({ title: "queued plan" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onPlanUpdate: callback },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(observed).toBe(expected);
+  });
+
   it("buffers a regular-verbose failed item until terminal delivery is known", async () => {
     const onItemEvent = vi.fn(async () => undefined);
     let warningSuppressed: boolean | undefined;
@@ -462,6 +490,34 @@ describe("executeFollowupTurn", () => {
 
     expect(onItemEvent).toHaveBeenCalledOnce();
     expect(result.progress.visibleToolErrorObserved()).toBe(true);
+  });
+
+  it("continues flushing buffered failures after a delivery callback rejects", async () => {
+    const onItemEvent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("presentation failed"))
+      .mockResolvedValueOnce(undefined);
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onItemEvent?.({ phase: "end", status: "failed" });
+      await params.opts?.onItemEvent?.({ phase: "end", status: "error" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onItemEvent },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    await expect(result.progress.flushFailed()).resolves.toBe(true);
+    expect(onItemEvent).toHaveBeenCalledTimes(2);
   });
 
   it("tracks a full-verbosity failed command before suppressing duplicate warnings", async () => {
@@ -629,7 +685,7 @@ describe("executeFollowupTurn", () => {
       onCompactionNoticePayload: vi.fn(async () => {}),
     });
 
-    await expect(detachedProgress).resolves.toBeUndefined();
+    await expect(detachedProgress).resolves.toBe(false);
     await expect(result.progress.drain()).rejects.toBe(failure);
   });
 

@@ -1,5 +1,7 @@
+import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { defaultRuntime } from "../../runtime.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -129,13 +131,13 @@ export async function executeFollowupTurn(params: {
     pendingProgressTasks.add(trackedTask);
     return progressChain;
   };
-  const pendingFailedProgressDeliveries: Array<() => Promise<void>> = [];
+  const pendingFailedProgressDeliveries: Array<() => Promise<boolean>> = [];
   const shouldBufferFailedProgress = () =>
     turn.queued.run.sourceReplyDeliveryMode !== "message_tool_only" &&
     progressAllowed() &&
     currentVerboseLevel() === "on" &&
     shouldEmitToolResult();
-  const enqueuePendingFailedProgressDelivery = (deliver: () => Promise<void>) => {
+  const enqueuePendingFailedProgressDelivery = (deliver: () => Promise<boolean>) => {
     pendingFailedProgressDeliveries.push(deliver);
   };
   const discardPendingFailedProgressDeliveries = () => {
@@ -144,9 +146,28 @@ export async function executeFollowupTurn(params: {
   const flushPendingFailedProgressDeliveries = async (): Promise<boolean> => {
     const deliveries = pendingFailedProgressDeliveries.splice(0);
     for (const deliver of deliveries) {
-      await deliver();
+      try {
+        if (await deliver()) {
+          visibleToolError = true;
+        }
+      } catch (error) {
+        defaultRuntime.error?.(
+          `followup queue: buffered failed progress delivery failed: ${formatErrorMessage(error)}`,
+        );
+      }
     }
     return visibleToolError;
+  };
+  const enqueueProgressResult = async (
+    deliver: () => Promise<boolean | void> | boolean | void,
+  ): Promise<boolean | void> => {
+    let completed = false;
+    let result: boolean | void = false;
+    await enqueueProgress(async () => {
+      result = await deliver();
+      completed = true;
+    });
+    return completed ? result : false;
   };
   const wrap = <T>(callback: ((value: T) => unknown) | undefined, allowed = progressAllowed) =>
     callback
@@ -155,6 +176,19 @@ export async function executeFollowupTurn(params: {
             if (allowed()) {
               await callback(value);
             }
+          })
+      : undefined;
+  const wrapVisibility = <T>(
+    callback: ((value: T) => Promise<boolean | void> | boolean | void) | undefined,
+    allowed = progressAllowed,
+  ) =>
+    callback
+      ? (value: T) =>
+          enqueueProgressResult(async () => {
+            if (!allowed()) {
+              return false;
+            }
+            return (await settleProgressVisibilityCallbackResult(callback(value))).visible;
           })
       : undefined;
   const baseTypingSignals = createTypingSignaler({
@@ -184,71 +218,87 @@ export async function executeFollowupTurn(params: {
     onBlockReply: undefined,
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,
-    onToolStart: wrap(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
+    onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
     onCommandOutput: sourceOpts?.onCommandOutput
       ? (output) =>
-          enqueueProgress(async () => {
+          enqueueProgressResult(async () => {
             if (!shouldEmitToolResult()) {
-              return;
+              return false;
             }
             const failed =
               output.status === "failed" ||
               output.status === "error" ||
               (typeof output.exitCode === "number" && output.exitCode !== 0);
-            const deliver = async () => {
-              const visible = (await sourceOpts.onCommandOutput?.(output)) !== false;
-              if (visible && failed) {
-                visibleToolError = true;
-              }
-            };
+            const deliver = async () =>
+              (await settleProgressVisibilityCallbackResult(sourceOpts.onCommandOutput!(output)))
+                .visible;
             if (failed && !shouldEmitFailedToolProgress()) {
               if (shouldBufferFailedProgress()) {
                 enqueuePendingFailedProgressDelivery(deliver);
               }
-              return;
+              return false;
             }
-            await deliver();
+            const visible = await deliver();
+            if (visible && failed) {
+              visibleToolError = true;
+            }
+            return visible;
           })
       : undefined,
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
-          enqueueProgress(async () => {
+          enqueueProgressResult(async () => {
             if (!shouldEmitToolResult()) {
-              return;
+              return false;
             }
             const failed =
               item.phase === "error" || item.status === "failed" || item.status === "error";
-            const deliver = async () => {
-              const visible = (await sourceOpts.onItemEvent?.(item)) !== false;
-              if (visible && failed) {
-                visibleToolError = true;
-              }
-            };
+            const deliver = async () =>
+              (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))).visible;
             if (failed && !shouldEmitFailedToolProgress()) {
               if (shouldBufferFailedProgress()) {
                 enqueuePendingFailedProgressDelivery(deliver);
               }
-              return;
+              return false;
             }
-            await deliver();
+            const visible = await deliver();
+            if (visible && failed) {
+              visibleToolError = true;
+            }
+            return visible;
           })
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
-    onPlanUpdate: wrap(sourceOpts?.onPlanUpdate),
-    onApprovalEvent: wrap(sourceOpts?.onApprovalEvent, shouldEmitToolResult),
-    onPatchSummary: wrap(sourceOpts?.onPatchSummary, shouldEmitToolResult),
+    onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
+    onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitToolResult),
+    onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitToolResult),
     onCompactionStart: sourceOpts?.onCompactionStart
       ? () =>
-          enqueueProgress(() => (progressAllowed() ? sourceOpts.onCompactionStart?.() : undefined))
+          enqueueProgressResult(async () =>
+            progressAllowed()
+              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionStart!()))
+                  .visible
+              : false,
+          )
       : undefined,
     onCompactionEnd: sourceOpts?.onCompactionEnd
       ? () =>
-          enqueueProgress(() => (progressAllowed() ? sourceOpts.onCompactionEnd?.() : undefined))
+          enqueueProgressResult(async () =>
+            progressAllowed()
+              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!()))
+                  .visible
+              : false,
+          )
       : undefined,
-    onReasoningStream: wrap(sourceOpts?.onReasoningStream),
+    onReasoningStream: wrapVisibility(sourceOpts?.onReasoningStream),
     onReasoningProgress: wrap(sourceOpts?.onReasoningProgress),
     onReasoningEnd: sourceOpts?.onReasoningEnd
-      ? () => enqueueProgress(() => (progressAllowed() ? sourceOpts.onReasoningEnd?.() : undefined))
+      ? () =>
+          enqueueProgressResult(async () =>
+            progressAllowed()
+              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onReasoningEnd!())).visible
+              : false,
+          )
       : undefined,
     shouldSuppressToolErrorWarnings: () => {
       const explicit = sourceOpts?.suppressToolErrorWarnings;
@@ -264,9 +314,9 @@ export async function executeFollowupTurn(params: {
       return undefined;
     },
     onToolResult: async (payload) => {
-      await enqueueProgress(async () => {
+      return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {
-          return;
+          return false;
         }
         const verboseToolResult = shouldEmitVerboseToolResult();
         const toolResultProgressVisible = Boolean(channelToolResultProgress) || verboseToolResult;
@@ -274,17 +324,15 @@ export async function executeFollowupTurn(params: {
           turn.queued.run.sourceReplyDeliveryMode === "message_tool_only" &&
           !toolResultProgressVisible
         ) {
-          return;
+          return false;
         }
-        const deliver = async () => {
-          const visible =
-            (await (channelToolResultProgress && !verboseToolResult
-              ? channelToolResultProgress(payload)
-              : params.onToolResult(payload, { runId: turn.runId }))) !== false;
-          if (visible && payload.isError === true) {
-            visibleToolError = true;
-          }
-        };
+        const deliver = async () =>
+          channelToolResultProgress && !verboseToolResult
+            ? (await settleProgressVisibilityCallbackResult(channelToolResultProgress(payload)))
+                .visible
+            : await params
+                .onToolResult(payload, { runId: turn.runId })
+                .then((visible) => visible !== false);
         if (
           payload.isError === true &&
           currentVerboseLevel() === "on" &&
@@ -293,9 +341,13 @@ export async function executeFollowupTurn(params: {
           if (shouldBufferFailedProgress()) {
             enqueuePendingFailedProgressDelivery(deliver);
           }
-          return;
+          return false;
         }
-        await deliver();
+        const visible = await deliver();
+        if (visible && payload.isError === true) {
+          visibleToolError = true;
+        }
+        return visible;
       });
     },
   };

@@ -788,7 +788,7 @@ describe("deliverFollowupDecision", () => {
 
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(deliveryState.routeReply).not.toHaveBeenCalled();
-      expect(outcome).toBe("non_error");
+      expect(outcome).toBe("none");
     } finally {
       deliveryState.followupRoute = undefined;
     }

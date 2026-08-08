@@ -361,9 +361,6 @@ async function sendFollowupPayloads(params: {
     await typing.signalTextDelta(payload.text);
     if (route !== "origin") {
       await defaults.opts?.onBlockReply?.(payload);
-      if (defaults.opts?.onBlockReply) {
-        recordDelivery(payload);
-      }
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {
       const metadata = getReplyPayloadMetadata(payload);
       const result = await routeReply({
@@ -395,7 +392,6 @@ async function sendFollowupPayloads(params: {
         const origin = resolveOriginMessageProvider({ originatingChannel });
         if (origin && origin === provider && defaults.opts?.onBlockReply) {
           await defaults.opts.onBlockReply(payload);
-          recordDelivery(payload);
         } else if (defaults.opts?.onBlockReply) {
           crossChannelFailure = true;
         } else {
@@ -426,7 +422,6 @@ async function sendFollowupPayloads(params: {
       isError: true,
     };
     await defaults.opts.onBlockReply(failurePayload);
-    recordDelivery(failurePayload);
   }
   return deliveryOutcome;
 }
