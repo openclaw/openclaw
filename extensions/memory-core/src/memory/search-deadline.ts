@@ -7,6 +7,17 @@ export type MemorySearchDeadlineControlOptions = {
   [MEMORY_SEARCH_DEADLINE_CONTROL]?: (action: MemorySearchDeadlineAction) => void;
 };
 
+class MemorySearchTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`memory_search timed out after ${Math.round(timeoutMs / 1000)}s`);
+    this.name = "MemorySearchTimeoutError";
+  }
+}
+
+export function isMemorySearchTimeoutError(error: unknown): boolean {
+  return error instanceof MemorySearchTimeoutError;
+}
+
 export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
   const { reason } = signal;
   if (reason instanceof Error) {
@@ -16,7 +27,7 @@ export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
 }
 
 function createMemorySearchTimeoutError(timeoutMs: number): Error {
-  return new Error(`memory_search timed out after ${Math.round(timeoutMs / 1000)}s`);
+  return new MemorySearchTimeoutError(timeoutMs);
 }
 
 export async function runMemorySearchWithDeadline<T>(params: {
