@@ -198,7 +198,7 @@ export type CodeModeConfig =
       maxOutputBytes?: number;
       /** Maximum serialized snapshot bytes. */
       maxSnapshotBytes?: number;
-      /** Maximum concurrent nested tool calls. */
+      /** Maximum nested tool calls the host executes concurrently for one code-mode run. */
       maxPendingToolCalls?: number;
       /** Retention for suspended snapshots. */
       snapshotTtlSeconds?: number;

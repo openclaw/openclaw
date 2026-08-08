@@ -24,12 +24,114 @@ export type PendingBridgeState = PendingBridgeRequest & {
   cancel?: () => void;
 };
 
+type BridgeDispatchEntry = {
+  status: "queued" | "active" | "settled";
+  id: string;
+  cancelRequested: boolean;
+  start: () => Promise<SettledBridgeRequest>;
+  cancelActive: () => void;
+  settle: (result: SettledBridgeRequest) => void;
+};
+
+/** Bound host execution without limiting how many bridge promises the guest may register. */
+export class CodeModeBridgeDispatchQueue {
+  readonly #maxConcurrent: number;
+  readonly #queued: BridgeDispatchEntry[] = [];
+  #active = 0;
+
+  constructor(maxConcurrent: number) {
+    this.#maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
+  }
+
+  enqueue(params: {
+    id: string;
+    start: () => Promise<SettledBridgeRequest>;
+    cancelActive: () => void;
+    signal?: AbortSignal;
+  }): {
+    promise: Promise<SettledBridgeRequest>;
+    cancel: () => void;
+  } {
+    let resolvePromise: (result: SettledBridgeRequest) => void = () => {};
+    const promise = new Promise<SettledBridgeRequest>((resolve) => {
+      resolvePromise = resolve;
+    });
+    const entry: BridgeDispatchEntry = {
+      id: params.id,
+      status: "queued",
+      cancelRequested: false,
+      start: params.start,
+      cancelActive: params.cancelActive,
+      settle: () => {},
+    };
+    const onAbort = () => cancel();
+    entry.settle = (result) => {
+      if (entry.status === "settled") {
+        return;
+      }
+      const wasActive = entry.status === "active";
+      entry.status = "settled";
+      params.signal?.removeEventListener("abort", onAbort);
+      resolvePromise(result);
+      if (wasActive) {
+        this.#active = Math.max(0, this.#active - 1);
+        this.#pump();
+      }
+    };
+    const cancel = () => {
+      if (entry.status === "queued") {
+        const index = this.#queued.indexOf(entry);
+        if (index >= 0) {
+          this.#queued.splice(index, 1);
+        }
+        entry.settle(cancelledBridgeRequest(params.id));
+      } else if (entry.status === "active") {
+        entry.cancelRequested = true;
+        entry.cancelActive();
+      }
+    };
+    if (params.signal?.aborted) {
+      entry.settle(cancelledBridgeRequest(params.id));
+    } else {
+      params.signal?.addEventListener("abort", onAbort, { once: true });
+      this.#queued.push(entry);
+      this.#pump();
+    }
+    return { promise, cancel };
+  }
+
+  #pump(): void {
+    while (this.#active < this.#maxConcurrent) {
+      const entry = this.#queued.shift();
+      if (!entry) {
+        return;
+      }
+      entry.status = "active";
+      this.#active += 1;
+      try {
+        void entry.start().then(
+          (result) =>
+            entry.settle(entry.cancelRequested ? cancelledBridgeRequest(entry.id) : result),
+          () => entry.settle(cancelledBridgeRequest(entry.id)),
+        );
+      } catch {
+        entry.settle(cancelledBridgeRequest(entry.id));
+      }
+    }
+  }
+}
+
+function cancelledBridgeRequest(id: string): SettledBridgeRequest {
+  return { id, ok: false, error: "code mode bridge call cancelled" };
+}
+
 type CodeModeRunState = {
   runId: string;
   replayId: string;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
+  bridgeDispatchQueue: CodeModeBridgeDispatchQueue;
   snapshotBytes: Uint8Array;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
@@ -223,13 +325,18 @@ export function snapshotState(params: {
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  bridgeDispatchQueue?: CodeModeBridgeDispatchQueue;
 }) {
   enforceSnapshotStateLimits(params);
   const runId = `cm_${randomUUID()}`;
+  const bridgeDispatchQueue =
+    params.bridgeDispatchQueue ??
+    new CodeModeBridgeDispatchQueue(params.config.maxPendingToolCalls);
   const pending = createPendingBridgeStates({
     ...params,
     activeRunId: runId,
     codeModeRunId: params.codeModeReplayId,
+    bridgeDispatchQueue,
   });
   try {
     return storeSnapshotState({
@@ -237,6 +344,7 @@ export function snapshotState(params: {
       runId,
       replayId: params.codeModeReplayId,
       pending,
+      bridgeDispatchQueue,
       replaySafe:
         params.replaySafe &&
         pendingBridgeRequestsReplaySafe(params.pendingRequests, params.runtime),
@@ -293,26 +401,32 @@ export function createPendingBridgeStates(params: {
   ctx: ToolSearchToolContext;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  bridgeDispatchQueue: CodeModeBridgeDispatchQueue;
 }): PendingBridgeState[] {
   return params.pendingRequests.map((request) => {
-    // Bridge calls start immediately while the VM snapshot is stored. Their
-    // settled values are later replayed into QuickJS by the wait tool.
     const abortController = new AbortController();
     const signal = params.signal
       ? AbortSignal.any([params.signal, abortController.signal])
       : abortController.signal;
+    const scheduled = params.bridgeDispatchQueue.enqueue({
+      id: request.id,
+      start: () =>
+        runBridgeRequest({
+          runtime: params.runtime,
+          namespaceRuntime: params.namespaceRuntime,
+          parentToolCallId: params.parentToolCallId,
+          codeModeRunId: params.codeModeRunId,
+          ctx: params.ctx,
+          request,
+          signal,
+          onUpdate: params.onUpdate,
+        }),
+      cancelActive: () => abortController.abort(),
+      signal: params.signal,
+    });
     const state: PendingBridgeState = {
       ...request,
-      promise: runBridgeRequest({
-        runtime: params.runtime,
-        namespaceRuntime: params.namespaceRuntime,
-        parentToolCallId: params.parentToolCallId,
-        codeModeRunId: params.codeModeRunId,
-        ctx: params.ctx,
-        request,
-        signal,
-        onUpdate: params.onUpdate,
-      }).then((settled) => {
+      promise: scheduled.promise.then((settled) => {
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;
         if (state.method === "agentWait" && params.activeRunId) {
@@ -330,7 +444,7 @@ export function createPendingBridgeStates(params: {
         }
         return settled;
       }),
-      cancel: () => abortController.abort(),
+      cancel: scheduled.cancel,
     };
     return state;
   });
@@ -347,6 +461,7 @@ export function storeSnapshotState(params: {
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
+  bridgeDispatchQueue: CodeModeBridgeDispatchQueue;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
@@ -372,6 +487,7 @@ export function storeSnapshotState(params: {
     parentToolCallId: params.parentToolCallId,
     ctx: params.ctx,
     config: params.config,
+    bridgeDispatchQueue: params.bridgeDispatchQueue,
     snapshotBytes: params.snapshotBytes,
     pending: params.pending,
     settlementMode: params.settlementMode,

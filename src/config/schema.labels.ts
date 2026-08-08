@@ -251,7 +251,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.codeMode.memoryLimitBytes": "Code Mode Memory Limit",
   "tools.codeMode.maxOutputBytes": "Code Mode Output Limit",
   "tools.codeMode.maxSnapshotBytes": "Code Mode Snapshot Limit",
-  "tools.codeMode.maxPendingToolCalls": "Code Mode Pending Tool Limit",
+  "tools.codeMode.maxPendingToolCalls": "Code Mode Active Nested Calls",
   "tools.codeMode.snapshotTtlSeconds": "Code Mode Snapshot TTL",
   "tools.codeMode.searchDefaultLimit": "Code Mode Default Search Results",
   "tools.codeMode.maxSearchLimit": "Code Mode Max Search Results",

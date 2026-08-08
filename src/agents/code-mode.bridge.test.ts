@@ -85,8 +85,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
 
   it("resolves sequential bridge tool calls inline within one exec instead of a wait per call", async () => {
     const catalogRef = createToolSearchCatalogRef();
-    // maxPendingToolCalls stays a per-batch concurrency cap; five sequential
-    // awaits must drain inline even with a cap of 2.
+    // The host limit spans the whole run; sequential awaits must drain inline.
     const config = {
       tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
     } as never;
@@ -131,6 +130,140 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(details.status).toBe("completed");
     expect(details.value).toEqual([0, 1, 2, 3, 4]);
     expect(ticket.execute).toHaveBeenCalledTimes(5);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("queues bridge calls above the host concurrency limit without dropping them", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    let active = 0;
+    let peakActive = 0;
+    const bounded = pluginToolWithExecute(
+      "fake_bounded",
+      "Bounded concurrency helper",
+      async (_toolCallId, input) => {
+        active += 1;
+        peakActive = Math.max(peakActive, active);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        });
+        active -= 1;
+        return jsonResult(input);
+      },
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, bounded],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-bounded",
+        {
+          code: `return await Promise.all(
+            Array.from({ length: 5 }, (_, index) =>
+              tools.callValue("fake_bounded", { index }),
+            ),
+          );`,
+        },
+      ),
+    );
+
+    expect(details).toMatchObject({ status: "completed" });
+    expect(details.value).toEqual([
+      { index: 0 },
+      { index: 1 },
+      { index: 2 },
+      { index: 3 },
+      { index: 4 },
+    ]);
+    expect(bounded.execute).toHaveBeenCalledTimes(5);
+    expect(peakActive).toBe(2);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("aborts active bridge work without starting queued calls", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 1, timeoutMs: 30_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const activeStarted = createDeferred();
+    let activeAborted = false;
+    const activeTool = pluginToolWithExecute(
+      "fake_active_cancel",
+      "Active cancellation helper",
+      async (_toolCallId, _input, signal) => {
+        activeStarted.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              activeAborted = true;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        return jsonResult({ done: true });
+      },
+    );
+    const queuedTool = pluginTool("fake_queued_cancel", "Queued cancellation helper");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, activeTool, queuedTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const controller = new AbortController();
+    const resultPromise = expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+      "code-call-queued-cancel",
+      {
+        code: `return await Promise.all([
+          tools.callValue("fake_active_cancel", {}),
+          tools.callValue("fake_queued_cancel", {}),
+        ]);`,
+      },
+      controller.signal,
+    );
+    await activeStarted.promise;
+    controller.abort();
+    const details = resultDetails(await resultPromise);
+
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "aborted",
+      error: "code mode execution aborted",
+    });
+    expect(activeTool.execute).toHaveBeenCalledOnce();
+    expect(activeAborted).toBe(true);
+    expect(queuedTool.execute).not.toHaveBeenCalled();
     expect(testing.activeRuns.size).toBe(0);
   });
 

@@ -215,8 +215,9 @@ implementations.
 In scope: model-visible control/direct tool definitions, hidden tool catalog
 construction, JavaScript/TypeScript guest execution, the QuickJS-WASI worker
 runtime, host callbacks for search/describe/call, resumable state for
-suspended guest programs, output/timeout/memory/pending-call/snapshot limits,
-and telemetry/trajectory projection for nested tool calls.
+suspended guest programs, output/timeout/memory/snapshot limits, an active-call
+concurrency limit that queues accepted excess calls, and telemetry/trajectory
+projection for nested tool calls.
 
 Out of scope: provider-native remote code execution, shell execution
 semantics, changing existing tool authorization, persistent user-authored
@@ -259,6 +260,13 @@ enable the feature on its own.
 | `snapshotTtlSeconds`  | `900`                          | `1`-`86400`                                     |
 | `searchDefaultLimit`  | `8`                            | clamped to `maxSearchLimit`                     |
 | `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
+
+`maxPendingToolCalls` limits active host execution of nested calls for each
+code-mode run. Accepted calls above the limit queue until a slot opens.
+Each VM frontier also has a fixed internal safety ceiling of 256 outstanding
+bridge registrations, including requests carried into a resumed snapshot.
+Their serialized arguments have a separate fixed 8 MiB aggregate ceiling.
+Exceeding either limit fails before that frontier dispatches host work.
 
 If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
 for that run; it does not silently expose normal tools as a fallback. This
@@ -885,7 +893,8 @@ Nested calls project into the transcript as real tool calls so support
 bundles show what happened, with the projection identifying the parent
 code-mode tool call and the nested tool id.
 
-Parallel nested calls are allowed up to `maxPendingToolCalls`.
+The host executes up to `maxPendingToolCalls` nested calls concurrently for
+each code-mode run. Accepted calls above the limit queue until a slot opens.
 
 ## Run and snapshot lifecycle
 
@@ -959,7 +968,8 @@ Model code is hostile. The runtime uses defense in depth:
   or host global objects in the guest
 - uses QuickJS memory and interrupt limits plus a parent-process wall-clock
   timeout
-- enforces output, snapshot, log, and pending-call caps
+- enforces output, snapshot, and log caps plus an active-call concurrency cap
+  that queues accepted excess calls
 - serializes host bridge values through a narrow JSON adapter
 - converts host errors into plain guest errors, never host realm objects
 - drops snapshots on timeout, abort, session end, or expiry

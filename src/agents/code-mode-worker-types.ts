@@ -27,6 +27,8 @@ export type PendingBridgeRequest = {
   id: string;
   method: CodeModeBridgeMethod;
   args: unknown[];
+  /** Exact UTF-8 byte length of the guest's serialized argument payload. */
+  argumentBytes?: number;
 };
 
 export type SettledBridgeRequest = { id: string } & Result<unknown, string>;

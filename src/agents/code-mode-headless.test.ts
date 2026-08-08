@@ -96,6 +96,139 @@ describe("headless Code Mode", () => {
     expect(second.execute).toHaveBeenCalledOnce();
   });
 
+  it("queues headless calls above the host concurrency limit without dropping them", async () => {
+    let active = 0;
+    let peakActive = 0;
+    const bounded = fakeTool("headless_bounded", async (_toolCallId, input) => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
+      active -= 1;
+      return jsonResult(input);
+    });
+
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([bounded]),
+        code: `return await Promise.all(
+          Array.from({ length: 5 }, (_, index) =>
+            tools.callValue("openclaw:core:headless_bounded", { index }),
+          ),
+        );`,
+        overrides: { maxPendingToolCalls: 2 },
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.value).toEqual([
+      { index: 0 },
+      { index: 1 },
+      { index: 2 },
+      { index: 3 },
+      { index: 4 },
+    ]);
+    expect(result.toolCallCount).toBe(5);
+    expect(bounded.execute).toHaveBeenCalledTimes(5);
+    expect(peakActive).toBe(2);
+  });
+
+  it("rejects a bridge backlog overflow without running headless tools", async () => {
+    const target = fakeTool("headless_backlog", async () => jsonResult({ unexpected: true }));
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([target]),
+        code: `return await Promise.all(
+          Array.from({ length: 257 }, (_, index) =>
+            tools.callValue("openclaw:core:headless_backlog", { index }),
+          ),
+        );`,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      code: "invalid_input",
+      error:
+        "code mode bridge backlog exceeded; await results or split the work into smaller batches.",
+      toolCallCount: 0,
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("rejects aggregate bridge arguments above 8 MiB without running headless tools", async () => {
+    const target = fakeTool("headless_argument_budget", async () =>
+      jsonResult({ unexpected: true }),
+    );
+
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([target]),
+        code: `return await tools.callValue("openclaw:core:headless_argument_budget", {
+          payload: "x".repeat(8 * 1024 * 1024),
+        });`,
+        overrides: { memoryLimitBytes: 128 * 1024 * 1024 },
+        wallClockMs: 30_000,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      code: "invalid_input",
+      error:
+        "code mode bridge arguments exceeded 8388608 bytes; pass references or split the work into smaller batches.",
+      toolCallCount: 0,
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("aborts active headless work without starting queued calls", async () => {
+    const activeStarted = createDeferred();
+    let activeAborted = false;
+    const activeTool = fakeTool("headless_active_cancel", async (_toolCallId, _input, signal) => {
+      activeStarted.resolve();
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            activeAborted = true;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+      return jsonResult({ done: true });
+    });
+    const queuedTool = fakeTool("headless_queued_cancel", async () =>
+      jsonResult({ unexpected: true }),
+    );
+    const controller = new AbortController();
+    const resultPromise = runCodeModeScriptHeadless({
+      ctx: createHeadlessHarness([activeTool, queuedTool]),
+      code: `return await Promise.all([
+        tools.callValue("openclaw:core:headless_active_cancel", {}),
+        tools.callValue("openclaw:core:headless_queued_cancel", {}),
+      ]);`,
+      overrides: { maxPendingToolCalls: 1 },
+      wallClockMs: 30_000,
+      signal: controller.signal,
+    });
+    await activeStarted.promise;
+    controller.abort();
+    const result = expectFailed(await resultPromise);
+
+    expect(result).toMatchObject({
+      code: "aborted",
+      error: "code mode execution aborted",
+    });
+    expect(activeTool.execute).toHaveBeenCalledOnce();
+    expect(activeAborted).toBe(true);
+    expect(queuedTool.execute).not.toHaveBeenCalled();
+  });
+
   it("keeps the headless race winner when the later-started tool settles first", async () => {
     let firstAborted = false;
     const first = fakeTool("headless_first_race", async (_toolCallId, _input, signal) => {

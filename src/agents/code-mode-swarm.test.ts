@@ -99,11 +99,11 @@ describe("Code Mode swarm guest", () => {
     );
     expectWaiting(first);
     expect(first.pendingRequests).toEqual([
-      {
+      expect.objectContaining({
         id: "bridge:swarmNote:1",
         method: "swarmNote",
         args: [{ kind: "phase", text: "Research phase" }],
-      },
+      }),
       expect.objectContaining({
         id: "bridge:agentSpawn:1",
         method: "agentSpawn",
@@ -127,11 +127,11 @@ describe("Code Mode swarm guest", () => {
     ]);
     expectWaiting(second);
     expect(second.pendingRequests).toEqual([
-      {
+      expect.objectContaining({
         id: "bridge:agentWait:1",
         method: "agentWait",
         args: ["collector-1"],
-      },
+      }),
     ]);
 
     const completed = await workerResume(second, [

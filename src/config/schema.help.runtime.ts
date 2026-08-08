@@ -128,7 +128,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode.maxSnapshotBytes":
     "Maximum serialized bytes retained for one suspended QuickJS snapshot.",
   "tools.codeMode.maxPendingToolCalls":
-    "Maximum concurrent nested tool calls a code-mode VM can start before it must resume later.",
+    "Maximum nested tool calls the host executes concurrently for one code-mode run; additional calls queue.",
   "tools.codeMode.snapshotTtlSeconds":
     "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":

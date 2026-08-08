@@ -30,6 +30,7 @@ import {
 } from "./code-mode-runtime.js";
 import {
   cancelPendingBridgeStates,
+  CodeModeBridgeDispatchQueue,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
@@ -219,6 +220,7 @@ export async function runCodeModeScriptHeadless(params: {
     const swarmEnabled = false;
     const codeModeRunId = `cm_headless_${randomUUID()}`;
     const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+    const bridgeDispatchQueue = new CodeModeBridgeDispatchQueue(config.maxPendingToolCalls);
     const catalog = runtime.all({ includeMcp: false });
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
@@ -298,6 +300,7 @@ export async function runCodeModeScriptHeadless(params: {
           codeModeRunId,
           ctx: params.ctx,
           signal: abortScope.signal,
+          bridgeDispatchQueue,
         }),
       );
       // Preserve the waiting frontier before the lazy deadline callback;
@@ -327,7 +330,12 @@ export async function runCodeModeScriptHeadless(params: {
             kind: "resume",
             snapshotBytes: result.snapshotBytes,
             settledRequests,
-            pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
+            pendingRequests: pending.map(({ id, method, args, argumentBytes }) => ({
+              id,
+              method,
+              args,
+              argumentBytes,
+            })),
           },
           config,
           deadline,

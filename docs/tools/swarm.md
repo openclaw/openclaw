@@ -172,11 +172,10 @@ return await agents.run(
 `maxConcurrent` children for the group and queues the rest in submission
 order.
 
-Code Mode separately bounds concurrent guest bridge calls with
-`tools.codeMode.maxPendingToolCalls` (default `16`, maximum `128`). For very
-large groups, launch bounded batches below that limit and leave headroom for
-`phase()`, `log()`, and child wait transitions. `maxConcurrent` limits running
-children; it does not raise the guest bridge-call limit.
+Code Mode separately limits active host execution of nested calls for each run
+with `tools.codeMode.maxPendingToolCalls` (default `16`, maximum `128`).
+Accepted calls above that limit queue until a slot opens. `maxConcurrent`
+limits running children; it does not raise the Code Mode host-execution limit.
 
 ### Loop on a decision gate
 
