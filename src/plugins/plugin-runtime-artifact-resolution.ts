@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import {
+  isTypeScriptPackageEntry,
+  listBuiltRuntimeEntryCandidates,
+} from "./package-entrypoints.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "./runtime.js";
@@ -36,69 +40,21 @@ function rewriteBundledRuntimeArtifactRelativePath(relativePath: string): string
   return relativePath.replace(/\.[^.]+$/u, ".js");
 }
 
-function listPackageLocalRuntimeArtifactOutputExtensions(sourceExt: string): string[] {
-  switch (sourceExt) {
-    case ".mts":
-    case ".mjs":
-      return [".mjs", ".js", ".cjs"];
-    case ".cts":
-    case ".cjs":
-      return [".cjs", ".js", ".mjs"];
-    default:
-      return [".js", ".mjs", ".cjs"];
-  }
-}
-
-function listPackageLocalRuntimeArtifactRelativePathBases(relativePath: string): string[] {
-  const ext = path.extname(relativePath).toLowerCase();
-  const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
-  if (!withoutExt.startsWith(`src${path.sep}`) && !withoutExt.startsWith("src/")) {
-    return [withoutExt];
-  }
-  return [withoutExt.slice(4), withoutExt];
-}
-
-function listPackageLocalDistRuntimeArtifactRelativePaths(relativePath: string): string[] {
-  const ext = path.extname(relativePath).toLowerCase();
-  const candidates = new Set<string>();
-  for (const base of listPackageLocalRuntimeArtifactRelativePathBases(relativePath)) {
-    for (const outputExt of listPackageLocalRuntimeArtifactOutputExtensions(ext)) {
-      candidates.add(`${base}${outputExt}`);
-    }
-  }
-  return [...candidates];
-}
-
-function shouldPreferPackageLocalDistRuntimeArtifact(source: string): boolean {
-  switch (path.extname(source).toLowerCase()) {
-    case ".ts":
-    case ".tsx":
-    case ".mts":
-    case ".cts":
-      return true;
-    default:
-      return false;
-  }
-}
-
 function resolvePackageLocalDistRuntimeArtifact(params: {
   source: string;
   rootDir: string;
 }): string | null {
   const relativeSource = path.relative(params.rootDir, params.source);
   if (
-    !shouldPreferPackageLocalDistRuntimeArtifact(relativeSource) ||
+    !isTypeScriptPackageEntry(relativeSource) ||
     relativeSource === "" ||
     relativeSource.startsWith("..") ||
     path.isAbsolute(relativeSource)
   ) {
     return null;
   }
-  const artifactRoot = path.join(params.rootDir, "dist");
-  for (const artifactRelativePath of listPackageLocalDistRuntimeArtifactRelativePaths(
-    relativeSource,
-  )) {
-    const artifactSource = path.join(artifactRoot, artifactRelativePath);
+  for (const artifactRelativePath of listBuiltRuntimeEntryCandidates(relativeSource)) {
+    const artifactSource = path.resolve(params.rootDir, artifactRelativePath);
     if (fs.existsSync(artifactSource)) {
       return safeRealpathOrResolve(artifactSource);
     }
