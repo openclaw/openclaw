@@ -1,6 +1,7 @@
 // Qa Lab Matrix tests cover config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { applyQaMergePatch } from "../../../suite-merge-patch.js";
 import { buildMatrixQaConfig } from "./config.js";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
@@ -79,6 +80,7 @@ describe("matrix qa config", () => {
       mode: "off",
       preview: { toolProgress: true },
     });
+    expect(sut?.textChunkLimit).toBe(4000);
     expect(sut?.threadReplies).toBe("inbound");
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
@@ -389,6 +391,39 @@ describe("matrix qa config", () => {
       target: "both",
     });
     expect(sut?.textChunkLimit).toBe(280);
+  });
+
+  it("resets a prior scenario chunk limit through recursive gateway patches", () => {
+    const lowLimitPatch = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: { textChunkLimit: 280 },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+    const quietDefaultPatch = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: {
+        streaming: "quiet",
+      },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    const lowLimitConfig = applyQaMergePatch({}, lowLimitPatch);
+    const quietDefaultConfig = applyQaMergePatch(
+      lowLimitConfig,
+      quietDefaultPatch,
+    ) as OpenClawConfig;
+
+    expect(quietDefaultConfig.channels?.matrix?.accounts?.sut?.textChunkLimit).toBe(4000);
   });
 
   it("resolves role-based Matrix sender allowlist overrides", () => {

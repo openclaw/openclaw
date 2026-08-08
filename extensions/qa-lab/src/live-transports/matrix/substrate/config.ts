@@ -438,7 +438,7 @@ function buildMatrixQaChannelAccountConfig(params: {
   // Matrix accepts only the nested streaming shape; harness overrides keep
   // their scalar/boolean vocabulary and normalize here before config write.
   // Scenario config is applied with config.patch, which recursively merges objects.
-  // Write every slot so a prior streaming scenario cannot leak into the next one.
+  // Write every scenario-owned default so prior scenario state cannot leak into the next one.
   const streamingConfig = {
     streaming: {
       block: { enabled: params.snapshot.blockStreaming },
@@ -454,10 +454,6 @@ function buildMatrixQaChannelAccountConfig(params: {
   const threadBindingsConfig =
     params.overrides?.threadBindings !== undefined
       ? { threadBindings: params.snapshot.threadBindings }
-      : {};
-  const textChunkLimitConfig =
-    params.snapshot.textChunkLimit !== undefined
-      ? { textChunkLimit: params.snapshot.textChunkLimit }
       : {};
 
   return {
@@ -486,7 +482,7 @@ function buildMatrixQaChannelAccountConfig(params: {
     ...autoJoinAllowlistConfig,
     ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
     ...streamingConfig,
-    ...textChunkLimitConfig,
+    textChunkLimit: params.snapshot.textChunkLimit ?? 4000,
   };
 }
 
