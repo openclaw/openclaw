@@ -4702,7 +4702,11 @@ describe("per-turn send budget", () => {
     });
   }
 
-  function stubSend(overrides?: { dryRun?: boolean; kind?: "send" | "broadcast" }) {
+  function stubSend(overrides?: {
+    dryRun?: boolean;
+    kind?: "send" | "broadcast";
+    suppressed?: boolean;
+  }) {
     mocks.runMessageAction.mockReset();
     if (overrides?.kind === "broadcast") {
       mocks.runMessageAction.mockResolvedValue({
@@ -4715,14 +4719,27 @@ describe("per-turn send budget", () => {
       } as MessageActionRunResult);
       return;
     }
+    // A core send can report deliveryStatus "suppressed" (e.g. no_visible_payload)
+    // without reaching the peer; the ledger must not count it.
     mocks.runMessageAction.mockResolvedValue({
       kind: "send",
       action: "send",
       channel: "imessage",
       to: currentChat,
-      handledBy: "plugin",
+      handledBy: overrides?.suppressed ? "core" : "plugin",
       payload: {},
       dryRun: overrides?.dryRun ?? false,
+      ...(overrides?.suppressed
+        ? {
+            sendResult: {
+              channel: "imessage",
+              to: currentChat,
+              via: "direct",
+              mediaUrl: null,
+              deliveryStatus: "suppressed",
+            },
+          }
+        : {}),
     } as MessageActionRunResult);
   }
 
@@ -4766,6 +4783,21 @@ describe("per-turn send budget", () => {
     const secondTurn = createBudgetTool({ sessionKey, runId: "run-b" });
     const result = await send(secondTurn, "b1");
     expect(softNotice(result)).toBeUndefined();
+  });
+
+  it("does not count a suppressed core send", async () => {
+    stubSend({ suppressed: true });
+    const tool = createBudgetTool({ maxPerTurn: 1 });
+    const first = await send(tool, "first");
+    // A suppressed delivery reached the runner but not the peer, so no nudge.
+    expect(softNotice(first)).toBeUndefined();
+    // A confirmed delivery to the same target is now the first counted send: it is
+    // not blocked (the suppressed send never consumed the cap slot) and stays silent.
+    stubSend();
+    const second = await send(tool, "second");
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(softNotice(second)).toBeUndefined();
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
   });
 
   it("does not count dry-run results", async () => {

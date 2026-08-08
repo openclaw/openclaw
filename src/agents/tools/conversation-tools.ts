@@ -10,6 +10,11 @@ import {
   type ConversationSendResult,
   type ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
+import {
+  resolveConversation,
+  resolveConversationRegistryScope,
+  type ConversationRecord,
+} from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveEffectiveMessageToolsConfig } from "../../infra/outbound/outbound-policy.js";
@@ -23,7 +28,7 @@ import {
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
-import { peekTurnSendCount, recordTurnSend } from "./turn-send-ledger.js";
+import { buildTurnSendTargetKey, peekTurnSendCount, recordTurnSend } from "./turn-send-ledger.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -65,10 +70,12 @@ type ConversationToolOptions = {
 
 type ConversationToolDeps = {
   callGateway: typeof callGateway;
+  resolveConversation: typeof resolveConversation;
 };
 
 const defaultDeps: ConversationToolDeps = {
   callGateway,
+  resolveConversation,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -142,13 +149,42 @@ export function createConversationsListTool(
 
 function resolveConversationBudgetContext(
   options: ConversationToolOptions,
+  deps: ConversationToolDeps,
   conversationRef: string,
 ): { sessionKey: string; runId: string; targetKey: string } | undefined {
   const sessionKey = options.agentSessionKey?.trim() || undefined;
-  if (!sessionKey || !options.runId) {
+  if (!sessionKey || !options.runId || !options.config) {
     return undefined;
   }
-  return { sessionKey, runId: options.runId, targetKey: conversationRef };
+  // Resolve the opaque ref to its real (channel, account, target) route via the local
+  // registry so the ledger key matches the message tool's key for the same recipient;
+  // alternating the two tools at one peer must not evade the nudge or hard cap. Fail
+  // open on any miss — a registry read that comes up empty (or throws) must never
+  // block a send, mirroring resolveOutboundActionRoute returning undefined on ambiguity.
+  let record: ConversationRecord | undefined;
+  try {
+    record = deps.resolveConversation(
+      resolveConversationRegistryScope({
+        agentId: resolveToolAgentId(options),
+        config: options.config,
+      }),
+      conversationRef,
+    );
+  } catch {
+    return undefined;
+  }
+  if (!record) {
+    return undefined;
+  }
+  return {
+    sessionKey,
+    runId: options.runId,
+    targetKey: buildTurnSendTargetKey({
+      channel: record.channel,
+      accountId: record.accountId,
+      target: record.target,
+    }),
+  };
 }
 
 /** Sends directly to one external conversation without invoking its backing local session. */
@@ -178,9 +214,11 @@ export function createConversationsSendTool(
         conversationRef,
       });
       // Per-turn send budget, shared with the message tool: count successful sends
-      // per (turn, conversationRef) so a reworded resend to the same conversation is
+      // per (turn, resolved route) so a reworded resend to the same conversation is
       // visible even though the loop detector hashes full params and can't see it.
-      const budgetContext = resolveConversationBudgetContext(options, conversationRef);
+      // The ref is resolved to its (channel, account, target) route so the ledger key
+      // is identical to the message tool's for the same recipient.
+      const budgetContext = resolveConversationBudgetContext(options, deps, conversationRef);
       // Optional hard cap (opt-in via tools.message.maxMessagesPerTurnPerTarget):
       // block before the Gateway call once the cap is reached this turn.
       if (budgetContext && options.config) {

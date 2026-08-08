@@ -117,7 +117,7 @@ import {
   type MessageToolSchemaBuilders,
 } from "./message-tool-schema-scoping.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
-import { peekTurnSendCount, recordTurnSend } from "./turn-send-ledger.js";
+import { buildTurnSendTargetKey, peekTurnSendCount, recordTurnSend } from "./turn-send-ledger.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
@@ -261,7 +261,7 @@ function resolveOutboundActionRoute(params: {
   // Plugin-declared aliases keep owner-specific target fields out of core.
   // A route mismatch fails open; provider/account keys prevent cross-send suppression.
   const routeTarget = !target || currentTargets.has(target) ? "<current-source>" : target;
-  return `${channel}\0${normalizeAccountId(params.accountId ?? "default")}\0${routeTarget}`;
+  return buildTurnSendTargetKey({ channel, accountId: params.accountId, target: routeTarget });
 }
 
 function sanitizeUserVisibleToolTextResult(
@@ -2051,8 +2051,22 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // the per-turn ledger regardless of the nudge toggle. From the second send to
       // this target onward, append a one-line soft reminder unless turnSendNudge is
       // explicitly disabled. A `dry-run` result (e.g. no gateway) never counts.
+      //
+      // A core send can return deliveryStatus "suppressed" (e.g. no_visible_payload)
+      // without reaching the peer; that must not consume the cap or fire a false
+      // nudge. Only "suppressed" is checked because "failed"/"partial_failed" already
+      // throw upstream (message.ts) and never reach here, and plugin/gateway sends
+      // carry kind:"send" with no sendResult (deliveryStatus undefined) — those still
+      // count because delivery happened remotely.
+      const deliveryStatus = result.kind === "send" ? result.sendResult?.deliveryStatus : undefined;
+      const deliveredNothing = deliveryStatus === "suppressed";
       let turnSendNotice: string | undefined;
-      if (budgetContext && result.kind !== "broadcast" && result.dryRun !== true) {
+      if (
+        budgetContext &&
+        result.kind !== "broadcast" &&
+        result.dryRun !== true &&
+        !deliveredNothing
+      ) {
         const sendCount = recordTurnSend(budgetContext);
         const nudgeEnabled =
           resolveEffectiveMessageToolsConfig({

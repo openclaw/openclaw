@@ -5,20 +5,26 @@ import {
   ConversationSendResultSchema,
   ConversationTurnResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../../security/dangerous-tools.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import {
   createConversationsListTool,
   createConversationsSendTool,
   createConversationsTurnTool,
 } from "./conversation-tools.js";
+import { createMessageTool } from "./message-tool.js";
 import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
 
 afterEach(() => {
   resetTurnSendLedgerForTest();
+  resetPluginRuntimeStateForTest();
 });
 
 const conversation = {
@@ -82,9 +88,14 @@ function createDeps() {
             },
           },
   );
+  // The registry resolves the opaque ref to its real (channel, account, target)
+  // route; the budget ledger keys on that route, not the raw conversationRef.
+  const resolveConversationMock = vi.fn(() => conversation);
   return {
     callGateway: callGatewayMock as never,
+    resolveConversation: resolveConversationMock as never,
     callGatewayMock,
+    resolveConversationMock,
   };
 }
 
@@ -396,6 +407,109 @@ describe("conversations_send per-turn send budget", () => {
       status: "suppressed",
       reason: "turn_send_budget_exhausted",
     });
+    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("message and conversations_send share the per-turn budget", () => {
+  // Both tools route to the same real recipient reef:peer-agent under the default
+  // account: the message tool resolves it as an explicit target, and the registry
+  // resolves the conv ref to the same (channel, account, target). Alternating them
+  // must therefore share one ledger key rather than evade the nudge and hard cap.
+  const sessionKey = "agent:main:reef:direct:operator";
+  const runId = "run-mixed-1";
+  const peerTarget = conversation.target;
+
+  function softNotice(result: { content: Array<{ type: string; text?: string }> }) {
+    return result.content
+      .filter((entry): entry is { type: "text"; text: string } => entry.type === "text")
+      .map((entry) => entry.text)
+      .find((text) => text.includes("already sent"));
+  }
+
+  function registerReefPlugin() {
+    const plugin = {
+      id: "reef",
+      meta: {
+        id: "reef",
+        label: "Reef",
+        selectionLabel: "Reef",
+        docsPath: "/channels/reef",
+        blurb: "reef test plugin",
+      },
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+      config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+      },
+    } as unknown as ChannelPlugin;
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "reef", source: "test", plugin }]));
+  }
+
+  function createMixedMessageTool(config: Record<string, unknown>) {
+    registerReefPlugin();
+    return createMessageTool({
+      currentChannelProvider: "reef",
+      currentChannelId: "reef:operator",
+      agentAccountId: "default",
+      agentSessionKey: sessionKey,
+      runId,
+      sourceReplyDeliveryMode: "message_tool_only",
+      config: config as never,
+      runMessageAction: (async () =>
+        ({
+          kind: "send",
+          action: "send",
+          channel: "reef",
+          to: peerTarget,
+          handledBy: "plugin",
+          payload: {},
+          dryRun: false,
+        }) satisfies MessageActionRunResult) as never,
+      resolveCommandSecretRefsViaGateway: (async ({ config: cfg }: { config: unknown }) => ({
+        resolvedConfig: cfg,
+        diagnostics: [],
+      })) as never,
+      getScopedChannelsCommandSecretTargets: (() => ({ targetIds: new Set<string>() })) as never,
+    });
+  }
+
+  async function sendViaMessageTool(tool: ReturnType<typeof createMessageTool>, message: string) {
+    return tool.execute(`msg-${message}`, {
+      action: "send",
+      channel: "reef",
+      to: peerTarget,
+      message,
+    });
+  }
+
+  it("nudges on the second cross-tool send and blocks the third at the cap", async () => {
+    const config = { tools: { message: { maxMessagesPerTurnPerTarget: 2 } } };
+    const deps = createDeps();
+    const messageTool = createMixedMessageTool(config);
+    const conversationTool = createConversationsSendTool(
+      { agentId: "main", agentSessionKey: sessionKey, runId, config: config as never },
+      deps,
+    );
+
+    // 1st send (message tool): silent.
+    const first = await sendViaMessageTool(messageTool, "hello");
+    expect(softNotice(first)).toBeUndefined();
+
+    // 2nd send (conversations_send, same recipient): nudge fires despite the tool switch.
+    const second = await conversationTool.execute("conv-1", {
+      conversationRef: conversation.conversationRef,
+      message: "hello again",
+    });
+    expect(softNotice(second)).toContain("already sent 2 messages");
+
+    // 3rd send (message tool again): blocked by the shared cap of 2.
+    const third = await sendViaMessageTool(messageTool, "third variant");
+    expect(third.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
+    // The blocked send never reached the runner-backed gateway path.
     expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
   });
 });
