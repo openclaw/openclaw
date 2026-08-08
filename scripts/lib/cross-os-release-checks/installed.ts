@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, createWriteStream, existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  appendFileSync,
+  chmodSync,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+} from "node:fs";
+import { basename, dirname, extname, join } from "node:path";
 import {
   agentOutputHasExpectedOkMarker,
   buildCrossOsReleaseAgentSessionId,
@@ -19,6 +27,7 @@ import {
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
+  CROSS_OS_MANAGED_GATEWAY_DIAGNOSTIC_TAIL_BYTES,
   CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
   buildCrossOsReleaseSmokeMemorySlotConfigArgs,
   buildCrossOsReleaseSmokePluginAllowlist,
@@ -36,7 +45,12 @@ import {
   npmCommand,
   resolveInstalledPrefixDirFromCliPath,
 } from "./install.ts";
-import { readLogFileSize, readLogTextSince } from "./logs.ts";
+import {
+  readLogFileSize,
+  readLogTextSince,
+  writePrivateDiagnosticText,
+  writeRedactedLogTail,
+} from "./logs.ts";
 import {
   canConnectToLoopbackPort,
   hasChildExited,
@@ -50,6 +64,177 @@ import { formatError, shellEscapeForSh, sleep } from "./shared.ts";
 
 const INSTALLER_CONNECT_TIMEOUT_SECONDS = 10;
 const INSTALLER_REQUEST_TIMEOUT_SECONDS = 120;
+const SENSITIVE_ENV_NAME_RE =
+  /(?:^|_)(?:AUTH|COOKIE|CREDENTIAL|JWT|KEY|PASS(?:WORD|WD)?|SECRET|SESSION|SIGNATURE|TOKEN)(?:_|$)/iu;
+const SENSITIVE_CREDENTIAL_KEY_SOURCE = String.raw`(?:(?:[A-Z0-9]+[_-])*(?:AUTH(?:ORIZATION)?|COOKIE|CREDENTIAL|JWT|KEY|PASS(?:WORD|WD|PHRASE)?|SECRET|SESSION|SIGNATURE|TOKEN)|api[-_]?key|api[-_]?token|bearer[-_]?token|private[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|client[-_]?secret|app[-_]?secret|secret[-_]?(?:value|input)|raw[-_]?secret|key[-_]?material|aws[-_]?secret[-_]?access[-_]?key|set[-_]?cookie)`;
+const SENSITIVE_CREDENTIAL_ASSIGNMENT_RE = new RegExp(
+  String.raw`(["']?\b${SENSITIVE_CREDENTIAL_KEY_SOURCE}\b["']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,;)}\]\r\n]+)`,
+  "giu",
+);
+const SENSITIVE_URL_QUERY_RE = new RegExp(
+  String.raw`([?&]${SENSITIVE_CREDENTIAL_KEY_SOURCE}=)[^&#\s<>]*`,
+  "giu",
+);
+const URL_USERINFO_PASSWORD_RE = /(\b[a-z][a-z0-9+.-]*:(?:\/\/|\\\/\\\/)[^/\s:@]*:)[^/\s@]+(@)/giu;
+
+type ManagedGatewayDiagnosticPhase = "initial" | "fallback-start";
+
+// The release harness runs directly with bare Node before workspace packages exist.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function replaceLiteral(
+  value: string,
+  literal: string,
+  replacement: string,
+  options: { caseInsensitive?: boolean } = {},
+) {
+  if (!literal) {
+    return value;
+  }
+  if (!options.caseInsensitive) {
+    return value.replaceAll(literal, replacement);
+  }
+  return value.replace(new RegExp(escapeRegExp(literal), "giu"), () => replacement);
+}
+
+function redactCredentialText(value: string) {
+  return value
+    .replace(URL_USERINFO_PASSWORD_RE, "$1***$2")
+    .replace(SENSITIVE_URL_QUERY_RE, "$1***")
+    .replace(SENSITIVE_CREDENTIAL_ASSIGNMENT_RE, (_match, prefix: string, credential: string) => {
+      const quote = credential[0];
+      return quote === '"' || quote === "'" || quote === "`"
+        ? `${prefix}${quote}***${quote}`
+        : `${prefix}***`;
+    });
+}
+
+function redactManagedGatewayDiagnosticText(params: {
+  text: string;
+  lane: LaneState;
+  env: NodeJS.ProcessEnv;
+  managedStateDir?: string;
+}) {
+  let redacted = params.text;
+  const sensitiveValues = Object.entries(params.env)
+    .filter(([key, value]) => SENSITIVE_ENV_NAME_RE.test(key) && Boolean(value))
+    .map(([, value]) => value as string)
+    .toSorted((a, b) => b.length - a.length);
+  for (const value of sensitiveValues) {
+    redacted = replaceLiteral(redacted, value, "***");
+  }
+
+  const pathReplacements: Array<[string | undefined, string]> = [
+    [params.managedStateDir, "[MANAGED_STATE_DIR]"],
+    [params.lane.stateDir, "[STATE_DIR]"],
+    [params.lane.appDataDir, "[APPDATA_DIR]"],
+    [params.lane.homeDir, "[HOME]"],
+    [params.lane.rootDir, "[LANE_ROOT]"],
+    [params.env.LOCALAPPDATA, "[LOCALAPPDATA]"],
+    [params.env.TEMP, "[TEMP]"],
+    [params.env.TMP, "[TEMP]"],
+    [params.env.TMPDIR, "[TEMP]"],
+    [params.env.USERPROFILE, "[HOME]"],
+    [params.env.HOME, "[HOME]"],
+  ];
+  for (const [pathValue, replacement] of pathReplacements
+    .filter(([value]) => Boolean(value))
+    .toSorted((a, b) => (b[0]?.length ?? 0) - (a[0]?.length ?? 0))) {
+    if (!pathValue) {
+      continue;
+    }
+    const slashNormalized = pathValue.replaceAll("\\", "/");
+    const variants = new Set([
+      pathValue,
+      slashNormalized,
+      JSON.stringify(pathValue).slice(1, -1),
+      JSON.stringify(slashNormalized).slice(1, -1),
+    ]);
+    for (const variant of variants) {
+      redacted = replaceLiteral(redacted, variant, replacement, { caseInsensitive: true });
+    }
+  }
+  return redactCredentialText(redacted);
+}
+
+function readString(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function resolveManagedGatewayStateDir(payload: unknown, env: NodeJS.ProcessEnv) {
+  const root = isRecord(payload) ? payload : {};
+  const service = isRecord(root.service) ? root.service : {};
+  const command = isRecord(service.command) ? service.command : {};
+  const environment = isRecord(command.environment) ? command.environment : {};
+  const configuredStateDir = readString(environment, "OPENCLAW_STATE_DIR")?.trim();
+  if (configuredStateDir) {
+    return configuredStateDir;
+  }
+  const homeDir = env.HOME?.trim() || env.USERPROFILE?.trim();
+  if (!homeDir) {
+    return undefined;
+  }
+  const profile = readString(environment, "OPENCLAW_PROFILE")?.trim();
+  const suffix = profile && profile.toLowerCase() !== "default" ? `-${profile}` : "";
+  return join(homeDir, `.openclaw${suffix}`);
+}
+
+function buildManagedGatewayDiagnosticStatus(payload: unknown, redact: (text: string) => string) {
+  const root = isRecord(payload) ? payload : {};
+  const service = isRecord(root.service) ? root.service : {};
+  const runtime = isRecord(service.runtime) ? service.runtime : {};
+  const status: Record<string, string | number> = {};
+  for (const key of ["status", "state", "lastRunTime", "lastRunResult"] as const) {
+    const value = readString(runtime, key);
+    if (value !== undefined) {
+      status[key] = value;
+    }
+  }
+  if (typeof runtime.pid === "number" && Number.isSafeInteger(runtime.pid)) {
+    status.pid = runtime.pid;
+  }
+  const detail = readString(runtime, "detail");
+  if (detail !== undefined) {
+    status.detail = redact(detail);
+  }
+
+  const driftReport = isRecord(root.pluginVersionDrift) ? root.pluginVersionDrift : {};
+  const reportExpected = readString(driftReport, "gatewayVersion");
+  const drifts = Array.isArray(driftReport.drifts)
+    ? driftReport.drifts.flatMap((value) => {
+        if (!isRecord(value)) {
+          return [];
+        }
+        const entry = {
+          id: readString(value, "pluginId"),
+          installed: readString(value, "installedVersion"),
+          source: readString(value, "source"),
+          expected: readString(value, "gatewayVersion") ?? reportExpected,
+        };
+        return [
+          Object.fromEntries(Object.entries(entry).filter(([, field]) => field !== undefined)),
+        ];
+      })
+    : [];
+
+  return {
+    ...(Object.keys(status).length > 0 ? { service: status } : {}),
+    ...(drifts.length > 0 ? { pluginVersionDrift: drifts } : {}),
+  };
+}
+
+function managedGatewayDiagnosticDir(logPath: string) {
+  const extension = extname(logPath);
+  const stem = basename(logPath, extension);
+  return join(dirname(logPath), `${stem}-diagnostics`);
+}
 
 export async function resolveInstallerTargetVersion(params: {
   baselineSpec: string;
@@ -718,27 +903,149 @@ export async function waitForInstalledGatewayToStop(params: {
   );
 }
 
-export async function ensureManagedGatewayReady(params: {
-  lane: LaneState;
-  cliPath: string;
-  env: NodeJS.ProcessEnv;
-  logPath: string;
-}) {
+export async function collectManagedGatewayReadinessDiagnostics(
+  params: {
+    lane: LaneState;
+    cliPath: string;
+    env: NodeJS.ProcessEnv;
+    logPath: string;
+    phase: ManagedGatewayDiagnosticPhase;
+  },
+  options: { runStatus?: typeof runInstalledCli } = {},
+) {
   try {
-    await waitForInstalledGateway(params);
+    const outputDir = managedGatewayDiagnosticDir(params.logPath);
+    let statusPayload: unknown;
+    let rawDir: string | undefined;
+    try {
+      rawDir = mkdtempSync(join(params.lane.rootDir, ".managed-gateway-readiness-"));
+      chmodSync(rawDir, 0o700);
+      const rawStatusPath = join(rawDir, "gateway-status.raw.log");
+      writePrivateDiagnosticText(rawStatusPath, "");
+      const result = await (options.runStatus ?? runInstalledCli)({
+        cliPath: params.cliPath,
+        args: ["gateway", "status", "--json", "--no-probe"],
+        cwd: params.lane.homeDir,
+        env: params.env,
+        logPath: rawStatusPath,
+        timeoutMs: CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
+        check: false,
+      });
+      statusPayload = JSON.parse(result.stdout) as unknown;
+    } catch {
+      // Status collection is diagnostic only; retain any available log tails below.
+    } finally {
+      if (rawDir) {
+        try {
+          rmSync(rawDir, { recursive: true, force: true });
+        } catch {
+          // The lane root is ephemeral; cleanup failure must not hide readiness evidence.
+        }
+      }
+    }
+    const managedStateDir = resolveManagedGatewayStateDir(statusPayload, params.env);
+    const managedLogDir = managedStateDir ? join(managedStateDir, "logs") : undefined;
+    const redact = (text: string) =>
+      redactManagedGatewayDiagnosticText({
+        text,
+        lane: params.lane,
+        env: params.env,
+        managedStateDir,
+      });
+
+    if (statusPayload !== undefined) {
+      try {
+        const sanitizedStatus = buildManagedGatewayDiagnosticStatus(statusPayload, redact);
+        writePrivateDiagnosticText(
+          join(outputDir, `${params.phase}-status.json`),
+          `${JSON.stringify(sanitizedStatus, null, 2)}\n`,
+        );
+      } catch {
+        // One diagnostic artifact must not prevent collection of the remaining tails.
+      }
+    }
+
+    if (managedLogDir) {
+      try {
+        writeRedactedLogTail({
+          sourcePath: join(managedLogDir, "gateway-restart.log"),
+          destinationPath: join(outputDir, `${params.phase}-gateway-restart.log`),
+          redact,
+          maxBytes: CROSS_OS_MANAGED_GATEWAY_DIAGNOSTIC_TAIL_BYTES,
+        });
+      } catch {
+        // Restart logging is best-effort and may not exist on an early startup failure.
+      }
+    }
+  } catch {
+    // Readiness diagnostics must never replace the managed gateway failure.
+  }
+}
+
+export async function ensureManagedGatewayReady(
+  params: {
+    lane: LaneState;
+    cliPath: string;
+    env: NodeJS.ProcessEnv;
+    logPath: string;
+  },
+  options: {
+    waitForGateway?: typeof waitForInstalledGateway;
+    startGateway?: (params: {
+      lane: LaneState;
+      cliPath: string;
+      env: NodeJS.ProcessEnv;
+      logPath: string;
+    }) => Promise<unknown>;
+    collectDiagnostics?: (
+      params: Parameters<typeof collectManagedGatewayReadinessDiagnostics>[0],
+    ) => Promise<void>;
+    platform?: NodeJS.Platform;
+  } = {},
+) {
+  const waitForGateway = options.waitForGateway ?? waitForInstalledGateway;
+  const collectDiagnostics =
+    options.collectDiagnostics ?? collectManagedGatewayReadinessDiagnostics;
+  const captureDiagnostics = async (phase: ManagedGatewayDiagnosticPhase) => {
+    if ((options.platform ?? process.platform) !== "win32") {
+      return;
+    }
+    try {
+      await collectDiagnostics({ ...params, phase });
+    } catch {
+      // Injected/test diagnostic collectors remain non-authoritative too.
+    }
+  };
+  try {
+    await waitForGateway(params);
     return;
   } catch {
-    await runInstalledCli({
-      cliPath: params.cliPath,
-      args: ["gateway", "start"],
-      cwd: params.lane.homeDir,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: 2 * 60 * 1000,
-      check: false,
-    });
+    await captureDiagnostics("initial");
+    try {
+      if (options.startGateway) {
+        await options.startGateway(params);
+      } else {
+        await runInstalledCli({
+          cliPath: params.cliPath,
+          args: ["gateway", "start"],
+          cwd: params.lane.homeDir,
+          env: params.env,
+          logPath: params.logPath,
+          timeoutMs: 2 * 60 * 1000,
+          check: false,
+        });
+      }
+    } catch (error) {
+      await captureDiagnostics("fallback-start");
+      throw error;
+    }
   }
-  await waitForInstalledGateway(params);
+  try {
+    await waitForGateway(params);
+  } catch (error) {
+    await captureDiagnostics("fallback-start");
+    throw error;
+  }
 }
 
 export async function runInstalledModelsSet(params: {

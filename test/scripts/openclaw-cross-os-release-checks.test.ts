@@ -5,9 +5,11 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -47,6 +49,7 @@ import {
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
+  CROSS_OS_MANAGED_GATEWAY_DIAGNOSTIC_TAIL_BYTES,
   CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS,
@@ -57,6 +60,8 @@ import {
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   deleteDiscordMessage,
+  collectManagedGatewayReadinessDiagnostics,
+  ensureManagedGatewayReady,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
@@ -113,6 +118,7 @@ import {
   verifyWindowsPackagedUpgradeFallbackInstall,
   waitForGatewayWithStartupMigrationRestart,
   writePackageDistInventoryForCandidate,
+  writeRedactedLogTail,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
@@ -742,6 +748,324 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         logPath: statusLogPath,
       });
     });
+  });
+
+  it("captures private redacted managed gateway readiness diagnostics", async () => {
+    await withTempDirAsync("openclaw-cross-os-gateway-diagnostics-", async (rootDir) => {
+      const homeDir = join(rootDir, "home");
+      const stateDir = join(homeDir, ".openclaw-lane");
+      const managedHomeDir = join(rootDir, "managed-home");
+      const managedStateDir = join(managedHomeDir, ".openclaw");
+      const appDataDir = join(homeDir, "AppData", "Roaming");
+      const logsDir = join(rootDir, "artifacts");
+      const restartLogPath = join(managedStateDir, "logs", "gateway-restart.log");
+      const laneRestartLogPath = join(stateDir, "logs", "gateway-restart.log");
+      const outsideLogPath = join(rootDir, "outside.log");
+      const logPath = join(logsDir, "managed-ready.log");
+      const secret = "managed-gateway-diagnostic-secret";
+      const unregisteredSecret = "managed-gateway-unregistered-secret";
+      const apiKeySecret = "managed-gateway-api-key-secret";
+      const accessTokenSecret = "managed-gateway-access-token-secret";
+      const clientSecret = "managed-gateway-client-secret";
+      const jwtFieldSecret = "managed-gateway-jwt-field-secret";
+      const jwtEnvSecret = "managed-gateway-jwt-env-secret";
+      const windowsHome = String.raw`C:\Users\Alice`;
+      const windowsHomeCaseVariant = String.raw`c:\USERS\ALICE`;
+      const windowsJsonPath = JSON.stringify({
+        path: String.raw`c:\users\alice\AppData\Local\openclaw.log`,
+      });
+      mkdirSync(dirname(restartLogPath), { recursive: true });
+      writeFileSync(outsideLogPath, `outside-log-must-not-be-uploaded ${secret}\n`);
+      writeFileSync(
+        restartLogPath,
+        [
+          `restart secret=${secret}`,
+          `home=${homeDir}`,
+          `windows-home=${windowsHomeCaseVariant}`,
+          `windows-json=${windowsJsonPath}`,
+          `SERVICE_PASSWORD=${unregisteredSecret}`,
+          `{"apiKey":"${apiKeySecret}","accessToken":"${accessTokenSecret}","jwt":"${jwtFieldSecret}"}`,
+          `clientSecret='${clientSecret}'`,
+          `jwt=${jwtFieldSecret}`,
+          `jwt-env=${jwtEnvSecret}`,
+          `url=https://runner:${unregisteredSecret}@example.test/path`,
+          `query=https://example.test/path?access_token=${unregisteredSecret}`,
+          `temp=${rootDir}`,
+          "",
+        ].join("\n"),
+      );
+      mkdirSync(dirname(laneRestartLogPath), { recursive: true });
+      writeFileSync(laneRestartLogPath, "lane-restart-log-must-not-be-uploaded\n");
+      const lane = {
+        name: "diagnostic-test",
+        rootDir,
+        prefixDir: join(rootDir, "prefix"),
+        homeDir,
+        stateDir,
+        appDataDir,
+        gatewayPort: 18789,
+        phaseTimings: [],
+      };
+      const rawStatus = JSON.stringify({
+        cli: { version: "2026.8.1" },
+        logFile: outsideLogPath,
+        service: {
+          runtime: {
+            status: "stopped",
+            state: "Ready",
+            pid: 1234,
+            lastRunTime: "2026-08-07T00:00:00Z",
+            lastRunResult: "267011",
+            detail: `token=${secret}; accessToken=${accessTokenSecret}; jwt=${jwtFieldSecret}; jwt-env=${jwtEnvSecret}; path=${homeDir}`,
+            missingUnit: true,
+          },
+          command: { sourcePath: join(managedStateDir, "gateway.cmd") },
+        },
+        config: { path: join(stateDir, "openclaw.json") },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.8.1",
+          drifts: [
+            {
+              pluginId: "matrix",
+              installedVersion: "2026.7.9",
+              source: "npm",
+              gatewayVersion: "2026.8.1",
+              packageName: "@openclaw/matrix",
+            },
+          ],
+        },
+      });
+
+      await collectManagedGatewayReadinessDiagnostics(
+        {
+          lane,
+          cliPath: "/opt/openclaw",
+          env: {
+            HOME: managedHomeDir,
+            USERPROFILE: managedHomeDir,
+            LOCALAPPDATA: windowsHome,
+            TEMP: rootDir,
+            OPENAI_API_KEY: secret,
+            JWT: jwtEnvSecret,
+          },
+          logPath,
+          phase: "initial",
+        },
+        {
+          runStatus: async (params) => {
+            expect(params.args).toEqual(["gateway", "status", "--json", "--no-probe"]);
+            expect(params.check).toBe(false);
+            expect(params.logPath.startsWith(rootDir)).toBe(true);
+            if (process.platform !== "win32") {
+              expect(statSync(params.logPath).mode & 0o777).toBe(0o600);
+            }
+            writeFileSync(params.logPath, rawStatus, { flag: "a" });
+            return { exitCode: 1, stdout: rawStatus, stderr: "" };
+          },
+        },
+      );
+
+      const diagnosticDir = join(logsDir, "managed-ready-diagnostics");
+      const status = JSON.parse(readFileSync(join(diagnosticDir, "initial-status.json"), "utf8"));
+      expect(status).toEqual({
+        service: {
+          status: "stopped",
+          state: "Ready",
+          lastRunTime: "2026-08-07T00:00:00Z",
+          lastRunResult: "267011",
+          pid: 1234,
+          detail: "token=***; accessToken=***; jwt=***; jwt-env=***; path=[HOME]",
+        },
+        pluginVersionDrift: [
+          {
+            id: "matrix",
+            installed: "2026.7.9",
+            source: "npm",
+            expected: "2026.8.1",
+          },
+        ],
+      });
+      const capturedText = readdirSync(diagnosticDir)
+        .map((fileName) => readFileSync(join(diagnosticDir, fileName), "utf8"))
+        .join("\n");
+      const artifactNames = readdirSync(diagnosticDir).toSorted();
+      expect(artifactNames).toEqual(["initial-gateway-restart.log", "initial-status.json"]);
+      expect(readFileSync(join(diagnosticDir, "initial-gateway-restart.log"), "utf8")).toContain(
+        '"apiKey":"***"',
+      );
+      expect(readFileSync(join(diagnosticDir, "initial-gateway-restart.log"), "utf8")).toContain(
+        '"accessToken":"***"',
+      );
+      expect(readFileSync(join(diagnosticDir, "initial-gateway-restart.log"), "utf8")).toContain(
+        "clientSecret='***'",
+      );
+      for (const fileName of artifactNames) {
+        const artifact = readFileSync(join(diagnosticDir, fileName), "utf8");
+        for (const sensitiveValue of [
+          secret,
+          unregisteredSecret,
+          apiKeySecret,
+          accessTokenSecret,
+          clientSecret,
+          jwtFieldSecret,
+          jwtEnvSecret,
+        ]) {
+          expect(artifact).not.toContain(sensitiveValue);
+        }
+      }
+      expect(capturedText).not.toContain(homeDir);
+      expect(capturedText.toLowerCase()).not.toContain(windowsHome.toLowerCase());
+      expect(capturedText.toLowerCase()).not.toContain(
+        JSON.stringify(windowsHome).slice(1, -1).toLowerCase(),
+      );
+      expect(capturedText).not.toContain("sourcePath");
+      expect(capturedText).not.toContain("openclaw.json");
+      expect(capturedText).not.toContain("outside-log-must-not-be-uploaded");
+      expect(capturedText).not.toContain("lane-restart-log-must-not-be-uploaded");
+      expect(capturedText).toContain("[HOME]");
+      expect(capturedText).toContain("jwt=***");
+      expect(
+        readdirSync(rootDir).some((name) => name.startsWith(".managed-gateway-readiness-")),
+      ).toBe(false);
+      if (process.platform !== "win32") {
+        expect(statSync(diagnosticDir).mode & 0o777).toBe(0o700);
+        for (const fileName of readdirSync(diagnosticDir)) {
+          expect(statSync(join(diagnosticDir, fileName)).mode & 0o777).toBe(0o600);
+        }
+      }
+    });
+  });
+
+  it("bounds managed gateway diagnostic tails on a UTF-8 boundary", () => {
+    withTempDir("openclaw-cross-os-gateway-tail-", (dir) => {
+      const sourcePath = join(dir, "source.log");
+      const destinationPath = join(dir, "tail.log");
+      writeFileSync(
+        sourcePath,
+        Buffer.concat([
+          Buffer.from("😀"),
+          Buffer.alloc(CROSS_OS_MANAGED_GATEWAY_DIAGNOSTIC_TAIL_BYTES - 3, "a"),
+          Buffer.from([0xf0, 0x9f]),
+        ]),
+      );
+
+      expect(
+        writeRedactedLogTail({
+          sourcePath,
+          destinationPath,
+          redact: (text) => text,
+        }),
+      ).toBe(true);
+      const tail = readFileSync(destinationPath, "utf8");
+      expect(tail).not.toContain("�");
+      expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(
+        CROSS_OS_MANAGED_GATEWAY_DIAGNOSTIC_TAIL_BYTES,
+      );
+    });
+  });
+
+  it("keeps readiness diagnostics best-effort and rethrows the final timeout unchanged", async () => {
+    const rootDir = "/tmp/openclaw-managed-gateway-test";
+    const lane = {
+      name: "diagnostic-test",
+      rootDir,
+      prefixDir: join(rootDir, "prefix"),
+      homeDir: join(rootDir, "home"),
+      stateDir: join(rootDir, "home", ".openclaw"),
+      appDataDir: join(rootDir, "home", "AppData", "Roaming"),
+      gatewayPort: 18789,
+      phaseTimings: [],
+    };
+    const firstTimeout = new Error("initial timeout");
+    const finalTimeout = new Error("fallback timeout");
+    const calls: string[] = [];
+    let waitCount = 0;
+    let thrown: unknown;
+    try {
+      await ensureManagedGatewayReady(
+        {
+          lane,
+          cliPath: "/opt/openclaw",
+          env: {},
+          logPath: join(rootDir, "managed-ready.log"),
+        },
+        {
+          waitForGateway: async () => {
+            calls.push("wait");
+            waitCount += 1;
+            throw waitCount === 1 ? firstTimeout : finalTimeout;
+          },
+          collectDiagnostics: async ({ phase }) => {
+            calls.push(`diagnostics:${phase}`);
+            throw new Error("diagnostic failure");
+          },
+          startGateway: async () => {
+            calls.push("start");
+          },
+          platform: "win32",
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBe(finalTimeout);
+    expect(calls).toEqual([
+      "wait",
+      "diagnostics:initial",
+      "start",
+      "wait",
+      "diagnostics:fallback-start",
+    ]);
+  });
+
+  it("captures fallback diagnostics and preserves a gateway start failure", async () => {
+    const rootDir = "/tmp/openclaw-managed-gateway-start-test";
+    const lane = {
+      name: "diagnostic-start-test",
+      rootDir,
+      prefixDir: join(rootDir, "prefix"),
+      homeDir: join(rootDir, "home"),
+      stateDir: join(rootDir, "home", ".openclaw"),
+      appDataDir: join(rootDir, "home", "AppData", "Roaming"),
+      gatewayPort: 18789,
+      phaseTimings: [],
+    };
+    const startError = new Error("gateway start timed out");
+    const calls: string[] = [];
+    let thrown: unknown;
+    try {
+      await ensureManagedGatewayReady(
+        {
+          lane,
+          cliPath: "/opt/openclaw",
+          env: {},
+          logPath: join(rootDir, "managed-ready.log"),
+        },
+        {
+          waitForGateway: async () => {
+            calls.push("wait");
+            throw new Error("initial timeout");
+          },
+          collectDiagnostics: async ({ phase }) => {
+            calls.push(`diagnostics:${phase}`);
+            if (phase === "fallback-start") {
+              throw new Error("diagnostic failure");
+            }
+          },
+          startGateway: async () => {
+            calls.push("start");
+            throw startError;
+          },
+          platform: "win32",
+        },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBe(startError);
+    expect(calls).toEqual(["wait", "diagnostics:initial", "start", "diagnostics:fallback-start"]);
   });
 
   it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
