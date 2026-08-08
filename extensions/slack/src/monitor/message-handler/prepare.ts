@@ -1183,14 +1183,14 @@ export async function prepareSlackMessage(params: {
     channel: "slack",
     accountId: account.accountId,
   });
-  const physicalSlackTarget = opts.eventScope
+  const preflightChannelTarget = opts.eventScope
     ? formatSlackTarget({
         teamId: opts.eventScope.teamId,
         kind: "channel",
         id: message.channel,
       })
     : `channel:${message.channel}`;
-  const logicalSlackTarget = opts.eventScope
+  const replyRouteTarget = opts.eventScope
     ? formatSlackTarget({
         teamId: opts.eventScope.teamId,
         kind: isDirectMessage ? "user" : "channel",
@@ -1263,7 +1263,7 @@ export async function prepareSlackMessage(params: {
           media: preflightMedia,
           cfg,
           accountId: account.accountId,
-          originatingTo: physicalSlackTarget,
+          originatingTo: preflightChannelTarget,
           sessionKey: preflightRouting.sessionKey,
           messageThreadId: preflightRouting.threadContext.messageThreadId,
         })
@@ -1667,7 +1667,7 @@ export async function prepareSlackMessage(params: {
       parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: {
-      to: logicalSlackTarget,
+      to: replyRouteTarget,
       replyToId: threadContext.replyToId,
       messageThreadId: directThreadRoutedToDmSession ? undefined : effectiveMessageThreadId,
       nativeChannelId: message.channel,
@@ -1787,7 +1787,7 @@ export async function prepareSlackMessage(params: {
       transcript: preflightAudioTranscript,
       cfg,
       accountId: account.accountId,
-      originatingTo: physicalSlackTarget,
+      originatingTo: preflightChannelTarget,
       messageThreadId: threadContext.messageThreadId,
     });
   }
@@ -1818,7 +1818,7 @@ export async function prepareSlackMessage(params: {
             ? {
                 sessionKey: updateLastRouteSessionKey,
                 channel: "slack",
-                to: logicalSlackTarget,
+                to: replyRouteTarget,
                 accountId: route.accountId,
                 threadId: effectiveMessageThreadId,
                 mainDmOwnerPin:
