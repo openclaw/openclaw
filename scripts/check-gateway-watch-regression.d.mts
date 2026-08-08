@@ -141,6 +141,7 @@ export function shouldRefreshBuildStampForRestoredArtifacts(params: unknown): bo
  * Writes build and runtime-postbuild stamps for the current artifact set.
  */
 export function writeBuildAndRuntimePostBuildStamps(params?: Record<string, unknown>): void;
+export function calculateDistRuntimeByteGrowth(pre: unknown, post: unknown): number;
 /**
  * Collects pass/fail findings for the bounded gateway watch regression run.
  */
