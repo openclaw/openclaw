@@ -222,6 +222,13 @@ function normalizeHeartbeatChatFinalText(params: {
  */
 const AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
+/**
+ * Pacing window for live assistant text on the chat channel. Applied on both
+ * edges: a chunk that arrives inside the window is delivered when the window
+ * expires rather than waiting for the next event that happens to pass the gate.
+ */
+const CHAT_DELTA_THROTTLE_MS = 150;
+
 export type ChatEventBroadcast = GatewayBroadcastFn;
 
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
@@ -417,11 +424,33 @@ export function createAgentEventHandler({
 
   const pendingTerminalLifecycleErrors = new Map<string, PendingTerminalLifecycleError>();
 
+  type PendingChatDeltaFlush = {
+    timer: NodeJS.Timeout;
+    sessionKey: string;
+    agentId: string | undefined;
+    sourceRunId: string;
+    seq: number;
+    opts: { controlUiVisible?: boolean } | undefined;
+  };
+
+  /** Trailing-edge flush armed per client run while the delta throttle is closed. */
+  const pendingChatDeltaFlushes = new Map<string, PendingChatDeltaFlush>();
+
+  const cancelPendingChatDeltaFlush = (clientRunId: string) => {
+    const pending = pendingChatDeltaFlushes.get(clientRunId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pendingChatDeltaFlushes.delete(clientRunId);
+  };
+
   type AgentTextThrottleStream = "assistant" | "thinking";
 
   const agentTextThrottleStreams = ["assistant", "thinking"] as const;
 
   const clearBufferedChatState = (clientRunId: string) => {
+    cancelPendingChatDeltaFlush(clientRunId);
     chatRunState.clearRun(clientRunId);
   };
 
@@ -887,31 +916,18 @@ export function createAgentEventHandler({
     pendingTerminalLifecycleErrors.set(evt.runId, { timer, event: evt, opts });
   };
 
-  const emitChatDelta = (
+  const broadcastChatDelta = (
     sessionKey: string,
     agentId: string | undefined,
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    text: string,
-    delta?: unknown,
-    opts?: { controlUiVisible?: boolean },
+    opts: { controlUiVisible?: boolean } | undefined,
   ) => {
-    const run = chatRunState.getOrCreate(clientRunId);
-    const previousRawText = run.rawBuffer ?? "";
-    const mergedRawText = resolveMergedAssistantText({
-      previousText: previousRawText,
-      nextText: text,
-      nextDelta: typeof delta === "string" ? delta : "",
-    });
-    if (!mergedRawText) {
-      return;
-    }
-    const now = Date.now();
-    run.rawBuffer = mergedRawText;
-    run.bufferUpdatedAt = now;
-    const last = run.deltaSentAt ?? 0;
-    if (now - last < 150) {
+    // Read live run state: the trailing flush fires after the buffer may have
+    // merged further chunks, and after a terminal may have cleared the run.
+    const run = chatRunState.runs.get(clientRunId);
+    if (!run?.rawBuffer) {
       return;
     }
     const projected = chatRunState.resolveBuffer(clientRunId);
@@ -926,6 +942,7 @@ export function createAgentEventHandler({
     if (!broadcastDelta) {
       return;
     }
+    const now = Date.now();
     run.deltaSentAt = now;
     run.deltaLastBroadcastLen = mergedText.length;
     run.deltaLastBroadcastText = mergedText;
@@ -951,6 +968,113 @@ export function createAgentEventHandler({
       controlUiVisible: opts?.controlUiVisible ?? true,
       dropIfSlow: true,
     });
+  };
+
+  // Direct aborts and restart shutdown mark, then clear, the run id they were
+  // handed — for a mapped run that is the source id, not the client id this
+  // flush is keyed by, so the client-keyed buffer outlives the aborted frame.
+  // Read both ids, exactly as the live event path derives its abort state.
+  const hasCurrentChatAbortMarker = (clientRunId: string, sourceRunId: string) => {
+    const chatLink = chatRunState.registry.peek(sourceRunId);
+    return (
+      isChatAbortMarkerCurrent(chatRunState.runs.get(clientRunId)?.abortMarker, chatLink) ||
+      isChatAbortMarkerCurrent(chatRunState.runs.get(sourceRunId)?.abortMarker, chatLink)
+    );
+  };
+
+  const scheduleChatDeltaFlush = (
+    sessionKey: string,
+    agentId: string | undefined,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    delayMs: number,
+    opts: { controlUiVisible?: boolean } | undefined,
+  ) => {
+    const existing = pendingChatDeltaFlushes.get(clientRunId);
+    if (existing) {
+      // Keep the deadline the first withheld chunk established; only refresh the
+      // identity the flush will broadcast with.
+      pendingChatDeltaFlushes.set(clientRunId, {
+        ...existing,
+        sessionKey,
+        agentId,
+        sourceRunId,
+        seq,
+        opts,
+      });
+      return;
+    }
+    const timer = setSafeTimeout(() => {
+      const pending = pendingChatDeltaFlushes.get(clientRunId);
+      if (!pending || pending.timer !== timer) {
+        return;
+      }
+      pendingChatDeltaFlushes.delete(clientRunId);
+      if (hasCurrentChatAbortMarker(clientRunId, pending.sourceRunId)) {
+        return;
+      }
+      broadcastChatDelta(
+        pending.sessionKey,
+        pending.agentId,
+        clientRunId,
+        pending.sourceRunId,
+        pending.seq,
+        pending.opts,
+      );
+    }, delayMs);
+    timer.unref?.();
+    pendingChatDeltaFlushes.set(clientRunId, {
+      timer,
+      sessionKey,
+      agentId,
+      sourceRunId,
+      seq,
+      opts,
+    });
+  };
+
+  const emitChatDelta = (
+    sessionKey: string,
+    agentId: string | undefined,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    text: string,
+    delta?: unknown,
+    opts?: { controlUiVisible?: boolean },
+  ) => {
+    const run = chatRunState.getOrCreate(clientRunId);
+    const previousRawText = run.rawBuffer ?? "";
+    const mergedRawText = resolveMergedAssistantText({
+      previousText: previousRawText,
+      nextText: text,
+      nextDelta: typeof delta === "string" ? delta : "",
+    });
+    if (!mergedRawText) {
+      return;
+    }
+    const now = Date.now();
+    run.rawBuffer = mergedRawText;
+    run.bufferUpdatedAt = now;
+    const waitedMs = now - (run.deltaSentAt ?? 0);
+    if (waitedMs < CHAT_DELTA_THROTTLE_MS) {
+      // Arm the trailing edge instead of dropping the chunk on the floor: the
+      // buffered text is otherwise delivered only when some later event happens
+      // to pass the gate, which leaves its latency bounded by nothing.
+      scheduleChatDeltaFlush(
+        sessionKey,
+        agentId,
+        clientRunId,
+        sourceRunId,
+        seq,
+        CHAT_DELTA_THROTTLE_MS - waitedMs,
+        opts,
+      );
+      return;
+    }
+    cancelPendingChatDeltaFlush(clientRunId);
+    broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, opts);
   };
 
   const resolveBufferedChatTextState = (
@@ -1025,6 +1149,9 @@ export function createAgentEventHandler({
       controlUiVisible: opts?.controlUiVisible ?? true,
       dropIfSlow: true,
     });
+    // This boundary drain subsumes any armed trailing flush; leaving it pending
+    // would re-broadcast against a watermark this call just moved.
+    cancelPendingChatDeltaFlush(clientRunId);
     run.deltaLastBroadcastLen = text.length;
     run.deltaLastBroadcastText = text;
     run.deltaSentAt = now;
@@ -1078,6 +1205,9 @@ export function createAgentEventHandler({
     // suppressed the most recent chunk, leaving the client with stale text.
     // Only flush if the buffered text differs from the last broadcast to avoid duplicates.
     flushBufferedChatDeltaIfNeeded(sessionKey, opts?.agentId, clientRunId, sourceRunId, seq, opts);
+    // clearRun does not route through clearBufferedChatState, so disarm here as
+    // well: no trailing flush may emit a delta after this run's terminal frame.
+    cancelPendingChatDeltaFlush(clientRunId);
     chatRunState.clearRun(clientRunId);
     const spawnedBy = resolveSpawnedBy(sessionKey);
     if (jobState !== "error") {
@@ -1719,6 +1849,10 @@ export function createAgentEventHandler({
         clearTimeout(pending.timer);
       }
       pendingTerminalLifecycleErrors.clear();
+      for (const pending of pendingChatDeltaFlushes.values()) {
+        clearTimeout(pending.timer);
+      }
+      pendingChatDeltaFlushes.clear();
     },
   });
 }
