@@ -49,6 +49,7 @@ const enterpriseGridActionTools = new Set([
   "downloadFile",
   "editMessage",
   "emojiList",
+  "listPins",
   "memberInfo",
   "pinMessage",
   "react",

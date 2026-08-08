@@ -64,14 +64,22 @@ describe("handleSlackAction", () => {
     } as OpenClawConfig;
   }
 
-  it("keeps pin reads unavailable for an enterprise org account", async () => {
-    await expect(
-      handleSlackAction(
-        { action: "listPins", channelId: "C123" },
-        slackConfig({ enterpriseOrgInstall: true }),
-      ),
-    ).rejects.toThrow(/unavailable for Enterprise Grid org installs/);
-    expect(listSlackPins).not.toHaveBeenCalled();
+  it("reads pins from the trusted Enterprise Grid workspace", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    listSlackPins.mockResolvedValueOnce([]);
+
+    const result = await handleSlackAction({ action: "listPins", channelId: "C123" }, cfg, {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    });
+
+    expect(requireDetails(result).ok).toBe(true);
+    expect(requireMockArg(listSlackPins, "listSlackPins", 0, 0)).toBe("C123");
+    expectRecordFields(requireRecordArg(listSlackPins, "listSlackPins", 0, 1), {
+      cfg,
+      teamId: "T123",
+    });
   });
 
   it("reads the current requester from the trusted Enterprise Grid workspace", async () => {
