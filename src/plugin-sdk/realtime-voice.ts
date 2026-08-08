@@ -1,4 +1,9 @@
 /** Production-private runtime seam for bundled and separately published official plugins. */
+import {
+  createRealtimeVoiceSessionHarness as createInternalRealtimeVoiceSessionHarness,
+  type RealtimeVoiceSessionHarness as InternalRealtimeVoiceSessionHarness,
+} from "../talk/realtime-session-harness.js";
+
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeVoiceAudioFormat,
@@ -171,10 +176,22 @@ export {
   type RealtimeVoiceBridgeSessionParams,
   type RealtimeVoiceMarkStrategy,
 } from "../talk/session-runtime.js";
-export {
-  createRealtimeVoiceSessionHarness,
-  type RealtimeVoiceSessionHarness,
-} from "../talk/realtime-session-harness.js";
+type PublicRealtimeVoiceSessionHarnessParams = Omit<
+  Parameters<typeof createInternalRealtimeVoiceSessionHarness>[0],
+  "returnEvents"
+>;
+
+export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> =
+  InternalRealtimeVoiceSessionHarness<TForcedConsultContext>;
+
+export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknown>(
+  params: PublicRealtimeVoiceSessionHarnessParams,
+): RealtimeVoiceSessionHarness<TForcedConsultContext> {
+  return createInternalRealtimeVoiceSessionHarness<TForcedConsultContext>({
+    ...params,
+    returnEvents: false,
+  });
+}
 export {
   createRealtimeVoiceAudioQueue,
   RealtimeVoiceSessionLifecycle,

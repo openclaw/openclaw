@@ -100,6 +100,91 @@ describe("talk realtime gateway relay", () => {
     };
   }
 
+  it("delivers owner events to the local sink and Gateway connection", () => {
+    const eventSink = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds,
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn: vi.fn() },
+      } as never,
+      connId: "conn-local-sink",
+      eventSink,
+      provider: createIdleRelayProvider(),
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-local-sink",
+      audioBase64: Buffer.from([1, 2]).toString("base64"),
+    });
+
+    expect(eventSink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relaySessionId: session.relaySessionId,
+        type: "inputAudio",
+        byteLength: 2,
+      }),
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({ relaySessionId: session.relaySessionId, type: "inputAudio" }),
+      new Set(["conn-local-sink"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  it("keeps Gateway and provider delivery alive when the local sink throws", () => {
+    const sendAudio = vi.fn();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () => ({
+      connect: vi.fn(async () => undefined),
+      sendAudio,
+      setMediaTimestamp: vi.fn(),
+      handleBargeIn: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    });
+    const broadcastToConnIds = vi.fn();
+    const warn = vi.fn();
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds,
+        getRuntimeConfig: () => ({}),
+        logGateway: { warn },
+      } as never,
+      connId: "conn-throwing-sink",
+      eventSink: () => {
+        throw new Error("renderer gone");
+      },
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-throwing-sink",
+      audioBase64: Buffer.from([1, 2]).toString("base64"),
+    });
+
+    expect(warn).toHaveBeenCalledWith("talk realtime event sink failed: renderer gone");
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "talk.event",
+      expect.objectContaining({ relaySessionId: session.relaySessionId, type: "inputAudio" }),
+      new Set(["conn-throwing-sink"]),
+      { dropIfSlow: true },
+    );
+    expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
+  });
+
   it("closes only realtime relays owned by the disconnected connection", async () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     const tempDir = await fs.realpath(tempDirs.make("openclaw-relay-disconnect-"));
@@ -1449,6 +1534,11 @@ describe("talk realtime gateway relay", () => {
       language: "de",
     });
     await Promise.resolve();
+    const relay = relaySessions.get(session.relaySessionId);
+    expect(relay).toBeDefined();
+    if (!relay) {
+      throw new Error("expected active relay session");
+    }
 
     const sessionFields = expectRecordFields(session, {
       provider: "relay-test",
@@ -1489,13 +1579,28 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(readyEvent, { event: "talk.event", connIds: ["conn-1"] });
     expectDelivery(readyPayload, false);
 
+    const audioStartedPayload = findEventPayload(
+      events,
+      (payload) => payload.type === "audioStarted",
+    );
+    const audioStartedEvent = expectRecordFields(audioStartedPayload.talkEvent, {
+      type: "output.audio.started",
+    });
+    expect(relay.harness.talk.recentEvents).toContain(audioStartedPayload.talkEvent);
+    expectDelivery(audioStartedPayload, false);
+
     const audioPayload = findEventPayload(events, (payload) => payload.type === "audio");
     expectRecordFields(audioPayload, {
       relaySessionId: session.relaySessionId,
       type: "audio",
       audioBase64: Buffer.from("audio-out").toString("base64"),
     });
-    expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
+    const audioEvent = expectRecordFields(audioPayload.talkEvent, { type: "output.audio.delta" });
+    if (typeof audioStartedEvent.seq !== "number" || typeof audioEvent.seq !== "number") {
+      throw new Error("Expected sequenced relay audio events");
+    }
+    expect(audioEvent.seq).toBe(audioStartedEvent.seq + 1);
+    expect(relay.harness.talk.recentEvents).toContain(audioPayload.talkEvent);
     expectDelivery(audioPayload, true);
 
     const markPayload = findEventPayload(events, (payload) => payload.type === "mark");
@@ -1504,6 +1609,12 @@ describe("talk realtime gateway relay", () => {
       type: "mark",
       markName: "mark-1",
     });
+    expectRecordFields(markPayload.talkEvent, {
+      type: "output.audio.done",
+      payload: { markName: "mark-1" },
+      final: true,
+    });
+    expect(relay.harness.talk.recentEvents).toContain(markPayload.talkEvent);
     expectDelivery(markPayload, false);
 
     const partialTranscript = findEventPayload(
@@ -1641,6 +1752,7 @@ describe("talk realtime gateway relay", () => {
       byteLength: Buffer.from("audio-in").byteLength,
     });
     expectRecordFields(inputAudioPayload.talkEvent, { type: "input.audio.delta" });
+    expect(relay.harness.talk.recentEvents).toContain(inputAudioPayload.talkEvent);
     expectDelivery(inputAudioPayload, true);
 
     const clearPayload = findEventPayload(events, (payload) => payload.type === "clear");
@@ -1707,6 +1819,54 @@ describe("talk realtime gateway relay", () => {
     });
     expectRecordFields(closePayload.talkEvent, { type: "session.closed", final: true });
     expectDelivery(closePayload, false);
+  });
+
+  it("publishes recorded input before synchronous provider output", () => {
+    const events: Array<{ payload: Record<string, unknown> }> = [];
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => ({
+        connect: vi.fn(async () => undefined),
+        sendAudio: vi.fn(() => request.onAudio(Buffer.from("provider-output"))),
+        setMediaTimestamp: vi.fn(),
+        handleBargeIn: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        isConnected: vi.fn(() => true),
+      }),
+    };
+    const session = createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: (_event: string, payload: Record<string, unknown>) => {
+          events.push({ payload });
+        },
+      } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      audioBase64: Buffer.from("browser-input").toString("base64"),
+    });
+
+    const sequencedEvents = events
+      .map(({ payload }) => payload.talkEvent)
+      .filter((event): event is Record<string, unknown> => Boolean(event));
+    expect(sequencedEvents.map((event) => event.type)).toEqual([
+      "turn.started",
+      "input.audio.delta",
+      "output.audio.started",
+      "output.audio.delta",
+    ]);
+    expect(sequencedEvents.map((event) => event.seq)).toEqual([1, 2, 3, 4]);
   });
 
   it("emits generic issue details when relay connect fails", async () => {

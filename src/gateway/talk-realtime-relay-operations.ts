@@ -26,7 +26,8 @@ import {
   MAX_AUDIO_BASE64_BYTES,
   MAX_RELAY_SESSIONS_GLOBAL,
   MAX_RELAY_SESSIONS_PER_CONN,
-  broadcastToOwner,
+  broadcastRelayTurnStarted,
+  publishTalkRealtimeRelayEvent,
   drainingRelaySessions,
   ensureRelayTurn,
   noFallbackRelayOutputFlush,
@@ -104,7 +105,7 @@ export function closeRelaySession(session: RelaySession, reason: "completed" | "
     // Provider teardown may throw, but the relay must still reach its durable
     // voice and owner-visible terminal state before that error is surfaced.
     void closeRelayVoiceSession(session);
-    broadcastToOwner(session.context, session.connId, {
+    publishTalkRealtimeRelayEvent(session, {
       relaySessionId: session.id,
       type: "close",
       reason,
@@ -186,18 +187,20 @@ export function sendTalkRealtimeRelayAudio(params: {
   }
   const session = getRelaySession(params.relaySessionId, params.connId);
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Realtime relay");
-  const turnId = ensureRelayTurn(session);
-  session.bridge.sendAudio(audio);
-  broadcastToOwner(session.context, session.connId, {
+  const recorded = session.harness.recordInputAudio(audio);
+  if (!recorded) {
+    return;
+  }
+  broadcastRelayTurnStarted(session, recorded.turn.event);
+  publishTalkRealtimeRelayEvent(session, {
     relaySessionId: session.id,
     type: "inputAudio",
     byteLength: audio.byteLength,
-    talkEvent: session.harness.talk.emit({
-      type: "input.audio.delta",
-      turnId,
-      payload: { byteLength: audio.byteLength },
-    }),
+    talkEvent: recorded.inputAudioDelta,
   });
+  // Publish the recorded input before provider code can synchronously re-enter
+  // with output events, preserving the harness's authoritative sequence order.
+  session.bridge.sendAudio(audio);
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }
@@ -476,7 +479,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   if (relaySessions.get(session.id) !== session) {
     return finalResult;
   }
-  broadcastToOwner(session.context, session.connId, {
+  publishTalkRealtimeRelayEvent(session, {
     relaySessionId: session.id,
     type: "toolProgress",
     result: finalResult,
@@ -529,7 +532,7 @@ export function cancelTalkRealtimeRelayTurn(params: {
     turnId,
     payload: { reason },
   });
-  broadcastToOwner(session.context, session.connId, {
+  publishTalkRealtimeRelayEvent(session, {
     relaySessionId: session.id,
     type: "clear",
     talkEvent: cancelled.ok ? cancelled.event : undefined,

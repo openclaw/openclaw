@@ -5,6 +5,7 @@ export type GatewayRelayEvent = {
   talkEvent?: RealtimeTalkEvent;
 } & (
   | { type?: "ready" }
+  | { type?: "audioStarted" }
   | { type?: "audio"; audioBase64?: string }
   | { type?: "clear"; reason?: "barge-in" }
   | { type?: "mark"; markName?: string }

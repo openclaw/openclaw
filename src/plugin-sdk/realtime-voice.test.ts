@@ -1,9 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  createRealtimeVoiceSessionHarness,
   createRealtimeVoiceAudioQueue,
   RealtimeVoiceSessionLifecycle,
   type RealtimeVoiceSessionConnection,
 } from "./realtime-voice.js";
+
+expectTypeOf<Parameters<typeof createRealtimeVoiceSessionHarness>[0]>().not.toHaveProperty(
+  "returnEvents",
+);
+expectTypeOf<
+  ReturnType<typeof createRealtimeVoiceSessionHarness>["ensureTurn"]
+>().returns.toEqualTypeOf<string>();
 
 function connectLifecycle(
   lifecycle: RealtimeVoiceSessionLifecycle,

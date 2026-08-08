@@ -8,25 +8,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const defaultHarnessParams: Parameters<typeof createRealtimeVoiceSessionHarness>[0] = {
+  talk: {
+    sessionId: "test-session",
+    mode: "realtime",
+    transport: "gateway-relay",
+    brain: "agent-consult",
+    provider: "test",
+  },
+  talkPayloads: {
+    turnStarted: () => ({ surface: "test" }),
+    turnEnded: (reason) => ({ reason }),
+    inputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
+    outputAudioStarted: () => ({ surface: "test" }),
+    outputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
+    outputAudioDone: (reason) => ({ reason }),
+  },
+};
+
 function createHarness(
   overrides: Partial<Parameters<typeof createRealtimeVoiceSessionHarness>[0]> = {},
 ) {
   return createRealtimeVoiceSessionHarness({
-    talk: {
-      sessionId: "test-session",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "test",
-    },
-    talkPayloads: {
-      turnStarted: () => ({ surface: "test" }),
-      turnEnded: (reason) => ({ reason }),
-      inputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
-      outputAudioStarted: () => ({ surface: "test" }),
-      outputAudioDelta: (audio) => ({ byteLength: audio.byteLength }),
-      outputAudioDone: (reason) => ({ reason }),
-    },
+    ...defaultHarnessParams,
     ...overrides,
   });
 }
@@ -45,13 +49,14 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
 }
 
 describe("realtime voice session harness", () => {
-  it("keeps shared Talk events ordered across input, output, and turn completion", () => {
+  it("keeps legacy helpers compatible while ordering Talk events", () => {
     const harness = createHarness();
 
+    expect(harness.ensureTurn()).toBe("turn-1");
     expect(harness.recordInputAudio(Buffer.from([1, 2]))).toBe(true);
-    harness.recordOutputAudio(Buffer.from([3, 4, 5]));
-    harness.finishOutputAudio("response.done");
-    harness.endTurn("response.done");
+    expect(harness.recordOutputAudio(Buffer.from([3, 4, 5]))).toBeUndefined();
+    expect(harness.finishOutputAudio("response.done")).toBeUndefined();
+    expect(harness.endTurn("response.done")).toBeUndefined();
 
     expect(harness.talk.recentEvents.map((event) => event.type)).toEqual([
       "turn.started",
@@ -62,6 +67,37 @@ describe("realtime voice session harness", () => {
       "turn.ended",
     ]);
     expect(harness.talk.recentEvents.map((event) => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("returns the exact Talk events emitted by audio helpers", () => {
+    const harness = createRealtimeVoiceSessionHarness({
+      ...defaultHarnessParams,
+      returnEvents: true,
+    });
+
+    const input = harness.recordInputAudio(Buffer.from([1, 2]));
+    const output = harness.recordOutputAudio(Buffer.from([3, 4, 5]));
+    const done = harness.finishOutputAudio("mark", { markName: "played" });
+
+    expect(input).toMatchObject({
+      turn: { turnId: "turn-1", event: { type: "turn.started" } },
+      inputAudioDelta: { type: "input.audio.delta", turnId: "turn-1" },
+    });
+    expect(output).toMatchObject({
+      turn: { turnId: "turn-1" },
+      outputAudioStarted: { type: "output.audio.started", turnId: "turn-1" },
+      outputAudioDelta: { type: "output.audio.delta", turnId: "turn-1" },
+    });
+    expect(done).toMatchObject({
+      type: "output.audio.done",
+      turnId: "turn-1",
+      payload: { reason: "mark" },
+    });
+    expect(input?.turn.event).toBe(harness.talk.recentEvents[0]);
+    expect(input?.inputAudioDelta).toBe(harness.talk.recentEvents[1]);
+    expect(output.outputAudioStarted).toBe(harness.talk.recentEvents[2]);
+    expect(output.outputAudioDelta).toBe(harness.talk.recentEvents[3]);
+    expect(done).toBe(harness.talk.recentEvents[4]);
   });
 
   it("honors a caller-specific recent Talk event limit", () => {
