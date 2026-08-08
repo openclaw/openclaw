@@ -26,6 +26,7 @@ import {
   ensureAuthProfileStoreMock,
   estimateTokensMock,
   getApiKeyForModelMock,
+  getHistoryLimitFromSessionKeyMock,
   getMemorySearchManagerMock,
   guardSessionManagerMock,
   hookRunner,
@@ -347,6 +348,20 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       details: { ok: true },
     });
     resetCompactSessionStateMocks();
+  });
+
+  it("passes the account id to the history limit resolver during compaction", async () => {
+    // Prompt preparation and compaction both truncate history; if only one
+    // forwards the account, an account-scoped limit silently reverts to the
+    // channel root the first time a session compacts.
+    await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs({ agentAccountId: "work" }));
+
+    expect(getHistoryLimitFromSessionKeyMock).toHaveBeenCalled();
+    const call = expectDefined(
+      getHistoryLimitFromSessionKeyMock.mock.calls.at(-1),
+      "history limit resolver call",
+    );
+    expect(call[2]).toBe("work");
   });
 
   it("acquires the normal session lock without process-wide reentry", async () => {
