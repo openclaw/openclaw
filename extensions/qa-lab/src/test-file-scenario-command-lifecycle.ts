@@ -7,6 +7,7 @@ export type QaScenarioCommandExecution = {
   command: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void;
   timeoutMs?: number;
 };
 
@@ -74,8 +75,14 @@ class QaScenarioCommandLifecycle {
   start(resolve: (result: QaScenarioCommandResult) => void, reject: (reason?: unknown) => void) {
     this.resolve = resolve;
     this.armTimeout();
-    this.child.stdout?.on("data", (chunk: Buffer) => this.stdout.push(chunk));
-    this.child.stderr?.on("data", (chunk: Buffer) => this.stderr.push(chunk));
+    this.child.stdout?.on("data", (chunk: Buffer) => {
+      this.stdout.push(chunk);
+      this.execution.onOutput?.("stdout", chunk);
+    });
+    this.child.stderr?.on("data", (chunk: Buffer) => {
+      this.stderr.push(chunk);
+      this.execution.onOutput?.("stderr", chunk);
+    });
     process.once("exit", this.handleParentExit);
     for (const signal of QA_SCENARIO_COMMAND_PARENT_SIGNALS) {
       process.once(signal, this.handleParentSignal);

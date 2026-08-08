@@ -35,12 +35,16 @@ function createChild(pid = 42) {
   return child;
 }
 
-function runCommand(timeoutMs?: number) {
+function runCommand(
+  timeoutMs?: number,
+  onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void,
+) {
   return runQaScenarioCommandLifecycle({
     command: "/usr/local/bin/scenario-command",
     args: ["--run"],
     cwd: "/tmp/qa",
     env: { OPENCLAW_QA_REF: "test" },
+    ...(onOutput ? { onOutput } : {}),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   });
 }
@@ -79,10 +83,17 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
 
   it("preserves the exact close result and removes parent handlers", async () => {
     const child = createChild();
-    const resultPromise = runCommand(5_000);
+    const output: Array<[string, string]> = [];
+    const resultPromise = runCommand(5_000, (stream, chunk) => {
+      output.push([stream, chunk.toString("utf8")]);
+    });
 
     child.stdout?.emit("data", Buffer.from("out\n"));
     child.stderr?.emit("data", Buffer.from("err\n"));
+    expect(output).toEqual([
+      ["stdout", "out\n"],
+      ["stderr", "err\n"],
+    ]);
     child.emit("close", 3, null);
 
     await expect(resultPromise).resolves.toEqual({

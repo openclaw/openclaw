@@ -1021,6 +1021,95 @@ describe("qa test file scenario runner", () => {
     expect(result.results[3]?.failureMessage).toBe("gateway-network exited with 1");
   });
 
+  it("runs long-budget scripts first while preserving result order and live output", async () => {
+    const repoRoot = await makeTempRepo("qa-script-budget-order-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "script-budget-order");
+    const makeProducer = (id: string, timeoutMs: number) => {
+      const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+      if (scenario.execution.kind !== "script") {
+        throw new Error("expected script scenario");
+      }
+      return {
+        ...scenario,
+        id,
+        sourcePath: `qa/scenarios/runtime/${id}.yaml`,
+        execution: { ...scenario.execution, timeoutMs },
+      };
+    };
+    const scenarios = [
+      makeProducer("short-producer", 60_000),
+      makeDockerE2eScenario("docker-lane", "gateway"),
+      makeProducer("long-producer", 60 * 60_000),
+    ];
+    const commandOrder: string[] = [];
+    const liveOutput: string[] = [];
+    const progress: string[] = [];
+
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios,
+      progress: (message) => progress.push(message),
+      onCommandOutput: (_stream, chunk) => liveOutput.push(chunk.toString("utf8")),
+      runCommand: async (command) => {
+        if (command.args[0] === "scripts/test-docker-all.mjs") {
+          commandOrder.push("docker-lane");
+          const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
+          if (!logDir) {
+            throw new Error("missing Docker scheduler log dir");
+          }
+          await fs.mkdir(logDir, { recursive: true });
+          await fs.writeFile(
+            path.join(logDir, "summary.json"),
+            `${JSON.stringify({
+              failures: [],
+              lanes: [{ elapsedSeconds: 1, name: "gateway", status: 0 }],
+              selectedLanes: ["gateway"],
+            })}\n`,
+            "utf8",
+          );
+        } else {
+          const scenarioId = path.basename(command.args.at(-1) ?? "");
+          commandOrder.push(scenarioId);
+          await writeScriptProducerEvidence({
+            outputDir,
+            producerId: `producer.${scenarioId}`,
+            scenarioId,
+            status: "pass",
+          });
+        }
+        command.onOutput?.("stdout", Buffer.from(`live:${commandOrder.at(-1)}\n`));
+        return { exitCode: 0, stdout: "buffered output\n", stderr: "" };
+      },
+    });
+
+    expect(commandOrder).toEqual(["long-producer", "docker-lane", "short-producer"]);
+    expect(result.results.map(({ scenario }) => scenario.id)).toEqual([
+      "short-producer",
+      "docker-lane",
+      "long-producer",
+    ]);
+    expect(liveOutput).toEqual([
+      "live:long-producer\n",
+      "live:docker-lane\n",
+      "live:short-producer\n",
+    ]);
+    expect(progress).toEqual([
+      "native script start scenario=long-producer timeoutMs=3600000",
+      expect.stringMatching(
+        /^native script finish scenario=long-producer status=pass durationMs=\d+$/,
+      ),
+      "native docker-batch start scenarios=1 timeoutMs=1800000",
+      expect.stringMatching(/^native docker-batch finish passed=1 failed=0 durationMs=\d+$/),
+      "native script start scenario=short-producer timeoutMs=60000",
+      expect.stringMatching(
+        /^native script finish scenario=short-producer status=pass durationMs=\d+$/,
+      ),
+    ]);
+  });
+
   it("uses script scenario timeout overrides when running producer commands", async () => {
     const repoRoot = await makeTempRepo("qa-script-scenario-timeout-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-timeout");
