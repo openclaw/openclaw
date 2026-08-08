@@ -3,6 +3,9 @@
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
+// Past this much lateness the stream already underran; restart the cadence from now
+// instead of firing a catch-up burst the carrier jitter buffer would drop.
+const MAX_PACING_CATCHUP_MS = 100;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
 const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
 
@@ -35,6 +38,8 @@ export class RealtimeAudioPacer {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
+  /** Monotonic time the next audio frame is due, so pacing cannot drift late frame by frame. */
+  private nextSendDeadlineMs: number | null = null;
 
   constructor(
     private readonly params: {
@@ -151,6 +156,9 @@ export class RealtimeAudioPacer {
   private resetQueue(): void {
     this.queue.length = 0;
     this.queueHead = 0;
+    // Nothing is pending, so the next audio starts a fresh cadence rather than
+    // inheriting a deadline from the previous utterance.
+    this.nextSendDeadlineMs = null;
   }
 
   /** Send one queued item and schedule the next send based on audio duration. */
@@ -169,7 +177,24 @@ export class RealtimeAudioPacer {
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
       sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
-      delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
+      // Schedule against a running deadline instead of sleeping a full frame after each
+      // send; a relative sleep adds send and event-loop cost to every frame, and that
+      // underfeed accumulates into carrier jitter-buffer concealment.
+      const frameDurationMs = item.durationMs || TELEPHONY_CHUNK_MS;
+      // Monotonic clock: `setTimeout` schedules against libuv's monotonic time, so pacing
+      // must use the same domain. A wall-clock source would let an NTP correction distort
+      // the cadence and reintroduce the artifacts this pacing exists to prevent.
+      const nowMs = performance.now();
+      // Drop the deadline once it is no longer meaningful, i.e. after a stall longer than
+      // the pacing window.
+      if (
+        this.nextSendDeadlineMs === null ||
+        nowMs - this.nextSendDeadlineMs > MAX_PACING_CATCHUP_MS
+      ) {
+        this.nextSendDeadlineMs = nowMs;
+      }
+      this.nextSendDeadlineMs += frameDurationMs;
+      delayMs = Math.max(0, this.nextSendDeadlineMs - nowMs);
     } else {
       sent = this.params.send(this.params.serializer.mark(item.name));
     }
