@@ -2069,11 +2069,13 @@ describe("channel turn kernel", () => {
 
   it("threads turnAdoptionLifecycle into assembled reply options and fires after recovery persist attempt", async () => {
     const events: string[] = [];
+    let threadedOnAdopted: (() => void | Promise<void>) | undefined;
     const onAdopted = vi.fn(async () => {
       events.push("adopted");
     });
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
       async (params: Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]) => {
+        threadedOnAdopted = params.replyOptions?.turnAdoptionLifecycle?.onAdopted;
         events.push("dispatch-start");
         // Persist attempt completes before adoption (agent-runner contract).
         events.push("recovery-persist");
@@ -2103,13 +2105,11 @@ describe("channel turn kernel", () => {
 
     expect(onAdopted).toHaveBeenCalledOnce();
     expect(events).toEqual(["record", "dispatch-start", "recovery-persist", "adopted", "settle"]);
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyOptions: expect.objectContaining({
-          turnAdoptionLifecycle: expect.objectContaining({ onAdopted }),
-        }),
-      }),
-    );
+    // The dispatch owner threads the tracked wrapper (not the raw lifecycle) so
+    // a post-adoption failure cannot trigger wrapper-level abandonment.
+    expect(threadedOnAdopted).toBeDefined();
+    await threadedOnAdopted?.();
+    expect(onAdopted).toHaveBeenCalledTimes(2);
   });
 
   it("abandons the ingress claim when dispatch fails before adoption", async () => {
@@ -2139,6 +2139,38 @@ describe("channel turn kernel", () => {
 
     expect(onAdopted).not.toHaveBeenCalled();
     expect(onAbandoned).toHaveBeenCalledOnce();
+  });
+
+  it("does not abandon an adopted ingress claim when later dispatch work throws", async () => {
+    const onAdopted = vi.fn();
+    const onAbandoned = vi.fn();
+    const dispatchError = new Error("post-adoption settlement failed");
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
+      async (params: Parameters<DispatchReplyWithBufferedBlockDispatcher>[0]) => {
+        await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
+        throw dispatchError;
+      },
+    ) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "test",
+        agentId: "main",
+        routeSessionKey: "agent:main:test:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx(),
+        recordInboundSession: createRecordInboundSession([]),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          deliver: vi.fn(async () => undefined),
+        },
+        turnAdoptionLifecycle: { onAdopted, onAbandoned },
+      }),
+    ).rejects.toThrow(dispatchError);
+
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(onAbandoned).not.toHaveBeenCalled();
   });
 
   it("does not run afterRecord when session recording fails", async () => {

@@ -1,3 +1,4 @@
+import type { TurnAdoptionLifecycle } from "../../auto-reply/get-reply-options.types.js";
 import { clearChannelHistoryIfEnabled } from "../../auto-reply/reply/history.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
@@ -24,6 +25,28 @@ import type {
 
 const NO_ADDITIONAL_DELIVERY_SIGNALS: ChannelTurnVisibleDeliverySignals = {};
 const log = createSubsystemLogger("channels/turn/execution");
+
+const turnAdoptionState = new WeakMap<TurnAdoptionLifecycle, boolean>();
+
+/**
+ * Wraps the exact lifecycle passed into dispatch so a post-adoption failure
+ * cannot trigger wrapper-level abandonment (for example SMS MMS media cleanup)
+ * that the durable drain's post-adoption no-op would be too late to prevent.
+ * Adoption is recorded before forwarding: once adoption is attempted the claim
+ * belongs to the drain, which keeps it on failure instead of releasing it.
+ */
+export function trackTurnAdoptionLifecycle(
+  lifecycle: TurnAdoptionLifecycle,
+): TurnAdoptionLifecycle {
+  const tracked = {
+    ...lifecycle,
+    onAdopted: async () => {
+      turnAdoptionState.set(tracked, true);
+      await lifecycle.onAdopted();
+    },
+  };
+  return tracked;
+}
 
 function emit(params: {
   log?: (event: ChannelTurnLogEvent) => void;
@@ -90,10 +113,16 @@ function resolveRecordSessionKey<TDispatchResult>(
 async function abandonPreAdoptionIngressClaim<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): Promise<void> {
+  const lifecycle = params.runDispatchLifecycle?.turnAdoptionLifecycle;
+  // Wrapper lifecycles (SMS MMS cleanup) run abandonment side effects before
+  // forwarding to the drain, so only release a claim that never adopted.
+  if (lifecycle === undefined || turnAdoptionState.get(lifecycle) === true) {
+    return;
+  }
   try {
     // The lifecycle contract types onAbandoned as possibly-sync, but drain
     // implementations return a promise; adopt whichever shape is returned.
-    await Promise.resolve(params.runDispatchLifecycle?.turnAdoptionLifecycle?.onAbandoned?.());
+    await Promise.resolve(lifecycle.onAbandoned?.());
   } catch {
     // Preserve the original turn failure; the drain's release path reports its
     // own write errors and keeps heartbeat ownership on failure.
