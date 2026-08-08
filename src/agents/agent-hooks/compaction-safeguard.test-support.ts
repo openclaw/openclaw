@@ -18,6 +18,7 @@ type CompactionSafeguardTestApi = {
   auditSummaryQuality: CallableFunction;
   capCompactionSummary: CallableFunction;
   capCompactionSummaryPreservingSuffix: CallableFunction;
+  sliceTailAtLineBoundary: CallableFunction;
   formatFileOperations: CallableFunction;
   computeAdaptiveChunkRatio: CallableFunction;
   isOversizedForSummary: CallableFunction;
@@ -30,7 +31,9 @@ type CompactionSafeguardTestApi = {
   MAX_COMPACTION_SUMMARY_CHARS: number;
   MAX_FILE_OPS_SECTION_CHARS: number;
   MAX_FILE_OPS_LIST_CHARS: number;
+  MAX_CONTEXT_SECTION_CHARS: number;
   SUMMARY_TRUNCATED_MARKER: string;
+  SUFFIX_TRUNCATED_MARKER: string;
 };
 
 function getTestApi(): CompactionSafeguardTestApi {

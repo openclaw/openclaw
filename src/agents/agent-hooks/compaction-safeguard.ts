@@ -69,12 +69,24 @@ const MAX_TOOL_FAILURE_CHARS = 240;
 const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 const MAX_FILE_OPS_SECTION_CHARS = 2_000;
 const MAX_FILE_OPS_LIST_CHARS = 900;
+// Bound for the split-turn prefix, the only suffix part with no bound of its
+// own. Not applied to preserved turns, which recentTurnsPreserve bounds by turn
+// count and promises verbatim.
+const MAX_CONTEXT_SECTION_CHARS = 4_000;
 const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
+// Distinct from SUMMARY_TRUNCATED_MARKER: names loss of appended context
+// (preserved turns, split-turn prefix) rather than of the summary itself, so a
+// reader of the stored artifact can tell which half was cut.
+const SUFFIX_TRUNCATED_MARKER = "\n\n[Compaction context truncated to fit budget]\n";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+// Bounds the tool name inside a rendered message's "- Tool result (x): " label.
+// With the text bound above, this is what makes a whole rendered message
+// bounded, so no section trim ever has to cut one in half.
+const MAX_ROLE_LABEL_NAME_CHARS = 80;
 const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
@@ -553,22 +565,62 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
     formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
     formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
   ].filter(Boolean);
+  // Suffix content, so it names context loss. capCompactionSummary would stamp
+  // this with the summary marker and misreport which half was cut.
   return sections.length > 0
-    ? capCompactionSummary(`\n\n${sections.join("\n\n")}`, MAX_FILE_OPS_SECTION_CHARS)
+    ? capWithMarker(
+        `\n\n${sections.join("\n\n")}`,
+        MAX_FILE_OPS_SECTION_CHARS,
+        SUFFIX_TRUNCATED_MARKER,
+      )
     : "";
 }
 
-function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
-  if (maxChars <= 0 || summary.length <= maxChars) {
-    return summary;
+function capWithMarker(text: string, maxChars: number, marker: string): string {
+  if (maxChars <= 0 || text.length <= maxChars) {
+    return text;
   }
-  const marker = SUMMARY_TRUNCATED_MARKER;
   const budget = Math.max(0, maxChars - marker.length);
   if (budget <= 0) {
     // Marker cannot fit; keep body prefix instead of a partial marker fragment.
-    return truncateUtf16Safe(summary, maxChars);
+    return truncateUtf16Safe(text, maxChars);
   }
-  return `${truncateUtf16Safe(summary, budget)}${marker}`;
+  return `${truncateUtf16Safe(text, budget)}${marker}`;
+}
+
+/**
+ * Tail slice that starts on a line boundary, so no line is delivered
+ * half-formed. A cut already landing on a boundary keeps its first line;
+ * otherwise the partial line goes, and a slice with no boundary at all is one
+ * fragment, so nothing survives. Slicing and aligning live together because
+ * only here are both the source and the cut position known.
+ *
+ * A line boundary is NOT a message boundary — a rendered message may span lines
+ * (see formatContextMessages). This is the last-resort trim over an already
+ * assembled suffix, where the section structure is no longer available, so it
+ * guarantees only that the result is line-aligned and UTF-16 safe. Its output
+ * is always preceded by SUFFIX_TRUNCATED_MARKER, so a surviving continuation
+ * reads as truncated content rather than as a whole turn. A caller that still
+ * holds the messages MUST drop whole messages instead; boundRawSplitTurn does.
+ */
+function sliceTailAtLineBoundary(text: string, budget: number): string {
+  if (budget <= 0) {
+    return "";
+  }
+  if (text.length <= budget) {
+    return text;
+  }
+  const kept = sliceUtf16Safe(text, -budget);
+  const cutIndex = text.length - kept.length;
+  if (cutIndex === 0 || text.charCodeAt(cutIndex - 1) === 10) {
+    return kept;
+  }
+  const lineBreak = kept.indexOf("\n");
+  return lineBreak >= 0 ? kept.slice(lineBreak + 1) : "";
+}
+
+function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
+  return capWithMarker(summary, maxChars, SUMMARY_TRUNCATED_MARKER);
 }
 
 function capCompactionSummaryPreservingSuffix(
@@ -582,13 +634,41 @@ function capCompactionSummaryPreservingSuffix(
   if (maxChars <= 0) {
     return capCompactionSummary(`${summaryBody}${suffix}`, maxChars);
   }
-  if (suffix.length >= maxChars) {
-    // Preserve tail (workspace rules, diagnostics) over head (preserved turns).
-    return sliceUtf16Safe(suffix, -maxChars);
+  // The body is never squeezed below its reserved share. A suffix at or near the
+  // budget used to leave it a sliver — or, once the suffix reached maxChars,
+  // nothing at all — producing a full-length artifact that carried none of the
+  // summary the compaction existed to produce. Reserving first makes the sliver
+  // and the total-loss cases the same code path rather than adjacent branches.
+  const reservedForBody = Math.min(summaryBody.length, Math.floor(maxChars / 2));
+  const bodyBudget = Math.max(0, reservedForBody, maxChars - suffix.length);
+  // A zero budget must yield nothing. capCompactionSummary passes its input
+  // through when the budget is non-positive, which would put the whole body
+  // back and overrun maxChars once the suffix is appended.
+  const cappedBody = bodyBudget > 0 ? capCompactionSummary(summaryBody, bodyBudget) : "";
+  const suffixBudget = maxChars - cappedBody.length;
+  if (suffix.length <= suffixBudget) {
+    return `${cappedBody}${suffix}`;
   }
-  const bodyBudget = Math.max(0, maxChars - suffix.length);
-  const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
-  return `${cappedBody}${suffix}`;
+  log.warn(
+    `Compaction suffix (${suffix.length} chars) exceeds its ${suffixBudget}-char share of the ${maxChars}-char summary budget; truncating suffix and keeping ${cappedBody.length} chars of summary body`,
+  );
+  if (suffixBudget <= 0) {
+    // sliceUtf16Safe(s, -0) returns the whole string, since -0 < 0 is false.
+    // Unreachable today (the body's reserve is at most half the budget, so some
+    // budget always remains) but the trap is one edit away from being live.
+    return cappedBody;
+  }
+  if (suffixBudget <= SUFFIX_TRUNCATED_MARKER.length) {
+    // Marker cannot fit; keep the suffix tail rather than a partial marker
+    // fragment, mirroring capCompactionSummary's tiny-budget behavior. No
+    // boundary realignment here: this budget is smaller than the marker, so it
+    // is unreachable in production (the body's reserve leaves at least half the
+    // cap for the suffix) and dropping the partial line would empty it.
+    return `${cappedBody}${sliceUtf16Safe(suffix, -suffixBudget)}`;
+  }
+  // Suffix keeps its tail (workspace rules, diagnostics) over its head.
+  const keptSuffix = sliceTailAtLineBoundary(suffix, suffixBudget - SUFFIX_TRUNCATED_MARKER.length);
+  return `${cappedBody}${SUFFIX_TRUNCATED_MARKER}${keptSuffix}`;
 }
 
 function resolveSummaryReserveTokens(
@@ -731,10 +811,18 @@ function formatContextMessages(messages: AgentMessage[]): string[] {
       } else if (message.role === "toolResult") {
         const toolName = (message as { toolName?: unknown }).toolName;
         const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
-        roleLabel = `Tool result (${safeToolName})`;
+        // Message text is bounded below, but the label was not: toolName is
+        // caller-supplied and arbitrarily long, which is the only way a single
+        // rendered message could outgrow a section budget and force a trim to
+        // cut inside the label itself.
+        roleLabel = `Tool result (${capWithMarker(safeToolName, MAX_ROLE_LABEL_NAME_CHARS, "...")})`;
       } else {
         return null;
       }
+      // A rendered message may span lines: extractMessageText joins content
+      // blocks with a newline and returns block text verbatim. Callers that
+      // trim MUST work on this array, where one element is one message —
+      // never on the joined string, where a newline is not a message boundary.
       const rendered = [
         extractMessageText(message),
         formatNonTextPlaceholder((message as { content?: unknown }).content),
@@ -758,12 +846,76 @@ function formatContextSection(messages: AgentMessage[], heading: string): string
   return lines.length > 0 ? `${heading}\n${lines.join("\n")}` : "";
 }
 
+// The split-turn prefix is the one suffix contributor with no bound of its own:
+// preserved turns are turn-count bounded (MAX_RECENT_TURNS_PRESERVE), file ops,
+// tool failures, and workspace rules each carry char caps, but this section
+// grows with the turn. It reaches the suffix by two routes carrying different
+// content, so each names the end it keeps rather than sharing a default —
+// applying one direction to both is what produced the earlier context losses.
+
+/** Summarizer output: TURN_PREFIX_INSTRUCTIONS front-loads it, so keep the head. */
+function boundSummarizedSplitTurn(section: string): string {
+  return capWithMarker(section, MAX_CONTEXT_SECTION_CHARS, SUFFIX_TRUNCATED_MARKER);
+}
+
+/**
+ * Raw chronological messages that never reached the summarizer. Keep the newest:
+ * they carry the latest tool results and execution state, and nothing else in
+ * the artifact reproduces them, whereas earlier history is already in the
+ * summary body.
+ *
+ * Takes the rendered messages rather than the joined string. A rendered message
+ * may span lines, so the boundaries cannot be recovered from the join — dropping
+ * whole elements is exact where searching for a newline is a guess.
+ */
+function boundRawSplitTurn(renderedMessages: string[]): string {
+  const joined = renderedMessages.join("\n");
+  if (joined.length <= MAX_CONTEXT_SECTION_CHARS) {
+    return joined;
+  }
+  const budget = MAX_CONTEXT_SECTION_CHARS - SUFFIX_TRUNCATED_MARKER.length;
+  // Drop whole messages from the oldest end until the rest fits.
+  let firstKept = renderedMessages.length;
+  let kept = 0;
+  for (let i = renderedMessages.length - 1; i >= 0; i--) {
+    // Every message after the first costs its joining newline.
+    const cost = (renderedMessages[i] ?? "").length + (firstKept < renderedMessages.length ? 1 : 0);
+    if (kept + cost > budget) {
+      break;
+    }
+    kept += cost;
+    firstKept = i;
+  }
+  if (firstKept === renderedMessages.length) {
+    // Even the newest message alone overruns the budget. Unreachable while a
+    // rendered message is bounded by MAX_RECENT_TURN_TEXT_CHARS plus a label
+    // bounded by MAX_ROLE_LABEL_NAME_CHARS, both far below this budget, but a
+    // change to either would make it live.
+    //
+    // Truncate from the end so the "- Role: " prefix always survives. Slicing
+    // the tail instead would drop the prefix and hand the next run a run of
+    // text that reads as content with no attribution.
+    return `${SUFFIX_TRUNCATED_MARKER}${capWithMarker(renderedMessages.at(-1) ?? "", budget, "...")}`;
+  }
+  return `${SUFFIX_TRUNCATED_MARKER}${renderedMessages.slice(firstKept).join("\n")}`;
+}
+
 function formatPreservedTurnsSection(messages: AgentMessage[]): string {
+  // Deliberately uncapped: recentTurnsPreserve promises the configured recent
+  // turns verbatim, and a char cap would cut mid-line through a rendered turn.
+  // The turn count is the bound; capCompactionSummaryPreservingSuffix absorbs
+  // any residual overflow without costing the summary body its reserved share.
   return formatContextSection(messages, "\n\n## Recent turns preserved verbatim");
 }
 
 function formatSplitTurnContextSection(messages: AgentMessage[]): string {
-  return formatContextSection(messages, "**Turn Context (split turn):**\n");
+  const lines = formatContextMessages(messages);
+  if (lines.length === 0) {
+    return "";
+  }
+  // Bound the rendered lines, not the heading, so the heading survives a cut
+  // that keeps the tail.
+  return `**Turn Context (split turn):**\n\n${boundRawSplitTurn(lines)}`;
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
@@ -1168,7 +1320,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\nAdditional requirements:\n\n${currentInstructions}`,
               previousSummary: undefined,
             });
-            splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
+            splitTurnSectionLocal = boundSummarizedSplitTurn(
+              `**Turn Context (split turn):**\n\n${prefixSummary}`,
+            );
             summaryWithoutPreservedTurns = historySummary.trim()
               ? `${historySummary}\n\n---\n\n${splitTurnSectionLocal}`
               : splitTurnSectionLocal;
@@ -1263,6 +1417,7 @@ const testing = {
   auditSummaryQuality,
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
+  sliceTailAtLineBoundary,
   formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
@@ -1275,7 +1430,9 @@ const testing = {
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
   MAX_FILE_OPS_LIST_CHARS,
+  MAX_CONTEXT_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
+  SUFFIX_TRUNCATED_MARKER,
 } as const;
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

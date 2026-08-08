@@ -65,8 +65,11 @@ const {
   SAFETY_MARGIN,
   MAX_COMPACTION_SUMMARY_CHARS,
   MAX_FILE_OPS_SECTION_CHARS,
+  MAX_CONTEXT_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
+  SUFFIX_TRUNCATED_MARKER,
 } = testing;
+const { formatSplitTurnContextSection } = testing;
 
 beforeEach(() => {
   testing.setSummarizeInStagesForTest(mockSummarizeInStages);
@@ -555,7 +558,344 @@ describe("compaction-safeguard summary budgets", () => {
   });
 
   it("keeps an oversized preserved suffix UTF-16 safe at its leading edge", () => {
-    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("tail");
+    expect(capCompactionSummaryPreservingSuffix("", "A🚀tail", 5)).toBe("tail");
+  });
+
+  it("keeps the summary body when the suffix alone exceeds the cap", () => {
+    const body =
+      "## Decisions\nShip the refresh.\n## Open TODOs\nNone.\n## Constraints/Rules\nNone.\n" +
+      "## Pending user asks\nNone.\n## Exact identifiers\nN823JB";
+    const criticalTail =
+      "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const oversizedSuffix = `${"x".repeat(MAX_COMPACTION_SUMMARY_CHARS)}${criticalTail}`;
+
+    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped.startsWith("## Decisions")).toBe(true);
+    expect(capped).toContain("## Exact identifiers");
+    expect(capped).toContain("<workspace-critical-rules>");
+  });
+
+  it("marks suffix-only truncation when a short body leaves the suffix the one thing cut", () => {
+    const body = "## Decisions\nShip the refresh.\n## Exact identifiers\nN823JB";
+    const criticalTail =
+      "\n\n<workspace-critical-rules>\n## Session Startup\n</workspace-critical-rules>";
+    const oversizedSuffix = `${"x".repeat(MAX_COMPACTION_SUMMARY_CHARS)}${criticalTail}`;
+
+    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    // Body fits in half the budget, so it is returned intact and unmarked...
+    expect(capped.startsWith(body)).toBe(true);
+    expect(capped).not.toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    // ...but the suffix lost its head, and the stored artifact must say so.
+    expect(capped).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    expect(capped).toContain("<workspace-critical-rules>");
+  });
+
+  it("never reduces the summary body to nothing, at any suffix size", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    const body =
+      "## Decisions\nD\n## Open TODOs\nT\n## Constraints/Rules\nC\n" +
+      "## Pending user asks\nP\n## Exact identifiers\nN823JB";
+    // Sweep the boundary the overflow branch used to sit on. maxChars - 1 is
+    // the case that left the body a single character on the ordinary path.
+    const suffixSizes = [0, 1, 100, max / 2, max - 2, max - 1, max, max + 1, max * 3];
+
+    for (const size of suffixSizes) {
+      const out = capCompactionSummaryPreservingSuffix(body, "s".repeat(size));
+
+      expect(out.length, `length at suffix=${size}`).toBeLessThanOrEqual(max);
+      // The defect this PR exists to fix: the artifact must never come back
+      // carrying none of the summary it was built to preserve.
+      expect(out.startsWith("## Decisions"), `body head at suffix=${size}`).toBe(true);
+      expect(out, `identifiers at suffix=${size}`).toContain("N823JB");
+    }
+  });
+
+  it("resumes a trimmed suffix on a line boundary, never mid-turn", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    const body = "## Decisions\n".padEnd(max, "b");
+    // A suffix between half the cap and the cap: previously appended whole,
+    // now trimmed because the body holds its reserved share. Preserved turns
+    // render one per line, so the cut must not restart inside one.
+    const turns = Array.from(
+      { length: 30 },
+      (_, i) => `- Assistant: turn-${i} ${"y".repeat(280)}`,
+    ).join("\n");
+    const suffix = `\n\n## Recent turns preserved verbatim\n${turns}`;
+    expect(suffix.length).toBeGreaterThan(max / 2);
+    expect(suffix.length).toBeLessThan(max);
+
+    const out = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(out.length).toBeLessThanOrEqual(max);
+    expect(out).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // Every surviving turn line is whole: the first one after the marker starts
+    // at a real line start, not partway through a rendered message.
+    const afterMarker = out.slice(out.indexOf(SUFFIX_TRUNCATED_MARKER.trim()));
+    for (const line of afterMarker.split("\n").slice(1).filter(Boolean)) {
+      expect(line, `partial line: ${line.slice(0, 40)}`).toMatch(
+        /^(- Assistant: turn-\d+ y+|##|<|\s*$)/,
+      );
+    }
+  });
+
+  it("keeps the newest raw split-turn messages, not the oldest", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatSplitTurnContextSection(messages);
+
+    // These messages never reached the summarizer, so the latest tool results
+    // and execution state are the part nothing else reproduces.
+    expect(section).toContain("turn-199");
+    expect(section).not.toContain("turn-0 ");
+    expect(section).toContain("**Turn Context (split turn):**");
+    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+  });
+
+  it("drops a trailing suffix fragment when no line boundary survives", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    const body = "## Decisions\n".padEnd(max, "b");
+    // One very long unbroken line: any tail slice of it is a mid-turn fragment.
+    const suffix = `- Assistant: ${"z".repeat(max)}`;
+
+    const out = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(out.length).toBeLessThanOrEqual(max);
+    expect(out).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // Nothing of the unbroken line survives, rather than a fragment that reads
+    // as a whole message.
+    expect(out).not.toContain("zz");
+  });
+
+  it("starts raw split-turn context on a whole message", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatSplitTurnContextSection(messages);
+    const body = section.slice(section.indexOf(SUFFIX_TRUNCATED_MARKER.trim()));
+
+    // The tail slice lands mid-message; the surviving content must resume at a
+    // real line start rather than presenting a fragment as a whole turn.
+    for (const line of body.split("\n").slice(1).filter(Boolean)) {
+      // Rendered lines are truncated at MAX_RECENT_TURN_TEXT_CHARS with a trailing ellipsis.
+      expect(line, `partial line: ${line.slice(0, 40)}`).toMatch(
+        /^- Assistant: turn-\d+ y+\.{0,3}$/,
+      );
+    }
+  });
+
+  it("keeps the first line when a tail cut already lands on a boundary", () => {
+    const { sliceTailAtLineBoundary } = testing;
+    const text = "aaa\nbbb\nccc";
+
+    // Cut at index 4, i.e. immediately after a newline: "bbb" is whole and must
+    // survive. Dropping through the first newline regardless would lose it.
+    expect(sliceTailAtLineBoundary(text, 7)).toBe("bbb\nccc");
+    // Cut at index 5, inside "bbb": that partial line goes.
+    expect(sliceTailAtLineBoundary(text, 6)).toBe("ccc");
+    // No boundary at all in the kept span: the whole slice is one fragment.
+    expect(sliceTailAtLineBoundary(text, 2)).toBe("");
+    // Budget at or above the text keeps everything; non-positive keeps nothing.
+    expect(sliceTailAtLineBoundary(text, text.length)).toBe(text);
+    expect(sliceTailAtLineBoundary(text, 0)).toBe("");
+  });
+
+  it("preserves multiline turns verbatim, below the cap", () => {
+    // Two content blocks is the shape that actually reaches the formatter:
+    // extractMessageText joins blocks with a newline, so a rendered message
+    // spans lines without anyone typing one.
+    const messages = [
+      {
+        role: "assistant" as const,
+        content: [
+          { type: "text" as const, text: "block one" },
+          { type: "text" as const, text: "block two" },
+        ],
+        timestamp: 0,
+      },
+      {
+        role: "toolResult" as const,
+        toolName: "bash",
+        content: [{ type: "text" as const, text: "stdout line 1\nstdout line 2" }],
+        timestamp: 0,
+      },
+    ];
+
+    const section: string = formatPreservedTurnsSection(messages);
+
+    // recentTurnsPreserve promises the configured turns verbatim. Collapsing
+    // internal newlines to satisfy a trim elsewhere breaks that contract for
+    // every session with multiline tool output, below the cap, for nothing.
+    expect(section).toContain("- Assistant: block one\nblock two");
+    expect(section).toContain("- Tool result (bash): stdout line 1\nstdout line 2");
+  });
+
+  it("never orphans a continuation when trimming multiline split turns", () => {
+    // Each message renders as two lines via the block join, so a trim that
+    // treats a newline as a message boundary would keep "part2-N" without its
+    // "- Assistant: turn-N" head, which the next run reads as a whole turn.
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: `turn-${i}` },
+        { type: "text" as const, text: `part2-${i} ${"y".repeat(200)}` },
+      ],
+      timestamp: 0,
+    }));
+
+    const section: string = formatSplitTurnContextSection(messages);
+    const after = section.slice(
+      section.indexOf(SUFFIX_TRUNCATED_MARKER.trim()) + SUFFIX_TRUNCATED_MARKER.trim().length,
+    );
+
+    expect(section).toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // Every surviving continuation still has its own head.
+    const orphans = Array.from(after.matchAll(/part2-(\d+)/gu), (m) => Number(m[1])).filter(
+      (n) => !after.includes(`- Assistant: turn-${n}\n`),
+    );
+    expect(orphans, `continuations kept without their head: ${orphans.join(", ")}`).toEqual([]);
+    // The newest message is the one nothing else reproduces, so it is kept.
+    expect(after).toContain("- Assistant: turn-199\n");
+  });
+
+  it("bounds an oversized tool name so a rendered message stays whole", () => {
+    // Message text is capped at MAX_RECENT_TURN_TEXT_CHARS, but toolName is
+    // caller-supplied. Left unbounded it was the one way a single rendered
+    // message outgrew the section budget, which then forced a trim to cut
+    // inside the label and strip the role prefix off the content.
+    const messages = [
+      {
+        role: "toolResult" as const,
+        toolName: `${"t".repeat(MAX_CONTEXT_SECTION_CHARS)}-endmark`,
+        content: [{ type: "text" as const, text: "newest tool output" }],
+        timestamp: 0,
+      },
+    ];
+
+    const section: string = formatSplitTurnContextSection(messages);
+
+    expect(section.length).toBeLessThanOrEqual(
+      MAX_CONTEXT_SECTION_CHARS + "**Turn Context (split turn):**\n\n".length,
+    );
+    // The whole message survives, prefix included, and no trim was needed.
+    expect(section).toContain("- Tool result (");
+    expect(section).toContain("newest tool output");
+    expect(section).not.toContain(SUFFIX_TRUNCATED_MARKER.trim());
+    // The label is bounded rather than passed through.
+    expect(section).not.toContain("-endmark");
+    expect(section).toMatch(/^- Tool result \(t{1,120}\.{3}\): /mu);
+  });
+
+  it("never emits split-turn content without its role prefix", () => {
+    // Whatever the trim does, every line of content it keeps must be
+    // attributable. A tail slice of a single rendered message would drop the
+    // "- Role: " head and hand the next run unattributed text.
+    const messages = Array.from({ length: 40 }, (_unused, i) => ({
+      role: "toolResult" as const,
+      toolName: "t".repeat(4_000),
+      content: [{ type: "text" as const, text: `out-${i} ${"z".repeat(600)}` }],
+      timestamp: i,
+    }));
+
+    const section: string = formatSplitTurnContextSection(messages);
+    const body = section.slice(section.indexOf("**Turn Context (split turn):**"));
+
+    for (const line of body.split("\n").slice(1).filter(Boolean)) {
+      if (line.startsWith("[Compaction context truncated")) {
+        continue;
+      }
+      expect(line, `unattributed line: ${line.slice(0, 48)}`).toMatch(
+        /^- (Tool result \(|User: |Assistant: )/u,
+      );
+    }
+  });
+
+  it("never exceeds the cap, down to a one-character budget", () => {
+    const body = "## Decisions\nD\n## Exact identifiers\nN823JB";
+    const suffix =
+      "\n\n<workspace-critical-rules>\n## Session Startup\n</workspace-critical-rules>";
+
+    // The reserved share rounds to zero below two characters, so the body gets
+    // no allocation and the suffix must still not overrun the budget.
+    for (const maxChars of [1, 2, 3, 10, 50]) {
+      const out = capCompactionSummaryPreservingSuffix(body, suffix, maxChars);
+      expect(out.length, `length at maxChars=${maxChars}`).toBeLessThanOrEqual(maxChars);
+    }
+  });
+
+  it("keeps a long body's reserved share even against an oversized suffix", () => {
+    const max = MAX_COMPACTION_SUMMARY_CHARS;
+    const body = "## Decisions\n".padEnd(max, "b");
+
+    for (const size of [max - 1, max, max * 2]) {
+      // "~" appears nowhere in the body or either marker, so its first index is
+      // exactly where the body's share ends. Line-broken because an unbroken
+      // run has no surviving boundary and is dropped whole by design.
+      const suffix = Array.from({ length: Math.ceil(size / 80) }, () => "~".repeat(79)).join("\n");
+      const out = capCompactionSummaryPreservingSuffix(body, suffix);
+
+      expect(out.length, `length at suffix=${size}`).toBeLessThanOrEqual(max);
+      // Half the budget is the floor; a truncated body still says it was cut.
+      expect(out.startsWith("## Decisions"), `body head at suffix=${size}`).toBe(true);
+      expect(out, `marker at suffix=${size}`).toContain(SUMMARY_TRUNCATED_MARKER.trim());
+      expect(out.indexOf("~"), `body share at suffix=${size}`).toBeGreaterThanOrEqual(
+        Math.floor(max / 2),
+      );
+    }
+  });
+
+  it("leaves configured preserved turns whole rather than char-capping them", () => {
+    const messages = Array.from({ length: 12 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `turn-${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatPreservedTurnsSection(messages);
+
+    // recentTurnsPreserve promises the configured recent turns verbatim, and a
+    // char cap would cut mid-line through a rendered turn. The turn count is
+    // the bound; oversized totals are absorbed by the budget split instead.
+    expect(section).toContain("turn-0 ");
+    expect(section).toContain("turn-11 ");
+    expect(section).not.toContain(SUFFIX_TRUNCATED_MARKER.trim());
+  });
+
+  it("bounds a split-turn context section so it cannot outgrow the summary budget", () => {
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: `step ${i} ${"y".repeat(600)}` }],
+      timestamp: 0,
+    }));
+
+    const section = formatSplitTurnContextSection(messages);
+
+    expect(section.length).toBeLessThan(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(section).toContain("**Turn Context (split turn):**");
+    expect(section.length).toBeLessThanOrEqual(
+      "**Turn Context (split turn):**\n\n".length + MAX_CONTEXT_SECTION_CHARS,
+    );
+  });
+
+  it("marks the body as truncated when an oversized suffix forces a body cap", () => {
+    const body = "## Decisions\n".padEnd(MAX_COMPACTION_SUMMARY_CHARS, "b");
+    const oversizedSuffix = "s".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped.startsWith("## Decisions")).toBe(true);
+    expect(capped).toContain(SUMMARY_TRUNCATED_MARKER.trim());
   });
 });
 
