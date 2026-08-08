@@ -84,6 +84,28 @@ export async function persistSessionTranscriptTurn(
     throw new Error("Cannot patch session lifecycle without an expected session id");
   }
   const target = await resolveTranscriptTurnTarget(scope, options.config);
+  // Route through the guarded SQLite path when the session entry was loaded
+  // from a persisted SQLite row (not an in-memory mirror), so a session-id
+  // rotation between resolve and append surfaces a visible session-rebound
+  // rejection. Use the caller's session id (target.sessionId). Mirror-only
+  // entries (from scope.sessionStore/scope.sessionEntry) and transcript-only
+  // scopes (no entry) keep the legacy append — the guarded transaction
+  // requires a persisted row to validate. (#119221)
+  if (
+    target.entryFromPersistedStore &&
+    target.storePath &&
+    target.sessionKey &&
+    target.sessionEntry &&
+    target.sessionId
+  ) {
+    return await persistExpectedSessionTranscriptTurn(
+      { ...scope, storePath: target.storePath },
+      {
+        ...options,
+        expectedSessionId: target.sessionId,
+      },
+    );
+  }
   const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
     {
       sessionFile: target.sessionKey,
@@ -275,6 +297,7 @@ async function resolveTranscriptTurnTarget(
 ): Promise<
   SessionTranscriptTurnWriteContext & {
     sessionEntry: SessionEntry | undefined;
+    entryFromPersistedStore: boolean;
   }
 > {
   const sessionKey = scope.sessionKey?.trim();
@@ -301,16 +324,38 @@ async function resolveTranscriptTurnTarget(
         sessionKey,
         storePath,
       });
-  const sessionEntry =
-    resolved?.existing ??
-    scope.sessionEntry ??
-    loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
+  // Track whether the session entry is backed by a persisted SQLite row.
+  // scope.sessionStore may be a Gateway-materialized SQLite snapshot (not a
+  // pure memory mirror), so we cannot infer provenance from sessionStore
+  // presence alone. When sessionStore is set, also check SQLite directly:
+  // if a row exists there, the entry is persisted and the guarded transaction
+  // can validate it; otherwise it is mirror-only and must use the legacy append.
+  // (#119221)
+  let sessionEntry = resolved?.existing ?? scope.sessionEntry;
+  let entryFromPersistedStore = false;
+  if (sessionEntry && !scope.sessionStore && resolved?.existing != null) {
+    // Non-sessionStore path with resolved.existing: came from
+    // resolveSessionEntrySelection (SQLite). Persisted.
+    entryFromPersistedStore = true;
+  } else if (sessionEntry && scope.sessionStore) {
+    // sessionStore path: check whether a SQLite row also exists for this key.
+    const sqliteEntry = loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
+    entryFromPersistedStore = sqliteEntry != null;
+  }
+  // If sessionEntry came from scope.sessionEntry (caller-supplied, no
+  // sessionStore, no resolved.existing), it is an in-memory value — not
+  // persisted. ACP/CLI internal transcript routes use this path.
+  if (!sessionEntry) {
+    sessionEntry = loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
+    entryFromPersistedStore = true;
+  }
   return {
     agentId,
     sessionId: scope.sessionId,
     sessionKey: resolved?.normalizedKey ?? sessionKey,
     storePath,
     sessionEntry,
+    entryFromPersistedStore,
   };
 }
 
