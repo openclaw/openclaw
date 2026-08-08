@@ -818,6 +818,96 @@ describe("AcpSessionManager", () => {
     }
   });
 
+  it("promotes timed-out parented ACP progress into the terminal task summary", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      vi.useFakeTimers();
+      try {
+        const runtimeState = createRuntime();
+        hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+          id: "acpx",
+          runtime: runtimeState.runtime,
+        });
+        hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+          const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+          if (sessionKey === "agent:codex:acp:child-timeout") {
+            return {
+              sessionKey,
+              storeSessionKey: sessionKey,
+              entry: {
+                sessionId: "child-timeout",
+                updatedAt: Date.now(),
+                spawnedBy: "agent:operator:telegram:system:2",
+                label: "Timeout preservation",
+              },
+              acp: readySessionMeta(),
+            };
+          }
+          if (sessionKey === "agent:operator:telegram:system:2") {
+            return {
+              sessionKey,
+              storeSessionKey: sessionKey,
+              entry: {
+                sessionId: "parent-system",
+                updatedAt: Date.now(),
+              },
+            };
+          }
+          return null;
+        });
+
+        let turnStarted = false;
+        runtimeState.runTurn.mockImplementation(async function* () {
+          turnStarted = true;
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: "I'll inspect the repo now.",
+          };
+          await new Promise(() => {});
+        });
+
+        const manager = new AcpSessionManager();
+        const cfg = {
+          ...baseCfg,
+          agents: {
+            defaults: {
+              timeoutSeconds: 1,
+            },
+          },
+        } as OpenClawConfig;
+
+        const turn = manager.runTurn({
+          cfg,
+          sessionKey: "agent:codex:acp:child-timeout",
+          text: "Investigate and report back",
+          mode: "prompt",
+          requestId: "parented-timeout-progress-run",
+        });
+        void turn.catch(() => undefined);
+        await vi.waitFor(
+          () => {
+            expect(turnStarted).toBe(true);
+          },
+          { interval: 1 },
+        );
+        await vi.advanceTimersByTimeAsync(3_500);
+
+        await expect(turn).rejects.toMatchObject({
+          code: "ACP_TURN_FAILED",
+          message: "ACP turn timed out after 1s.",
+        });
+        expectRecordFields(requireTaskByRunId("parented-timeout-progress-run"), {
+          status: "timed_out",
+          progressSummary: "I'll inspect the repo now.",
+          terminalSummary: "I'll inspect the repo now.",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+
   it("runs turns for different ACP sessions in parallel", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

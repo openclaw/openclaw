@@ -20,6 +20,7 @@ import {
   markBackgroundTaskRunning,
   markBackgroundTaskTerminal,
   resolveBackgroundTaskContext,
+  resolveBackgroundTaskFailureTerminalSummary,
   resolveBackgroundTaskFailureStatus,
   resolveBackgroundTaskTerminalResult,
 } from "./manager.background-task.js";
@@ -130,6 +131,10 @@ export async function runManagerTurn(params: {
     });
     if (taskContext) {
       const failureStatus = resolveBackgroundTaskFailureStatus(errorToRecord);
+      const terminalSummary = resolveBackgroundTaskFailureTerminalSummary(
+        errorToRecord,
+        taskProgressSummary,
+      );
       markBackgroundTaskTerminal(taskContext.runId, {
         sessionKey,
         status: failureStatus,
@@ -137,7 +142,7 @@ export async function runManagerTurn(params: {
         lastEventAt: Date.now(),
         error: formatAcpErrorChain(errorToRecord),
         progressSummary: taskProgressSummary || null,
-        terminalSummary: null,
+        terminalSummary,
       });
       if (spawnedByWatcher) {
         recordSubagentTerminalState({
