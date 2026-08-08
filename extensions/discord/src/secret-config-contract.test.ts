@@ -152,7 +152,7 @@ describe("Discord secret config contract", () => {
     expect(context.warnings).toStrictEqual([]);
   });
 
-  it("collects the canonical provider API key alongside an alias override", () => {
+  it("collects the canonical provider API key when an alias does not override it", () => {
     const sourceConfig = {
       channels: {
         discord: {
@@ -188,6 +188,44 @@ describe("Discord secret config contract", () => {
       "codex-realtime",
       sourceConfig,
     );
+    expect(context.warnings).toStrictEqual([]);
+  });
+
+  it("skips a canonical provider API key shadowed by an alias override", () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          voice: {
+            realtime: {
+              provider: "codex-realtime",
+              providers: {
+                codex: {
+                  apiKey: { source: "env", provider: "default", id: "ROOT_CODEX" },
+                },
+                "codex-realtime": {
+                  apiKey: { source: "env", provider: "default", id: "ROOT_CODEX_ALIAS" },
+                  voice: "arbor",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig, env: {} });
+
+    collectRuntimeConfigAssignments({
+      config: structuredClone(sourceConfig),
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments.map(({ path, ref }) => ({ path, ref }))).toEqual([
+      {
+        path: "channels.discord.voice.realtime.providers.codex-realtime.apiKey",
+        ref: { source: "env", provider: "default", id: "ROOT_CODEX_ALIAS" },
+      },
+    ]);
     expect(context.warnings).toStrictEqual([]);
   });
 });

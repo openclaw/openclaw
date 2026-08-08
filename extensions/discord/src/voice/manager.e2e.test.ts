@@ -1416,6 +1416,70 @@ describe("DiscordVoiceManager", () => {
     expect(manager.status()).toStrictEqual([]);
   });
 
+  it("preserves transcript-only capture when a moderator moves the bot", async () => {
+    useDirectAgentRealtimeProvider();
+    const firstConnection = createConnectionMock();
+    const secondConnection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
+    const client = createClient();
+    configureVoiceStateGateway(client, () => []);
+    const manager = createManager(
+      makeVoiceConfig({ mode: "agent-proxy", realtime: { provider: "codex" } }),
+      client,
+    );
+    const onUtterance = vi.fn();
+    manager.setBotUserId("bot-user");
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { transcripts: { sessionId: "notes-1", onUtterance } },
+    );
+
+    await updateVoiceState(manager, "bot-user", "1002");
+
+    const entry = getSessionEntry(manager);
+    expect(entry.transcripts).toEqual({ sessionId: "notes-1", onUtterance });
+    expect(entry.realtime).toBeUndefined();
+    expect(firstConnection.destroy).toHaveBeenCalledTimes(1);
+    expect(secondConnection.destroy).not.toHaveBeenCalled();
+    expectConnectedStatus(manager, "1002");
+  });
+
+  it("preserves realtime and transcript capture when a moderator moves the bot", async () => {
+    useDirectAgentRealtimeProvider();
+    const firstConnection = createConnectionMock();
+    const secondConnection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(firstConnection).mockReturnValueOnce(secondConnection);
+    const client = createClient();
+    configureVoiceStateGateway(client, () => [
+      { guild_id: "g1", user_id: directAgentOwnerId, channel_id: "1002" },
+    ]);
+    const manager = createManager(
+      makeVoiceConfig({ mode: "agent-proxy", realtime: { provider: "codex" } }),
+      client,
+      { commands: { ownerAllowFrom: [`discord:${directAgentOwnerId}`] } },
+    );
+    const onUtterance = vi.fn();
+    manager.setBotUserId("bot-user");
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { requester: { senderId: directAgentOwnerId, senderIsOwner: true } },
+    );
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { transcripts: { sessionId: "notes-1", onUtterance } },
+    );
+
+    await updateVoiceState(manager, "bot-user", "1002");
+
+    const entry = getSessionEntry(manager);
+    expect(entry.transcripts).toEqual({ sessionId: "notes-1", onUtterance });
+    expect(entry.realtime).toBeDefined();
+    expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(2);
+    expect(firstConnection.destroy).toHaveBeenCalledTimes(1);
+    expect(secondConnection.destroy).not.toHaveBeenCalled();
+    expectConnectedStatus(manager, "1002");
+  });
+
   it("suppresses repeated autoJoin attempts after fatal realtime startup failures", async () => {
     realtimeSessionMock.connect.mockRejectedValueOnce(new Error("Incorrect API key provided"));
     const manager = createManager(
