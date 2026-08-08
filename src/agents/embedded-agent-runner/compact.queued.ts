@@ -568,12 +568,17 @@ async function compactResolvedContextEngine(
         })
       : undefined;
   if (lockedNativeHarness) {
+    // The model lock forbids replacing native compaction with the context engine,
+    // so a locked session returns the (possibly recovered) native result directly.
     return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
       return harnessResult;
     }
+    // A missing/stale binding — including a dead thread the native request surfaced
+    // as "thread not found" — falls back to context-engine compaction, which
+    // recompacts a live transcript or exposes the stale binding for recovery.
     log.warn(
       `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
     );

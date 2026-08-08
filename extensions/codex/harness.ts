@@ -238,7 +238,6 @@ export function createCodexAppServerAgentHarness(options: {
       return maybeCompactCodexAppServerSession(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        allowNonManualNativeRequest: true,
       });
     },
     reset: async (params) => {
