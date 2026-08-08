@@ -1,10 +1,13 @@
-import os from "node:os";
+import { promises as fs } from "node:fs";
 // Subagent spawn tests cover target policy, session patching, runtime model
 // persistence, registry registration, and lifecycle event emission.
+import os from "node:os";
+import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { readReservedSubagentClaimToken } from "./reserved-subagent-admission.js";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -29,12 +32,25 @@ const hoisted = vi.hoisted(() => ({
   resolveAgentConfigMock: vi.fn(),
   resolveContextEngineMock: vi.fn(),
   countActiveRunsForSessionMock: vi.fn(),
+  hasSubagentRunIdentityMock: vi.fn(),
+  getLatestSubagentRunByChildSessionKeyMock: vi.fn(),
+  quarantineFailedSubagentSpawnMock: vi.fn(),
   listSwarmRunsForGroupMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
+  hookRunner: null as null | {
+    hasHooks?: (name: string) => boolean;
+    runSubagentProgress?: (...args: unknown[]) => Promise<void>;
+    runSubagentSpawned?: (...args: unknown[]) => Promise<void>;
+    runSubagentEnded?: (...args: unknown[]) => Promise<void>;
+  },
 }));
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
+let activateCollectorLaunch: typeof import("./subagent-collector-launch-failure.js").activateCollectorLaunch;
+let retryRetainedContextEnginePreparationRollback: typeof import("./subagent-spawn-context.js").retryRetainedContextEnginePreparationRollback;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let spawnFailureQuarantine: typeof import("./subagent-spawn-failure-quarantine.js");
+let reserveSwarmRun: typeof import("./swarm-scheduler.js").reserveSwarmRun;
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
@@ -68,6 +84,99 @@ function gatewayRequest(method: string): Record<string, unknown> {
 
 function firstRegisteredSubagentRun(): Record<string, unknown> {
   return requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function activateFailingCollectorLaunchForTest(params: {
+  childRunId: string;
+  childSessionKey: string;
+  contextEnginePreparation?: { rollback: () => Promise<void> | void };
+  error?: Error;
+}) {
+  const groupId = `swarm:${params.childRunId}`;
+  reserveSwarmRun({
+    activeRunIds: [],
+    groupId,
+    maxConcurrent: 1,
+    runId: params.childRunId,
+  });
+  activateCollectorLaunch({
+    childRunId: params.childRunId,
+    childSessionKey: params.childSessionKey,
+    contextEnginePreparation: params.contextEnginePreparation,
+    emitSpawnLifecycleHooks: async () => {},
+    groupId,
+    launchChildRun: async () => {
+      throw params.error ?? new Error("launch failed");
+    },
+    requesterInternalKey: "agent:main:main",
+    threadBindingReady: true,
+  });
+}
+
+function installActiveCountFromRegisteredRuns(extraRuns: Record<string, unknown>[] = []) {
+  hoisted.countActiveRunsForSessionMock.mockImplementation(
+    (sessionKey: string, options?: { collect?: boolean }) => {
+      const latestByChild = new Map<string, Record<string, unknown>>();
+      const records = [
+        ...hoisted.registerSubagentRunMock.mock.calls.map((call) => requireRecord(call[0])),
+        ...extraRuns,
+      ];
+      for (const record of records) {
+        if (options?.collect !== undefined && (record.collect === true) !== options.collect) {
+          continue;
+        }
+        const owner =
+          typeof record.controllerSessionKey === "string"
+            ? record.controllerSessionKey
+            : record.requesterSessionKey;
+        const childSessionKey =
+          typeof record.childSessionKey === "string" ? record.childSessionKey : "";
+        if (owner === sessionKey && childSessionKey) {
+          latestByChild.set(childSessionKey, record);
+        }
+      }
+      return latestByChild.size;
+    },
+  );
+}
+
+function spawnOrdinaryWorker(suffix: string, requesterSessionKey = "agent:main:main") {
+  return spawnSubagentDirect(
+    {
+      task: `ordinary shared admission ${suffix}`,
+      agentId: "worker",
+      expectsCompletionMessage: false,
+    },
+    { agentSessionKey: requesterSessionKey },
+  );
+}
+
+function spawnReservedWorker(suffix: string, requesterSessionKey = "agent:main:main") {
+  return spawnSubagentDirect(
+    {
+      task: `reserved shared admission ${suffix}`,
+      agentId: "worker",
+      expectsCompletionMessage: false,
+    },
+    {
+      agentSessionKey: requesterSessionKey,
+      authorizedTargetAgentId: "worker",
+      preallocatedChildSessionKey: `agent:worker:subagent:${suffix}`,
+      preallocatedRunId: `run-${suffix}`,
+      pluginOwnerId: "agentic-os",
+      reservedSubagentClaimToken: `claim-${suffix}`,
+    },
+  );
 }
 
 type InheritedSpawnPreferenceCase = {
@@ -167,24 +276,46 @@ describe("spawnSubagentDirect seam flow", () => {
       settleFailedQueuedSubagentLaunchMock: hoisted.settleFailedQueuedSubagentLaunchMock,
       completeCollectorLaunchCleanupMock: hoisted.completeCollectorLaunchCleanupMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
+      quarantineFailedSubagentSpawnMock: hoisted.quarantineFailedSubagentSpawnMock,
       resolveAgentConfig: hoisted.resolveAgentConfigMock,
       resolveContextEngineMock: hoisted.resolveContextEngineMock,
       countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
+      hasSubagentRunIdentity: hoisted.hasSubagentRunIdentityMock,
+      getLatestSubagentRunByChildSessionKey: hoisted.getLatestSubagentRunByChildSessionKeyMock,
       listSwarmRunsForGroup: hoisted.listSwarmRunsForGroupMock,
       resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+      hookRunner: {
+        hasHooks: (name: string) => Boolean(hoisted.hookRunner?.hasHooks?.(name)),
+        runSubagentProgress: async (...args: unknown[]) => {
+          await hoisted.hookRunner?.runSubagentProgress?.(...args);
+        },
+        runSubagentSpawned: async (...args: unknown[]) => {
+          await hoisted.hookRunner?.runSubagentSpawned?.(...args);
+        },
+        runSubagentEnded: async (...args: unknown[]) => {
+          await hoisted.hookRunner?.runSubagentEnded?.(...args);
+        },
+      },
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
+    ({ activateCollectorLaunch } = await import("./subagent-collector-launch-failure.js"));
+    ({ retryRetainedContextEnginePreparationRollback } =
+      await import("./subagent-spawn-context.js"));
+    ({ reserveSwarmRun } = await import("./swarm-scheduler.js"));
+    spawnFailureQuarantine = await import("./subagent-spawn-failure-quarantine.js");
   });
 
   beforeEach(() => {
     swarmSchedulerTesting.reset();
+    spawnFailureQuarantine.resetRetainedFailedSpawnAdmissionsForTests();
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
     hoisted.loadSessionStoreMock.mockReset();
     hoisted.loadPreparedModelCatalogMock.mockReset().mockResolvedValue([]);
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.quarantineFailedSubagentSpawnMock.mockReset();
     hoisted.startQueuedSubagentRunMock.mockReset().mockReturnValue(true);
     hoisted.settleFailedQueuedSubagentLaunchMock.mockReset().mockReturnValue(true);
     hoisted.completeCollectorLaunchCleanupMock.mockReset();
@@ -194,30 +325,35 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.resolveAgentConfigMock.mockReset();
     hoisted.resolveContextEngineMock.mockReset().mockResolvedValue({});
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
+    hoisted.hasSubagentRunIdentityMock.mockReset().mockReturnValue(false);
+    hoisted.getLatestSubagentRunByChildSessionKeyMock.mockReset().mockReturnValue(null);
     hoisted.listSwarmRunsForGroupMock.mockReset().mockReturnValue([]);
     hoisted.resolveAgentConfigMock.mockImplementation(
       (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
         cfg.agents?.list?.find((agent) => agent.id === agentId),
     );
     hoisted.configOverride = createConfigOverride();
+    hoisted.hookRunner = null;
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
-    hoisted.loadSessionStoreMock.mockReturnValue({});
+    const sessionStore: Record<string, Record<string, unknown>> = {};
+    hoisted.loadSessionStoreMock.mockReturnValue(sessionStore);
 
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
         _storePath: string,
         mutator: (store: Record<string, Record<string, unknown>>) => unknown,
       ) => {
-        const store: Record<string, Record<string, unknown>> = {};
-        await mutator(store);
-        return store;
+        await mutator(sessionStore);
+        return sessionStore;
       },
     );
   });
 
   afterEach(() => {
+    spawnFailureQuarantine.resetRetainedFailedSpawnAdmissionsForTests();
     swarmSchedulerTesting.reset();
     vi.unstubAllEnvs();
+    vi.useRealTimers();
   });
 
   it("rejects direct swarm parameters while tools.swarm is disabled", async () => {
@@ -302,6 +438,762 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
   });
 
+  it("keeps reserved target authorization inside the configured allowlist", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"] },
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: { allowAgents: ["planner"] },
+          },
+          { id: "planner", workspace: "/tmp/workspace-planner" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "must respect configured allowlist",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved-disallowed-worker",
+        preallocatedRunId: "reserved-disallowed-worker-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-disallowed-worker-claim",
+      },
+    );
+
+    expect(result.status).not.toBe("accepted");
+    expect(result.error).toContain("not allowed");
+    expect(gatewayRequestRecords()).toEqual([]);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "reserved then reserved",
+      first: spawnReservedWorker,
+      second: spawnReservedWorker,
+    },
+    {
+      name: "ordinary then reserved",
+      first: spawnOrdinaryWorker,
+      second: spawnReservedWorker,
+    },
+    {
+      name: "reserved then ordinary",
+      first: spawnReservedWorker,
+      second: spawnOrdinaryWorker,
+    },
+  ])(
+    "shares requester admission across mixed concurrent spawns: $name",
+    async ({ first, second }) => {
+      hoisted.configOverride = createConfigOverride({
+        agents: {
+          defaults: {
+            workspace: os.tmpdir(),
+            subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+          },
+          list: [
+            { id: "main", workspace: "/tmp/workspace-main" },
+            { id: "worker", workspace: "/tmp/workspace-worker" },
+          ],
+        },
+      });
+      installActiveCountFromRegisteredRuns();
+      hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+      const firstAgentStarted = deferred<void>();
+      const releaseFirstAgent = deferred<Record<string, unknown>>();
+      let agentCalls = 0;
+      hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+        if (method.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        if (method === "agent") {
+          agentCalls += 1;
+          if (agentCalls === 1) {
+            firstAgentStarted.resolve();
+            return await releaseFirstAgent.promise;
+          }
+          return { runId: `unexpected-run-${agentCalls}` };
+        }
+        return {};
+      });
+
+      const firstSpawn = first("shared-admission-first");
+      await firstAgentStarted.promise;
+
+      const secondResult = await second("shared-admission-second");
+      expect(secondResult.status).toBe("forbidden");
+      expect(secondResult.error).toContain("max active children");
+      expect(agentCalls).toBe(1);
+
+      releaseFirstAgent.resolve({ runId: "shared-admission-first-run" });
+      await expect(firstSpawn).resolves.toMatchObject({ status: "accepted" });
+    },
+  );
+
+  it("admits one of at least three contenders and fails the rest closed", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const firstAgentStarted = deferred<void>();
+    const releaseFirstAgent = deferred<Record<string, unknown>>();
+    let agentCalls = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        agentCalls += 1;
+        firstAgentStarted.resolve();
+        return await releaseFirstAgent.promise;
+      }
+      return {};
+    });
+
+    const firstSpawn = spawnOrdinaryWorker("three-contenders-first");
+    await firstAgentStarted.promise;
+    const [secondResult, thirdResult] = await Promise.all([
+      spawnReservedWorker("three-contenders-second"),
+      spawnOrdinaryWorker("three-contenders-third"),
+    ]);
+
+    expect(secondResult.status).toBe("forbidden");
+    expect(thirdResult.status).toBe("forbidden");
+    expect(agentCalls).toBe(1);
+    releaseFirstAgent.resolve({ runId: "three-contenders-first-run" });
+    await expect(firstSpawn).resolves.toMatchObject({ status: "accepted" });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not double count a child after provisional admission hands off to registration", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 2 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    const spawnedHookEntered = deferred<void>();
+    const releaseSpawnedHook = deferred<void>();
+    let spawnedHookCalls = 0;
+    hoisted.hookRunner = {
+      hasHooks: (name) => name === "subagent_spawned",
+      runSubagentSpawned: async () => {
+        spawnedHookCalls += 1;
+        if (spawnedHookCalls === 1) {
+          spawnedHookEntered.resolve();
+          await releaseSpawnedHook.promise;
+        }
+      },
+    };
+
+    const firstSpawn = spawnOrdinaryWorker("handoff-first");
+    await spawnedHookEntered.promise;
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+
+    const secondResult = await spawnOrdinaryWorker("handoff-second");
+    expect(secondResult.status).toBe("accepted");
+    releaseSpawnedHook.resolve();
+    await expect(firstSpawn).resolves.toMatchObject({ status: "accepted" });
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates shared admission capacity by requester session", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const firstAgentStarted = deferred<void>();
+    const releaseFirstAgent = deferred<Record<string, unknown>>();
+    let agentCalls = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        agentCalls += 1;
+        if (agentCalls === 1) {
+          firstAgentStarted.resolve();
+          return await releaseFirstAgent.promise;
+        }
+        return { runId: "cross-requester-second-run" };
+      }
+      return {};
+    });
+
+    const firstSpawn = spawnOrdinaryWorker("cross-requester-first", "agent:main:main");
+    await firstAgentStarted.promise;
+    const secondResult = await spawnReservedWorker("cross-requester-second", "agent:main:other");
+
+    expect(secondResult.status).toBe("accepted");
+    expect(agentCalls).toBe(2);
+    releaseFirstAgent.resolve({ runId: "cross-requester-first-run" });
+    await expect(firstSpawn).resolves.toMatchObject({ status: "accepted" });
+  });
+
+  it("releases provisional admission after deterministic pre-dispatch failure", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.resolveContextEngineMock.mockRejectedValueOnce(new Error("context unavailable"));
+
+    const firstResult = await spawnOrdinaryWorker("deterministic-failure-first");
+    expect(firstResult.status).toBe("error");
+
+    const secondResult = await spawnOrdinaryWorker("deterministic-failure-second");
+    expect(secondResult.status).toBe("accepted");
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("quarantines exhausted indeterminate cleanup so the requester remains at capacity", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    const quarantineRows: Record<string, unknown>[] = [];
+    installActiveCountFromRegisteredRuns(quarantineRows);
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation((row: Record<string, unknown>) => {
+      quarantineRows.push(row);
+      return "recorded";
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        throw new Error("session deletion did not settle");
+      }
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        throw new Error("ambiguous dispatch failure");
+      }
+      return {};
+    });
+
+    const firstResult = await spawnReservedWorker("quarantined-failure");
+    expect(firstResult).toMatchObject({
+      status: "error",
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+    expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledTimes(1);
+
+    const secondResult = await spawnOrdinaryWorker("after-quarantined-failure");
+    expect(secondResult.status).toBe("forbidden");
+    expect(secondResult.error).toContain("max active children");
+  });
+
+  it("retains requester admission until deletion proof when quarantine persistence fails", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry persistence unavailable");
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const holderDeleteStarted = deferred<void>();
+    const holderDelete = deferred<Record<string, unknown>>();
+    let deleteCalls = 0;
+    let failAgentLaunch = true;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        deleteCalls += 1;
+        if (deleteCalls <= 3) {
+          throw new Error("session deletion did not settle");
+        }
+        holderDeleteStarted.resolve();
+        return await holderDelete.promise;
+      }
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        if (failAgentLaunch) {
+          throw new Error("ambiguous dispatch failure");
+        }
+        return { runId: "after-deletion-proof-run" };
+      }
+      return {};
+    });
+
+    const firstResult = await spawnReservedWorker("quarantine-persist-fails");
+    expect(firstResult).toMatchObject({
+      status: "error",
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+    expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledTimes(1);
+
+    const blockedResult = await spawnOrdinaryWorker("while-proof-missing");
+    expect(blockedResult.status).toBe("forbidden");
+    expect(blockedResult.error).toContain("max active children");
+
+    const reconciliation = spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    await holderDeleteStarted.promise;
+    const stillBlockedResult = await spawnOrdinaryWorker("while-proof-pending");
+    expect(stillBlockedResult.status).toBe("forbidden");
+    expect(stillBlockedResult.error).toContain("max active children");
+
+    failAgentLaunch = false;
+    holderDelete.resolve({ ok: true });
+    await reconciliation;
+
+    const admittedResult = await spawnOrdinaryWorker("after-deletion-proof");
+    expect(admittedResult.status).toBe("accepted");
+    expect(deleteCalls).toBe(4);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retained failed-spawn cleanup scheduled after the initial retry window", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry persistence unavailable");
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    let deleteCalls = 0;
+    let failAgentLaunch = true;
+    let deleteRecovered = false;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        deleteCalls += 1;
+        if (deleteRecovered) {
+          return { ok: true };
+        }
+        throw new Error("session deletion did not settle");
+      }
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        if (failAgentLaunch) {
+          throw new Error("ambiguous dispatch failure");
+        }
+        return { runId: "after-retained-storage-recovery-run" };
+      }
+      return {};
+    });
+
+    const firstResult = await spawnReservedWorker("quarantine-persist-delete-outage");
+    expect(firstResult).toMatchObject({
+      status: "error",
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+    expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledTimes(1);
+    const provisionalCleanupAttempts = deleteCalls;
+
+    const blockedResult = await spawnOrdinaryWorker("while-retained-proof-missing");
+    expect(blockedResult.status).toBe("forbidden");
+    expect(blockedResult.error).toContain("max active children");
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    }
+
+    expect(deleteCalls - provisionalCleanupAttempts).toBe(30);
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([
+      expect.objectContaining({
+        childSessionKey: "agent:worker:subagent:quarantine-persist-delete-outage",
+        attempts: 30,
+        maxAttempts: 30,
+        status: "retained",
+        retryScheduled: true,
+      }),
+    ]);
+
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    expect(deleteCalls - provisionalCleanupAttempts).toBe(31);
+    const stillBlockedResult = await spawnOrdinaryWorker("after-retained-retries-exhaust");
+    expect(stillBlockedResult.status).toBe("forbidden");
+    expect(stillBlockedResult.error).toContain("max active children");
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+
+    failAgentLaunch = false;
+    deleteRecovered = true;
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([]);
+
+    const admittedResult = await spawnOrdinaryWorker("after-retained-storage-recovery");
+    expect(admittedResult.status).toBe("accepted");
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retained admission active when replacement inspection throws", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry persistence unavailable");
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const childSessionKey = "agent:worker:subagent:quarantine-persist-inspection-throws";
+    const sessionIdentity = {
+      expectedSessionId: "retained-inspection-original",
+      expectedLifecycleRevision: "retained-inspection-lifecycle",
+    };
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      const child = store[childSessionKey];
+      if (child) {
+        child.sessionId ??= sessionIdentity.expectedSessionId;
+        child.lifecycleRevision ??= sessionIdentity.expectedLifecycleRevision;
+      }
+      return store;
+    });
+    let deleteCalls = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        deleteCalls += 1;
+        throw new Error("session deletion did not settle");
+      }
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        throw new Error("ambiguous dispatch failure");
+      }
+      return {};
+    });
+
+    const firstResult = await spawnReservedWorker("quarantine-persist-inspection-throws");
+    expect(firstResult).toMatchObject({
+      status: "error",
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity: {
+          expectedSessionId: expect.any(String),
+          expectedLifecycleRevision: expect.any(String),
+        },
+      },
+    });
+    const retainedSessionIdentity = requireRecord(
+      requireRecord(firstResult.reservedCleanup).sessionIdentity,
+    );
+    const provisionalCleanupAttempts = deleteCalls;
+
+    hoisted.loadSessionStoreMock.mockImplementation(() => {
+      throw new Error("session store unavailable");
+    });
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+
+    expect(deleteCalls - provisionalCleanupAttempts).toBe(1);
+    const retained = spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions();
+    expect(retained).toEqual([
+      expect.objectContaining({
+        childSessionKey,
+        attempts: 1,
+        status: "retrying",
+        retryScheduled: true,
+      }),
+    ]);
+    const deleteParams = hoisted.dispatchGatewayMethodInProcessMock.mock.calls
+      .filter(([method]) => method === "sessions.delete")
+      .map(([, params]) => requireRecord(params));
+    expect(deleteParams).toContainEqual(expect.objectContaining(retainedSessionIdentity));
+
+    const blockedResult = await spawnOrdinaryWorker("after-retained-inspection-error");
+    expect(blockedResult.status).toBe("forbidden");
+    expect(blockedResult.error).toContain("max active children");
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("releases retained admission when a replacement child identity proves the original is gone", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry persistence unavailable");
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const childSessionKey = "agent:worker:subagent:quarantine-persist-replaced-child";
+    const sessionIdentity = {
+      expectedSessionId: "retained-original-session",
+      expectedLifecycleRevision: "retained-original-lifecycle",
+    };
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      const child = store[childSessionKey];
+      if (child) {
+        child.sessionId ??= sessionIdentity.expectedSessionId;
+        child.lifecycleRevision ??= sessionIdentity.expectedLifecycleRevision;
+      }
+      return store;
+    });
+    let failAgentLaunch = true;
+    let deleteCalls = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        deleteCalls += 1;
+        throw new Error("session deletion did not settle");
+      }
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        if (failAgentLaunch) {
+          throw new Error("ambiguous dispatch failure");
+        }
+        return { runId: "after-replacement-proof-run" };
+      }
+      return {};
+    });
+
+    const firstResult = await spawnReservedWorker("quarantine-persist-replaced-child");
+    expect(firstResult).toMatchObject({
+      status: "error",
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity: {
+          expectedSessionId: expect.any(String),
+          expectedLifecycleRevision: expect.any(String),
+        },
+      },
+    });
+    expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledTimes(1);
+
+    const blockedResult = await spawnOrdinaryWorker("while-replacement-proof-missing");
+    expect(blockedResult.status).toBe("forbidden");
+    expect(blockedResult.error).toContain("max active children");
+
+    store[childSessionKey] = {
+      ...store[childSessionKey],
+      sessionId: "retained-replacement-session",
+      lifecycleRevision: "retained-replacement-lifecycle",
+      updatedAt: Date.now(),
+      status: "running",
+    };
+
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([]);
+
+    failAgentLaunch = false;
+    const admittedResult = await spawnOrdinaryWorker("after-replacement-proof");
+    expect(admittedResult.status).toBe("accepted");
+    expect(deleteCalls).toBe(4);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retained attachment cleanup until deletion or replacement proof releases admission", async () => {
+    const attachmentsRootDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-retained-attachments-"),
+    );
+    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "evidence.txt"), "staged evidence");
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry persistence unavailable");
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const childSessionKey = "agent:worker:subagent:quarantine-persist-attachments";
+    const sessionIdentity = {
+      expectedSessionId: "retained-attachments-original-session",
+      expectedLifecycleRevision: "retained-attachments-original-lifecycle",
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: {
+        sessionId: sessionIdentity.expectedSessionId,
+        lifecycleRevision: sessionIdentity.expectedLifecycleRevision,
+        updatedAt: Date.now(),
+        status: "running",
+      },
+    };
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        throw new Error("session deletion did not settle");
+      }
+      return {};
+    });
+    let released = false;
+
+    expect(
+      spawnFailureQuarantine.recordSpawnPipelineIndeterminateFailedSubagentSpawn(
+        { id: "retained-attachments-slot", release: () => void (released = true) },
+        {
+          runId: "run-quarantine-persist-attachments",
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          requesterAgentId: "main",
+          task: "retain staged attachments after failed spawn quarantine persistence",
+          agentId: "worker",
+          cleanup: "delete",
+          runTimeoutSeconds: 30,
+          spawnMode: "run",
+          reason: "context unavailable",
+          sessionIdentity,
+          attachmentsDir,
+          attachmentsRootDir,
+        },
+      ),
+    ).toBe(false);
+
+    expect(released).toBe(false);
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    expect(released).toBe(false);
+    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([
+      expect.objectContaining({
+        childSessionKey,
+        status: "retrying",
+      }),
+    ]);
+
+    store[childSessionKey] = {
+      ...store[childSessionKey],
+      sessionId: "retained-attachments-replacement-session",
+      lifecycleRevision: "retained-attachments-replacement-lifecycle",
+      updatedAt: Date.now(),
+      status: "running",
+    };
+    await spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+
+    expect(released).toBe(true);
+    await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([]);
+  });
+
+  it("ignores caller-supplied provisional-count fields outside the shared admission owner", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "ordinary caller cannot forge provisional capacity",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        reservedSubagentAdditionalActiveChildren: 99,
+      } as Parameters<typeof spawnSubagentDirect>[1] & {
+        reservedSubagentAdditionalActiveChildren: number;
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
   it("allows omitted agentId to default to requester even when allowAgents excludes requester", async () => {
     hoisted.configOverride = createConfigOverride({
       agents: {
@@ -337,17 +1229,670 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
   });
 
+  it("consumes plugin-reserved identities with exact one-shot target authorization", async () => {
+    const preallocatedChildSessionKey = "agent:worker:subagent:plugin-reserved-child";
+    const preallocatedRunId = "plugin-reserved-run";
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["worker"],
+            },
+          },
+          {
+            id: "planner",
+            workspace: "/tmp/workspace-planner",
+          },
+          {
+            id: "worker",
+            workspace: "/tmp/workspace-worker",
+          },
+        ],
+      },
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(
+      async (method: string, params: Record<string, unknown>) =>
+        method === "agent" ? { runId: params.idempotencyKey } : { ok: true },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        const preallocatedChildEntry = store[preallocatedChildSessionKey];
+        if (!preallocatedChildEntry) {
+          throw new Error("expected preallocated child session entry");
+        }
+        preallocatedChildEntry.sessionId ??= "plugin-reserved-created-session";
+        persistedStore = store;
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "launch through the plugin reservation",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey,
+        preallocatedRunId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "requester-revision",
+        reservedSubagentClaimToken: "plugin-reserved-claim",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      childSessionKey: preallocatedChildSessionKey,
+      runId: preallocatedRunId,
+    });
+    expect(firstRegisteredSubagentRun()).toMatchObject({
+      childSessionKey: preallocatedChildSessionKey,
+      runId: preallocatedRunId,
+      agentId: "worker",
+      expectsCompletionMessage: false,
+    });
+    const reservedDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
+    );
+    const expectedSessionId = persistedStore?.[preallocatedChildSessionKey]?.sessionId;
+    expect(expectedSessionId).toBeTypeOf("string");
+    expect(reservedDispatch?.[1]).toMatchObject({
+      sessionKey: preallocatedChildSessionKey,
+      idempotencyKey: preallocatedRunId,
+      expectedExistingSessionId: expectedSessionId,
+    });
+    expect(readReservedSubagentClaimToken(reservedDispatch?.[1])).toBe("plugin-reserved-claim");
+    expect(reservedDispatch?.[2]).toMatchObject({ pluginRuntimeOwnerId: "agentic-os" });
+    expect(persistedStore?.[preallocatedChildSessionKey]).toMatchObject({
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId: preallocatedRunId,
+            requesterSessionId: "requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "requester-revision",
+            claimToken: "plugin-reserved-claim",
+          },
+        },
+      },
+    });
+  });
+
+  it("replays an exact plugin-reserved provisional child row after a crash", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-crash-replay-child";
+    const runId = "reserved-crash-replay-run";
+    const claimToken = "reserved-crash-replay-fingerprint";
+    const existingEntry = {
+      sessionId: "reserved-crash-replay-session",
+      createdAt: 1,
+      updatedAt: 1,
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      model: "stale-model",
+      modelProvider: "stale-provider",
+      modelOverride: "stale-model",
+      providerOverride: "stale-provider",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+      modelOverrideFallbackOriginProvider: "stale-provider",
+      modelOverrideFallbackOriginModel: "stale-model",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId,
+            requesterSessionId: "requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "requester-revision",
+            claimToken,
+          },
+        },
+      },
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], model: "openai/gpt-5.4" },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(
+      async (method: string, params: Record<string, unknown>) =>
+        method === "agent" ? { runId: params.idempotencyKey } : { ok: true },
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "resume the exact reserved child after a crash",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "requester-revision",
+        reservedSubagentClaimToken: claimToken,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      childSessionKey,
+      runId,
+    });
+    expect(store[childSessionKey]).toMatchObject({
+      ...existingEntry,
+      pluginExtensions: existingEntry.pluginExtensions,
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverride: "gpt-5.4",
+      providerOverride: "openai",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.4",
+    });
+    expect(
+      hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
+        ([method]) => method === "agent",
+      ),
+    ).toHaveLength(1);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects exact plugin-reserved identities once durable registry state exists", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-registry-replay-child";
+    const runId = "reserved-registry-replay-run";
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.hasSubagentRunIdentityMock.mockImplementation(
+      (candidate: string) => candidate === runId,
+    );
+    hoisted.getLatestSubagentRunByChildSessionKeyMock.mockImplementation((candidate: string) =>
+      candidate === childSessionKey ? { runId, childSessionKey } : null,
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "registry state makes exact replay fail closed",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "requester-session",
+        reservedSubagentClaimToken: "reserved-registry-replay-claim",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("durable registry state"),
+      childSessionKey,
+      runId,
+    });
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an altered plugin-reserved crash replay without mutation or dispatch", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-crash-replay-altered-child";
+    const runId = "reserved-crash-replay-altered-run";
+    const existingEntry = {
+      sessionId: "reserved-crash-replay-altered-session",
+      createdAt: 1,
+      updatedAt: 1,
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId,
+            requesterSessionId: "requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "requester-revision",
+            claimToken: "reserved-crash-replay-original-fingerprint",
+          },
+        },
+      },
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "altered replay must fail closed",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "requester-revision",
+        reservedSubagentClaimToken: "reserved-crash-replay-changed-fingerprint",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+      childSessionKey,
+    });
+    expect(store[childSessionKey]).toEqual(existingEntry);
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a plugin-reserved replay from the same key after requester recreation", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-recreated-requester-child";
+    const runId = "reserved-recreated-requester-run";
+    const claimToken = "reserved-recreated-requester-fingerprint";
+    const existingEntry = {
+      sessionId: "reserved-recreated-requester-child-session",
+      createdAt: 1,
+      updatedAt: 1,
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId,
+            requesterSessionId: "original-requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "requester-revision",
+            claimToken,
+          },
+        },
+      },
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "same key and task must not reclaim after requester recreation",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "replacement-requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "requester-revision",
+        reservedSubagentClaimToken: claimToken,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+      childSessionKey,
+    });
+    expect(store[childSessionKey]).toEqual(existingEntry);
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugin-reserved replay after requester lifecycle reset with a stable session id", async () => {
+    const childSessionKey = "agent:worker:subagent:reserved-reset-requester-child";
+    const runId = "reserved-reset-requester-run";
+    const claimToken = "reserved-reset-requester-fingerprint";
+    const existingEntry = {
+      sessionId: "reserved-reset-requester-child-session",
+      createdAt: 1,
+      updatedAt: 1,
+      pluginOwnerId: "agentic-os",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      pluginExtensions: {
+        "agentic-os": {
+          openclawReservedSubagent: {
+            runId,
+            requesterSessionId: "stable-requester-session",
+            requesterLifecycleRevisionPresent: true,
+            requesterLifecycleRevision: "before-reset",
+            claimToken,
+          },
+        },
+      },
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "stable requester session id must not replay after lifecycle reset",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        requesterSessionId: "stable-requester-session",
+        requesterLifecycleRevisionPresent: true,
+        requesterLifecycleRevision: "after-reset",
+        reservedSubagentClaimToken: claimToken,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+      childSessionKey,
+    });
+    expect(store[childSessionKey]).toEqual(existingEntry);
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an existing reserved child session without mutating or dispatching it", async () => {
+    const childSessionKey = "agent:worker:subagent:existing-reserved-child";
+    const existingEntry = {
+      sessionId: "existing-session",
+      updatedAt: 1,
+      pluginOwnerId: "other-plugin",
+      spawnedBy: "agent:other:main",
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      [childSessionKey]: { ...existingEntry },
+    };
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "must not overwrite the existing child",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: "reserved-run-existing-child",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-existing-child-claim",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+      childSessionKey,
+    });
+    expect(store[childSessionKey]).toEqual(existingEntry);
+    expect(gatewayRequestRecords().some((request) => request.method === "agent")).toBe(false);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("atomically accepts only one concurrent creator for a reserved child session", async () => {
+    const childSessionKey = "agent:worker:subagent:concurrent-reserved-child";
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(
+      async (method: string, params: Record<string, unknown>) =>
+        method === "agent" ? { runId: params.idempotencyKey } : { ok: true },
+    );
+    const spawn = () =>
+      spawnSubagentDirect(
+        {
+          task: "claim the child exactly once",
+          agentId: "worker",
+          expectsCompletionMessage: false,
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          authorizedTargetAgentId: "worker",
+          preallocatedChildSessionKey: childSessionKey,
+          preallocatedRunId: "reserved-run-concurrent-child",
+          pluginOwnerId: "agentic-os",
+          reservedSubagentClaimToken: "reserved-concurrent-child-claim",
+        },
+      );
+
+    const results = await Promise.all([spawn(), spawn()]);
+
+    expect(results.filter((result) => result.status === "accepted")).toHaveLength(1);
+    expect(
+      results.filter(
+        (result) =>
+          result.status === "error" &&
+          result.error?.includes("reserved childSessionKey already exists"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
+        ([method]) => method === "agent",
+      ),
+    ).toHaveLength(1);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "mismatched target",
+      context: {
+        authorizedTargetAgentId: "planner",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved",
+        preallocatedRunId: "reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-target-mismatch-claim",
+      },
+      expected: "reserved spawn target does not match requested agentId",
+    },
+    {
+      name: "mismatched child agent",
+      context: {
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:planner:subagent:reserved",
+        preallocatedRunId: "reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-child-mismatch-claim",
+      },
+      expected: "reserved childSessionKey must be",
+    },
+    {
+      name: "partial reservation",
+      context: {
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved",
+      },
+      expected: "reserved subagent spawn requires",
+    },
+    {
+      name: "incognito child for durable requester",
+      context: {
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:incognito-reserved",
+        preallocatedRunId: "reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-incognito-mismatch-claim",
+      },
+      expected: "matching incognito classification",
+    },
+    {
+      name: "durable child for incognito requester",
+      agentSessionKey: "agent:main:dashboard:incognito-parent",
+      context: {
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved",
+        preallocatedRunId: "reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-incognito-requester-mismatch-claim",
+      },
+      expected: "matching incognito classification",
+    },
+  ])("rejects an invalid plugin reservation: $name", async (testCase) => {
+    const { context, expected } = testCase;
+    const agentSessionKey =
+      "agentSessionKey" in testCase ? testCase.agentSessionKey : "agent:main:main";
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "planner", workspace: "/tmp/workspace-planner" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "reject invalid reservation", agentId: "worker" },
+      {
+        agentSessionKey,
+        ...context,
+      },
+    );
+
+    expect(result.status).not.toBe("accepted");
+    expect(result.error).toContain(expected);
+    expect(gatewayRequestRecords()).toEqual([]);
+  });
+
   it("inherits incognito storage ownership for direct children", async () => {
     const requesterSessionKey = "agent:main:dashboard:incognito-parent";
     const sessionPatches: Record<string, unknown>[] = [];
     const sessionStorePaths: string[] = [];
+    const store: Record<string, Record<string, unknown>> = {};
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
         storePath: string,
         mutator: (store: Record<string, Record<string, unknown>>) => unknown,
       ) => {
         sessionStorePaths.push(storePath);
-        const store: Record<string, Record<string, unknown>> = {};
         await mutator(store);
         sessionPatches.push(...Object.values(store));
         return store;
@@ -370,12 +1915,12 @@ describe("spawnSubagentDirect seam flow", () => {
   it("defaults collector group id from requester session and requesting run", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
     const sessionPatches: Record<string, unknown>[] = [];
+    const store: Record<string, Record<string, unknown>> = {};
     hoisted.updateSessionStoreMock.mockImplementation(
       async (
         _storePath: string,
         mutator: (store: Record<string, Record<string, unknown>>) => unknown,
       ) => {
-        const store: Record<string, Record<string, unknown>> = {};
         await mutator(store);
         sessionPatches.push(...Object.values(store));
         return store;
@@ -687,11 +2232,68 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
   });
 
+  it("retains the actual context preparation rollback for failed collector launch retry", async () => {
+    let rollbackAttempts = 0;
+    const preparation = {
+      rollback: vi.fn(async () => {
+        rollbackAttempts += 1;
+        if (rollbackAttempts === 1) {
+          throw new Error("transient rollback failure");
+        }
+      }),
+    };
+
+    activateFailingCollectorLaunchForTest({
+      childRunId: "failed-collector-rollback-retry-run",
+      childSessionKey: "agent:main:subagent:failed-collector-rollback-retry",
+      contextEnginePreparation: preparation,
+    });
+
+    await vi.waitFor(() => {
+      expect(preparation.rollback).toHaveBeenCalledTimes(1);
+      expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledWith(
+        "failed-collector-rollback-retry-run",
+        expect.any(String),
+        { contextEnginePreparationRollbackPending: true },
+      );
+    });
+    await expect(
+      retryRetainedContextEnginePreparationRollback("failed-collector-rollback-retry-run"),
+    ).resolves.toBe("completed");
+    expect(preparation.rollback).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds collector launch settlement retries when registry persistence keeps failing", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.useFakeTimers();
+    hoisted.settleFailedQueuedSubagentLaunchMock.mockImplementation(() => {
+      throw new Error("registry busy");
+    });
+
+    activateFailingCollectorLaunchForTest({
+      childRunId: "failed-collector-settlement-run",
+      childSessionKey: "agent:main:subagent:failed-collector-settlement",
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.waitFor(() =>
+      expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledTimes(3),
+    );
+    expect(hoisted.completeCollectorLaunchCleanupMock).not.toHaveBeenCalled();
+    expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:failed-collector-settlement",
+        reason: "delete",
+      }),
+    );
+    vi.useRealTimers();
+  });
+
   it("uses and validates tools.swarm.defaultAgentId for collector children", async () => {
     hoisted.configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
       agents: {
-        defaults: { workspace: os.tmpdir() },
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
         list: [
           {
             id: "main",
@@ -1292,9 +2894,403 @@ describe("spawnSubagentDirect seam flow", () => {
       expect.objectContaining({
         forceSyntheticClient: true,
         syntheticScopes: ["operator.admin"],
-        timeoutMs: 60_000,
       }),
     );
+  });
+
+  it("returns reserved cleanup indeterminate after bounded in-process deletion failures", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const sessionIdentity = {
+      expectedSessionId: "ambiguous-reserved-child-session",
+      expectedLifecycleRevision: "ambiguous-reserved-child-lifecycle",
+    };
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      const child = store["agent:worker:subagent:ambiguous-reserved-child"];
+      if (child) {
+        child.sessionId ??= sessionIdentity.expectedSessionId;
+        child.lifecycleRevision ??= sessionIdentity.expectedLifecycleRevision;
+      }
+      return store;
+    });
+    let deleteAttempts = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        throw new Error("cleanup unavailable");
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "retain the reserved identities during ambiguous cleanup",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
+        preallocatedRunId: "ambiguous-reserved-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "ambiguous-reserved-claim",
+      },
+    );
+    expect(result).toMatchObject({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: "agent:worker:subagent:ambiguous-reserved-child",
+      runId: "ambiguous-reserved-run",
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity: {
+          expectedSessionId: expect.any(String),
+          expectedLifecycleRevision: expect.any(String),
+        },
+      },
+    });
+    const capturedSessionIdentity = requireRecord(
+      requireRecord(result.reservedCleanup).sessionIdentity,
+    );
+    expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deleteCleanupDispatchedAt: expect.any(Number),
+        sessionIdentity: capturedSessionIdentity,
+      }),
+    );
+    const sessionDeleteCalls = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
+      ([method]) => method === "sessions.delete",
+    );
+    expect(sessionDeleteCalls.map(([, params]) => params)).toEqual([
+      expect.objectContaining(capturedSessionIdentity),
+      expect.objectContaining(capturedSessionIdentity),
+      expect.objectContaining(capturedSessionIdentity),
+    ]);
+    expect(deleteAttempts).toBe(3);
+  });
+
+  it("cleans up an accepted reserved launch cancelled before registry registration", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry unavailable");
+    });
+    const abortController = new AbortController();
+    const childSessionKey = "agent:worker:subagent:accepted-then-cancelled-child";
+    const runId = "accepted-then-cancelled-reserved-run";
+    const acceptedGatewayRunId = "accepted-then-cancelled-gateway-run";
+    const sessionIdentity = {
+      expectedSessionId: "accepted-then-cancelled-session",
+      expectedLifecycleRevision: "accepted-then-cancelled-lifecycle",
+    };
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      const child = store[childSessionKey];
+      if (child) {
+        child.sessionId = sessionIdentity.expectedSessionId;
+        child.lifecycleRevision = sessionIdentity.expectedLifecycleRevision;
+      }
+      return store;
+    });
+    let deleteAttempts = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        abortController.abort(new Error("requester cancelled after accepted launch"));
+        return { runId: acceptedGatewayRunId };
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        throw new Error("cleanup unavailable");
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "cancel after the reserved child launch is accepted",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: childSessionKey,
+        preallocatedRunId: runId,
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "accepted-then-cancelled-claim",
+        signal: abortController.signal,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: "requester cancelled after accepted launch",
+      childSessionKey,
+      runId: acceptedGatewayRunId,
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity,
+      },
+    });
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+    expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
+    const capturedSessionIdentity = requireRecord(
+      requireRecord(result.reservedCleanup).sessionIdentity,
+    );
+    const sessionDeleteCalls = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.filter(
+      ([method]) => method === "sessions.delete",
+    );
+    expect(sessionDeleteCalls.map(([, params]) => params)).toEqual([
+      expect.objectContaining(capturedSessionIdentity),
+      expect.objectContaining(capturedSessionIdentity),
+      expect.objectContaining(capturedSessionIdentity),
+    ]);
+    expect(deleteAttempts).toBe(3);
+    expect(spawnFailureQuarantine.inspectRetainedFailedSpawnAdmissions()).toEqual([
+      expect.objectContaining({
+        childSessionKey,
+        status: "retrying",
+        retryScheduled: true,
+      }),
+    ]);
+
+    const blockedResult = await spawnOrdinaryWorker("while-accepted-abort-cleanup-retained");
+    expect(blockedResult.status).toBe("forbidden");
+    expect(blockedResult.error).toContain("max active children");
+  });
+
+  it("reports confirmed reserved cleanup when deletion succeeds within the bound", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    let deleteAttempts = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        if (deleteAttempts < 3) {
+          throw new Error("cleanup unavailable");
+        }
+      }
+      return { ok: true };
+    });
+
+    await expect(
+      spawnSubagentDirect(
+        {
+          task: "release the reserved identities after confirmed cleanup",
+          agentId: "worker",
+          expectsCompletionMessage: false,
+        },
+        {
+          agentSessionKey: "agent:main:main",
+          authorizedTargetAgentId: "worker",
+          preallocatedChildSessionKey: "agent:worker:subagent:eventual-delete-child",
+          preallocatedRunId: "eventual-delete-run",
+          pluginOwnerId: "agentic-os",
+          reservedSubagentClaimToken: "eventual-delete-claim",
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "error",
+      error: "gateway request timeout for agent",
+      childSessionKey: "agent:worker:subagent:eventual-delete-child",
+      runId: "eventual-delete-run",
+      reservedCleanup: { sessionDeletion: "deleted" },
+    });
+    expect(deleteAttempts).toBe(3);
+  });
+
+  it("uses the post-fork child session identity for reserved cleanup", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["main"] } },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      if (method.startsWith("sessions.")) {
+        throw new Error("cleanup unavailable");
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "fail after fork so reserved cleanup must target the forked child identity",
+        agentId: "main",
+        context: "fork",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "main",
+        preallocatedChildSessionKey: "agent:main:subagent:reserved-fork-cleanup-child",
+        preallocatedRunId: "reserved-fork-cleanup-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-fork-cleanup-claim",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      reservedCleanup: {
+        sessionDeletion: "indeterminate",
+        sessionIdentity: {
+          expectedSessionId: "forked-session-id",
+        },
+      },
+    });
+    const agentParams = hoisted.dispatchGatewayMethodInProcessMock.mock.calls
+      .filter(([method]) => method === "agent")
+      .map(([, params]) => requireRecord(params));
+    expect(agentParams).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ expectedExistingSessionId: "forked-session-id" }),
+      ]),
+    );
+    const deleteParams = hoisted.dispatchGatewayMethodInProcessMock.mock.calls
+      .filter(([method]) => method === "sessions.delete")
+      .map(([, params]) => requireRecord(params));
+    expect(deleteParams).toEqual(
+      expect.arrayContaining([expect.objectContaining({ expectedSessionId: "forked-session-id" })]),
+    );
+  });
+
+  it("returns reserved cleanup indeterminate at the deletion timeout boundary", async () => {
+    const cleanupApi = await import("./subagent-spawn-cleanup.js");
+    hoisted.callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
+
+    const result = await cleanupApi.cleanupFailedSpawnBeforeAgentStart({
+      childSessionKey: "agent:worker:subagent:timeout-boundary",
+      deleteTranscript: true,
+      expectedIdentity: {
+        expectedSessionId: "timeout-boundary-session",
+        expectedLifecycleRevision: "timeout-boundary-lifecycle",
+      },
+      waitForSessionDeletion: { maxAttempts: 10, maxElapsedMs: 0, retryDelayMs: 0 },
+    });
+
+    expect(result.sessionDeletion).toBe("indeterminate");
+    expect(hoisted.callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the reserved cleanup claim fail-closed until confirmed deletion", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const store: Record<string, Record<string, unknown>> = {};
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), subagents: { allowAgents: ["worker"] } },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    hoisted.loadSessionStoreMock.mockImplementation(() => store);
+    hoisted.updateSessionStoreMock.mockImplementation(async (_storePath, mutator) => {
+      await mutator(store);
+      return store;
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    let deleteAttempts = 0;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      if (method === "sessions.delete") {
+        deleteAttempts += 1;
+        throw new Error("cleanup unavailable");
+      }
+      return { ok: true };
+    });
+
+    const first = await spawnSubagentDirect(
+      {
+        task: "retain the reserved identities after indeterminate cleanup",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child-held",
+        preallocatedRunId: "ambiguous-reserved-run-held",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "ambiguous-reserved-claim",
+      },
+    );
+    expect(first).toMatchObject({
+      status: "error",
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+    expect(deleteAttempts).toBe(3);
+
+    const duplicate = await spawnSubagentDirect(
+      {
+        task: "duplicate should still be rejected by the undeleted child session",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:ambiguous-reserved-child-held",
+        preallocatedRunId: "ambiguous-reserved-run-held",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "ambiguous-reserved-claim-2",
+      },
+    );
+    expect(duplicate).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("reserved childSessionKey already exists"),
+    });
   });
 
   it.each(inheritedSpawnPreferenceCases)(

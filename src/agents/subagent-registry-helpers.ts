@@ -15,7 +15,10 @@ import { computeBackoff } from "../infra/backoff.js";
 import { defaultRuntime } from "../runtime.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  SUBAGENT_ENDED_REASON_ERROR,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -27,6 +30,7 @@ import {
   resolveSubagentRunOrphanReason,
   type SubagentRunOrphanReason,
 } from "./subagent-session-reconciliation.js";
+import { releaseSwarmRun } from "./swarm-scheduler.js";
 
 export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 15_000;
@@ -91,6 +95,34 @@ export function logAnnounceGiveUp(
   defaultRuntime.log(
     `[warn] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel}${deliveryError}`,
   );
+}
+
+export function markSpawnFailureCleanupTerminalState(
+  entry: SubagentRunRecord,
+  params: { now: number; status: "deleted" | "missing" | "replaced"; error: string },
+) {
+  if (entry.spawnFailureCleanup) {
+    entry.spawnFailureCleanup.status = params.status;
+    entry.spawnFailureCleanup.lastAttemptAt = params.now;
+    entry.spawnFailureCleanup.nextAttemptAt = undefined;
+    entry.spawnFailureCleanup.lastError = null;
+  }
+  const outcome = { status: "error" as const, error: params.error };
+  entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+  entry.cleanupHandled = true;
+  entry.cleanupCompletedAt = params.now;
+  entry.execution = {
+    ...(entry.execution ?? { status: "interrupted" as const }),
+    status: "terminal",
+    endedAt: params.now,
+    outcome,
+  };
+}
+
+export function failedSpawnCleanupTerminalError(status: "missing" | "replaced"): string {
+  return status === "missing"
+    ? "subagent spawn failed before startup and the provisional session was already absent"
+    : "subagent spawn failed before startup and a replacement session proved the provisional session is gone";
 }
 
 /** Persists child session timing/status derived from the subagent registry row. */
@@ -191,8 +223,11 @@ function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
-  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
+export async function safeRemoveAttachmentsPath(params: {
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+}): Promise<boolean> {
+  if (!params.attachmentsDir || !params.attachmentsRootDir) {
     return true;
   }
 
@@ -209,14 +244,14 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
 
   try {
     const [rootReal, dirReal] = await Promise.all([
-      resolveReal(entry.attachmentsRootDir),
-      resolveReal(entry.attachmentsDir),
+      resolveReal(params.attachmentsRootDir),
+      resolveReal(params.attachmentsDir),
     ]);
     if (!dirReal) {
       return true;
     }
 
-    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
+    const rootBase = rootReal ?? path.resolve(params.attachmentsRootDir);
     const dirBase = dirReal;
     if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
       return false;
@@ -227,6 +262,9 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
     return false;
   }
 }
+
+export const safeRemoveAttachmentsDir: (entry: SubagentRunRecord) => Promise<boolean> =
+  safeRemoveAttachmentsPath;
 
 function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
@@ -270,16 +308,23 @@ export function reconcileOrphanedRun(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
+  if (params.runs.get(params.runId) !== params.entry) {
+    return false;
+  }
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
     safeRemoveAttachmentsDirSync(params.entry);
   }
+  if (params.runs.get(params.runId) !== params.entry) {
+    return false;
+  }
   const removed = params.runs.delete(params.runId);
-  params.resumedRuns.delete(params.runId);
   if (!removed) {
     return false;
   }
+  params.resumedRuns.delete(params.runId);
+  releaseSwarmRun(params.entry.schedulerSlotId ?? params.entry.swarmRunId ?? params.runId);
   defaultRuntime.log(
     `[warn] Subagent orphan run pruned source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
   );
@@ -311,6 +356,9 @@ export function reconcileOrphanedRestoredRuns(params: {
     ) {
       // Provider completion or interrupted recovery still owns these rows.
       // Their bounded reconciliation runs even when the session vanished.
+      continue;
+    }
+    if (entry.spawnFailureCleanup) {
       continue;
     }
     const orphanReason = resolveSubagentRunOrphanReason({

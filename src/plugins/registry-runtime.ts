@@ -25,17 +25,21 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
-import {
-  isAgentHarnessSessionKey,
-  isAgentHarnessSessionKeyOwnedBy,
-} from "../sessions/agent-harness-session-key.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
   withPluginRuntimePluginIdScope,
   withPluginRuntimePluginScope,
+  withReservedSubagentRequesterOwnershipScope,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import {
+  assertLockedSessionEntryPluginOwned,
+  assertReservedAgentHarnessSessionKeyOwned,
+  resolveAgentHarnessRegistration,
+  resolveLockedSessionPluginOwnership,
+  resolveReservedSpawnRequesterOwnerPluginId,
+} from "./session-ownership.js";
 
 const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "agent",
@@ -105,22 +109,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     if (cached) {
       return cached;
     }
-    const resolveHarnessRegistration = (harnessId: unknown) => {
-      const normalizedHarnessId = normalizeOptionalAgentRuntimeId(harnessId);
-      return normalizedHarnessId
-        ? registry.agentHarnesses.find(
-            (entry) => normalizeOptionalAgentRuntimeId(entry.harness.id) === normalizedHarnessId,
-          )
-        : undefined;
-    };
-    const resolveHarnessRegistrationForSessionKey = (sessionKey: string) =>
-      registry.agentHarnesses.find((entry) => {
-        const rawHarnessId = normalizeOptionalString(entry.harness.id)?.toLowerCase();
-        return (
-          rawHarnessId === normalizeOptionalAgentRuntimeId(rawHarnessId) &&
-          isAgentHarnessSessionKeyOwnedBy(sessionKey, rawHarnessId)
-        );
-      });
+    const resolveHarnessRegistration = (harnessId: unknown) =>
+      resolveAgentHarnessRegistration({ registry, harnessId });
     const assertOwnedHarness = (harnessId: unknown, action: string): string => {
       const normalizedHarnessId = normalizeOptionalAgentRuntimeId(harnessId);
       if (!normalizedHarnessId) {
@@ -142,70 +132,21 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       return normalizedHarnessId;
     };
     const assertReservedSessionKeyOwned = (sessionKey: unknown, action: string): void => {
-      const normalizedSessionKey = normalizeOptionalString(sessionKey);
-      if (!normalizedSessionKey || !isAgentHarnessSessionKey(normalizedSessionKey)) {
-        return;
-      }
-      const registration = resolveHarnessRegistrationForSessionKey(normalizedSessionKey);
-      if (!registration) {
-        throw new Error(
-          `Plugin "${pluginId}" cannot ${action} reserved agent harness session "${normalizedSessionKey}" because its harness is not registered.`,
-        );
-      }
-      if (registration.pluginId !== pluginId) {
-        throw new Error(
-          `Plugin "${pluginId}" cannot ${action} reserved agent harness session "${normalizedSessionKey}" owned by plugin "${registration.pluginId}".`,
-        );
-      }
+      assertReservedAgentHarnessSessionKeyOwned({ action, pluginId, registry, sessionKey });
     };
     const resolveLockedSessionHarnessRegistration = (
       sessionKey: string,
       entry: SessionEntry,
       action: string,
     ) => {
-      if (entry.modelSelectionLocked !== true) {
-        return undefined;
-      }
-      const harnessId = normalizeOptionalAgentRuntimeId(entry.agentHarnessId);
-      if (!harnessId) {
-        const pluginOwnerId = normalizeOptionalString(entry.pluginOwnerId);
-        if (pluginOwnerId) {
-          return { ownerPluginId: pluginOwnerId };
-        }
-        throw new Error(
-          `Plugin "${pluginId}" must provide a registered agent harness id to ${action} locked sessions.`,
-        );
-      }
-      const registration = resolveHarnessRegistration(harnessId);
-      if (!registration) {
-        throw new Error(
-          `Plugin "${pluginId}" must register agent harness "${harnessId}" before it can ${action} locked sessions.`,
-        );
-      }
-      if (
-        isAgentHarnessSessionKey(sessionKey) &&
-        !isAgentHarnessSessionKeyOwnedBy(sessionKey, harnessId)
-      ) {
-        throw new Error(
-          `Locked session "${sessionKey}" belongs to agent harness "${harnessId}", which does not match its reserved session key.`,
-        );
-      }
-      return { ownerPluginId: registration.pluginId, harnessId, registration };
+      return resolveLockedSessionPluginOwnership({ action, entry, pluginId, registry, sessionKey });
     };
     const assertLockedSessionEntryOwned = (
       sessionKey: string,
       entry: SessionEntry,
       action: string,
     ): void => {
-      const resolved = resolveLockedSessionHarnessRegistration(sessionKey, entry, action);
-      if (!resolved) {
-        return;
-      }
-      if (resolved.ownerPluginId !== pluginId) {
-        throw new Error(
-          `Locked session "${sessionKey}" is owned by plugin "${resolved.ownerPluginId}", not "${pluginId}".`,
-        );
-      }
+      assertLockedSessionEntryPluginOwned({ action, entry, pluginId, registry, sessionKey });
     };
     const assertSessionEntryOwned = (params: {
       action: string;
@@ -235,6 +176,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
       });
       assertSessionEntryOwned({ action: params.action, entry, sessionKey: params.sessionKey });
+      return entry;
+    };
+    const assertReservedSpawnRequesterOwned = (sessionKey: string): SessionEntry => {
+      const entry = registryParams.runtime.agent.session.getSessionEntry({
+        sessionKey,
+        readConsistency: "latest",
+      });
+      if (!entry) {
+        throw new Error(
+          `Plugin "${pluginId}" cannot spawn a reserved child from missing requester session "${sessionKey}".`,
+        );
+      }
+      resolveReservedSpawnRequesterOwnerPluginId({ entry, pluginId, registry, sessionKey });
       return entry;
     };
     const resolveStoredSessionExecutionOwner = (params: {
@@ -511,6 +465,34 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       entry: SessionEntry;
       sessionKey: string;
     }): void => {
+      const beforePluginOwnerId = normalizeOptionalString(params.before?.pluginOwnerId);
+      const nextPluginOwnerId = normalizeOptionalString(params.entry.pluginOwnerId);
+      if (beforePluginOwnerId !== nextPluginOwnerId) {
+        throw new Error(
+          `Plugin "${pluginId}" cannot ${params.action} session "${params.sessionKey}" because pluginOwnerId is immutable through runtime session mutations.`,
+        );
+      }
+      if (params.before) {
+        const beforeHarnessId = normalizeOptionalAgentRuntimeId(params.before.agentHarnessId);
+        const nextHarnessId = normalizeOptionalAgentRuntimeId(params.entry.agentHarnessId);
+        if (
+          params.before.modelSelectionLocked !== true &&
+          (params.entry.modelSelectionLocked === true ||
+            (nextHarnessId !== undefined && nextHarnessId !== beforeHarnessId))
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" cannot ${params.action} session "${params.sessionKey}" because agent harness ownership is immutable through runtime session mutations.`,
+          );
+        }
+        if (
+          params.before.modelSelectionLocked === true &&
+          (params.entry.modelSelectionLocked !== true || nextHarnessId !== beforeHarnessId)
+        ) {
+          throw new Error(
+            `Plugin "${pluginId}" cannot ${params.action} session "${params.sessionKey}" because agent harness ownership is immutable through runtime session mutations.`,
+          );
+        }
+      }
       if (params.entry.modelSelectionLocked === true) {
         assertLockedSessionEntryOwned(params.sessionKey, params.entry, params.action);
         return;
@@ -519,7 +501,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         assertLockedSessionEntryOwned(params.sessionKey, params.before, params.action);
         return;
       }
-      if (isAgentHarnessSessionKey(params.sessionKey) && !params.before) {
+      if (!params.before) {
         assertReservedSessionKeyOwned(params.sessionKey, params.action);
       }
     };
@@ -872,6 +854,30 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent = getRuntimeProperty();
         return {
+          spawnReserved: async (params) =>
+            await withPluginRuntimePluginIdScope(pluginId, async () => {
+              const entry = assertReservedSpawnRequesterOwned(params.requesterSessionKey);
+              return await withReservedSubagentRequesterOwnershipScope(
+                {
+                  ownerPluginId: pluginId,
+                  sessionKey: params.requesterSessionKey,
+                  ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+                  lifecycleRevisionPresent: Object.hasOwn(entry, "lifecycleRevision"),
+                  ...(typeof entry.lifecycleRevision === "string"
+                    ? { lifecycleRevision: entry.lifecycleRevision }
+                    : {}),
+                  ...(typeof entry.createdAt === "number" ? { createdAt: entry.createdAt } : {}),
+                  resolveCurrentOwnerPluginId: ({ entry: currentEntry, sessionKey }) =>
+                    resolveReservedSpawnRequesterOwnerPluginId({
+                      entry: currentEntry,
+                      pluginId,
+                      registry,
+                      sessionKey,
+                    }),
+                },
+                async () => await subagent.spawnReserved(params),
+              );
+            }),
           run: async (params) =>
             await withPluginRuntimePluginIdScope(pluginId, async () => {
               assertSessionIdentitiesOwned({

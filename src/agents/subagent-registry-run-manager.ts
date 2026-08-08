@@ -252,6 +252,8 @@ export type RegisterSubagentRunParams = {
   outputSchema?: Record<string, unknown>;
   queuedLaunch?: SwarmQueuedLaunch;
   queued?: boolean;
+  /** Fail closed instead of reusing a plugin-reserved child identity. */
+  rejectIdentityReuse?: boolean;
 };
 
 export function createSubagentRunManager(params: {
@@ -1180,6 +1182,17 @@ export function createSubagentRunManager(params: {
     if (!runId || !childSessionKey || !requesterSessionKey) {
       return;
     }
+    if (params.runs.has(runId)) {
+      throw new Error(`subagent runId already exists: ${runId}`);
+    }
+    if (
+      registerParams.rejectIdentityReuse === true &&
+      Array.from(params.runs.values()).some(
+        (candidate) => candidate.childSessionKey === childSessionKey,
+      )
+    ) {
+      throw new Error(`subagent childSessionKey already exists: ${childSessionKey}`);
+    }
     const now = Date.now();
     const generation = nextSubagentRunGeneration(
       params.getRunsForChildSession(childSessionKey),
@@ -1451,7 +1464,11 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const failQueuedSubagentRun = (runId: string, error: string) => {
+  const failQueuedSubagentRun = (
+    runId: string,
+    error: string,
+    options?: { contextEnginePreparationRollbackPending?: boolean },
+  ) => {
     const key = runId.trim();
     const entry = findRunByIdentity(key);
     if (!entry || entry.execution.status !== "queued") {
@@ -1468,6 +1485,9 @@ export function createSubagentRunManager(params: {
     };
     entry.queuedLaunch = undefined;
     entry.collectorLaunchCleanupPending = true;
+    if (options?.contextEnginePreparationRollbackPending === true) {
+      entry.contextEnginePreparationRollbackPending = true;
+    }
     entry.completion = { required: false, resultText: error, capturedAt: endedAt };
     updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     try {
@@ -1498,13 +1518,17 @@ export function createSubagentRunManager(params: {
     return true;
   };
 
-  const settleFailedQueuedSubagentLaunch = (runId: string, error: string) => {
+  const settleFailedQueuedSubagentLaunch = (
+    runId: string,
+    error: string,
+    options?: { contextEnginePreparationRollbackPending?: boolean },
+  ) => {
     const entry = findRunByIdentity(runId);
     if (!entry?.collect) {
       return false;
     }
     if (typeof entry.execution.endedAt !== "number") {
-      return failQueuedSubagentRun(runId, error);
+      return failQueuedSubagentRun(runId, error, options);
     }
     if (entry.collectorCompletion) {
       return true;
@@ -1512,6 +1536,9 @@ export function createSubagentRunManager(params: {
     const snapshot = structuredClone(entry);
     entry.swarmLaunchPending = false;
     entry.collectorLaunchCleanupPending = true;
+    if (options?.contextEnginePreparationRollbackPending === true) {
+      entry.contextEnginePreparationRollbackPending = true;
+    }
     entry.queuedLaunch = undefined;
     entry.execution = {
       ...entry.execution,

@@ -85,10 +85,7 @@ describe("sessions_spawn context modes", () => {
           Number.isFinite(parentTokens) &&
           parentTokens > maxTokens
         ) {
-          const sessionEntry = {
-            ...params.fallbackEntry,
-            ...store[params.sessionKey],
-          };
+          const sessionEntry = { ...(store[params.sessionKey] ?? params.fallbackEntry) };
           return {
             status: "skipped",
             reason: "decision-skip",
@@ -113,9 +110,9 @@ describe("sessions_spawn context modes", () => {
         if (!fork) {
           return { status: "failed" };
         }
+        const baseEntry = store[params.sessionKey] ?? params.fallbackEntry;
         const sessionEntry = {
-          ...params.fallbackEntry,
-          ...store[params.sessionKey],
+          ...baseEntry,
           sessionId: fork.sessionId,
           sessionFile: fork.sessionFile,
           forkedFromParent: true,
@@ -137,10 +134,12 @@ describe("sessions_spawn context modes", () => {
   }
 
   function requireAcceptedResult(result: Awaited<ReturnType<typeof spawnSubagentDirect>>) {
-    expect(result.status).toBe("accepted");
     if (result.status !== "accepted") {
-      throw new Error(`expected accepted result, got ${result.status}`);
+      throw new Error(
+        `expected accepted result, got ${result.status}: ${"error" in result ? result.error : ""}`,
+      );
     }
+    expect(result.status).toBe("accepted");
     return result;
   }
 
@@ -222,6 +221,63 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.parentSessionId).toBe("parent-session-id");
     expect(prepareContext.childSessionId).toBe("forked-session-id");
     expect(prepareContext.childSessionFile).toBe("/tmp/forked-session.jsonl");
+  });
+
+  it("guards fork preparation with the provisional child identity", async () => {
+    const store: SessionStore = {
+      main: {
+        sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
+        updatedAt: 1,
+      },
+    };
+    usePersistentStoreMock(store);
+    let provisionalChildIdentity:
+      | { expectedSessionId: string; expectedLifecycleRevision: string }
+      | undefined;
+    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
+      if (typeof mutator !== "function") {
+        throw new Error("missing session store mutator");
+      }
+      const result = await mutator(store);
+      for (const [sessionKey, entry] of Object.entries(store)) {
+        if (sessionKey === "main" || provisionalChildIdentity) {
+          continue;
+        }
+        if (typeof entry.sessionId === "string" && typeof entry.lifecycleRevision === "string") {
+          provisionalChildIdentity = {
+            expectedSessionId: entry.sessionId,
+            expectedLifecycleRevision: entry.lifecycleRevision,
+          };
+        }
+      }
+      return result;
+    });
+    forkSessionFromParentMock.mockResolvedValue({
+      sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
+    });
+
+    await expect(
+      spawnSubagentDirect(
+        { task: "fork with guarded provisional identity", context: "fork" },
+        { agentSessionKey: "main" },
+      ),
+    ).resolves.toMatchObject({ status: "accepted" });
+
+    expect(provisionalChildIdentity).toEqual({
+      expectedSessionId: expect.any(String),
+      expectedLifecycleRevision: expect.any(String),
+    });
+    if (!provisionalChildIdentity) {
+      throw new Error("expected provisional child identity");
+    }
+    expect(forkSessionEntryFromParentMock).toHaveBeenCalledWith(
+      expect.objectContaining(provisionalChildIdentity),
+    );
+    expect(requireFirstMockArg(forkSessionEntryFromParentMock)).not.toHaveProperty(
+      "expectedUpdatedAt",
+    );
   });
 
   it("keeps the default spawn context isolated", async () => {

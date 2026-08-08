@@ -1,5 +1,6 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
@@ -7,6 +8,16 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { PluginRegistry } from "../registry-types.js";
+
+export type ReservedSubagentRequesterOwnershipEvidence = {
+  ownerPluginId: string;
+  sessionKey: string;
+  sessionId?: string;
+  lifecycleRevisionPresent: boolean;
+  lifecycleRevision?: string;
+  createdAt?: number;
+  resolveCurrentOwnerPluginId: (params: { entry: SessionEntry; sessionKey: string }) => string;
+};
 
 type PluginRuntimeGatewayRequestScope = {
   context?: GatewayRequestContext;
@@ -17,6 +28,7 @@ type PluginRuntimeGatewayRequestScope = {
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
+  reservedSubagentRequesterOwnership?: ReservedSubagentRequesterOwnershipEvidence;
   pluginRegistry?: PluginRegistry;
 };
 
@@ -106,4 +118,18 @@ export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
   return pluginRuntimeGatewayRequestScope.getStore();
+}
+
+export function withReservedSubagentRequesterOwnershipScope<T>(
+  evidence: ReservedSubagentRequesterOwnershipEvidence,
+  run: () => T,
+): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  const scoped: PluginRuntimeGatewayRequestScope = current
+    ? { ...current, reservedSubagentRequesterOwnership: evidence }
+    : {
+        isWebchatConnect: () => false,
+        reservedSubagentRequesterOwnership: evidence,
+      };
+  return pluginRuntimeGatewayRequestScope.run(scoped, run);
 }

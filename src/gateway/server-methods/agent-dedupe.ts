@@ -1,6 +1,35 @@
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { DEDUPE_TTL_MS } from "../server-constants.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { GatewayRequestContext } from "./types.js";
+
+type ReservedSubagentDedupeReservation = {
+  acceptedAt: number;
+  dedupeKeys: string[];
+  expiresAtMs: number;
+  pluginRuntimeOwnerId: string;
+  reservationId: string;
+  reservedSubagentClaimToken: string;
+  runId: string;
+  sessionKey: string;
+  status: "accepted";
+};
+
+type ReservedSubagentDedupeReservationState = {
+  expired: boolean;
+  reservation: ReservedSubagentDedupeReservation;
+};
+
+const activeReservedSubagentDedupeEntries = new WeakSet<DedupeEntry>();
+
+export function isActiveReservedSubagentDedupeEntry(entry: DedupeEntry): boolean {
+  return activeReservedSubagentDedupeEntries.has(entry);
+}
 
 export function resolveAgentDedupeKeys(params: {
   idempotencyKey: string;
@@ -25,6 +54,95 @@ export function readGatewayDedupeEntry(params: {
     }
   }
   return undefined;
+}
+
+export function readReservedSubagentDedupeReservation(
+  entry: ReturnType<typeof readGatewayDedupeEntry>,
+): ReservedSubagentDedupeReservation | undefined {
+  const state = readReservedSubagentDedupeReservationState(entry);
+  return state && !state.expired ? state.reservation : undefined;
+}
+
+export function readReservedSubagentDedupeReservationState(
+  entry: ReturnType<typeof readGatewayDedupeEntry>,
+): ReservedSubagentDedupeReservationState | undefined {
+  if (!entry?.ok || !entry.payload || typeof entry.payload !== "object") {
+    return undefined;
+  }
+  const payload = entry.payload as Partial<ReservedSubagentDedupeReservation>;
+  const expiresAtMs = asDateTimestampMs(payload.expiresAtMs);
+  if (
+    payload.status === "accepted" &&
+    typeof payload.runId === "string" &&
+    typeof payload.sessionKey === "string" &&
+    typeof payload.pluginRuntimeOwnerId === "string" &&
+    typeof payload.reservedSubagentClaimToken === "string" &&
+    expiresAtMs !== undefined &&
+    payload.reservationId === payload.reservedSubagentClaimToken
+  ) {
+    const reservation = { ...payload, expiresAtMs } as ReservedSubagentDedupeReservation;
+    return {
+      expired: !isFutureDateTimestampMs(expiresAtMs, { nowMs: Date.now() }),
+      reservation,
+    };
+  }
+  return undefined;
+}
+
+export function isReservedSubagentDedupeReservationAuthorized(params: {
+  reservation: ReservedSubagentDedupeReservation;
+  runId: string;
+  sessionKey?: string;
+  pluginRuntimeOwnerId?: string;
+  claimToken?: string;
+}): boolean {
+  return (
+    params.reservation.runId === params.runId &&
+    params.reservation.sessionKey === params.sessionKey &&
+    params.reservation.pluginRuntimeOwnerId === params.pluginRuntimeOwnerId &&
+    params.reservation.reservedSubagentClaimToken === params.claimToken
+  );
+}
+
+export function reserveReservedSubagentDedupeEntry(params: {
+  dedupe: GatewayRequestContext["dedupe"];
+  runId: string;
+  sessionKey: string;
+  pluginRuntimeOwnerId: string;
+  claimToken: string;
+}): () => void {
+  const keys = resolveAgentDedupeKeys({ idempotencyKey: params.runId });
+  if (readGatewayDedupeEntry({ dedupe: params.dedupe, keys })) {
+    throw new Error("reserved subagent runId already exists in the Gateway dedupe cache.");
+  }
+  const acceptedAt = Date.now();
+  const entry = {
+    ts: acceptedAt,
+    ok: true,
+    payload: {
+      acceptedAt,
+      dedupeKeys: keys,
+      expiresAtMs: acceptedAt + DEDUPE_TTL_MS,
+      pluginRuntimeOwnerId: params.pluginRuntimeOwnerId,
+      reservationId: params.claimToken,
+      reservedSubagentClaimToken: params.claimToken,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      status: "accepted" as const,
+    },
+  };
+  activeReservedSubagentDedupeEntries.add(entry);
+  for (const key of keys) {
+    params.dedupe.set(key, entry);
+  }
+  return () => {
+    activeReservedSubagentDedupeEntries.delete(entry);
+    for (const key of keys) {
+      if (params.dedupe.get(key) === entry) {
+        params.dedupe.delete(key);
+      }
+    }
+  };
 }
 
 export function isAcceptedAgentDedupePayload(payload: unknown): payload is {

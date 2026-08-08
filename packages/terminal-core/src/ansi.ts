@@ -38,6 +38,13 @@ const ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX = new RegExp(
   `${ANSI_OSC_SEQUENCE_PATTERN}|${ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN}`,
   "y",
 );
+const WIDTH_CONTROL_REGEX = new RegExp(
+  `[${String.fromCharCode(0x00)}-${String.fromCharCode(0x1f)}${String.fromCharCode(
+    0x7f,
+  )}-${String.fromCharCode(0x9f)}]`,
+  "gu",
+);
+const REGIONAL_INDICATOR_REGEX = /[\u{1F1E6}-\u{1F1FF}]/gu;
 const graphemeSegmenter =
   typeof Intl !== "undefined" && "Segmenter" in Intl
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -45,6 +52,112 @@ const graphemeSegmenter =
 
 function hasAnsiIntroducer(input: string): boolean {
   return input.includes("\u001B") || input.includes("\u009B") || input.includes("\u009D");
+}
+
+function isZeroWidthDefaultIgnorable(code: number): boolean {
+  return (
+    code === 0x00ad ||
+    code === 0x034f ||
+    code === 0x061c ||
+    code === 0x1160 ||
+    code === 0x180e ||
+    code === 0x200b ||
+    code === 0x200c ||
+    code === 0x200e ||
+    code === 0x200f ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2060 && code <= 0x206f) ||
+    code === 0xfe0e ||
+    code === 0xfeff
+  );
+}
+
+function isHangulLeadingJamo(code: number): boolean {
+  return (code >= 0x1100 && code <= 0x115e) || (code >= 0xa960 && code <= 0xa97c);
+}
+
+function isHangulMedialJamo(code: number): boolean {
+  return (code >= 0x1161 && code <= 0x11a7) || (code >= 0xd7b0 && code <= 0xd7c6);
+}
+
+function isHangulTrailingJamo(code: number): boolean {
+  return (code >= 0x11a8 && code <= 0x11ff) || (code >= 0xd7cb && code <= 0xd7fb);
+}
+
+function codePointAtStart(input: string, index: number): number | undefined {
+  return input.codePointAt(index);
+}
+
+function charLengthForCodePoint(code: number): number {
+  return code > 0xffff ? 2 : 1;
+}
+
+function readHangulJamoSyllableCluster(input: string, start: number): string | undefined {
+  const firstCode = codePointAtStart(input, start);
+  if (firstCode === undefined || !isHangulLeadingJamo(firstCode)) {
+    return undefined;
+  }
+  let index = start + charLengthForCodePoint(firstCode);
+  const medialCode = codePointAtStart(input, index);
+  if (medialCode === undefined || !isHangulMedialJamo(medialCode)) {
+    return undefined;
+  }
+  index += charLengthForCodePoint(medialCode);
+  while (index < input.length) {
+    const trailingCode = codePointAtStart(input, index);
+    if (trailingCode === undefined || !isHangulTrailingJamo(trailingCode)) {
+      break;
+    }
+    index += charLengthForCodePoint(trailingCode);
+  }
+  return input.slice(start, index);
+}
+
+function splitPrintableWidthClusters(input: string): string[] {
+  return splitGraphemes(input);
+}
+
+function printableWidthClusterWidth(input: string): number {
+  const normalized = /[\u1100-\u11FF\uA960-\uA97C\uD7B0-\uD7FB]/u.test(input)
+    ? input.normalize("NFC")
+    : input;
+  const startsWithHangulSyllable =
+    normalized.length === input.length &&
+    input === normalized &&
+    input.length > 0 &&
+    readHangulJamoSyllableCluster(input, 0) === input;
+  return startsWithHangulSyllable ? 2 : stringWidth(normalized);
+}
+
+function printableWidthChunkWidth(input: string): number {
+  return splitPrintableWidthClusters(input).reduce(
+    (width, cluster) => width + printableWidthClusterWidth(cluster),
+    0,
+  );
+}
+
+function widthAcrossDefaultIgnorableBoundaries(input: string): number {
+  let width = 0;
+  let chunk = "";
+  const flush = (): void => {
+    if (chunk) {
+      width += printableWidthChunkWidth(chunk);
+      chunk = "";
+    }
+  };
+  for (const char of input) {
+    const code = char.codePointAt(0);
+    if (code === undefined) {
+      continue;
+    }
+    if (isZeroWidthDefaultIgnorable(code)) {
+      flush();
+      continue;
+    }
+    chunk += char;
+  }
+  flush();
+  return width;
 }
 
 /**
@@ -153,14 +266,56 @@ export function splitGraphemes(input: string): string[] {
   if (!input) {
     return [];
   }
-  if (!graphemeSegmenter) {
-    return Array.from(input);
+  const segments = (() => {
+    if (!graphemeSegmenter) {
+      return Array.from(input);
+    }
+    try {
+      return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
+    } catch {
+      return Array.from(input);
+    }
+  })();
+  if (!/[\u1100-\u11FF\uA960-\uA97C\uD7B0-\uD7FB]/u.test(input)) {
+    return segments;
   }
-  try {
-    return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
-  } catch {
-    return Array.from(input);
+  const combined: string[] = [];
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index] ?? "";
+    const firstCode = codePointAtStart(segment, 0);
+    if (firstCode === undefined || !isHangulLeadingJamo(firstCode)) {
+      combined.push(segment);
+      continue;
+    }
+    let cluster = segment;
+    let nextIndex = index + 1;
+    const segmentHasMedial = Array.from(segment).some((char) => {
+      const code = char.codePointAt(0);
+      return code !== undefined && isHangulMedialJamo(code);
+    });
+    if (!segmentHasMedial) {
+      const next = segments[nextIndex] ?? "";
+      const nextCode = codePointAtStart(next, 0);
+      if (nextCode === undefined || !isHangulMedialJamo(nextCode)) {
+        combined.push(segment);
+        continue;
+      }
+      cluster += next;
+      nextIndex += 1;
+    }
+    while (nextIndex < segments.length) {
+      const next = segments[nextIndex] ?? "";
+      const nextCode = codePointAtStart(next, 0);
+      if (nextCode === undefined || !isHangulTrailingJamo(nextCode)) {
+        break;
+      }
+      cluster += next;
+      nextIndex += 1;
+    }
+    combined.push(cluster);
+    index = nextIndex - 1;
   }
+  return combined;
 }
 
 /**
@@ -180,7 +335,7 @@ export function sanitizeForLog(v: string): string {
   return stripAnsi(v).replace(controlCharsRegex, "");
 }
 
-function textWidth(text: string): number {
+function printableTextWidth(text: string): number {
   // POSIX renders these default-ignorable Hangul fillers as wide/halfwidth cells;
   // same-shaping representatives and well-formed surrogates preserve terminal output.
   const printable = /[\u115F\u3164\uFFA0\uD800-\uDFFF]/u.test(text)
@@ -191,11 +346,38 @@ function textWidth(text: string): number {
         .replaceAll("\uFFA0", "\uFF8A")
     : text;
   // OpenClaw owns ANSI parsing; upstream must not reinterpret malformed sequences.
-  let width = stringWidth(printable, { countAnsiEscapeCodes: true });
-  // Tabs execute inside CSI too; string-width intentionally treats them as zero-width.
-  for (let index = text.indexOf("\t"); index !== -1; index = text.indexOf("\t", index + 1)) {
-    width += 1;
+  const widthInput = printable
+    .replace(/[\u260E]\uFE0F?\u20E3/gu, "\u260E")
+    .replace(/[\u2764]\uFE0F?\u200D\u{1F525}/gu, "\u{1F525}")
+    .replace(/^\uFE0F+/u, "")
+    .replace(/^\u200D+/u, "")
+    .replace(/([0-9#*])\uFE0F(?!\u20E3)/gu, "$1")
+    .replace(/\u200D$/gu, "")
+    .replace(REGIONAL_INDICATOR_REGEX, "a");
+  return widthAcrossDefaultIgnorableBoundaries(widthInput);
+}
+
+function textWidth(text: string): number {
+  let width = 0;
+  let printableStart = 0;
+  const flushPrintable = (end: number): void => {
+    if (end > printableStart) {
+      width += printableTextWidth(text.slice(printableStart, end));
+    }
+  };
+  for (let index = 0; index < text.length; index += 1) {
+    WIDTH_CONTROL_REGEX.lastIndex = 0;
+    if (!WIDTH_CONTROL_REGEX.test(text.charAt(index))) {
+      continue;
+    }
+    flushPrintable(index);
+    if (text.charAt(index) === "\t") {
+      // Tabs execute inside CSI too; string-width intentionally treats them as zero-width.
+      width += 1;
+    }
+    printableStart = index + 1;
   }
+  flushPrintable(text.length);
   return width;
 }
 
@@ -225,6 +407,35 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
   // copying zero-width ANSI sequences, so trailing resets/link-closes still
   // land without letting embedded executable controls exceed the budget.
   let budgetSpent = false;
+  const resetSgrWithoutWidthControls = (value: string): string | undefined => {
+    const introducerLength =
+      value.charCodeAt(0) === 0x9b
+        ? 1
+        : value.charCodeAt(0) === 0x1b && value.charCodeAt(1) === 0x5b
+          ? 2
+          : 0;
+    if (introducerLength === 0 || value.charAt(value.length - 1) !== "m") {
+      return undefined;
+    }
+    let body = "";
+    let paramsForResetDetection = "";
+    for (let index = introducerLength; index < value.length - 1; index += 1) {
+      const code = value.charCodeAt(index);
+      if (code === 0x09) {
+        continue;
+      }
+      const char = value.charAt(index);
+      body += char;
+      if (code > 0x1f && code !== 0x7f) {
+        paramsForResetDetection += char;
+      }
+    }
+    const params = paramsForResetDetection.replace(/[ -/]+$/u, "");
+    const resets =
+      params === "" ||
+      params.split(/[;:]/u).some((part) => part === "" || Number.parseInt(part, 10) === 0);
+    return resets ? `${value.slice(0, introducerLength)}${body}m` : undefined;
+  };
   const appendVisible = (segment: string): void => {
     if (budgetSpent) {
       return;
@@ -316,10 +527,10 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
         out += segment.value;
         used += controlWidth;
       } else if (controlWidth > 0) {
-        out += widthControls.reduce(
-          (value, control) => value.replaceAll(control, ""),
-          segment.value,
-        );
+        const reset = resetSgrWithoutWidthControls(segment.value);
+        if (reset) {
+          out += reset;
+        }
         budgetSpent = true;
       } else {
         out += segment.value;

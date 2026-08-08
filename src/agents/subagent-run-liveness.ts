@@ -9,7 +9,7 @@ import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
 type SubagentRunLivenessRecord = Pick<
   SubagentRunRecord,
-  "createdAt" | "sessionStartedAt" | "runTimeoutSeconds"
+  "createdAt" | "sessionStartedAt" | "runTimeoutSeconds" | "spawnFailureCleanup"
 > & {
   execution: Pick<SubagentRunRecord["execution"], "startedAt" | "endedAt">;
 };
@@ -53,12 +53,22 @@ export function isStaleUnendedSubagentRun(
   return now - startedAt > resolveStaleCutoffMs(entry);
 }
 
+function hasUnresolvedSpawnFailureCleanup(
+  entry: Pick<SubagentRunRecord, "spawnFailureCleanup">,
+): boolean {
+  const status = entry.spawnFailureCleanup?.status;
+  return status === "pending" || status === "exhausted";
+}
+
 /** Return whether a subagent run is still live and unended. */
 export function isLiveUnendedSubagentRun(
   entry: SubagentRunLivenessRecord,
   now = Date.now(),
 ): boolean {
-  return !hasSubagentRunEnded(entry) && !isStaleUnendedSubagentRun(entry, now);
+  return (
+    !hasSubagentRunEnded(entry) &&
+    (hasUnresolvedSpawnFailureCleanup(entry) || !isStaleUnendedSubagentRun(entry, now))
+  );
 }
 
 function isRecentlyEndedSubagentRun(

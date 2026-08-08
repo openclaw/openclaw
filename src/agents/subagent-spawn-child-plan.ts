@@ -6,7 +6,7 @@ import { resolveAgentDir } from "./agent-scope-config.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { supportsModelTools } from "./model-tool-support.js";
-import { summarizeSpawnError } from "./spawn-pipeline.js";
+import { summarizeSpawnError } from "./spawn-error.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "./spawn-plan.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
@@ -145,13 +145,19 @@ export async function resolveSubagentChildPlan(params: {
     requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
   });
   const incognito = isIncognitoSessionKey(params.requesterInternalKey);
-  const mintedChildSessionKey = mintSpawnSessionKey({
-    targetAgentId: params.targetAgentId,
-    backend: "subagent",
-  });
-  const childSessionKey = incognito
-    ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
-    : mintedChildSessionKey;
+  const preallocatedChildSessionKey = normalizeOptionalString(
+    params.ctx.preallocatedChildSessionKey,
+  );
+  const mintedChildSessionKey =
+    preallocatedChildSessionKey ??
+    mintSpawnSessionKey({
+      targetAgentId: params.targetAgentId,
+      backend: "subagent",
+    });
+  const childSessionKey =
+    incognito && !preallocatedChildSessionKey
+      ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
+      : mintedChildSessionKey;
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,

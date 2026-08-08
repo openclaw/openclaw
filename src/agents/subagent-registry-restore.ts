@@ -24,7 +24,7 @@ import {
 import { retrySubagentCleanup } from "./subagent-spawn-cleanup.js";
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
-import { enqueueSwarmRun } from "./swarm-scheduler.js";
+import { enqueueSwarmRun, type SwarmStartFailureDisposition } from "./swarm-scheduler.js";
 
 type RestoredQueuedFailureSettlementClaim = {
   entry: SubagentRunRecord;
@@ -234,9 +234,14 @@ export function createSubagentRegistryRestorer(config: {
                 }
               });
             },
-            onStartFailure: (error) => {
+            onStartFailure: (
+              error,
+            ):
+              | SwarmStartFailureDisposition
+              | boolean
+              | Promise<SwarmStartFailureDisposition | boolean> => {
               if (error instanceof GatewayDrainingError) {
-                return false;
+                return "retry";
               }
               return failAndCleanupRestoredQueuedRun(
                 runId,
@@ -259,6 +264,9 @@ export function createSubagentRegistryRestorer(config: {
             storeCache: restoredSessionCache,
           })?.abortedLastRun === true
         ) {
+          continue;
+        }
+        if (entry.spawnFailureCleanup && typeof entry.cleanupCompletedAt !== "number") {
           continue;
         }
         resumeRun(runId);

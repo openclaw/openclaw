@@ -206,6 +206,11 @@ describe("terminal ansi helpers", () => {
     ["Hindi spacing mark", "का", 2],
     ["repeated leading Hangul jamo", "ᄀᄀ", 4],
     ["repeated Hangul jamo with a vowel", "ᄀ가", 4],
+    ["decomposed Hangul L/V syllable", "\u1100\u1161", 2],
+    ["decomposed Hangul L/V/T syllable", "\u1100\u1161\u11A8", 2],
+    ["mixed decomposed Hangul L/V/T text", "A\u1100\u1161\u11A8B", 4],
+    ["archaic decomposed Hangul L/V syllable", "\uA960\uD7B0", 2],
+    ["archaic decomposed Hangul L/V/T syllable", "\uA960\uD7B0\uD7CB", 2],
     ["Hangul leading filler", "\u115F", 2],
     ["Hangul vowel filler", "\u1160", 0],
     ["Hangul compatibility filler", "\u3164", 2],
@@ -233,6 +238,18 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth("a\tb")).toBe(3);
     expect(visibleWidth("a\u001B[31\tmb")).toBe(3);
     expect(visibleWidth("a\u009B31\tmb")).toBe(3);
+  });
+
+  it("preserves control boundaries while measuring normalized graphemes", () => {
+    expect(visibleWidth("❤\u0001\uFE0F")).toBe(1);
+    expect(visibleWidth("❤\u0001\u200D🔥")).toBe(3);
+    expect(visibleWidth("🇬\u0001🇧")).toBe(2);
+  });
+
+  it("preserves default-ignorable shaping boundaries while measuring graphemes", () => {
+    expect(visibleWidth("❤\u200B\uFE0F")).toBe(1);
+    expect(visibleWidth("❤\u200C\u200D🔥")).toBe(3);
+    expect(visibleWidth("🇬\u200B🇧")).toBe(2);
   });
 
   it("keeps malformed ANSI ownership with OpenClaw's canonical scanner", () => {
@@ -285,6 +302,19 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("ﾊﾞ", 1)).toBe("");
     expect(truncateToVisibleWidth("ﾊﾞ", 2)).toBe("ﾊﾞ");
     expect(truncateToVisibleWidth("का", 1)).toBe("");
+    expect(truncateToVisibleWidth("\u1100\u1161", 1)).toBe("");
+    expect(truncateToVisibleWidth("\u1100\u1161", 2)).toBe("\u1100\u1161");
+    expect(truncateToVisibleWidth("\u1100\u1161", 3)).toBe("\u1100\u1161");
+    expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 1)).toBe("");
+    expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 2)).toBe("\u1100\u1161\u11A8");
+    expect(truncateToVisibleWidth("\u1100\u1161\u11A8", 3)).toBe("\u1100\u1161\u11A8");
+    expect(truncateToVisibleWidth("\uA960\uD7B0", 1)).toBe("");
+    expect(truncateToVisibleWidth("\uA960\uD7B0", 2)).toBe("\uA960\uD7B0");
+    expect(truncateToVisibleWidth("\uA960\uD7B0\uD7CB", 1)).toBe("");
+    expect(truncateToVisibleWidth("\uA960\uD7B0\uD7CB", 2)).toBe("\uA960\uD7B0\uD7CB");
+    expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 1)).toBe("A");
+    expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 2)).toBe("A");
+    expect(truncateToVisibleWidth("A\u1100\u1161\u11A8B", 3)).toBe("A\u1100\u1161\u11A8");
     expect(truncateToVisibleWidth("ᄀᄀ", 3)).toBe("");
     expect(truncateToVisibleWidth("👨‍👩‍👧‍👦", 1)).toBe("");
     expect(truncateToVisibleWidth("🇬🇧", 1)).toBe("");
@@ -326,6 +356,30 @@ describe("terminal ansi helpers", () => {
     const reset = truncateToVisibleWidth("\x1b[31mA\x1b[0\tmB", 1);
     expect(reset).toBe("\x1b[31mA\x1b[0m");
     expect(visibleWidth(reset)).toBe(1);
+
+    const resetWithLineFeed = truncateToVisibleWidth("\x1b[31mA\x1b[0\t\nmB", 1);
+    expect(resetWithLineFeed).toBe("\x1b[31mA\x1b[0\nm");
+    expect(visibleWidth(resetWithLineFeed)).toBe(1);
+
+    const resetWithIndependentControls = truncateToVisibleWidth("\x1b[31mA\x1b[0\x07\r\x7fmB", 1);
+    expect(resetWithIndependentControls).toBe("\x1b[31mA\x1b[0\x07\r\x7fm");
+    expect(visibleWidth(resetWithIndependentControls)).toBe(1);
+
+    const parameterlessResetWithIndependentControls = truncateToVisibleWidth(
+      "\x1b[31mA\x1b[\t\nmB",
+      1,
+    );
+    expect(parameterlessResetWithIndependentControls).toBe("\x1b[31mA\x1b[\nm");
+    expect(visibleWidth(parameterlessResetWithIndependentControls)).toBe(1);
+
+    const c1ParameterlessResetWithIndependentControls = truncateToVisibleWidth(
+      "\x1b[31mA\u009B\t\r\x7fmB",
+      1,
+    );
+    expect(c1ParameterlessResetWithIndependentControls).toBe("\x1b[31mA\u009B\r\x7fm");
+    expect(visibleWidth(c1ParameterlessResetWithIndependentControls)).toBe(1);
+
+    expect(truncateToVisibleWidth("\x1b[31mA\x1b[31\t\nmB", 1)).toBe("\x1b[31mA");
   });
 
   it("reuses the ANSI scanner across truncation calls", () => {

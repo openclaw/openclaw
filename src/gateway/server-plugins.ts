@@ -372,17 +372,16 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
     });
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
-
   return {
+    spawnReserved: async (params) =>
+      (await import("./server-plugins-reserved-spawn.js")).spawnReservedSubagent(params),
     async run(params) {
       const pluginSubagentRequester = resolvePluginSubagentCompletionRequester(
         params.completionDelivery,
       );
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
+      const id = scope?.pluginId;
+      const pluginId = typeof id === "string" ? id.trim() || undefined : undefined;
       const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
         pluginId,
         toolsAlsoAllow: params.toolsAlsoAllow,

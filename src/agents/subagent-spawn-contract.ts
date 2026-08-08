@@ -1,4 +1,5 @@
 import type { FastMode } from "../shared/fast-mode.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
@@ -55,11 +56,28 @@ export type SpawnSubagentContext = {
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
+  /** Exact target authorized by a plugin-owned, active spawn lease. */
+  authorizedTargetAgentId?: string;
+  /** Plugin-preallocated child identity for crash-safe launch coordination. */
+  preallocatedChildSessionKey?: string;
+  /** Plugin-preallocated run identity for crash-safe launch coordination. */
+  preallocatedRunId?: string;
+  /** Plugin that owns the reserved child session. */
+  pluginOwnerId?: string;
+  /** Immutable requester session identity bound to the reserved replay token. */
+  requesterSessionId?: string;
+  /** Whether the requester lifecycle revision key existed when the reservation was admitted. */
+  requesterLifecycleRevisionPresent?: boolean;
+  /** Requester lifecycle revision value bound to the reserved replay token when present. */
+  requesterLifecycleRevision?: string;
+  /** Process-local token binding a reserved run to its Gateway dedupe reservation. */
+  reservedSubagentClaimToken?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   requesterRunId?: string;
+  signal?: AbortSignal;
 };
 
 export type SpawnSubagentResult = {
@@ -76,6 +94,10 @@ export type SpawnSubagentResult = {
   resolvedProvider?: string;
   modelApplied?: boolean;
   error?: string;
+  reservedCleanup?: {
+    sessionDeletion: "deleted" | "not_deleted" | "indeterminate";
+    sessionIdentity?: ProvisionalSessionCleanupIdentity;
+  };
   attachments?: {
     count: number;
     totalBytes: number;

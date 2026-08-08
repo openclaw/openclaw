@@ -44,6 +44,43 @@ type SubagentRunResult = {
   };
 };
 
+type SubagentSpawnReservedParams = {
+  /** Existing requester session whose policy and lineage the child inherits. Raw UTF-8 must fit within 1024 bytes. */
+  requesterSessionKey: string;
+  /**
+   * Configured target agent for the reserved child. The plugin lease does not
+   * bypass ordinary requester subagents.allowAgents authorization.
+   */
+  targetAgentId: string;
+  /**
+   * Child identity reserved by the plugin before calling core. Must use the
+   * canonical agent:<targetAgentId>:subagent:<id> namespace and match the
+   * requester session's incognito classification. Raw UTF-8 must fit within
+   * 1024 bytes.
+   */
+  childSessionKey: string;
+  /**
+   * Run identity reserved by the plugin before calling core. Raw UTF-8 must fit
+   * within 1024 bytes. Reserved namespaces: agent:*, chat:*, and
+   * exec-approval-followup:*.
+   */
+  runId: string;
+  task: string;
+  /** Optional stable task alias matching [a-z][a-z0-9_-]{0,63}; "all" and "last" are reserved. */
+  taskName?: string;
+  /** Optional display label. Raw UTF-8 must fit within 1024 bytes. */
+  label?: string;
+  cleanup?: "delete" | "keep";
+  context?: "isolated" | "fork";
+  lightContext?: boolean;
+};
+
+type SubagentSpawnReservedResult = {
+  childSessionKey: string;
+  runId: string;
+  mode: "run";
+};
+
 type SubagentWaitParams = {
   runId: string;
   timeoutMs?: number;
@@ -120,6 +157,15 @@ export type PluginRuntime = PluginRuntimeCore & {
   };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
+    /**
+     * Consume identities reserved by a plugin-owned lease and start one child.
+     * Child identity must use agent:<targetAgentId>:subagent:<id>, match the
+     * requester incognito classification, and pass ordinary requester
+     * subagents.allowAgents authorization for targetAgentId; the plugin lease
+     * never bypasses that policy.
+     * The plugin owns lease persistence, expiry, replay, and service metadata.
+     */
+    spawnReserved: (params: SubagentSpawnReservedParams) => Promise<SubagentSpawnReservedResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,

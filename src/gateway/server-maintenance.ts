@@ -39,6 +39,7 @@ import {
   waitForMediaCleanupDrains,
   waitForMediaCleanupDrainsToSettle,
 } from "./server-media-cleanup-lifecycle.js";
+import { isActiveReservedSubagentDedupeEntry } from "./server-methods/agent-dedupe.js";
 import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
@@ -208,6 +209,9 @@ export function startGatewayMaintenanceTimers(params: {
       }
       if ((payload as { status?: unknown }).status !== "accepted") {
         return false;
+      }
+      if (isActiveReservedSubagentDedupeEntry(dedupeEntry)) {
+        return true;
       }
       const expiresAtMs = (payload as { expiresAtMs?: unknown }).expiresAtMs;
       return isFutureDateTimestampMs(expiresAtMs, { nowMs: now });

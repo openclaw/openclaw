@@ -2,7 +2,13 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  isSubagentSessionKey,
+  isValidAgentId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { listAgentIds } from "./agent-scope-config.js";
 import { reserveChildAdmissionSlot } from "./child-admission.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "./spawn-plan.js";
@@ -48,9 +54,12 @@ type ResolvedSubagentSpawnRequest = {
     reservationPending: boolean;
   };
   admission: {
-    resolve: (pendingChildren?: number) => ReturnType<typeof resolveSpawnAdmission>;
+    resolve: (
+      pendingChildren?: number,
+      pendingChildSessionKeys?: ReadonlySet<string>,
+    ) => ReturnType<typeof resolveSpawnAdmission>;
     initial: ReturnType<typeof resolveSpawnAdmission> & { ok: true };
-    reservation?: { release: () => void };
+    reservation?: { id: string; release: () => void };
     childDepth: number;
     maxSpawnDepth: number;
   };
@@ -201,6 +210,64 @@ export function resolveSubagentSpawnRequest(
   const targetAgentId = effectiveRequestedAgentId
     ? normalizeAgentId(effectiveRequestedAgentId)
     : requesterAgentId;
+  const authorizedTargetAgentId = normalizeOptionalString(ctx.authorizedTargetAgentId);
+  const preallocatedChildSessionKey = normalizeOptionalString(ctx.preallocatedChildSessionKey);
+  const preallocatedRunId = normalizeOptionalString(ctx.preallocatedRunId);
+  const pluginOwnerId = normalizeOptionalString(ctx.pluginOwnerId);
+  const reservedSubagentClaimToken = normalizeOptionalString(ctx.reservedSubagentClaimToken);
+  const hasReservedSpawnField = Boolean(
+    authorizedTargetAgentId ||
+    preallocatedChildSessionKey ||
+    preallocatedRunId ||
+    pluginOwnerId ||
+    reservedSubagentClaimToken,
+  );
+  if (
+    hasReservedSpawnField &&
+    (!authorizedTargetAgentId ||
+      !preallocatedChildSessionKey ||
+      !preallocatedRunId ||
+      !pluginOwnerId ||
+      !reservedSubagentClaimToken)
+  ) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      "reserved subagent spawn requires target, child, run, plugin owner, and Gateway claim identities",
+    );
+  }
+  if (authorizedTargetAgentId) {
+    if (
+      !isValidAgentId(authorizedTargetAgentId) ||
+      normalizeAgentId(authorizedTargetAgentId) !== targetAgentId
+    ) {
+      return rejectSubagentSpawnRequest(
+        "forbidden",
+        "reserved spawn target does not match requested agentId",
+      );
+    }
+    const parsedChildSessionKey = parseAgentSessionKey(preallocatedChildSessionKey);
+    const childSuffix = parsedChildSessionKey?.rest.slice("subagent:".length).trim();
+    if (
+      !parsedChildSessionKey ||
+      !isSubagentSessionKey(preallocatedChildSessionKey) ||
+      !childSuffix ||
+      normalizeAgentId(parsedChildSessionKey.agentId) !== targetAgentId
+    ) {
+      return rejectSubagentSpawnRequest(
+        "error",
+        "reserved childSessionKey must be a non-empty agent:<targetAgentId>:subagent:<id> key",
+      );
+    }
+    if (
+      isIncognitoSessionKey(requesterInternalKey) !==
+      isIncognitoSessionKey(preallocatedChildSessionKey)
+    ) {
+      return rejectSubagentSpawnRequest(
+        "forbidden",
+        "requester and reserved childSessionKey must have matching incognito classification",
+      );
+    }
+  }
   const configuredAgentIds = listAgentIds(cfg);
   const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
   const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
@@ -232,13 +299,15 @@ export function resolveSubagentSpawnRequest(
       targetAgentId,
       requestedAgentId: effectiveRequestedAgentId,
       configuredAgentIds,
-      additionalActiveChildren: pendingChildren,
+      authorizedTargetAgentId,
+      additionalActiveChildren: params.collect === true ? 0 : pendingChildren,
     });
   };
   const admissionReservation = params.collect
     ? undefined
     : reserveChildAdmissionSlot({
         controllerSessionKey: ownership.controllerSessionKey,
+        childSessionKey: preallocatedChildSessionKey,
         resolveAdmission,
       });
   const admission = admissionReservation ?? resolveAdmission();
@@ -260,13 +329,15 @@ export function resolveSubagentSpawnRequest(
   const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
   const swarmLaunchReplayKey = normalizeOptionalString(params.swarmLaunchReplayKey);
   // Registry and Gateway identities are global, while host replay keys are requester-scoped.
-  const childIdem = swarmLaunchReplayKey
-    ? `swarm_${crypto
-        .createHash("sha256")
-        .update(JSON.stringify([requesterInternalKey, swarmLaunchReplayKey]))
-        .digest("hex")
-        .slice(0, 32)}`
-    : crypto.randomUUID();
+  const childIdem =
+    preallocatedRunId ??
+    (swarmLaunchReplayKey
+      ? `swarm_${crypto
+          .createHash("sha256")
+          .update(JSON.stringify([requesterInternalKey, swarmLaunchReplayKey]))
+          .digest("hex")
+          .slice(0, 32)}`
+      : crypto.randomUUID());
   let reservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
     const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);

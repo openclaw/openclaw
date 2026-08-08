@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { readReservedSubagentClaimToken } from "../../agents/reserved-subagent-admission.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import {
-  isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,
+  isReservedSubagentDedupeReservationAuthorized,
   readGatewayDedupeEntry,
+  readReservedSubagentDedupeReservation,
+  readReservedSubagentDedupeReservationState,
   setAbortedAgentDedupeEntries,
   setGatewayDedupeEntries,
 } from "./agent-dedupe.js";
@@ -34,15 +38,43 @@ export function createAgentDedupeLifecycle(params: {
   ownerConnId?: string;
   ownerDeviceId?: string;
   context: GatewayRequestHandlerOptions["context"];
+  client: GatewayRequestHandlerOptions["client"];
   respond: GatewayRequestHandlerOptions["respond"];
 }) {
   let reserved = false;
   let accepted = false;
   let committedResetCompletion: CommittedResetCompletion | undefined;
-  const reservationId = randomUUID();
+  let reservationId: string = randomUUID();
+  let ownedReservationEntry: DedupeEntry | undefined;
 
   const reserve = (sessionKey?: string, dedupeAgentId?: string) => {
     if (reserved) {
+      return;
+    }
+    const existingEntry = readGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      keys: params.agentDedupeKeys,
+    });
+    const existingReservation = readReservedSubagentDedupeReservation(existingEntry);
+    const existingReservationState = existingReservation
+      ? undefined
+      : readReservedSubagentDedupeReservationState(existingEntry);
+    const adoptableReservation = existingReservation ?? existingReservationState?.reservation;
+    if (existingEntry) {
+      reserved = true;
+      if (
+        adoptableReservation &&
+        isReservedSubagentDedupeReservationAuthorized({
+          reservation: adoptableReservation,
+          runId: params.runId,
+          sessionKey,
+          pluginRuntimeOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
+          claimToken: readReservedSubagentClaimToken(params.request),
+        })
+      ) {
+        reservationId = adoptableReservation.reservationId;
+        ownedReservationEntry = existingEntry;
+      }
       return;
     }
     const dedupeSessionResolvesGlobal = sessionKey
@@ -54,29 +86,31 @@ export function createAgentDedupeLifecycle(params: {
       overrideSeconds:
         typeof params.request.timeout === "number" ? params.request.timeout : undefined,
     });
+    const entry = {
+      ts: acceptedAt,
+      ok: true,
+      payload: {
+        runId: params.runId,
+        reservationId,
+        status: "accepted" as const,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(dedupeAgentId && (!sessionKey || dedupeSessionResolvesGlobal)
+          ? { agentId: dedupeAgentId }
+          : {}),
+        controlUiVisible: !params.suppressVisibleSessionEffects,
+        acceptedAt,
+        dedupeKeys: params.agentDedupeKeys,
+        expiresAtMs: resolveAgentRunExpiresAtMs({ now: acceptedAt, timeoutMs: pendingTimeoutMs }),
+        ownerConnId: params.ownerConnId,
+        ownerDeviceId: params.ownerDeviceId,
+      },
+    };
     setGatewayDedupeEntries({
       dedupe: params.context.dedupe,
       keys: params.agentDedupeKeys,
-      entry: {
-        ts: acceptedAt,
-        ok: true,
-        payload: {
-          runId: params.runId,
-          reservationId,
-          status: "accepted" as const,
-          ...(sessionKey ? { sessionKey } : {}),
-          ...(dedupeAgentId && (!sessionKey || dedupeSessionResolvesGlobal)
-            ? { agentId: dedupeAgentId }
-            : {}),
-          controlUiVisible: !params.suppressVisibleSessionEffects,
-          acceptedAt,
-          dedupeKeys: params.agentDedupeKeys,
-          expiresAtMs: resolveAgentRunExpiresAtMs({ now: acceptedAt, timeoutMs: pendingTimeoutMs }),
-          ownerConnId: params.ownerConnId,
-          ownerDeviceId: params.ownerDeviceId,
-        },
-      },
+      entry,
     });
+    ownedReservationEntry = entry;
     reserved = true;
   };
 
@@ -90,9 +124,7 @@ export function createAgentDedupeLifecycle(params: {
     });
     if (
       isPreRegistrationAbortedAgentDedupeEntryForSession({ entry, runId: params.runId }) ||
-      (entry?.ok &&
-        isAcceptedAgentDedupePayload(entry.payload) &&
-        entry.payload.reservationId !== reservationId)
+      (entry && entry !== ownedReservationEntry)
     ) {
       return;
     }
@@ -161,7 +193,9 @@ export function createAgentDedupeLifecycle(params: {
   };
 
   return {
-    reservationId,
+    get reservationId() {
+      return reservationId;
+    },
     reserve,
     clearUnaccepted,
     abortForLifecycleRotation,

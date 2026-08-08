@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isGatewayRestartDraining,
@@ -46,6 +47,7 @@ import {
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
 } from "./subagent-session-reconciliation.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -473,6 +475,117 @@ export const claimSubagentRunKill = subagentRunManager.claimSubagentRunKill;
 export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRunKillClaim;
 export const registerSubagentRun: (params: RegisterSubagentRunParams) => void =
   subagentRunManager.registerSubagentRun;
+
+export function quarantineFailedSubagentSpawn(params: {
+  runId: string;
+  childSessionKey: string;
+  controllerSessionKey?: string;
+  requesterSessionKey: string;
+  requesterOrigin?: SubagentRunRecord["requesterOrigin"];
+  progressOrigin?: SubagentRunRecord["progressOrigin"];
+  requesterDisplayKey: string;
+  requesterAgentId?: string;
+  task: string;
+  taskName?: string;
+  agentId?: string;
+  cleanup: "delete" | "keep";
+  label?: string;
+  model?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  runTimeoutSeconds?: number;
+  spawnMode?: SubagentRunRecord["spawnMode"];
+  reason: string;
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
+  createdAt?: number;
+  deleteCleanupDispatchedAt?: number | undefined;
+}): "recorded" | "existing" {
+  const runId = params.runId.trim();
+  const childSessionKey = params.childSessionKey.trim();
+  if (!runId || !childSessionKey) {
+    throw new Error("failed-spawn quarantine requires run and child session identities");
+  }
+  const existing =
+    subagentRuns.has(runId) ||
+    [...subagentRuns.values()].some(
+      (entry) =>
+        entry.taskRunId === runId ||
+        entry.swarmRunId === runId ||
+        entry.childSessionKey === childSessionKey,
+    );
+  if (existing) {
+    return "existing";
+  }
+  const now = Date.now();
+  const createdAt =
+    typeof params.createdAt === "number" &&
+    Number.isFinite(params.createdAt) &&
+    params.createdAt <= now
+      ? params.createdAt
+      : now;
+  const maxAttempts = isFastTestRuntimeEnv() ? 3 : 30;
+  const entry: SubagentRunRecord = {
+    runId,
+    childSessionKey,
+    ...(params.controllerSessionKey ? { controllerSessionKey: params.controllerSessionKey } : {}),
+    requesterSessionKey: params.requesterSessionKey,
+    ...(params.requesterOrigin ? { requesterOrigin: params.requesterOrigin } : {}),
+    ...(params.progressOrigin ? { progressOrigin: params.progressOrigin } : {}),
+    requesterDisplayKey: params.requesterDisplayKey,
+    ...(params.requesterAgentId ? { requesterAgentId: params.requesterAgentId } : {}),
+    task: params.task,
+    ...(params.taskName ? { taskName: params.taskName } : {}),
+    cleanup: params.cleanup,
+    ...(params.label ? { label: params.label } : {}),
+    ...(params.model ? { model: params.model } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.runTimeoutSeconds !== undefined
+      ? { runTimeoutSeconds: params.runTimeoutSeconds }
+      : {}),
+    ...(params.spawnMode ? { spawnMode: params.spawnMode } : {}),
+    ...(params.attachmentsDir ? { attachmentsDir: params.attachmentsDir } : {}),
+    ...(params.attachmentsRootDir ? { attachmentsRootDir: params.attachmentsRootDir } : {}),
+    ...(params.retainAttachmentsOnKeep !== undefined
+      ? { retainAttachmentsOnKeep: params.retainAttachmentsOnKeep }
+      : {}),
+    createdAt,
+    expectsCompletionMessage: false,
+    execution: {
+      status: "interrupted",
+      interruptedAt: now,
+      interruptionReason: "lost-execution-context",
+    },
+    completion: { required: false },
+    delivery: { status: "not_required" },
+    ...(params.deleteCleanupDispatchedAt !== undefined
+      ? { deleteCleanupDispatchedAt: params.deleteCleanupDispatchedAt }
+      : {}),
+    spawnFailureCleanup: {
+      status: "pending",
+      reason: params.reason,
+      recordedAt: now,
+      attempts: 0,
+      maxAttempts,
+      nextAttemptAt: now,
+      sessionDeletion: "indeterminate",
+      ...(params.sessionIdentity ? { sessionIdentity: params.sessionIdentity } : {}),
+    },
+  };
+  subagentRuns.set(runId, entry);
+  try {
+    persistSubagentRunsOrThrow();
+  } catch (error) {
+    subagentRuns.delete(runId);
+    throw error;
+  }
+  subagentSweeper.start();
+  return "recorded";
+}
+
 export const startQueuedSubagentRun = subagentRunManager.startQueuedSubagentRun;
 export const settleFailedQueuedSubagentLaunch = subagentRunManager.settleFailedQueuedSubagentLaunch;
 
@@ -584,6 +697,7 @@ export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringIte
 export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSteeringItems;
 export const listSubagentRunsForController = publicApi.listSubagentRunsForController;
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
+export const hasSubagentRunIdentity = publicApi.hasSubagentRunIdentity;
 export const getSubagentRunsByRunIds = publicApi.getSubagentRunsByRunIds;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;

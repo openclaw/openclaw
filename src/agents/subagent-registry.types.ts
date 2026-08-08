@@ -6,6 +6,7 @@ import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export type SubagentCompletionRequest = {
@@ -174,6 +175,19 @@ export type SubagentCompletionDeliveryState = {
     | "waiting_for_requester_turn";
 };
 
+type SpawnFailureCleanupState = {
+  status: "pending" | "exhausted" | "deleted" | "missing" | "replaced" | "terminal_registered";
+  reason: string;
+  recordedAt: number;
+  attempts: number;
+  maxAttempts: number;
+  nextAttemptAt?: number;
+  lastAttemptAt?: number;
+  lastError?: string | null;
+  sessionDeletion: "indeterminate";
+  sessionIdentity?: ProvisionalSessionCleanupIdentity;
+};
+
 /** Durable outbox state for the top-level requester settle wake. */
 export type RequesterSettleWakeState = {
   status: "pending" | "dispatching";
@@ -255,6 +269,8 @@ export type SubagentRunRecord = {
   terminalOwner?: "interrupted-recovery";
   /** Present only while a current-version killed run awaits bounded reconciliation. */
   killReconciliation?: SubagentKillReconciliationState;
+  /** Fail-closed holder for a child whose failed spawn could not prove session deletion. */
+  spawnFailureCleanup?: SpawnFailureCleanupState;
   /** Durable operator cancellation ownership before runtime side effects complete. */
   killIntent?: SubagentKillIntent;
   /** Durable requester-stop policy until silent completion cleanup finishes. */
@@ -302,6 +318,8 @@ export type SubagentRunRecord = {
   queuedLaunch?: SwarmQueuedLaunch;
   /** Durable retry obligation for a prepared collector session whose launch failed. */
   collectorLaunchCleanupPending?: boolean;
+  /** Durable retry obligation for the exact retained preparation rollback handle. */
+  contextEnginePreparationRollbackPending?: boolean;
   /** Set after failed-launch context-engine cleanup succeeds, preventing duplicate end hooks. */
   contextEngineCleanupCompletedAt?: number;
   collectorCompletion?: SwarmCollectorCompletion;

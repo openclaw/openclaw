@@ -3,7 +3,9 @@ import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-pol
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
-import { summarizeSpawnError } from "./spawn-pipeline.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { summarizeSpawnError } from "./spawn-error.js";
+import type { ProvisionalSessionCleanupIdentity } from "./subagent-spawn-cleanup-types.js";
 import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentContextMode } from "./subagent-spawn.types.js";
@@ -26,6 +28,11 @@ type PreparedSpawnContext =
     }
   | { status: "error"; error: string };
 
+const retainedContextEnginePreparationRollbacks = resolveGlobalMap<
+  string,
+  SubagentSpawnPreparation
+>(Symbol.for("openclaw.retainedContextEnginePreparationRollbacks"), "close-only");
+
 export async function prepareSubagentSessionContext(params: {
   cfg: OpenClawConfig;
   contextMode: SpawnSubagentContextMode;
@@ -33,6 +40,7 @@ export async function prepareSubagentSessionContext(params: {
   targetAgentId: string;
   requesterInternalKey: string;
   childSessionKey: string;
+  expectedChildIdentity?: ProvisionalSessionCleanupIdentity;
 }): Promise<PreparedSpawnContext> {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
@@ -64,6 +72,15 @@ export async function prepareSubagentSessionContext(params: {
       sessionKey: childTarget.canonicalKey,
       sessionStoreKeys: childTarget.storeKeys,
       fallbackEntry: { sessionId: "", updatedAt: Date.now() },
+      ...(params.expectedChildIdentity?.expectedSessionId
+        ? { expectedSessionId: params.expectedChildIdentity.expectedSessionId }
+        : {}),
+      ...(params.expectedChildIdentity?.expectedLifecycleRevision
+        ? { expectedLifecycleRevision: params.expectedChildIdentity.expectedLifecycleRevision }
+        : {}),
+      ...(typeof params.expectedChildIdentity?.expectedSessionUpdatedAt === "number"
+        ? { expectedUpdatedAt: params.expectedChildIdentity.expectedSessionUpdatedAt }
+        : {}),
       agentId: params.requesterAgentId,
     });
     if (forkedResult.status === "missing-parent") {
@@ -174,6 +191,37 @@ export async function rollbackPreparedContextEngine(
     // Best-effort cleanup only.
     return false;
   }
+}
+
+export function retainContextEnginePreparationRollback(params: {
+  runId: string;
+  preparation?: SubagentSpawnPreparation;
+}): boolean {
+  const runId = params.runId.trim();
+  if (!runId || !params.preparation) {
+    return false;
+  }
+  retainedContextEnginePreparationRollbacks.set(runId, params.preparation);
+  return true;
+}
+
+export function clearRetainedContextEnginePreparationRollback(runId: string): void {
+  retainedContextEnginePreparationRollbacks.delete(runId.trim());
+}
+
+export async function retryRetainedContextEnginePreparationRollback(
+  runId: string,
+): Promise<"completed" | "missing" | "pending"> {
+  const key = runId.trim();
+  const preparation = retainedContextEnginePreparationRollbacks.get(key);
+  if (!preparation) {
+    return "missing";
+  }
+  if (!(await rollbackPreparedContextEngine(preparation))) {
+    return "pending";
+  }
+  retainedContextEnginePreparationRollbacks.delete(key);
+  return "completed";
 }
 
 export function resolveSubagentContextMode(params: {

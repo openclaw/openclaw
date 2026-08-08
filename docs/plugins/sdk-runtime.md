@@ -408,6 +408,64 @@ two-party event loops that do not go through the shared inbound reply runner.
     });
     ```
 
+    Plugins that persist their own lease and idempotency records can consume
+    preallocated child and run identities atomically:
+
+    ```typescript
+    // Create a plugin-owned depth-zero controller. Do not include `:subagent:`
+    // in this key: the default maxSpawnDepth allows depth-zero requesters only.
+    const requesterSessionKey = "agent:main:my-plugin-controller";
+    const { runId: controllerRunId } = await api.runtime.subagent.run({
+      sessionKey: requesterSessionKey,
+      message: "Initialize the reserved-spawn controller.",
+      deliver: false,
+    });
+    await api.runtime.subagent.waitForRun({ runId: controllerRunId });
+
+    const accepted = await api.runtime.subagent.spawnReserved({
+      requesterSessionKey,
+      targetAgentId: "main",
+      childSessionKey: "agent:main:subagent:lease-01j...",
+      runId: "run-01j...",
+      task: "Collect the evidence attached to this lease.",
+      cleanup: "keep",
+      context: "isolated",
+    });
+    ```
+
+    `spawnReserved(...)` is a narrow execution seam, not a lease store. The
+    calling plugin owns lease authentication, expiry, replay handling,
+    persistence, and all service-specific metadata or Gateway methods. Core
+    validates that the configured target, child-session agent, returned child
+    identity, and returned run identity match the reservation. `childSessionKey`
+    must use the canonical `agent:<targetAgentId>:subagent:<id>` namespace, and
+    its incognito classification must match `requesterSessionKey`; reserved
+    spawn cannot bridge between normal and incognito session stores. Reserved
+    runs are one-shot `mode: "run"` children and do not emit an automatic
+    completion message. `requesterSessionKey` must name a session owned by the
+    calling plugin; a plugin cannot use this seam to borrow another plugin's or
+    an operator's session authority. The requester still needs the ordinary
+    `agents.entries.<requester>.subagents.allowAgents` or
+    `agents.defaults.subagents.allowAgents` authorization for `targetAgentId`.
+    A plugin lease only reserves identities; it does not bypass configured
+    subagent target policy.
+
+    Core binds the process-local reserved claim token and the durable child
+    replay marker to the requester session key, requester `sessionId`, and the
+    presence plus value of the requester's `lifecycleRevision`. If the requester
+    session is reset or recreated, even with the same `sessionId`, an old
+    reserved child row is not an exact replay and must be retried with a fresh
+    reservation.
+
+    Reserved identity inputs are bounded before core claims or dispatches the
+    child: `requesterSessionKey`, `childSessionKey`, and `runId` each must fit
+    within 1024 raw UTF-8 bytes. `runId` is plugin-owned and must not use
+    backend-reserved namespaces: `agent:*`, `chat:*`, or
+    `exec-approval-followup:*`. Use an opaque plugin prefix instead. Optional
+    `taskName` is a stable task alias, not display text: it must be 1-64 safe
+    ASCII characters matching `[a-z][a-z0-9_-]{0,63}`, and `all` plus `last`
+    are reserved target words.
+
     <Warning>
     Model overrides (`provider`/`model`) require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Untrusted plugins can still run subagents, but override requests are rejected.
     </Warning>
@@ -416,7 +474,7 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the canonical requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.
 
-    `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
+    `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)` or `api.runtime.subagent.spawnReserved(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
 
   </Accordion>
   <Accordion title="api.runtime.sandbox">
