@@ -1,4 +1,7 @@
 // Line plugin module implements download behavior.
+import { Readable } from "node:stream";
+import { finished } from "node:stream/promises";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { setTimeout as delay } from "node:timers/promises";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaStream } from "openclaw/plugin-sdk/media-store";
@@ -16,7 +19,8 @@ interface DownloadResult {
 const CONTENT_READY_MAX_ATTEMPTS = 6;
 const CONTENT_READY_BASE_DELAY_MS = 500;
 const CONTENT_READY_MAX_DELAY_MS = 4000;
-const CONTENT_READY_TIMEOUT_MS = 15_000;
+const CONTENT_READY_TIMEOUT_MS = 15_000; // readiness polls only
+const LINE_MEDIA_BODY_TIMEOUT_MS = 120_000; // post-200 body wall-clock
 const LINE_CONTENT_BASE_URL = "https://api-data.line.me/v2/bot/message";
 
 class RetryableLineMediaFetchError extends MediaFetchError {
@@ -30,48 +34,31 @@ function contentBackoffDelayMs(attempt: number): number {
   return Math.min(CONTENT_READY_BASE_DELAY_MS * 2 ** attempt, CONTENT_READY_MAX_DELAY_MS);
 }
 
+function resolvePositiveTimeoutMs(timeoutMs: number | undefined, fallbackMs: number): number {
+  const ok = typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0;
+  return ok ? Math.floor(timeoutMs) : fallbackMs;
+}
+
 function lineContentUrl(messageId: string): string {
   return `${LINE_CONTENT_BASE_URL}/${encodeURIComponent(messageId)}/content`;
 }
 
-async function* lineResponseBodyChunks(
-  response: Response,
+async function* autoRetryStreamErrors(
+  source: Readable,
   messageId: string,
 ): AsyncIterable<Uint8Array> {
-  const body = response.body;
-  if (!body) {
-    throw new RetryableLineMediaFetchError(
-      `LINE media response for message ${messageId} had no body`,
-    );
-  }
-  const reader = body.getReader();
-  let completed = false;
   try {
-    while (true) {
-      let chunk: ReadableStreamReadResult<Uint8Array>;
-      try {
-        chunk = await reader.read();
-      } catch (err) {
-        throw new RetryableLineMediaFetchError(
-          `LINE media response stream failed for message ${messageId}`,
-          { cause: err },
-        );
-      }
-      if (chunk.done) {
-        completed = true;
-        return;
-      }
-      if (chunk.value.byteLength > 0) {
-        yield chunk.value;
-      }
+    for await (const chunk of source) {
+      yield chunk;
     }
-  } finally {
-    if (!completed) {
-      await reader.cancel().catch(() => undefined);
+  } catch (err) {
+    if (err instanceof MediaFetchError) {
+      throw err;
     }
-    try {
-      reader.releaseLock();
-    } catch {}
+    throw new RetryableLineMediaFetchError(
+      `LINE media response stream failed for message ${messageId}`,
+      { cause: err },
+    );
   }
 }
 
@@ -160,27 +147,72 @@ export async function downloadLineMedia(
   messageId: string,
   channelAccessToken: string,
   maxBytes = 10 * 1024 * 1024,
-  options?: { originalFilename?: string },
+  options?: {
+    originalFilename?: string;
+    bodyTimeoutMs?: number;
+  },
 ): Promise<DownloadResult> {
-  const response = await fetchLineContentWhenReady(messageId, channelAccessToken);
-  let saved: Awaited<ReturnType<typeof saveMediaStream>>;
-  try {
-    saved = await saveMediaStream(
-      lineResponseBodyChunks(response, messageId),
-      response.headers.get("content-type") ?? undefined,
-      "inbound",
-      maxBytes,
-      options?.originalFilename,
-    );
-  } catch (err) {
-    await response.body?.cancel().catch(() => undefined);
-    throw err;
-  }
-  logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
+  const bodyTimeoutMs = resolvePositiveTimeoutMs(
+    options?.bodyTimeoutMs,
+    LINE_MEDIA_BODY_TIMEOUT_MS,
+  );
 
-  return {
-    path: saved.path,
-    contentType: saved.contentType,
-    size: saved.size,
-  };
+  const response = await fetchLineContentWhenReady(messageId, channelAccessToken);
+
+  const bodyController = new AbortController();
+  const bodyDeadline = setTimeout(() => bodyController.abort(), bodyTimeoutMs);
+  bodyDeadline.unref();
+
+  let content: Readable | undefined;
+  try {
+    content = Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>);
+
+    const onAbort = () => {
+      content?.destroy(
+        new RetryableLineMediaFetchError(
+          `LINE media body for message ${messageId} timed out after ${bodyTimeoutMs / 1000} seconds`,
+        ),
+      );
+    };
+
+    if (bodyController.signal.aborted) {
+      onAbort();
+    } else {
+      bodyController.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    let saved: Awaited<ReturnType<typeof saveMediaStream>>;
+    try {
+      saved = await saveMediaStream(
+        autoRetryStreamErrors(content, messageId),
+        response.headers.get("content-type") ?? undefined,
+        "inbound",
+        maxBytes,
+        options?.originalFilename,
+      );
+    } finally {
+      bodyController.signal.removeEventListener("abort", onAbort);
+    }
+
+    logVerbose(`line: persisted media ${messageId} to ${saved.path} (${saved.size} bytes)`);
+    return {
+      path: saved.path,
+      contentType: saved.contentType,
+      size: saved.size,
+    };
+  } catch (err) {
+    if (bodyController.signal.aborted) {
+      throw new RetryableLineMediaFetchError(
+        `LINE media body for message ${messageId} timed out after ${bodyTimeoutMs / 1000} seconds`,
+        { cause: err },
+      );
+    }
+    if (content) {
+      content.destroy();
+      await finished(content).catch(() => undefined);
+    }
+    throw err;
+  } finally {
+    clearTimeout(bodyDeadline);
+  }
 }
