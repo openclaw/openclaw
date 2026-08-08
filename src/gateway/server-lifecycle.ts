@@ -12,6 +12,7 @@ import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { shutdownProcessSupervisor } from "../process/supervisor/index.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime-state.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
@@ -407,6 +408,7 @@ export async function prepareGatewayLifecycle(params: {
       pluginServices: runtimeState.pluginServices,
       postReadySidecars: runtimeState.postReadySidecars,
       cron: runtimeState.cronState.cron,
+      shutdownProcessSupervisor,
       heartbeatRunner: runtimeState.heartbeatRunner,
       updateCheckStop: runtimeState.stopGatewayUpdateCheck,
       stopTaskRegistryMaintenance: stopTaskRegistryMaintenanceOnDemand,

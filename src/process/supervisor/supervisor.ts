@@ -27,6 +27,7 @@ type StartingRun = {
   scopeKey?: string;
   terminationReason?: TerminationReason;
   cancel?: (reason: TerminationReason) => void;
+  pending?: Promise<ManagedRun>;
 };
 
 type StartingScope = {
@@ -94,11 +95,13 @@ function resolveElapsedTimeoutReason(params: {
     : null;
 }
 
-export function createProcessSupervisor(): ProcessSupervisor {
+export function createProcessSupervisor(): ProcessSupervisor & { shutdown(): Promise<void> } {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
   const startingRuns = new Map<string, StartingRun>();
   const startingScopes = new Map<string, StartingScope>();
+  let shuttingDown = false;
+  let shutdownPromise: Promise<void> | null = null;
 
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     const current = active.get(runId);
@@ -456,6 +459,9 @@ export function createProcessSupervisor(): ProcessSupervisor {
   };
 
   const spawn = (input: SpawnInput): Promise<ManagedRun> => {
+    if (shuttingDown) {
+      return Promise.reject(new Error("process supervisor is shut down"));
+    }
     const scopeKey = normalizeOptionalString(input.scopeKey);
     const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
     const startingRun: StartingRun = { scopeKey };
@@ -483,6 +489,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
       previous.length > 0
         ? Promise.allSettled(previous).then(() => startRun(input, scopeKey, runId, startingRun))
         : startRun(input, scopeKey, runId, startingRun);
+    startingRun.pending = pending;
     starting?.runs.add(pending);
     if (starting && input.replaceExistingScope) {
       starting.replacement = pending;
@@ -504,10 +511,36 @@ export function createProcessSupervisor(): ProcessSupervisor {
     return pending;
   };
 
+  const shutdown = (): Promise<void> => {
+    if (shutdownPromise) {
+      return shutdownPromise;
+    }
+    shuttingDown = true;
+
+    const starting = [...startingRuns.entries()];
+    const running = [...active.entries()];
+    for (const [runId] of starting) {
+      cancel(runId, "manual-cancel");
+    }
+    for (const [runId] of running) {
+      cancel(runId, "manual-cancel");
+    }
+
+    const waits = [
+      ...running.map(([, current]) => current.run.wait()),
+      ...starting.flatMap(([, current]) =>
+        current.pending ? [current.pending.then((run) => run.wait())] : [],
+      ),
+    ];
+    shutdownPromise = Promise.allSettled(waits).then(() => undefined);
+    return shutdownPromise;
+  };
+
   return {
     spawn,
     cancel,
     cancelScope,
+    shutdown,
     getRecord: (runId: string) => registry.get(runId),
   };
 }

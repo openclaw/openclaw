@@ -684,6 +684,7 @@ export function createGatewayCloseHandler(
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
     cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
+    shutdownProcessSupervisor: () => Promise<void>;
     heartbeatRunner: HeartbeatRunner;
     updateCheckStop?: (() => void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
@@ -929,6 +930,7 @@ export function createGatewayCloseHandler(
         warnings,
       );
       await shutdownStep("update-check", () => params.updateCheckStop?.(), warnings);
+      await shutdownStep("process-supervisor", params.shutdownProcessSupervisor, warnings);
       for (const timer of params.nodePresenceTimers.values()) {
         clearInterval(timer);
       }

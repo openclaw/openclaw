@@ -136,6 +136,7 @@ function createGatewayCloseTestDeps(
     stopChannel: vi.fn(async () => undefined),
     pluginServices: null,
     cron: { stop: vi.fn() },
+    shutdownProcessSupervisor: vi.fn(async () => undefined),
     heartbeatRunner: { stop: vi.fn() } as never,
     updateCheckStop: null,
     stopTaskRegistryMaintenance: null,
@@ -229,6 +230,31 @@ describe("createGatewayCloseHandler", () => {
     expect(httpClose).toHaveBeenCalled();
     expect(result.warnings.length).toBeGreaterThan(0);
     expect(getActivePluginRegistry()).toBeNull();
+  });
+
+  it("drains the process supervisor after process-producing services stop", async () => {
+    const events: string[] = [];
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        cron: {
+          stop: vi.fn(() => {
+            events.push("cron");
+          }),
+        },
+        shutdownProcessSupervisor: vi.fn(async () => {
+          events.push("process-supervisor");
+        }),
+        heartbeatRunner: {
+          stop: vi.fn(() => {
+            events.push("heartbeat");
+          }),
+        } as never,
+      }),
+    );
+
+    await close({ reason: "test" });
+
+    expect(events).toEqual(["cron", "heartbeat", "process-supervisor"]);
   });
 
   it("completes a clean shutdown with a ShutdownResult", async () => {
