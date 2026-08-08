@@ -139,6 +139,8 @@ export type SubagentCompletionDeliveryState = {
   enqueuedAt?: number;
   deliveredAt?: number;
   announcedAt?: number;
+  /** Yield generation whose fully drained batch already received its requester final. */
+  requesterVisibleFinalGeneration?: number;
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;

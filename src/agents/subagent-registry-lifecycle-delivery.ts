@@ -35,7 +35,12 @@ import type {
   SubagentRegistryLifecycleParams,
   SubagentRegistryLifecycleState,
 } from "./subagent-registry-lifecycle-contracts.js";
-import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  PendingFinalDeliveryPayload,
+  RequesterSettleWakeState,
+  SubagentRunRecord,
+} from "./subagent-registry.types.js";
+import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
 
@@ -64,6 +69,7 @@ export function createSubagentRegistryLifecycleDelivery(
   const recordAnnounceDeliveryResult = (
     entry: SubagentRunRecord,
     delivery: SubagentAnnounceDeliveryResult,
+    requesterSettleWakeAtDispatch?: RequesterSettleWakeState,
   ) => {
     const deliveryState = ensureDeliveryState(entry);
     if (typeof delivery.enqueuedAt === "number") {
@@ -74,6 +80,37 @@ export function createSubagentRegistryLifecycleDelivery(
         typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
       deliveryState.deliveredAt = deliveredAt;
       deliveryState.lastDropReason = undefined;
+      const requesterSettleWake = entry.requesterSettleWake;
+      const batchRunIds = requesterSettleWake?.batchRunIds;
+      const dispatchBatchRunIds = requesterSettleWakeAtDispatch?.batchRunIds;
+      const requesterSettleWakeGeneration = requesterSettleWakeAtDispatch?.rearmGeneration;
+      if (
+        delivery.path === "direct" &&
+        delivery.requesterVisibleFinalDelivered === true &&
+        requesterSettleWake?.requesterYieldBatch === true &&
+        typeof requesterSettleWakeGeneration === "number" &&
+        Number.isSafeInteger(requesterSettleWakeGeneration) &&
+        requesterSettleWakeGeneration > 0 &&
+        requesterSettleWake.rearmGeneration === requesterSettleWakeGeneration &&
+        batchRunIds?.length === dispatchBatchRunIds?.length &&
+        batchRunIds?.includes(entry.runId) &&
+        batchRunIds.every((runId, index) => {
+          const sibling = params.runs.get(runId);
+          return Boolean(
+            runId === dispatchBatchRunIds?.[index] &&
+            sibling &&
+            sibling.requesterSessionKey === entry.requesterSessionKey &&
+            sibling.requesterSettleWake?.requesterYieldBatch === true &&
+            sibling.requesterSettleWake.rearmGeneration === requesterSettleWakeGeneration &&
+            hasSubagentRunEnded(sibling) &&
+            (sibling === entry ? delivery.delivered : sibling.delivery?.status === "delivered"),
+          );
+        })
+      ) {
+        // The callback precedes the current row's status update; its committed
+        // delivery still counts while every other frozen sibling must be durable.
+        deliveryState.requesterVisibleFinalGeneration = requesterSettleWakeGeneration;
+      }
     }
     deliveryState.disposition =
       delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");

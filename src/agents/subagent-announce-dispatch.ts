@@ -30,6 +30,8 @@ type SubagentAnnounceSteerOutcome =
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
+  /** True only when this completion actually delivered the requester's visible final. */
+  requesterVisibleFinalDelivered?: true;
   deliveredAt?: number;
   enqueuedAt?: number;
   reason?: SubagentAnnounceDeliveryFailureReason;

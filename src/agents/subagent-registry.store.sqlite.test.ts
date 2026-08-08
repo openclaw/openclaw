@@ -103,6 +103,7 @@ describe("subagent registry sqlite store", () => {
         },
         terminalOwner: "interrupted-recovery",
         completion: { required: true, resultText: null, capturedAt: 250 },
+        delivery: { status: "delivered", requesterVisibleFinalGeneration: 3 },
         requesterSettleWake: {
           status: "dispatching",
           attemptCount: 1,
@@ -118,6 +119,7 @@ describe("subagent registry sqlite store", () => {
       });
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      closeOpenClawStateDatabaseForTest();
 
       const restored = loadSubagentRegistryFromSqlite();
       expect(restored.get(run.runId)).toMatchObject({

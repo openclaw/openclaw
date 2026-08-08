@@ -157,6 +157,25 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
   });
 
+  it("requires a fresh parent-owned completed delivery before accepting a subagent handoff", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("subagent-handoff"));
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(flow).toContain('"set":"sessionKey"');
+    expect(flow).toContain("`agent:qa:handoff:${randomUUID().slice(0, 8)}`");
+    expect(flow).toContain("randomUUID().slice(0, 8)");
+    expect(flow).toContain("QA parent correlation: ${sessionKey}");
+    expect(flow).toContain("waitForAgentHistoryReply");
+    expect(flow).toContain('"saveAs":"handoffTask"');
+    expect(flow).toContain("['tasks', 'list', '--json', '--runtime', 'subagent']");
+    expect(flow).toContain("task.requesterSessionKey === sessionKey");
+    expect(flow).toContain("task.status === 'succeeded'");
+    expect(flow).toContain("task.deliveryStatus === 'delivered'");
+    expect(flow).toContain("String(request.allInputText ?? '').includes(sessionKey)");
+    expect(flow).not.toContain("readRawQaSessionStore");
+    expect(flow).not.toContain("readSessionTranscriptSummary");
+  });
+
   it("settles terminal-reply scenarios from durable task facts instead of sleeps", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback"));
     const flow = JSON.stringify(scenario.execution.flow);

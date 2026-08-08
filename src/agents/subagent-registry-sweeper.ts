@@ -20,6 +20,7 @@ import {
   SUBAGENT_SUSPENDED_DELIVERY_HARD_CAP,
   SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT,
 } from "./subagent-registry-suspended-delivery.js";
+import { resumeYieldedSubagentRequesterRecovery } from "./subagent-registry-sweeper-yielded-recovery.js";
 export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import {
   reconcileDurableSubagentKillIntent,
@@ -291,8 +292,13 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (entry.requesterSettleWake) {
-          params.resumeRequesterSettleWake(runId, entry);
-          continue;
+          const yieldedRecovery = resumeYieldedSubagentRequesterRecovery(runId, entry, now, params);
+          if (yieldedRecovery !== "execution-owner") {
+            if (yieldedRecovery === "requester-wake") {
+              params.resumeRequesterSettleWake(runId, entry);
+            }
+            continue;
+          }
         }
         if (isSuspendedPendingFinalDelivery(entry)) {
           const expired =

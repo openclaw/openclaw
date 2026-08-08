@@ -492,6 +492,12 @@ export function createSubagentRegistryLifecycleCleanup(
     }
     const pendingPayload = loadPendingFinalDeliveryPayload(entry);
     const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
+    const requesterSettleWakeAtDispatch = entry.requesterSettleWake
+      ? {
+          ...entry.requesterSettleWake,
+          batchRunIds: [...(entry.requesterSettleWake.batchRunIds ?? [])],
+        }
+      : undefined;
     let latestDeliveryError = getDeliveryLastError(entry);
     const finalizeAnnounceCleanup = async (didAnnounce: boolean) => {
       if (!isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
@@ -562,7 +568,7 @@ export function createSubagentRegistryLifecycleCleanup(
           retireSupersededCleanupInBackground(runId, entry, cleanupGeneration);
           return;
         }
-        recordAnnounceDeliveryResult(entry, delivery);
+        recordAnnounceDeliveryResult(entry, delivery, requesterSettleWakeAtDispatch);
         if (delivery.delivered) {
           const deliveryState = ensureDeliveryState(entry);
           deliveryState.status = "delivered";
