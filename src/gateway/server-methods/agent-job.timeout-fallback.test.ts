@@ -193,6 +193,73 @@ describe("waitForAgentJob timeout fallback", () => {
     });
   });
 
+  it("lets a same-run successful end resolve an active wait after retry grace", async () => {
+    const runId = `run-timeout-fallback-late-success-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 30_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        error: "Retryable provider failure",
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 16_100,
+      },
+    });
+
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "ok",
+      startedAt: 1_000,
+      endedAt: 16_100,
+    });
+  });
+
+  it("finalizes an uncorrected retryable error when the active wait expires", async () => {
+    const runId = `run-timeout-fallback-late-error-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 30_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        error: "Retryable provider failure",
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "error",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      error: "Retryable provider failure",
+    });
+  });
+
   it.each([
     { label: "failure", metadata: {} },
     {
