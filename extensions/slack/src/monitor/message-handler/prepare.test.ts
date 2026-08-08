@@ -1096,7 +1096,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const expectedSessionKey =
       scenario.bindingOwner === "runtime"
         ? "agent:review:slack:channel:c0ahzfcas1k"
-        : `agent:main:slack:channel:${channelId.toLowerCase()}:thread:${rootTs}`;
+        : `agent:main:slack:channel:${scenario.enterpriseTeamId ? `team:${scenario.enterpriseTeamId.toLowerCase()}:channel:` : ""}${channelId.toLowerCase()}:thread:${rootTs}`;
     const { storePath } = storeFixture.makeTmpStorePath();
     const channelsConfig = implicit
       ? { [channelId]: { enabled: true, requireMention: false } }
@@ -1136,6 +1136,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
       replyToMode,
       ...(channelsConfig ? { channelsConfig } : {}),
     });
+    if (scenario.enterpriseTeamId) {
+      Object.assign(slackCtx, { botUserId: "" });
+    }
     slackCtx.resolveChannelName = async () => ({
       name: implicit ? "genai" : "proj-openclaw",
       type: "channel",
