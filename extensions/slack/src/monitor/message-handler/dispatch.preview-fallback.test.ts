@@ -4937,6 +4937,37 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(session.stopped).toBe(true);
   });
 
+  it("records native stream participation as soon as Slack confirms visible delivery", async () => {
+    mockedNativeStreaming = true;
+    let releaseStop: (() => void) | undefined;
+    stopSlackStreamMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseStop = () => resolve({});
+        }),
+    );
+    const eventScope = {
+      apiAppId: "A_ENTERPRISE",
+      enterpriseId: "E_ENTERPRISE",
+      isEnterpriseInstall: true as const,
+      teamId: "T_ENTERPRISE",
+      client: {},
+    };
+
+    const dispatchPromise = dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({ eventScope }),
+    );
+
+    await vi.waitFor(() => expect(startSlackStreamMock).toHaveBeenCalledTimes(1));
+    expect(recordSlackThreadParticipationMock).toHaveBeenCalledWith("default", "C123", THREAD_TS, {
+      agentId: "agent-1",
+      teamId: "T_ENTERPRISE",
+    });
+
+    releaseStop?.();
+    await dispatchPromise;
+  });
+
   it("routes pending native stream text through chunked sender for unexpected finalize failures", async () => {
     mockedNativeStreaming = true;
     const session = {
