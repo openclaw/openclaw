@@ -27,20 +27,31 @@ export function managedWorktreeName(cardId: string): string {
   return `wb-${suffix}`.slice(0, 64).replace(/-$/, "");
 }
 
+export async function reconcileWorkboardEndedRun(params: {
+  store: WorkboardStore;
+  runId: string;
+  outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
+  error?: string;
+  reason?: string;
+}): Promise<void> {
+  const outcome = params.outcome ?? "unknown";
+  const detail =
+    outcome === "ok"
+      ? "Worker ended without completing or blocking the card."
+      : `Worker ended with outcome ${outcome}${params.error ? `: ${params.error}` : params.reason ? `: ${params.reason}` : "."}`;
+  await params.store.reconcileEndedRun({ detail, runId: params.runId });
+}
+
 export async function cleanupWorkboardRunWorktree(params: {
   store: WorkboardStore;
   worktrees: Pick<PluginRuntime["worktrees"], "removeIfLossless">;
   runId: string;
 }): Promise<void> {
-  const card = (await params.store.list()).find((entry) => entry.runId === params.runId);
-  const workspace = card?.metadata?.automation?.workspace;
-  if (!card || workspace?.kind !== "worktree" || !workspace.path) {
-    return;
-  }
-  await params.worktrees.removeIfLossless({
-    path: workspace.path,
-    ownerKind: "workboard",
-    ownerId: card.id,
+  await params.store.cleanupEndedRunWorktree({
+    runId: params.runId,
+    removeIfLossless: async (input) => {
+      await params.worktrees.removeIfLossless(input);
+    },
   });
 }
 
