@@ -152,7 +152,7 @@ describe("Discord secret config contract", () => {
     expect(context.warnings).toStrictEqual([]);
   });
 
-  it("collects the canonical provider API key when selected through an alias", () => {
+  it("collects the canonical provider API key alongside an alias override", () => {
     const sourceConfig = {
       channels: {
         discord: {
@@ -163,6 +163,7 @@ describe("Discord secret config contract", () => {
                 codex: {
                   apiKey: { source: "env", provider: "default", id: "ROOT_CODEX" },
                 },
+                "codex-realtime": { voice: "arbor" },
                 openai: {
                   apiKey: { source: "env", provider: "default", id: "ROOT_OPENAI" },
                 },

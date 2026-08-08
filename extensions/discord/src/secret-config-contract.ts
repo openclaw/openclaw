@@ -128,20 +128,18 @@ function collectRealtimeProviderApiKeyAssignments(params: {
     typeof params.realtime.provider === "string"
       ? normalizeRealtimeVoiceProviderId(params.realtime.provider)
       : undefined;
-  const configuredProviderIds = new Set(
-    Object.keys(params.realtime.providers).flatMap((providerId) => {
-      const normalized = normalizeRealtimeVoiceProviderId(providerId);
-      return normalized ? [normalized] : [];
-    }),
-  );
-  const selectedProvider = selectedProviderId
-    ? configuredProviderIds.has(selectedProviderId)
-      ? selectedProviderId
-      : canonicalizeRealtimeVoiceProviderId(selectedProviderId, params.context.sourceConfig)
+  const selectedProviderIds = selectedProviderId
+    ? new Set(
+        [
+          selectedProviderId,
+          canonicalizeRealtimeVoiceProviderId(selectedProviderId, params.context.sourceConfig),
+        ].filter((providerId): providerId is string => Boolean(providerId)),
+      )
     : undefined;
   for (const [providerId, providerConfig] of Object.entries(params.realtime.providers)) {
     if (
-      (selectedProvider && normalizeRealtimeVoiceProviderId(providerId) !== selectedProvider) ||
+      (selectedProviderIds &&
+        !selectedProviderIds.has(normalizeRealtimeVoiceProviderId(providerId) ?? "")) ||
       !isRecord(providerConfig)
     ) {
       continue;

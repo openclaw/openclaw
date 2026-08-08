@@ -1119,14 +1119,22 @@ export class DiscordVoiceManager {
         logger.warn(
           `discord voice: bot moved to allowed channel guild=${guildId} from=${existing.channelId} to=${channelId}; rebuilding voice session`,
         );
-        await this.join(
+        const preserveFollowState = this.isFollowOwnedGuild(guildId);
+        const requester = this.resolvePresentAutomaticRequester({ guildId, channelId });
+        const result = await this.join(
           { guildId, channelId },
           {
             automatic: true,
-            preserveFollowState: this.isFollowOwnedGuild(guildId),
-            requester: existing.requester,
+            preserveFollowState,
+            ...(requester ? { requester } : {}),
           },
         );
+        if (!result.ok && this.sessions.get(guildId) === existing) {
+          logger.warn(
+            `discord voice: bot move rebuild rejected guild=${guildId} channel=${channelId}; disconnecting stale session: ${result.message}`,
+          );
+          await this.leave({ guildId }, { preserveFollowState });
+        }
       }
       return;
     }
