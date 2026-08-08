@@ -576,12 +576,6 @@ export async function handleSlackAction(
   if (account.config.enterpriseOrgInstall === true && !enterpriseGridActionTools.has(action)) {
     throw new Error("Slack action tools are unavailable for Enterprise Grid org installs.");
   }
-  const resolveChannelId = () =>
-    resolveSlackChannelId(
-      readStringParam(params, "channelId", {
-        required: true,
-      }),
-    );
   const resolveChannelTarget = () =>
     resolveSlackActionChannelTarget(
       account,
