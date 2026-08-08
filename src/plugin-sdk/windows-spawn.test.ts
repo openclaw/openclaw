@@ -5,7 +5,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
-import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgram,
+} from "./windows-spawn.js";
 
 const { createTempDir } = createPluginSdkTestHarness({
   cleanup: {
@@ -15,6 +19,55 @@ const { createTempDir } = createPluginSdkTestHarness({
 });
 
 describe("resolveWindowsSpawnProgram", () => {
+  it("uses a nonblank arbitrary-case PATH alias", async () => {
+    const dir = await createTempDir("openclaw-windows-spawn-test-");
+    const shimPath = path.join(dir, "tool.CMD");
+    await writeFile(shimPath, "@ECHO off\r\n", "utf8");
+
+    expect(
+      resolveWindowsExecutablePath("tool", {
+        PATH: "",
+        pAtH: dir,
+        PATHEXT: ".CMD",
+      }),
+    ).toBe(shimPath);
+  });
+
+  it("uses a nonblank arbitrary-case PATHEXT alias", async () => {
+    const dir = await createTempDir("openclaw-windows-spawn-test-");
+    const shimPath = path.join(dir, "tool.CMD");
+    await writeFile(shimPath, "@ECHO off\r\n", "utf8");
+
+    expect(
+      resolveWindowsExecutablePath("tool", {
+        PATH: dir,
+        PATHEXT: "",
+        pAtHeXt: ".CMD",
+      }),
+    ).toBe(shimPath);
+  });
+
+  it("preserves canonical alias precedence across duplicate casings", async () => {
+    const canonicalDir = await createTempDir("openclaw-windows-spawn-canonical-");
+    const aliasDir = await createTempDir("openclaw-windows-spawn-alias-");
+    const canonicalShimPath = path.join(canonicalDir, "tool.CMD");
+    await writeFile(canonicalShimPath, "@ECHO off\r\n", "utf8");
+    await writeFile(path.join(aliasDir, "tool.EXE"), "", "utf8");
+
+    expect(
+      resolveWindowsExecutablePath("tool", {
+        Path: aliasDir,
+        PATH: canonicalDir,
+        Pathext: ".EXE",
+        PATHEXT: ".CMD",
+      }),
+    ).toBe(canonicalShimPath);
+  });
+
+  it("preserves an explicitly empty Windows search path", () => {
+    expect(resolveWindowsExecutablePath("node", { PATH: "", PATHEXT: ".EXE" })).toBe("node");
+  });
+
   it("rejects node command strings that include inline entrypoint arguments on Windows", () => {
     expect(() =>
       resolveWindowsSpawnProgram({

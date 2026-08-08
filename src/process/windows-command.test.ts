@@ -138,6 +138,27 @@ describe("Windows command helpers", () => {
     });
   });
 
+  it("uses nonblank PATH and PATHEXT aliases after blank canonical entries", async () => {
+    await withTempDir("openclaw-windows-command-env-alias-", async (binDir) => {
+      const executable = path.join(binDir, "tool.exe");
+      await writeFile(executable, "");
+
+      await withMockedWindowsPlatform(async () => {
+        expect(
+          resolveSafeChildProcessInvocation({
+            argv: ["tool"],
+            env: {
+              PATH: "",
+              pAtH: binDir,
+              PATHEXT: "",
+              pAtHeXt: ".EXE",
+            },
+          }).command,
+        ).toBe(executable);
+      });
+    });
+  });
+
   it("accepts PATH executables with explicit extensions independently of PATHEXT", async () => {
     await withTempDir("openclaw-windows-command-path-extension-", async (binDir) => {
       const executable = path.join(binDir, "tool.exe");
