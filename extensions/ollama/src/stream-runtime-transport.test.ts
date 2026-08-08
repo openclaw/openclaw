@@ -49,6 +49,43 @@ async function withOllamaServer(
   }
 }
 
+async function withTricklingWhitespaceServer(
+  tailChunk: Uint8Array,
+  intervalMs: number,
+  run: (baseUrl: string) => Promise<void>,
+): Promise<void> {
+  const server: Server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/x-ndjson" });
+    response.write(new TextEncoder().encode(`${TERMINAL_NDJSON}\n`));
+    // Keep the body open and trickle valid whitespace past the terminal
+    // record; completion must not wait for connection close.
+    const writer = setInterval(() => {
+      if (response.destroyed) {
+        clearInterval(writer);
+        return;
+      }
+      response.write(tailChunk);
+    }, intervalMs);
+    response.on("close", () => clearInterval(writer));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  try {
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+}
+
 async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
   const events: unknown[] = [];
   for await (const event of stream) {
@@ -85,39 +122,28 @@ describe("ollama production stream UTF-8 rejection over real HTTP", () => {
   });
 
   it("completes within the terminal-tail bound when the peer keeps sending whitespace", async () => {
-    const server: Server = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/x-ndjson" });
-      response.write(new TextEncoder().encode(`${TERMINAL_NDJSON}\n`));
-      // Keep the body open and trickle valid newline bytes well past the
-      // terminal-tail bound; completion must not wait for connection close.
-      const whitespace = new TextEncoder().encode("\n".repeat(8192));
-      const writer = setInterval(() => {
-        if (response.destroyed) {
-          clearInterval(writer);
-          return;
-        }
-        response.write(whitespace);
-      }, 1);
-      response.on("close", () => clearInterval(writer));
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-    const address = server.address() as AddressInfo;
-    try {
-      const stream = createOllamaStreamFn(`http://127.0.0.1:${address.port}`)(model, context, {});
+    await withTricklingWhitespaceServer(
+      new TextEncoder().encode("\n".repeat(8192)),
+      1,
+      async (baseUrl) => {
+        const stream = createOllamaStreamFn(baseUrl)(model, context, {});
+        const events = await collectStreamEvents(await Promise.resolve(stream));
+        expect(events.some((event) => typeOf(event) === "done")).toBe(true);
+        expect(events.some((event) => typeOf(event) === "error")).toBe(false);
+      },
+    );
+  });
+
+  it("completes within the terminal-tail deadline for a slow periodic tail", async () => {
+    await withTricklingWhitespaceServer(new TextEncoder().encode("\n"), 150, async (baseUrl) => {
+      const started = Date.now();
+      const stream = createOllamaStreamFn(baseUrl)(model, context, {});
       const events = await collectStreamEvents(await Promise.resolve(stream));
       expect(events.some((event) => typeOf(event) === "done")).toBe(true);
       expect(events.some((event) => typeOf(event) === "error")).toBe(false);
-    } finally {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+      // The fixed deadline bounds completion even while the peer keeps the
+      // body open with a trickle far below the byte bound.
+      expect(Date.now() - started).toBeLessThan(5_000);
+    });
   });
 });

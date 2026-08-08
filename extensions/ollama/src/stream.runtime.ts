@@ -56,6 +56,7 @@ const OLLAMA_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const OLLAMA_TERMINAL_TAIL_MAX_BYTES = 256 * 1024;
+const OLLAMA_TERMINAL_TAIL_DEADLINE_MS = 2_000;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -869,9 +870,12 @@ export async function* parseNdjsonStream(
   let pendingRecordBytes = 0;
   let terminalRecord: OllamaChatResponse | undefined;
   let terminalTailBytes = 0;
+  let terminalTailDeadline: number | undefined;
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = terminalRecord
+        ? await readWithTerminalTailDeadline(reader, terminalTailDeadline)
+        : await reader.read();
       if (done) {
         break;
       }
@@ -910,6 +914,7 @@ export async function* parseNdjsonStream(
           // terminal record, so malformed bytes in later transport chunks
           // would otherwise complete successfully without validation.
           terminalRecord = parsed;
+          terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
           buffer = "";
           break;
         }
@@ -937,6 +942,22 @@ export async function* parseNdjsonStream(
     void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+async function readWithTerminalTailDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  deadline: number | undefined,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const remainingMs = deadline === undefined ? 0 : deadline - Date.now();
+  if (remainingMs <= 0) {
+    return { done: true as const, value: undefined };
+  }
+  return await Promise.race([
+    reader.read(),
+    new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+      setTimeout(() => resolve({ done: true as const, value: undefined }), remainingMs);
+    }),
+  ]);
 }
 
 function resolveOllamaChatUrl(baseUrl: string): string {
