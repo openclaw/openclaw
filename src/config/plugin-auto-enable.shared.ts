@@ -21,7 +21,11 @@ import {
 } from "../channels/plugins/configured-state.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  hasMaterialPluginEntryConfig,
+  isPluginExplicitlySelected,
+  normalizePluginsConfig,
+} from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
@@ -809,21 +813,13 @@ function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
   return Array.isArray(deny) && deny.includes(pluginId);
 }
 
-function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
-  const allow = cfg.plugins?.allow;
-  if (Array.isArray(allow) && allow.includes(pluginId)) {
-    return true;
-  }
-  return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
-}
-
 function disableImplicitPreferredOverPlugin(params: {
   config: OpenClawConfig;
   originalConfig: OpenClawConfig;
   pluginId: string;
   manifestRegistry: PluginManifestRegistry;
 }): OpenClawConfig {
-  if (isPluginExplicitlySelected(params.originalConfig, params.pluginId)) {
+  if (isPluginExplicitlySelected(params.originalConfig.plugins, params.pluginId)) {
     return params.config;
   }
   if (
@@ -921,21 +917,6 @@ function registerPluginEntry(
       },
     },
   };
-}
-
-function hasMaterialPluginEntryConfig(entry: unknown): boolean {
-  if (!isRecord(entry)) {
-    return false;
-  }
-  return (
-    entry.enabled === true ||
-    isRecord(entry.config) ||
-    isRecord(entry.hooks) ||
-    isRecord(entry.subagent) ||
-    isRecord(entry.llm) ||
-    entry.apiKey !== undefined ||
-    entry.env !== undefined
-  );
 }
 
 function isKnownPluginId(pluginId: string, manifestRegistry: PluginManifestRegistry): boolean {

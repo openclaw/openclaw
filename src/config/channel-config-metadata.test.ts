@@ -1,0 +1,387 @@
+// Verifies channel config schema ownership across plugin origins and replacement declarations.
+import { describe, expect, it } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
+import { makeIsolatedEnv } from "./plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "./types.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
+
+function createChannelPlugin(params: {
+  id: string;
+  origin: PluginOrigin;
+  channelId?: string;
+  extraProperty?: string;
+  preferOver?: string[];
+  enabledByDefault?: boolean;
+}): PluginManifestRecord {
+  const channelId = params.channelId ?? "slack";
+  return {
+    id: params.id,
+    channels: [channelId],
+    ...(params.enabledByDefault ? { enabledByDefault: true } : {}),
+    configSchema: {
+      type: "object",
+      properties: { workspace: { type: "string" } },
+      additionalProperties: false,
+    },
+    channelConfigs: {
+      [channelId]: {
+        ...(params.preferOver ? { preferOver: params.preferOver } : {}),
+        schema: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+            ...(params.extraProperty ? { [params.extraProperty]: { type: "object" } } : {}),
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    cliBackends: [],
+    hooks: [],
+    manifestPath: `/tmp/${params.id}/openclaw.plugin.json`,
+    origin: params.origin,
+    providers: [],
+    rootDir: `/tmp/${params.id}`,
+    skills: [],
+    source: `/tmp/${params.id}/index.js`,
+  };
+}
+
+function selectSlackSchemaOwner(plugins: PluginManifestRecord[], config?: OpenClawConfig) {
+  const registry: PluginManifestRegistry = { diagnostics: [], plugins };
+  const entry = collectChannelSchemaMetadataWithOwnership(registry, config).find(
+    (channel) => channel.id === "slack",
+  );
+  return {
+    schemaPluginId: entry?.schemaPluginId,
+    properties: Object.keys(
+      (entry?.configSchema as { properties?: object } | undefined)?.properties ?? {},
+    ),
+  };
+}
+
+function permutations<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) {
+    return [[...items]];
+  }
+  const orders: T[][] = [];
+  for (const [index, item] of items.entries()) {
+    for (const rest of permutations([...items.slice(0, index), ...items.slice(index + 1)])) {
+      rest.unshift(item);
+      orders.push(rest);
+    }
+  }
+  return orders;
+}
+
+// Mirrors #92884: a replacement Slack plugin installed alongside the plugin it supersedes,
+// adding a plugin-owned channels.slack.threadGuard block behind preferOver.
+const REPLACED_SLACK = createChannelPlugin({ id: "openclaw-slack", origin: "global" });
+const REPLACEMENT_SLACK = createChannelPlugin({
+  id: "acme-slack-thread-guard",
+  origin: "global",
+  extraProperty: "threadGuard",
+  preferOver: ["openclaw-slack"],
+});
+// A same-origin claimant unrelated to the replacement contract.
+const UNRELATED_SLACK = createChannelPlugin({
+  id: "zeta-slack-extras",
+  origin: "global",
+  extraProperty: "zetaOnly",
+});
+const CLOSER_ORIGIN_SLACK = createChannelPlugin({
+  id: "operator-slack",
+  origin: "config",
+  extraProperty: "operatorOnly",
+});
+const TRAVERSAL_ORDERS = [
+  ["replacement first", [REPLACEMENT_SLACK, REPLACED_SLACK]],
+  ["replacement last", [REPLACED_SLACK, REPLACEMENT_SLACK]],
+] as const;
+
+function pluginEntryConfig(pluginId: string, entry: Record<string, unknown>): OpenClawConfig {
+  return { plugins: { entries: { [pluginId]: entry } } } as OpenClawConfig;
+}
+
+function pluginEnabledConfig(pluginId: string, enabled: boolean): OpenClawConfig {
+  return pluginEntryConfig(pluginId, { enabled });
+}
+
+// Every entry shape the shared material plugin-entry policy counts as an explicit operator
+// selection. `apiKey` is not a canonical `plugins.entries` key, so it proves the collector reads
+// that policy instead of re-deriving a `config`-only subset of it.
+const MATERIAL_PLUGIN_ENTRIES = [
+  ["config", { config: {} }],
+  ["apiKey", { apiKey: "op://slack/token" }],
+] as const;
+
+// Every `plugins.entries` form auto-enable's replacement policy honors as an explicit selection.
+const EXPLICIT_PLUGIN_ENTRIES = [
+  ["enabled", { enabled: true }],
+  ...MATERIAL_PLUGIN_ENTRIES,
+] as const;
+const CANONICAL_EXPLICIT_PLUGIN_ENTRIES = EXPLICIT_PLUGIN_ENTRIES.filter(
+  ([entryKey]) => entryKey !== "apiKey",
+);
+
+function bothSlackPluginsSelected(entry: Record<string, unknown>): OpenClawConfig {
+  return {
+    plugins: {
+      entries: { "openclaw-slack": entry, "acme-slack-thread-guard": entry },
+    },
+  } as OpenClawConfig;
+}
+
+// A bundled successor superseding the bundled channel plugin: the only shape where two claims
+// reach the explicit tier at equal origin, since `channels.<id>.enabled` marks a bundled plugin
+// explicit for the activation resolver but not for auto-enable's replacement policy.
+const BUNDLED_SLACK = createChannelPlugin({ id: "slack", origin: "bundled" });
+const BUNDLED_REPLACEMENT_SLACK = createChannelPlugin({
+  id: "openclaw-slack-thread-guard",
+  origin: "bundled",
+  extraProperty: "threadGuard",
+  preferOver: ["slack"],
+  enabledByDefault: true,
+});
+
+describe("collectChannelSchemaMetadataWithOwnership", () => {
+  for (const [order, plugins] of TRAVERSAL_ORDERS) {
+    it(`keeps the preferOver replacement schema at equal origin (${order})`, () => {
+      expect(selectSlackSchemaOwner([...plugins])).toEqual({
+        schemaPluginId: "acme-slack-thread-guard",
+        // heartbeatVisibility is the core-owned property merged into installed channel schemas.
+        properties: ["mode", "threadGuard", "heartbeatVisibility"],
+      });
+    });
+
+    it(`drops a disabled replacement's preferOver claim at equal origin (${order})`, () => {
+      expect(
+        selectSlackSchemaOwner([...plugins], pluginEnabledConfig("acme-slack-thread-guard", false))
+          .schemaPluginId,
+      ).toBe("openclaw-slack");
+    });
+
+    it(`keeps the enabled replacement when the plugin it supersedes is disabled (${order})`, () => {
+      expect(
+        selectSlackSchemaOwner([...plugins], pluginEnabledConfig("openclaw-slack", false))
+          .schemaPluginId,
+      ).toBe("acme-slack-thread-guard");
+    });
+
+    // Runtime policy only disables an implicitly selected superseded plugin, so an operator that
+    // enabled it on purpose keeps the schema that validates its existing channel keys.
+    it(`keeps an explicitly enabled superseded plugin's schema (${order})`, () => {
+      expect(
+        selectSlackSchemaOwner([...plugins], pluginEnabledConfig("openclaw-slack", true))
+          .schemaPluginId,
+      ).toBe("openclaw-slack");
+    });
+
+    // Auto-enable keeps a plugin the operator configured materially, so the replacement must not
+    // take the schema that validates that plugin's existing channel keys either.
+    for (const [entryKey, entry] of MATERIAL_PLUGIN_ENTRIES) {
+      it(`keeps a superseded plugin configured through entries.${entryKey} (${order})`, () => {
+        expect(
+          selectSlackSchemaOwner([...plugins], pluginEntryConfig("openclaw-slack", entry))
+            .schemaPluginId,
+        ).toBe("openclaw-slack");
+      });
+    }
+
+    // Selecting both plugins keeps both active with duplicate channel diagnostics, and channel
+    // registration keeps the first registrant, so preferOver decides nothing. Ownership must stay
+    // on the deterministic last-claim order instead of switching to replacement-only validation.
+    for (const [entryKey, entry] of EXPLICIT_PLUGIN_ENTRIES) {
+      it(`keeps last-claim ownership when both plugins are selected through entries.${entryKey} (${order})`, () => {
+        expect(
+          selectSlackSchemaOwner([...plugins], bothSlackPluginsSelected(entry)).schemaPluginId,
+        ).toBe(plugins.at(-1)?.id);
+      });
+    }
+
+    it(`keeps last-claim ownership when both plugins are allowlisted (${order})`, () => {
+      expect(
+        selectSlackSchemaOwner([...plugins], {
+          plugins: { allow: ["openclaw-slack", "acme-slack-thread-guard"] },
+        } as OpenClawConfig).schemaPluginId,
+      ).toBe(plugins.at(-1)?.id);
+    });
+  }
+
+  // `channels.<id>.enabled` is not an explicit plugin selection for auto-enable's replacement
+  // policy, so it still disables the superseded bundled plugin and the replacement serves the
+  // channel. The collector must not read a broader explicit set and hand the schema back.
+  for (const [order, plugins] of [
+    ["replacement first", [BUNDLED_REPLACEMENT_SLACK, BUNDLED_SLACK]],
+    ["replacement last", [BUNDLED_SLACK, BUNDLED_REPLACEMENT_SLACK]],
+  ] as const) {
+    it(`lets a replacement supersede a bundled plugin enabled only by channel config (${order})`, () => {
+      expect(
+        selectSlackSchemaOwner([...plugins], {
+          channels: { slack: { enabled: true } },
+        } as OpenClawConfig).schemaPluginId,
+      ).toBe("openclaw-slack-thread-guard");
+    });
+  }
+
+  for (const [order, plugins] of [
+    ["closer origin first", [CLOSER_ORIGIN_SLACK, REPLACEMENT_SLACK]],
+    ["closer origin last", [REPLACEMENT_SLACK, CLOSER_ORIGIN_SLACK]],
+  ] as const) {
+    it(`hands a disabled closer-origin owner's schema to an active farther origin (${order})`, () => {
+      expect(
+        selectSlackSchemaOwner([...plugins], pluginEnabledConfig("operator-slack", false))
+          .schemaPluginId,
+      ).toBe("acme-slack-thread-guard");
+    });
+  }
+
+  for (const claimants of permutations([REPLACEMENT_SLACK, REPLACED_SLACK, UNRELATED_SLACK])) {
+    it(`resolves ownership across all claimants (${claimants.map((plugin) => plugin.id).join(" > ")})`, () => {
+      expect(selectSlackSchemaOwner(claimants).schemaPluginId).toBe("acme-slack-thread-guard");
+    });
+  }
+
+  it("lets a closer origin override a preferOver replacement", () => {
+    const owner = selectSlackSchemaOwner([
+      REPLACEMENT_SLACK,
+      createChannelPlugin({
+        id: "workspace-slack",
+        origin: "workspace",
+        extraProperty: "workspaceOnly",
+      }),
+    ]);
+
+    expect(owner.schemaPluginId).toBe("workspace-slack");
+  });
+
+  it("keeps registry order deciding equal-origin plugins that declare no replacement", () => {
+    const owner = selectSlackSchemaOwner([
+      createChannelPlugin({
+        id: "acme-slack-thread-guard",
+        origin: "global",
+        extraProperty: "threadGuard",
+      }),
+      REPLACED_SLACK,
+    ]);
+
+    expect(owner.schemaPluginId).toBe("openclaw-slack");
+  });
+});
+
+// Plugin-owned channel id so the assertion covers collected plugin schemas only, without the
+// bundled channel Zod refinements that run before manifest-backed channel schema validation.
+const REPLACED_ACME = createChannelPlugin({
+  id: "openclaw-acmechat",
+  origin: "global",
+  channelId: "acmechat",
+  extraProperty: "legacyOption",
+});
+const REPLACEMENT_ACME = createChannelPlugin({
+  id: "acme-chat-thread-guard",
+  origin: "global",
+  channelId: "acmechat",
+  extraProperty: "threadGuard",
+  preferOver: ["openclaw-acmechat"],
+});
+
+const CLOSER_ORIGIN_ACME = createChannelPlugin({
+  id: "operator-acmechat",
+  origin: "config",
+  channelId: "acmechat",
+  extraProperty: "operatorOnly",
+});
+
+function validateAcmeChatKeys(params: {
+  plugins: PluginManifestRecord[];
+  channel: Record<string, unknown>;
+  entries: Record<string, Record<string, unknown>>;
+}) {
+  const result = validateConfigObjectWithPlugins(
+    {
+      agents: { list: [{ id: "openclaw" }] },
+      channels: { acmechat: params.channel },
+      plugins: { entries: params.entries },
+    },
+    {
+      env: makeIsolatedEnv(),
+      pluginMetadataSnapshot: {
+        manifestRegistry: { diagnostics: [], plugins: params.plugins },
+      },
+    },
+  );
+  return result.ok ? [] : result.issues;
+}
+
+describe("config validate channel schema ownership", () => {
+  for (const [order, plugins] of [
+    ["replacement first", [REPLACEMENT_ACME, REPLACED_ACME]],
+    ["replacement last", [REPLACED_ACME, REPLACEMENT_ACME]],
+  ] as const) {
+    it(`accepts the superseded plugin's channel keys while the replacement is disabled (${order})`, () => {
+      expect(
+        validateAcmeChatKeys({
+          plugins: [...plugins],
+          // legacyOption exists only in the superseded plugin's channel schema.
+          channel: { legacyOption: {} },
+          entries: { "acme-chat-thread-guard": { enabled: false } },
+        }),
+      ).toEqual([]);
+    });
+
+    it(`accepts an explicitly enabled superseded plugin's channel keys (${order})`, () => {
+      expect(
+        validateAcmeChatKeys({
+          plugins: [...plugins],
+          channel: { legacyOption: {} },
+          entries: { "openclaw-acmechat": { enabled: true } },
+        }),
+      ).toEqual([]);
+    });
+
+    it(`accepts a materially configured superseded plugin's channel keys (${order})`, () => {
+      expect(
+        validateAcmeChatKeys({
+          plugins: [...plugins],
+          channel: { legacyOption: {} },
+          // A material plugins.entries record is the explicit operator choice auto-enable
+          // preserves, so the replacement must not take the schema that accepts legacyOption.
+          entries: { "openclaw-acmechat": { config: { workspace: "T123" } } },
+        }),
+      ).toEqual([]);
+    });
+  }
+
+  // Selecting both plugins must not narrow validation to the replacement's schema: the runtime
+  // keeps both active, so the operator's existing keys stay valid under the last-claim owner.
+  for (const [order, plugins, acceptedKey] of [
+    ["replacement first", [REPLACEMENT_ACME, REPLACED_ACME], "legacyOption"],
+    ["replacement last", [REPLACED_ACME, REPLACEMENT_ACME], "threadGuard"],
+  ] as const) {
+    // `apiKey` is not a canonical `plugins.entries` key, so it stays in the collector-level table.
+    for (const [entryKey, entry] of CANONICAL_EXPLICIT_PLUGIN_ENTRIES) {
+      it(`keeps last-claim validation when both plugins are selected through entries.${entryKey} (${order})`, () => {
+        expect(
+          validateAcmeChatKeys({
+            plugins: [...plugins],
+            channel: { [acceptedKey]: {} },
+            entries: { "openclaw-acmechat": entry, "acme-chat-thread-guard": entry },
+          }),
+        ).toEqual([]);
+      });
+    }
+  }
+
+  it("accepts an active farther-origin plugin's channel keys while the closer origin is disabled", () => {
+    expect(
+      validateAcmeChatKeys({
+        plugins: [CLOSER_ORIGIN_ACME, REPLACEMENT_ACME],
+        // threadGuard exists only in the active replacement's channel schema.
+        channel: { threadGuard: {} },
+        entries: { "operator-acmechat": { enabled: false } },
+      }),
+    ).toEqual([]);
+  });
+});

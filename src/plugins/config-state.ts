@@ -137,6 +137,44 @@ const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
   hasExplicitPluginConfigShared(plugins);
 
+/**
+ * True when a raw `plugins.entries.<id>` record carries material operator configuration. Auto-enable
+ * treats such an entry as an explicit operator selection and refuses to supersede it, so every
+ * policy that asks "did the operator choose this plugin?" must read this one definition. Normalized
+ * entries drop `apiKey`/`env`, so callers pass the raw entry.
+ */
+export function hasMaterialPluginEntryConfig(entry: unknown): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  return (
+    entry.enabled === true ||
+    isRecord(entry.config) ||
+    isRecord(entry.hooks) ||
+    isRecord(entry.subagent) ||
+    isRecord(entry.llm) ||
+    entry.apiKey !== undefined ||
+    entry.env !== undefined
+  );
+}
+
+/**
+ * True when config explicitly selects a plugin the way auto-enable's `preferOver` policy honors:
+ * an allowlist entry or a material `plugins.entries` record. Auto-enable refuses to disable such a
+ * plugin for a replacement, so every policy that mirrors channel replacement must read this one
+ * definition. The activation resolver's explicit set is deliberately wider — it also counts bundled
+ * channel enablement and slot selection, which do not stop a replacement from taking the channel.
+ */
+export function isPluginExplicitlySelected(
+  plugins: OpenClawConfig["plugins"],
+  pluginId: string,
+): boolean {
+  return (
+    (Array.isArray(plugins?.allow) && plugins.allow.includes(pluginId)) ||
+    hasMaterialPluginEntryConfig(plugins?.entries?.[pluginId])
+  );
+}
+
 export function applyTestPluginDefaults(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

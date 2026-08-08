@@ -26,7 +26,7 @@ export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const registry = loadManifestRegistry(config);
   return buildConfigSchema({
     plugins: collectPluginSchemaMetadata(registry),
-    channels: collectChannelSchemaMetadata(registry),
+    channels: collectChannelSchemaMetadata(registry, config),
   });
 }
 
@@ -38,6 +38,6 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
   const registry = loadManifestRegistry(config);
   return buildConfigSchema({
     plugins: snapshot.valid ? collectPluginSchemaMetadata(registry) : [],
-    channels: collectChannelSchemaMetadata(registry),
+    channels: collectChannelSchemaMetadata(registry, config),
   });
 }
