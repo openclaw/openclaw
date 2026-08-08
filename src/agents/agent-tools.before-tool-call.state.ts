@@ -3,12 +3,15 @@
  * The adapter and wrapper both consult this map so later execution can use the
  * normalized payload selected by hook processing.
  */
+import type { AgentToolResult } from "./runtime/index.js";
+
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
 const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 const batchAdmittedToolCallIds = new Set<string>();
+const loopWarningsByToolCallId = new Map<string, string>();
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -102,12 +105,43 @@ export function consumeBatchAdmittedToolCall(toolCallId: string, runId?: string)
   return admitted;
 }
 
+/** Attach a bounded loop warning to the model-visible result of the admitted call. */
+export function recordLoopWarningForToolCall(
+  toolCallId: string,
+  warning: string,
+  runId?: string,
+): void {
+  loopWarningsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), warning);
+}
+
+export function appendLoopWarningToToolResult(
+  result: AgentToolResult<unknown>,
+  toolCallId: string,
+  runId?: string,
+): AgentToolResult<unknown> {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const warning = loopWarningsByToolCallId.get(key);
+  loopWarningsByToolCallId.delete(key);
+  if (!warning) {
+    return result;
+  }
+  return {
+    ...result,
+    content: [...(result.content ?? []), { type: "text", text: `Tool loop warning: ${warning}` }],
+  };
+}
+
 /** Remove unused batch-admission markers when their embedded run ends. */
 export function clearBatchAdmittedToolCallsForRun(runId: string): void {
   const prefix = `${runId}:`;
   for (const key of batchAdmittedToolCallIds) {
     if (key.startsWith(prefix)) {
       batchAdmittedToolCallIds.delete(key);
+    }
+  }
+  for (const key of loopWarningsByToolCallId.keys()) {
+    if (key.startsWith(prefix)) {
+      loopWarningsByToolCallId.delete(key);
     }
   }
 }
@@ -120,4 +154,5 @@ export function resetAdjustedParamsByToolCallIdForTests(): void {
   startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
   batchAdmittedToolCallIds.clear();
+  loopWarningsByToolCallId.clear();
 }

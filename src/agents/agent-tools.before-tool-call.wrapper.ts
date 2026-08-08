@@ -33,6 +33,7 @@ import {
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.policy.js";
 import {
+  appendLoopWarningToToolResult,
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   clearTrackedToolExecution,
@@ -545,7 +546,7 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        return result;
+        return appendLoopWarningToToolResult(result, toolCallId, ctx?.runId);
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(

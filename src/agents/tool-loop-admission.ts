@@ -5,7 +5,10 @@ import {
   loadBeforeToolCallRuntime,
   shouldEmitLoopWarning,
 } from "./agent-tools.before-tool-call.diagnostics.js";
-import { recordBatchAdmittedToolCall } from "./agent-tools.before-tool-call.state.js";
+import {
+  recordBatchAdmittedToolCall,
+  recordLoopWarningForToolCall,
+} from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { hashToolCall } from "./tool-loop-detection.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -81,6 +84,9 @@ async function evaluateToolLoopCall(
       message: result.message,
       pairedToolName: result.pairedToolName,
     });
+    if (call.toolCallId) {
+      recordLoopWarningForToolCall(call.toolCallId, result.message, ctx.runId);
+    }
   }
   return undefined;
 }

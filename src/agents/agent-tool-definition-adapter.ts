@@ -17,6 +17,7 @@ import {
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { consumeFinalClientVoiceToolConfirmation } from "./agent-tools.before-tool-call.policy.js";
+import { appendLoopWarningToToolResult } from "./agent-tools.before-tool-call.state.js";
 import {
   finalizeBeforeToolCallExecutionParams,
   prepareBeforeToolCallExecutionParams,
@@ -414,7 +415,7 @@ export function toToolDefinitions(
             toolName: normalizedName,
             result: rawResult,
           });
-          return result;
+          return appendLoopWarningToToolResult(result, toolCallId, hookContext?.runId);
         } catch (err) {
           if (signal?.aborted) {
             throw err;
@@ -576,14 +577,18 @@ export function toClientToolDefinitions(
           throw err;
         }
         // Return a terminal pending result; the client will execute the tool.
-        return {
-          ...jsonResult({
-            status: "pending",
-            tool: func.name,
-            message: "Tool execution delegated to client",
-          }),
-          terminate: true,
-        };
+        return appendLoopWarningToToolResult(
+          {
+            ...jsonResult({
+              status: "pending",
+              tool: func.name,
+              message: "Tool execution delegated to client",
+            }),
+            terminate: true,
+          },
+          toolCallId,
+          hookContext?.runId,
+        );
       },
     } satisfies ToolDefinition;
   });
