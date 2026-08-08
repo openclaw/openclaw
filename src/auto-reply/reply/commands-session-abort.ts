@@ -30,6 +30,12 @@ type AbortTarget = {
   sessionId?: string;
 };
 
+async function cancelExperienceReviewForSession(sessionKey: string): Promise<void> {
+  const { cancelSkillExperienceReview } =
+    await import("../../skills/workshop/experience-review-default.js");
+  cancelSkillExperienceReview(sessionKey);
+}
+
 function resolveAbortTarget(params: {
   ctx: { CommandTargetSessionKey?: string | null };
   sessionKey?: string;
@@ -145,6 +151,9 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     sessionStore: params.sessionStore,
   });
   const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
+  if (abortTarget.key) {
+    await cancelExperienceReviewForSession(abortTarget.key);
+  }
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
       `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
