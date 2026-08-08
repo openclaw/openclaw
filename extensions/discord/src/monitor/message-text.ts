@@ -2,6 +2,7 @@
 import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
+import { discordTextHasUserMentionToken } from "../mentions.js";
 import {
   formatDiscordSnapshotAuthor,
   normalizeDiscordMessageSnapshots,
@@ -51,6 +52,15 @@ export function resolveDiscordMessageText(
     return forwardedText;
   }
   return `${baseText}\n${forwardedText}`;
+}
+
+export function hasDiscordMessageUserMentionToken(message: Message, userId: string): boolean {
+  const content = normalizeOptionalString(message.content) ?? "";
+  if (discordTextHasUserMentionToken(content, userId)) {
+    return true;
+  }
+  const componentText = extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message));
+  return discordTextHasUserMentionToken(componentText, userId);
 }
 
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
