@@ -114,14 +114,23 @@ export function recordLoopWarningForToolCall(
   loopWarningsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), warning);
 }
 
+/** Consume pending warning guidance even when no model-visible result can be emitted. */
+export function consumeLoopWarningForToolCall(
+  toolCallId: string,
+  runId?: string,
+): string | undefined {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const warning = loopWarningsByToolCallId.get(key);
+  loopWarningsByToolCallId.delete(key);
+  return warning;
+}
+
 export function appendLoopWarningToToolResult(
   result: AgentToolResult<unknown>,
   toolCallId: string,
   runId?: string,
 ): AgentToolResult<unknown> {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const warning = loopWarningsByToolCallId.get(key);
-  loopWarningsByToolCallId.delete(key);
+  const warning = consumeLoopWarningForToolCall(toolCallId, runId);
   if (!warning) {
     return result;
   }
@@ -129,6 +138,24 @@ export function appendLoopWarningToToolResult(
     ...result,
     content: [...(result.content ?? []), { type: "text", text: `Tool loop warning: ${warning}` }],
   };
+}
+
+/** Preserve the original error kind while carrying warning guidance to agent-core. */
+export function appendLoopWarningToError(
+  error: unknown,
+  toolCallId: string,
+  runId?: string,
+): unknown {
+  const warning = consumeLoopWarningForToolCall(toolCallId, runId);
+  if (!warning) {
+    return error;
+  }
+  const warningText = `Tool loop warning: ${warning}`;
+  if (error instanceof Error) {
+    error.message = `${error.message}\n\n${warningText}`;
+    return error;
+  }
+  return new Error(`${String(error)}\n\n${warningText}`);
 }
 
 /** Remove unused batch-admission markers when their embedded run ends. */

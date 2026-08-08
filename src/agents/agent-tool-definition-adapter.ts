@@ -17,7 +17,11 @@ import {
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { consumeFinalClientVoiceToolConfirmation } from "./agent-tools.before-tool-call.policy.js";
-import { appendLoopWarningToToolResult } from "./agent-tools.before-tool-call.state.js";
+import {
+  appendLoopWarningToError,
+  appendLoopWarningToToolResult,
+  consumeLoopWarningForToolCall,
+} from "./agent-tools.before-tool-call.state.js";
 import {
   finalizeBeforeToolCallExecutionParams,
   prepareBeforeToolCallExecutionParams,
@@ -418,15 +422,20 @@ export function toToolDefinitions(
           return appendLoopWarningToToolResult(result, toolCallId, hookContext?.runId);
         } catch (err) {
           if (signal?.aborted) {
+            consumeLoopWarningForToolCall(toolCallId, hookContext?.runId);
             throw err;
           }
           if (isBeforeToolCallBlockedError(err)) {
             logDebug(`tools: ${normalizedName} blocked by before_tool_call: ${err.reason}`);
-            return buildBlockedToolResult({
-              reason: err.reason,
+            return appendLoopWarningToToolResult(
+              buildBlockedToolResult({
+                reason: err.reason,
+                toolCallId,
+                runId: hookContext?.runId,
+              }),
               toolCallId,
-              runId: hookContext?.runId,
-            });
+              hookContext?.runId,
+            );
           }
           const described = describeToolExecutionError(err);
           if (described.stack && described.stack !== described.message) {
@@ -439,10 +448,14 @@ export function toToolDefinitions(
           });
           logError(`[tools] ${normalizedName} failed: ${described.message} ${inputPreview}`);
 
-          return buildToolExecutionErrorResult({
-            toolName: normalizedName,
-            message: described.message,
-          });
+          return appendLoopWarningToToolResult(
+            buildToolExecutionErrorResult({
+              toolName: normalizedName,
+              message: described.message,
+            }),
+            toolCallId,
+            hookContext?.runId,
+          );
         }
       },
     } satisfies ToolDefinition;
@@ -569,12 +582,20 @@ export function toClientToolDefinitions(
             onClientToolCall.discard?.(toolCallId, func.name);
           }
           if (err instanceof ToolInputError) {
-            return buildToolExecutionErrorResult({
-              toolName: func.name,
-              message: err.message,
-            });
+            return appendLoopWarningToToolResult(
+              buildToolExecutionErrorResult({
+                toolName: func.name,
+                message: err.message,
+              }),
+              toolCallId,
+              hookContext?.runId,
+            );
           }
-          throw err;
+          if (signal?.aborted) {
+            consumeLoopWarningForToolCall(toolCallId, hookContext?.runId);
+            throw err;
+          }
+          throw appendLoopWarningToError(err, toolCallId, hookContext?.runId);
         }
         // Return a terminal pending result; the client will execute the tool.
         return appendLoopWarningToToolResult(
