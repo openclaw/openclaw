@@ -2064,7 +2064,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       if (
         budgetContext &&
         result.kind !== "broadcast" &&
-        result.dryRun !== true &&
+        !result.dryRun &&
         !deliveredNothing
       ) {
         const sendCount = recordTurnSend(budgetContext);
