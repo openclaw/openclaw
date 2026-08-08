@@ -59,6 +59,14 @@ const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Set<string>();
 
+const REQUESTER_LIFECYCLE_CHANGED_ANNOUNCE_RE =
+  /session .* changed (?:while starting expected work|before expected work could start)/i;
+
+function isRequesterLifecycleChangedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return REQUESTER_LIFECYCLE_CHANGED_ANNOUNCE_RE.test(message);
+}
+
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
   requireVisibleReply: boolean;
@@ -321,14 +329,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     );
     // A yielded batch owns a rearm generation even when its child settles later.
     // Otherwise a delivered single child clears the batch before its requester wakes.
-    const requesterYieldedAfterDelivery =
+    const yieldedAfterDelivery =
       state.afterRequesterYield === true ||
       (state.requesterYieldBatch === true && state.rearmGeneration !== undefined);
     if (
       requiredSettled.length === 0 ||
-      (requiredSettled.length < 2 &&
-        !hasUndeliveredRequiredCompletion &&
-        !requesterYieldedAfterDelivery) ||
+      (requiredSettled.length < 2 && !hasUndeliveredRequiredCompletion && !yieldedAfterDelivery) ||
       getSubagentDepthFromSessionStore(requesterSessionKey) >= 1
     ) {
       completeRequesterSettleWakeBatch({
@@ -379,6 +385,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   if (maybeCompleteWithoutWake(settledBatch, selectedState)) {
     return false;
   }
+  const requesterYieldedAfterDelivery =
+    selectedState.afterRequesterYield === true ||
+    (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
 
   const findings = buildChildCompletionFindings(
     dedupeLatestChildCompletionRows(
@@ -479,9 +488,23 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         directIdempotencyKey: buildAnnounceIdempotencyKey(
           attemptIndex === 0 ? wakeKeyBase : `${wakeKeyBase}:retry-${attemptIndex}`,
         ),
+        // Bind the delivery to the lifecycle revision validated above: the
+        // gateway re-checks it at final admission, so a reset between this
+        // preflight and admission cannot inject the wake into a replacement.
+        expectedRequesterLifecycleRevision: currentRequesterLifecycleRevision,
         signal: params.signal,
       });
     } catch (error) {
+      if (isRequesterLifecycleChangedError(error)) {
+        fenceRequesterSettleWakeBatch({
+          batchRunIds,
+          state,
+          mismatch: "requester_replaced",
+          requesterSessionKey,
+          transitionBatch: params.transitionBatch,
+        });
+        return false;
+      }
       // A transport exception can arrive after gateway admission. Replay the
       // same persisted idempotency key; only a known no-turn result may rotate it.
       const lastError = error instanceof Error ? error.message : String(error);

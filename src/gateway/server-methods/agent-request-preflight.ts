@@ -29,6 +29,7 @@ import {
   resolveAgentDedupeKeys,
 } from "./agent-dedupe.js";
 import {
+  resolveInternalExpectedLifecycleConstraint,
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
 } from "./agent-expected-session.js";
@@ -180,6 +181,28 @@ export function prepareAgentRequestPreflight(
     );
     return undefined;
   }
+  const internalLifecycleResult = resolveInternalExpectedLifecycleConstraint({
+    canUseInternalRuntimeHandoff,
+    expectedRequesterLifecycleRevision: params.client?.internal?.expectedRequesterLifecycleRevision,
+  });
+  if (!internalLifecycleResult.ok) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, internalLifecycleResult.error),
+    );
+    return undefined;
+  }
+  const expectedSession = expectedSessionResult.constraint
+    ? {
+        ...expectedSessionResult.constraint,
+        ...(internalLifecycleResult.lifecycleRevision
+          ? { lifecycleRevision: internalLifecycleResult.lifecycleRevision }
+          : {}),
+      }
+    : internalLifecycleResult.lifecycleRevision
+      ? { lifecycleRevision: internalLifecycleResult.lifecycleRevision }
+      : undefined;
   const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
   const requestedInternalSessionEffects = request.sessionEffects === "internal";
   const requestedModelOverride = Boolean(request.provider || request.model);
@@ -306,7 +329,7 @@ export function prepareAgentRequestPreflight(
     allowModelOverride,
     canUseInternalRuntimeHandoff,
     canUseCronRunContinuation,
-    expectedSession: expectedSessionResult.constraint,
+    expectedSession,
     expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
     providerOverride: allowModelOverride ? request.provider : undefined,
     modelOverride: allowModelOverride ? request.model : undefined,
