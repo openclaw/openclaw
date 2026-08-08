@@ -1650,6 +1650,7 @@ process.on("SIGINT", shutdown);`,
             volatile: {
               command: process.execPath,
               args: [serverPath],
+              requestTimeoutMs: 123_456,
             },
           },
         },
@@ -1666,6 +1667,7 @@ process.on("SIGINT", shutdown);`,
         "list_changed to invalidate the catalog",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
+      expect(runtime.getServerRequestTimeoutMs?.("volatile")).toBe(123_456);
 
       const refreshedCatalog = await runtime.getCatalog();
       expect(refreshedCatalog.tools).toEqual([]);
@@ -3776,6 +3778,7 @@ describe("requester-scoped MCP connection resolution", () => {
         requesterScope: params.requesterScope,
         peekCatalog: () => current,
         getCatalog: async () => current,
+        getServerRequestTimeoutMs: () => (serverName === "user-mail" ? 90_000 : 60_000),
       };
     };
     const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
@@ -3802,6 +3805,7 @@ describe("requester-scoped MCP connection resolution", () => {
     swapCatalogByServer.get("user-mail")?.("send_v2");
     const after = await runtime.getCatalog();
     expect(after.tools.map((tool) => tool.toolName).toSorted()).toEqual(["send_v2", "shared_tool"]);
+    expect(runtime.getServerRequestTimeoutMs?.("user-mail")).toBe(90_000);
     expect(
       runtime
         .peekCatalog()
