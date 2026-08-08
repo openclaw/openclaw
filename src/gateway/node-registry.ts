@@ -1079,6 +1079,14 @@ export class NodeRegistry {
     if (params.signal?.aborted) {
       return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
     }
+    // Anchor the budget before the first await so pre-dispatch work spends it too.
+    // A budget that only starts at dispatch can outlive the caller's own deadline,
+    // and a send that lands after the caller already answered would contradict the
+    // dispatch provenance that answer carried.
+    const invokeStartedAtMs = Date.now();
+    // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
+    const budgetMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
+    const dispatchDeadlineAtMs = budgetMs > 0 ? invokeStartedAtMs + budgetMs : undefined;
     let node = this.nodesById.get(params.nodeId);
     if (!node) {
       return {
@@ -1143,22 +1151,34 @@ export class NodeRegistry {
       command: params.command,
       params: params.params,
     });
-    // Keep node and Gateway on the same timer-safe value; zero disables both deadlines.
-    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
-    const payload = {
-      id: requestId,
-      nodeId: params.nodeId,
-      command: params.command,
-      paramsJSON:
-        "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
-      timeoutMs,
-      idempotencyKey: params.idempotencyKey,
-      sessionKey: normalizeString(params.sessionKey) || undefined,
-    };
+    // Tool parameters are unbounded, so serializing them is as much of a budget
+    // spender as the awaits above.
+    const paramsJSON =
+      "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null;
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,
       params: invokeParams,
     });
+    // Read the budget once every step that can spend it is behind us, so the node
+    // timeout and the pending timer below both start from what is actually left.
+    // Dispatching on an exhausted budget would hand the command to the node after
+    // the caller's deadline already answered that none had been dispatched.
+    const timeoutMs =
+      dispatchDeadlineAtMs === undefined
+        ? budgetMs
+        : Math.max(0, dispatchDeadlineAtMs - Date.now());
+    if (dispatchDeadlineAtMs !== undefined && timeoutMs === 0) {
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+    }
+    const payload = {
+      id: requestId,
+      nodeId: params.nodeId,
+      command: params.command,
+      paramsJSON,
+      timeoutMs,
+      idempotencyKey: params.idempotencyKey,
+      sessionKey: normalizeString(params.sessionKey) || undefined,
+    };
     const result = new Promise<NodeInvokeResult>((resolve, reject) => {
       const pending: PendingInvoke = {
         nodeId: params.nodeId,

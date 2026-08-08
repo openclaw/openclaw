@@ -6,7 +6,7 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
@@ -25,7 +25,8 @@ const activeTestRegistries = new Set<NodeRegistry>();
 type TestNodeSocket = {
   readyState: number;
   bufferedAmount: number;
-  send: ReturnType<typeof vi.fn>;
+  // Declared with its call signature so tests can wrap the recorded send.
+  send: Mock<(frame: unknown) => void>;
   close: ReturnType<typeof vi.fn>;
 };
 
@@ -353,6 +354,142 @@ describe("gateway/node-registry", () => {
     });
     expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-generation");
     expect(frames).toEqual([]);
+  });
+
+  it("does not dispatch when pairing revalidation outlives the invoke budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      let releasePairingLookup: (() => void) | undefined;
+      const resolveCurrentPairingState = vi.fn(
+        () =>
+          new Promise<{ identity: string; generation: string }>((resolve) => {
+            releasePairingLookup = () =>
+              resolve({ identity: "identity-a", generation: "generation-a" });
+          }),
+      );
+      const registry = createNodeRegistry({ resolveCurrentPairingState });
+      const client = makeClient("conn-budget", "node-budget", frames);
+      registerNodeSession(registry, client, {
+        pairingIdentity: "identity-a",
+        pairingGeneration: "generation-a",
+      });
+      const onDispatchReady = vi.fn();
+
+      const invocation = registry.invoke({
+        nodeId: "node-budget",
+        expectedConnId: "conn-budget",
+        expectedPairingGeneration: "generation-a",
+        command: "system.run",
+        timeoutMs: 20,
+        onDispatchReady,
+      });
+      // The caller's budget runs out while the pairing lease is still in flight.
+      await vi.advanceTimersByTimeAsync(40);
+      expect(resolveCurrentPairingState).toHaveBeenCalledOnce();
+      releasePairingLookup?.();
+      await vi.advanceTimersByTimeAsync(1);
+
+      // A send here would reach the node after the caller's deadline already
+      // answered that no command had been dispatched.
+      expect(frames).toEqual([]);
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      await expect(invocation).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not dispatch when request serialization outlives the invoke budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      const registry = createNodeRegistry();
+      const client = makeClient("conn-serialize", "node-serialize", frames);
+      registerNodeSession(registry, client);
+      const onDispatchReady = vi.fn();
+
+      const invocation = registry.invoke({
+        nodeId: "node-serialize",
+        expectedConnId: "conn-serialize",
+        command: "system.run",
+        params: {
+          cmd: ["echo"],
+          // Tool parameters are unbounded, so let serializing them spend the whole
+          // budget the way a large payload would.
+          argv: {
+            toJSON: () => {
+              vi.advanceTimersByTime(40);
+              return "serialized";
+            },
+          },
+        },
+        timeoutMs: 20,
+        onDispatchReady,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
+      // Arming the pending timer with the budget read before serialization would
+      // let the answer land after the caller's own deadline already passed.
+      expect(frames).toEqual([]);
+      expect(onDispatchReady).not.toHaveBeenCalled();
+      await expect(invocation).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still reports dispatch when the envelope send outlives the invoke budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const frames: string[] = [];
+      const socket = createTestNodeSocket(frames);
+      const rawSend = socket.send;
+      // Everything after the final budget read - building the outbound envelope
+      // and handing it to the socket - is one synchronous block, so charging the
+      // whole remaining budget to the send covers the serialization inside it.
+      socket.send = vi.fn((frame: unknown) => {
+        vi.advanceTimersByTime(40);
+        return rawSend(frame);
+      });
+      const registry = createNodeRegistry();
+      const client = makeClient("conn-dispatched", "node-dispatched", frames, {
+        socket: socket as unknown as GatewayWsClient["socket"],
+      });
+      registerNodeSession(registry, client);
+      const onDispatchReady = vi.fn();
+
+      const invocation = registry.invoke({
+        nodeId: "node-dispatched",
+        expectedConnId: "conn-dispatched",
+        command: "system.run",
+        params: { cmd: ["echo"] },
+        timeoutMs: 20,
+        onDispatchReady,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
+      // The node has the command, so the caller must not be told it is safe to
+      // retry: dispatch provenance is reported from the send, not from the clock.
+      expect(frames).toHaveLength(1);
+      expect(JSON.parse(frames[0] as string)).toMatchObject({
+        type: "event",
+        event: "node.invoke.request",
+      });
+      expect(onDispatchReady).toHaveBeenCalledOnce();
+      await expect(invocation).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("revalidates persistent generation ownership for inbound node RPCs", async () => {
