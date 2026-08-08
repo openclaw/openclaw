@@ -330,8 +330,9 @@ export function createOutboundPayloadPlan(
 }
 
 const FENCED_MEDIA_SKIP_WARN =
-  "media: MEDIA: token skipped — it is inside a fenced code block and will not be delivered. " +
-  "Remove the surrounding backticks/fence to send this as media.";
+  "media: MEDIA: token skipped — it is inside a fenced code block and will not be delivered as media. " +
+  "Fenced MEDIA lines stay visible text by design; delivery of legacy MEDIA: depends on the outbound path " +
+  "(some direct channel paths keep unfenced MEDIA: as literal text too).";
 
 /** True when final payload text still contains a fenced MEDIA: line (#41966). */
 function textHasFencedMediaTokenSkip(text: string | undefined): boolean {
