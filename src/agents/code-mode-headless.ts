@@ -221,6 +221,7 @@ export async function runCodeModeScriptHeadless(params: {
     // Headless runs publish no resumable snapshot/handle, so collector globals stay unavailable.
     const swarmEnabled = false;
     const codeModeRunId = `cm_headless_${randomUUID()}`;
+    const settlementCapability = randomUUID();
     const runtime = new ToolSearchRuntime(ownedCtx, toToolSearchConfig(config));
     const bridgeDispatchQueue = new CodeModeBridgeDispatchQueue(config.maxPendingToolCalls);
     const catalog = runtime.all({ includeMcp: false });
@@ -244,6 +245,7 @@ export async function runCodeModeScriptHeadless(params: {
         input: {
           kind: "exec",
           source,
+          settlementCapability,
           catalog,
           apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
           namespaces,
@@ -331,6 +333,7 @@ export async function runCodeModeScriptHeadless(params: {
           input: {
             kind: "resume",
             snapshotBytes: result.snapshotBytes,
+            settlementCapability,
             settledRequests,
             pendingRequests: pending.map(({ id, method, args, argumentBytes }) => ({
               id,

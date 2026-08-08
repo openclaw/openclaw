@@ -45,7 +45,10 @@ class CodeModeWorkerFailureWithOutput extends CodeModeWorkerFailure {
 }
 
 class CodeModeGuestError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly bridgeRequestId?: string,
+  ) {
     super(message);
     this.name = "CodeModeGuestError";
   }
@@ -213,6 +216,7 @@ async function createVm(params: {
   apiFiles: CodeModeApiVirtualFile[];
   namespaces: CodeModeNamespaceDescriptor[];
   swarmEnabled: boolean;
+  settlementCapability: string;
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
 }): Promise<VmRun> {
@@ -248,6 +252,9 @@ async function createVm(params: {
       state,
     }),
   ).consume((hostRequest) => vm.global.setProp("__openclawHostRequest", hostRequest));
+  vm.newString(params.settlementCapability).consume((capability) =>
+    vm.global.setProp("__openclawSettlementCapability", capability),
+  );
   vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
   return {
     vm,
@@ -382,6 +389,12 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       // format it like the synchronous path so async rejections keep their cause
       // and location instead of collapsing to the bare message.
       const dumped = vm.dump(error);
+      const bridgeRequestId = vm.global.getProp("__openclawBridgeFailureId").consume((readId) =>
+        vm.callFunction(readId, vm.undefined, error).consume((value) => {
+          const id = vm.dump(value);
+          return typeof id === "string" ? id : undefined;
+        }),
+      );
       // Node module globals are deliberately absent from the WASI guest. Keep
       // aliases fail-closed at that runtime boundary rather than guessing source
       // provenance or installing a host-backed loader.
@@ -396,7 +409,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
           : errorMessage(dumped);
-      throw new CodeModeGuestError(text);
+      throw new CodeModeGuestError(text, bridgeRequestId);
     });
   }
   return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
@@ -504,6 +517,7 @@ async function runExec(input: Extract<CodeModeWorkerPayload, { kind: "exec" }>) 
     apiFiles: input.apiFiles ?? [],
     namespaces: input.namespaces,
     swarmEnabled: input.swarmEnabled === true,
+    settlementCapability: input.settlementCapability,
     config: input.config,
     pendingRequests,
   });
@@ -540,24 +554,34 @@ async function runResume(input: Extract<CodeModeWorkerPayload, { kind: "resume" 
     config: input.config,
     takeBridgeFailure,
     prepare: () => {
-      vm.global.getProp("__openclawSettleBridge").consume((settle) => {
-        for (const request of input.settledRequests) {
-          const id = vm.newString(request.id);
-          const payload = vm.newString(JSON.stringify(request.ok ? request.value : request.error));
-          try {
-            vm.callFunction(
-              settle,
-              vm.undefined,
-              id,
-              request.ok ? vm.true : vm.false,
-              payload,
-            ).dispose();
-          } finally {
-            id.dispose();
-            payload.dispose();
+      vm.global.getProp("__openclawSettleBridge").consume((settle) =>
+        vm.newString(input.settlementCapability).consume((capability) => {
+          for (const request of input.settledRequests) {
+            vm.newString(request.id).consume((id) =>
+              vm
+                .newString(JSON.stringify(request.ok ? request.value : request.error))
+                .consume((payload) => {
+                  const accepted = vm
+                    .callFunction(
+                      settle,
+                      vm.undefined,
+                      capability,
+                      id,
+                      request.ok ? vm.true : vm.false,
+                      payload,
+                    )
+                    .consume((result) => vm.dump(result));
+                  if (accepted !== true) {
+                    throw new CodeModeWorkerFailure(
+                      "internal_error",
+                      "code mode bridge settlement rejected",
+                    );
+                  }
+                }),
+            );
           }
-        }
-      });
+        }),
+      );
     },
   });
 }
@@ -568,7 +592,13 @@ function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
 
 async function main(): Promise<CodeModeWorkerResult> {
   const input = workerData as unknown;
-  if (!isRecord(input) || !isRecord(input.config) || !isQuickJsWasmModule(input.wasmModule)) {
+  if (
+    !isRecord(input) ||
+    !isRecord(input.config) ||
+    !isQuickJsWasmModule(input.wasmModule) ||
+    typeof input.settlementCapability !== "string" ||
+    !input.settlementCapability
+  ) {
     return {
       status: "failed",
       error: "invalid code mode worker input",
@@ -584,6 +614,7 @@ async function main(): Promise<CodeModeWorkerResult> {
         kind: "exec",
         wasmModule: input.wasmModule,
         source: input.source,
+        settlementCapability: input.settlementCapability,
         config: input.config as CodeModeConfig,
         catalog: Array.isArray(input.catalog) ? input.catalog : [],
         apiFiles: Array.isArray(input.apiFiles) ? (input.apiFiles as CodeModeApiVirtualFile[]) : [],
@@ -598,6 +629,7 @@ async function main(): Promise<CodeModeWorkerResult> {
         kind: "resume",
         wasmModule: input.wasmModule,
         snapshotBytes: input.snapshotBytes,
+        settlementCapability: input.settlementCapability,
         config: input.config as CodeModeConfig,
         settledRequests: Array.isArray(input.settledRequests)
           ? (input.settledRequests as SettledBridgeRequest[])
@@ -617,6 +649,12 @@ async function main(): Promise<CodeModeWorkerResult> {
     };
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
+    const guestError =
+      error instanceof CodeModeGuestError
+        ? error
+        : error instanceof Error && error.cause instanceof CodeModeGuestError
+          ? error.cause
+          : undefined;
     const code = timedOut
       ? "timeout"
       : error instanceof CodeModeWorkerFailure
@@ -628,6 +666,7 @@ async function main(): Promise<CodeModeWorkerResult> {
       code,
       failurePhase: code === "invalid_input" ? "input" : "guest",
       bridgeDispatchStarted: false,
+      ...(guestError?.bridgeRequestId ? { bridgeRequestId: guestError.bridgeRequestId } : {}),
       output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }

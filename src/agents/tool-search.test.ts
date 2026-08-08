@@ -18,6 +18,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
+import { setChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
@@ -1253,6 +1254,53 @@ describe("Tool Search", () => {
     expect(result).toEqual([{ id: "H-1", paid: false, tons: 14 }]);
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen((result as unknown[])[0])).toBe(true);
+  });
+
+  it("uses the canonical concrete-instance policy for exact-id replay safety", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const core = fakeTool("search", "Core search");
+    const pluginSafe = fakeTool("plugin_safe", "Replay-safe plugin");
+    setPluginToolMeta(pluginSafe, {
+      pluginId: "plugin-safe",
+      optional: false,
+      replaySafe: true,
+    });
+    const pluginMcp = fakeTool("plugin_mcp", "MCP plugin");
+    setPluginToolMeta(pluginMcp, {
+      pluginId: "plugin-mcp",
+      optional: false,
+      replaySafe: true,
+      mcp: {
+        serverName: "test",
+        safeServerName: "test",
+        toolName: "search",
+        operation: "tool",
+      },
+    });
+    const channel = fakeTool("channel_search", "Channel search");
+    setChannelAgentToolMeta(channel as never, { channelId: "test-channel" });
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [core, pluginSafe, pluginMcp, channel],
+    });
+    const config = { tools: { toolSearch: true } } as never;
+    addClientToolsToToolSearchCatalog({
+      catalogRef,
+      tools: [fakeTool("client_search", "Client search")],
+      config,
+    });
+    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+    const exactId = (name: string) =>
+      expectDefined(
+        catalogRef.current?.entries.find((entry) => entry.name === name),
+        `${name} catalog entry`,
+      ).id;
+
+    expect(runtime.isReplaySafeExactId(exactId("search"))).toBe(true);
+    expect(runtime.isReplaySafeExactId(exactId("plugin_safe"))).toBe(true);
+    expect(runtime.isReplaySafeExactId(exactId("plugin_mcp"))).toBe(false);
+    expect(runtime.isReplaySafeExactId(exactId("channel_search"))).toBe(false);
+    expect(runtime.isReplaySafeExactId(exactId("client_search"))).toBe(false);
   });
 
   it("keeps output hints and validation after runtime normalization clones tools", async () => {

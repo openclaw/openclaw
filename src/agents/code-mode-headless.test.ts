@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../shared/deferred.js";
 import { prepareSource } from "./code-mode-runtime.js";
@@ -9,6 +10,8 @@ import {
   type ToolSearchToolContext,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+
+const settlementCapability = randomUUID();
 
 function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
   return {
@@ -918,6 +921,7 @@ describe("headless Code Mode", () => {
     const resultPromise = testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: "while (true) {}",
         config,
         catalog: [],
@@ -1003,6 +1007,7 @@ describe("headless Code Mode", () => {
       const result = await testing.runCodeModeWorker(
         {
           kind: "exec",
+          settlementCapability,
           source: "while (true) {}",
           config,
           catalog: [],

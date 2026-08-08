@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentExecutionAttribution } from "../../agent-execution-attribution.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
+import { bindEmbeddedAttemptExecutionAttribution } from "./attempt-execution-attribution.js";
 
 const mocks = vi.hoisted(() => ({
   buildSubscriptionParams: vi.fn(),
@@ -11,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   runBeforeFinalizeHook: vi.fn(),
   setActiveRun: vi.fn(),
   subscribe: vi.fn(),
+  installCodeModeRepairHook: vi.fn(),
 }));
 
 vi.mock("../../embedded-agent-subscribe.js", () => ({
@@ -22,6 +25,9 @@ vi.mock("../runs.js", () => ({
 }));
 vi.mock("./attempt.subscription-cleanup.js", () => ({
   buildEmbeddedSubscriptionParams: mocks.buildSubscriptionParams,
+}));
+vi.mock("./code-mode-repair.js", () => ({
+  installCodeModeRepairHook: mocks.installCodeModeRepairHook,
 }));
 vi.mock("./tool-activity-heartbeat.js", () => ({
   notifyToolActivity: mocks.notifyToolActivity,
@@ -36,25 +42,42 @@ import { SESSIONS_YIELD_ABORT_REASON } from "./attempt.sessions-yield.js";
 function prepareCatalogExecutor(
   projections: ToolSearchTargetTranscriptProjection[],
   options?: {
+    activeSession?: {
+      agent: Record<string, unknown>;
+      isStreaming: boolean;
+    };
+    codeModeControlsEnabledForRun?: boolean;
     getRunState?: () => {
       aborted: boolean;
       promptError: unknown;
       timedOut: boolean;
       yieldDetected: boolean;
     };
+    bindAttribution?: boolean;
     runAbortController?: AbortController;
     sandboxSessionKey?: string;
     sessionKey?: string;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
+  const attempt = {
+    runId: "run-output-schema",
+    sessionId: "session-output-schema",
+    sessionKey: options?.sessionKey ?? "agent:main:main",
+  } as never;
+  if (options?.bindAttribution !== false) {
+    bindEmbeddedAttemptExecutionAttribution(
+      attempt,
+      createAgentExecutionAttribution({
+        runId: "run-output-schema",
+        lifecycleGeneration: "generation-output-schema",
+      }),
+    );
+  }
   return prepareEmbeddedAttemptStream({
-    attempt: {
-      runId: "run-output-schema",
-      sessionId: "session-output-schema",
-      sessionKey: options?.sessionKey ?? "agent:main:main",
-    } as never,
-    activeSession: { agent: {}, isStreaming: false } as never,
+    attempt,
+    activeSession: (options?.activeSession ?? { agent: {}, isStreaming: false }) as never,
+    codeModeControlsEnabledForRun: options?.codeModeControlsEnabledForRun ?? false,
     hookRunner: undefined as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
@@ -90,6 +113,10 @@ describe("prepareEmbeddedAttemptStream", () => {
       toolMetas: [],
       runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
       isCompacting: vi.fn(() => false),
+      getReplayState: vi.fn(() => ({
+        replayInvalid: false,
+        hadPotentialSideEffects: false,
+      })),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
@@ -116,6 +143,7 @@ describe("prepareEmbeddedAttemptStream", () => {
         messages: [],
         pendingMessageCount: 0,
       } as never,
+      codeModeControlsEnabledForRun: false,
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
@@ -194,6 +222,7 @@ describe("prepareEmbeddedAttemptStream", () => {
         beforeAgentFinalizeRevisionAttempts: 0,
       } as never,
       activeSession: activeSession as never,
+      codeModeControlsEnabledForRun: false,
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
@@ -257,6 +286,78 @@ describe("prepareEmbeddedAttemptStream", () => {
         sessionKey: "agent:main:internal-session-effects:companion-run",
       }),
     );
+  });
+
+  it("supplements frozen inherited state with delayed terminal side-effect evidence", () => {
+    let hadPotentialSideEffects = false;
+    const getReplayState = vi.fn(() => ({
+      replayInvalid: false,
+      hadPotentialSideEffects,
+    }));
+    mocks.subscribe.mockReturnValue({
+      toolMetas: [],
+      runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
+      isCompacting: vi.fn(() => false),
+      getReplayState,
+    });
+    const agent = {};
+
+    prepareCatalogExecutor([], {
+      activeSession: { agent, isStreaming: false },
+      codeModeControlsEnabledForRun: true,
+    });
+
+    expect(mocks.installCodeModeRepairHook).toHaveBeenCalledOnce();
+    const repairInput = mocks.installCodeModeRepairHook.mock.calls[0]?.[0] as {
+      agent: object;
+      hasPotentialSideEffects: () => boolean;
+    };
+    expect(repairInput.agent).toBe(agent);
+    expect(repairInput.hasPotentialSideEffects()).toBe(false);
+    hadPotentialSideEffects = true;
+    expect(repairInput.hasPotentialSideEffects()).toBe(true);
+    expect(getReplayState).toHaveBeenCalledTimes(3);
+  });
+
+  it("blocks repair when inherited replay state already had potential side effects", () => {
+    const getReplayState = vi.fn(() => ({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    }));
+    mocks.subscribe.mockReturnValue({
+      toolMetas: [],
+      runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
+      isCompacting: vi.fn(() => false),
+      getReplayState,
+    });
+
+    prepareCatalogExecutor([], {
+      codeModeControlsEnabledForRun: true,
+    });
+
+    const repairInput = mocks.installCodeModeRepairHook.mock.calls[0]?.[0] as {
+      hasPotentialSideEffects: () => boolean;
+    };
+    expect(repairInput.hasPotentialSideEffects()).toBe(true);
+    expect(getReplayState).toHaveBeenCalledOnce();
+  });
+
+  it("does not install Code Mode repair when direct tools remain active", () => {
+    prepareCatalogExecutor([]);
+
+    expect(mocks.installCodeModeRepairHook).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when Code Mode repair lacks private execution attribution", () => {
+    prepareCatalogExecutor([], {
+      bindAttribution: false,
+      codeModeControlsEnabledForRun: true,
+    });
+
+    const repairInput = mocks.installCodeModeRepairHook.mock.calls[0]?.[0] as {
+      hasPotentialSideEffects: () => boolean;
+    };
+    expect(repairInput.hasPotentialSideEffects()).toBe(true);
   });
 
   it("validates hidden tool results before queuing transcript projections", async () => {

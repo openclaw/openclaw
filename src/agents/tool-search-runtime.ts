@@ -3,12 +3,12 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
+import { agentToolRestartSafetyOptions } from "./agent-tool-instance-replay.js";
 import {
   getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
@@ -16,9 +16,8 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
-import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { isAgentToolRestartSafe } from "./tool-replay-safety.js";
 import {
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
@@ -588,14 +587,7 @@ export class ToolSearchRuntime {
     if (entry.source !== "openclaw") {
       return false;
     }
-    const pluginMeta = getPluginToolMeta(entry.tool as Parameters<typeof getPluginToolMeta>[0]);
-    if (pluginMeta) {
-      return pluginMeta.mcp ? false : pluginMeta.replaySafe === true;
-    }
-    if (getChannelAgentToolMeta(entry.tool as never)) {
-      return false;
-    }
-    return isAgentToolReplaySafe(entry.tool);
+    return isAgentToolRestartSafe(entry.tool, agentToolRestartSafetyOptions);
   };
 
   private readonly callEntry = async (

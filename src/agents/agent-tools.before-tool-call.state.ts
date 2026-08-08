@@ -6,9 +6,11 @@
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
+const codeModeControlToolCallIds = new Set<string>();
 const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 const batchAdmittedToolCallIds = new Set<string>();
+const MAX_TRACKED_TOOL_CALL_IDS = 1024;
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -89,6 +91,35 @@ export function consumeStructuredReplaySafeToolCall(toolCallId: string, runId?: 
   return replaySafe;
 }
 
+/** Carry exact Code Mode control identity through name-only terminal events. */
+export function recordCodeModeControlToolCall(toolCallId: string, runId?: string): void {
+  codeModeControlToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+  while (codeModeControlToolCallIds.size > MAX_TRACKED_TOOL_CALL_IDS) {
+    const oldest = codeModeControlToolCallIds.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    codeModeControlToolCallIds.delete(oldest);
+  }
+}
+
+export function consumeCodeModeControlToolCall(toolCallId: string, runId?: string): boolean {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const codeModeControl = codeModeControlToolCallIds.has(key);
+  codeModeControlToolCallIds.delete(key);
+  return codeModeControl;
+}
+
+/** Remove unused Code Mode control markers when their embedded run ends. */
+export function clearCodeModeControlToolCallsForRun(runId: string): void {
+  const prefix = `${runId}:`;
+  for (const key of codeModeControlToolCallIds) {
+    if (key.startsWith(prefix)) {
+      codeModeControlToolCallIds.delete(key);
+    }
+  }
+}
+
 /** Mark a call whose loop policy was already admitted with its whole assistant batch. */
 export function recordBatchAdmittedToolCall(toolCallId: string, runId?: string): void {
   batchAdmittedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
@@ -119,5 +150,6 @@ export function resetAdjustedParamsByToolCallIdForTests(): void {
   trackedToolCallIds.clear();
   startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
+  codeModeControlToolCallIds.clear();
   batchAdmittedToolCallIds.clear();
 }

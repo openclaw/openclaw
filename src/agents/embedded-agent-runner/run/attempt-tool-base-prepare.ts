@@ -3,8 +3,11 @@ import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-con
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import {
+  agentToolReplaySafetyOptions,
+  agentToolRestartSafetyOptions,
+} from "../../agent-tool-instance-replay.js";
 import { createOpenClawCodingToolsForRuntime } from "../../agent-tools-internal.js";
-import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
@@ -182,24 +185,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
     forceMessageTool: attempt.forceMessageTool,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
   });
-  const replaySafetyOptions = {
-    declaredReplaySafe: (candidate: { name?: string }) => {
-      const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
-      if (pluginMeta) {
-        return pluginMeta.replaySafe === true;
-      }
-      return getChannelAgentToolMeta(candidate as never) ? false : undefined;
-    },
-  };
-  const restartSafetyOptions = {
-    declaredReplaySafe: (candidate: { name?: string }) => {
-      const pluginMeta = getPluginToolMeta(candidate as Parameters<typeof getPluginToolMeta>[0]);
-      if (pluginMeta?.mcp) {
-        return false;
-      }
-      return replaySafetyOptions.declaredReplaySafe(candidate);
-    },
-  };
   const constructedToolsRaw = !shouldConstructTools
     ? []
     : (() => {
@@ -325,7 +310,9 @@ export function prepareEmbeddedAttemptToolBase(params: {
         return filteredTools;
       })();
   const toolsRaw = attempt.forceRestartSafeTools
-    ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
+    ? constructedToolsRaw.filter((tool) =>
+        isAgentToolRestartSafe(tool, agentToolRestartSafetyOptions),
+      )
     : constructedToolsRaw;
   if (attempt.forceRestartSafeTools) {
     log.info(
@@ -343,7 +330,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     inheritedToolAllowlist,
     localModelLeanEnabled,
     localModelLeanPreserveToolNames,
-    replaySafetyOptions,
+    replaySafetyOptions: agentToolReplaySafetyOptions,
     runtimeCapabilityProfile,
     toolSearchCatalogRef,
     toolSearchConfig,

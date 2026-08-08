@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   beginCodeModeControlActivity,
@@ -26,6 +27,8 @@ import {
   registerHeadlessToolSearchCatalog,
   ToolSearchRuntime,
 } from "./tool-search.js";
+
+const settlementCapability = randomUUID();
 
 const EXPIRING_RUN_ID = "cm_worker_lifecycle_expiry";
 const CAPACITY_RUN_PREFIX = "cm_worker_lifecycle_capacity_";
@@ -233,6 +236,7 @@ describe("Code Mode worker lifecycle", () => {
     const result = await runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: "return true;",
         config,
         catalog: [],
@@ -259,6 +263,7 @@ describe("Code Mode worker lifecycle", () => {
     const result = await runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: "return true;",
         config,
         catalog: [],
@@ -295,6 +300,7 @@ describe("Code Mode worker lifecycle", () => {
         runCodeModeWorker(
           {
             kind: "exec",
+            settlementCapability,
             source: "return true;",
             config,
             catalog: [],
@@ -337,6 +343,7 @@ describe("Code Mode worker lifecycle", () => {
     const result = await runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source,
         config,
         catalog: [],

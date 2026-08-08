@@ -13,7 +13,8 @@ import {
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { copyPluginToolMeta } from "../plugins/tools.js";
+import { resolveAgentToolInstanceReplayPolicy } from "./agent-tool-instance-replay.js";
 import { resolveToolExecutionCorrelation } from "./agent-tools.before-tool-call.attribution.js";
 import {
   buildToolContentPrivateData,
@@ -38,6 +39,7 @@ import {
   buildAdjustedParamsKey,
   clearTrackedToolExecution,
   preExecutionBlockedToolCallIds,
+  recordCodeModeControlToolCall,
   recordStructuredReplaySafeToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
@@ -57,9 +59,11 @@ import {
   BEFORE_TOOL_CALL_WRAPPED,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
-import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
+import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import {
+  copyCodeModeControlToolIdentity,
   getCodeModeExecBeforeHookMetadata,
+  isCodeModeControlTool,
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
@@ -69,7 +73,11 @@ import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
+  registerTrustedToolInputError,
+  registerTrustedToolPreparationError,
+  revokeTrustedToolPreparationError,
 } from "./tool-result-error.js";
+import { recordUnsafeToolExecutionAuthority } from "./tool-side-effect-authority.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -174,6 +182,7 @@ class BeforeToolCallFailureError extends Error {
 function tagBeforeToolCallFailure(
   error: unknown,
   signal?: AbortSignal,
+  preparation = false,
 ): BeforeToolCallFailureError {
   try {
     if (error instanceof BeforeToolCallFailureError) {
@@ -184,7 +193,14 @@ function tagBeforeToolCallFailure(
   }
   const message = formatToolExecutionErrorMessage(error, "before_tool_call failed");
   const disposition = resolveToolErrorDiagnostic(error, signal).terminalReason;
-  return new BeforeToolCallFailureError(message, disposition, error);
+  const tagged = new BeforeToolCallFailureError(message, disposition, error);
+  if (isTrustedToolExecutionPreflightError(error)) {
+    registerTrustedToolInputError(tagged);
+    if (preparation) {
+      registerTrustedToolPreparationError(tagged);
+    }
+  }
+  return tagged;
 }
 
 /** Return the closed terminal disposition carried by a before-tool failure. */
@@ -232,7 +248,7 @@ export function recordStructuredReplayTrustForToolCall(
   tool: AnyAgentTool,
   runId?: string,
 ): void {
-  if (!toolCallId || getPluginToolMeta(tool) || getChannelAgentToolMeta(tool as never)) {
+  if (!toolCallId || resolveAgentToolInstanceReplayPolicy(tool).externallyOwned) {
     return;
   }
   recordStructuredReplaySafeToolCall(toolCallId, runId);
@@ -417,7 +433,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, params, "tool_preparation");
-        throw tagBeforeToolCallFailure(error, signal);
+        throw tagBeforeToolCallFailure(error, signal, true);
       }
       const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
       const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: preparedParams });
@@ -503,6 +519,10 @@ export function wrapToolWithBeforeToolCallHook(
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
+          if (isCodeModeControlTool(tool)) {
+            recordCodeModeControlToolCall(toolCallId, correlation.runId);
+          }
+          recordUnsafeToolExecutionAuthority(tool, executeParams, ctx);
           result = await (execute as ForwardedToolExecution)(
             toolCallId,
             executeParams,
@@ -568,6 +588,7 @@ export function wrapToolWithBeforeToolCallHook(
         }
         return result;
       } catch (err) {
+        revokeTrustedToolPreparationError(err);
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
             {
@@ -624,6 +645,7 @@ export function wrapToolWithBeforeToolCallHook(
   };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+  copyCodeModeControlToolIdentity(tool, wrappedTool);
   copyToolTerminalPresentation(tool, wrappedTool);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
@@ -669,6 +691,7 @@ export function rewrapToolWithBeforeToolCallHook(
   delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
+  copyCodeModeControlToolIdentity(tool, rewrapSource);
   copyToolTerminalPresentation(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }

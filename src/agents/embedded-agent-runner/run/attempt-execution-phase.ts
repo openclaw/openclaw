@@ -93,6 +93,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       setActiveSessionSystemPrompt,
     },
     stream: {
+      codeModeControlsEnabledForRun: toolBase.codeModeControlsEnabledForRun,
       runtimeChannel,
       hookRunner,
       hookAgentId,

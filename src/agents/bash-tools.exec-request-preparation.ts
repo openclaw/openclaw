@@ -23,6 +23,7 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
   command: string;
@@ -177,8 +178,34 @@ export function createExecRequestPreparation(params: {
   agentId?: string;
   resolveHostForParams: (params: ExecToolArgs) => ExecHost;
 }) {
-  const normalizeParams = (rawArgs: unknown): ExecToolArgs =>
-    stripMalformedXmlArgValueSuffixFromKeys(rawArgs as ExecToolArgs, XML_ARG_VALUE_EXEC_PARAM_KEYS);
+  const assertSandboxRuntimeAvailable = (rawArgs: unknown): void => {
+    // Preserve elevated routing and invalid-host errors for the execution owner.
+    if (
+      params.defaults?.sandbox ||
+      !isExecToolArgsObject(rawArgs) ||
+      (rawArgs.elevated !== undefined && typeof rawArgs.elevated !== "boolean")
+    ) {
+      return;
+    }
+    let sandbox = false;
+    try {
+      sandbox = params.resolveHostForParams(rawArgs) === "sandbox";
+    } catch {}
+    if (!sandbox) {
+      return;
+    }
+    throw new ToolInputError(`exec host=sandbox requires a sandbox runtime for this session.
+Enable sandbox mode (\`agents.defaults.sandbox.mode="non-main"\` or \`"all"\`) or use host=auto/gateway/node.`);
+  };
+
+  const normalizeParams = (rawArgs: unknown): ExecToolArgs => {
+    const normalized = stripMalformedXmlArgValueSuffixFromKeys(
+      rawArgs as ExecToolArgs,
+      XML_ARG_VALUE_EXEC_PARAM_KEYS,
+    );
+    assertSandboxRuntimeAvailable(normalized);
+    return normalized;
+  };
 
   const prepareParamsWithResolvedExecWorkdir = async (rawArgs: unknown): Promise<ExecToolArgs> => {
     if (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs)) {
@@ -189,9 +216,6 @@ export function createExecRequestPreparation(params: {
     try {
       host = params.resolveHostForParams(execParams);
     } catch {
-      return execParams;
-    }
-    if (host === "sandbox" && !params.defaults?.sandbox) {
       return execParams;
     }
     if (host === "sandbox" && params.defaults?.sandbox?.workdirValidation === "backend") {

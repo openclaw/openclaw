@@ -18,6 +18,7 @@ import {
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./swarm-code-mode.js";
 import { resolveSwarmConfig } from "./swarm-config.js";
+import { isTrustedToolPreparationError } from "./tool-result-error.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import {
   waitForCollectorCompletion,
@@ -388,6 +389,7 @@ export async function runBridgeRequest(params: {
   request: PendingBridgeRequest;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  onTrustedPreflight?: () => void;
 }): Promise<SettledBridgeRequest> {
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -535,6 +537,9 @@ export async function runBridgeRequest(params: {
     }
     return { id: params.request.id, ok: true, value: toCodeModeJsonSafe(value) };
   } catch (error) {
+    if (isTrustedToolPreparationError(error)) {
+      params.onTrustedPreflight?.();
+    }
     return { id: params.request.id, ok: false, error: formatErrorMessage(error) };
   }
 }

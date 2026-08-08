@@ -38,6 +38,7 @@ export type PendingBridgeState = PendingBridgeRequest & {
   settled?: SettledBridgeRequest;
   settledSequence?: number;
   cancel?: () => void;
+  trustedPreflight: boolean;
 };
 
 type BridgeDispatchEntry = {
@@ -168,6 +169,7 @@ type CodeModeRunState = {
   config: CodeModeConfig;
   bridgeDispatchQueue: CodeModeBridgeDispatchQueue;
   snapshotBytes: Uint8Array;
+  settlementCapability: string;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
   // Host recovery policy persists across wait calls independently of evidence.
@@ -370,6 +372,7 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
 export function snapshotState(params: {
   pendingRequests: PendingBridgeRequest[];
   snapshotBytes: Uint8Array;
+  settlementCapability: string;
   parentToolCallId: string;
   codeModeReplayId: string;
   ctx: CodeModeToolContext;
@@ -485,12 +488,16 @@ export function createPendingBridgeStates(params: {
           request,
           signal,
           onUpdate: params.onUpdate,
+          onTrustedPreflight: () => {
+            state.trustedPreflight = true;
+          },
         }),
       cancelActive: () => abortController.abort(),
       signal: params.signal,
     });
     const state: PendingBridgeState = {
       ...request,
+      trustedPreflight: false,
       promise: scheduled.promise.then((settled) => {
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;
@@ -523,6 +530,7 @@ export function storeSnapshotState(params: {
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
   snapshotBytes: Uint8Array;
+  settlementCapability: string;
   parentToolCallId: string;
   ctx: CodeModeToolContext;
   config: CodeModeConfig;
@@ -565,6 +573,7 @@ export function storeSnapshotState(params: {
     config: params.config,
     bridgeDispatchQueue: params.bridgeDispatchQueue,
     snapshotBytes: params.snapshotBytes,
+    settlementCapability: params.settlementCapability,
     pending: params.pending,
     settlementMode: params.settlementMode,
     enforceReplaySafeTools: params.enforceReplaySafeTools,

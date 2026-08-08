@@ -6,6 +6,7 @@ import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
+import { CODE_MODE_REPAIR_EVIDENCE } from "./code-mode-repair-evidence.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -112,6 +113,7 @@ export async function runExec(params: {
   );
   const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
+  const settlementCapability = randomUUID();
   try {
     const source = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
@@ -130,6 +132,7 @@ export async function runExec(params: {
       workerData: {
         kind: "exec",
         source,
+        settlementCapability,
         config: { ...config, timeoutMs: remainingMs },
         catalog,
         apiFiles,
@@ -141,6 +144,7 @@ export async function runExec(params: {
     });
     return await settleCodeModeResult({
       result,
+      settlementCapability,
       output: result.output,
       enforceReplaySafeTools: params.enforceReplaySafeTools,
       replaySafety,
@@ -262,6 +266,7 @@ async function waitForPending(
 
 async function settleCodeModeResult(params: {
   result: CodeModeWorkerResult;
+  settlementCapability: string;
   output: unknown[];
   enforceReplaySafeTools: boolean;
   replaySafety: { safe: boolean };
@@ -284,6 +289,7 @@ async function settleCodeModeResult(params: {
 }) {
   let result = params.result;
   let pending = params.pending ?? [];
+  const trustedPreflightRequestIds = new Set<string>();
   const bridgeDispatchQueue =
     params.bridgeDispatchQueue ??
     new CodeModeBridgeDispatchQueue(
@@ -425,6 +431,7 @@ async function settleCodeModeResult(params: {
           replaySafe: params.replaySafety.safe,
           settlementMode: result.settlementMode,
           snapshotBytes: result.snapshotBytes,
+          settlementCapability: params.settlementCapability,
           parentToolCallId: params.parentToolCallId,
           ctx: params.ctx,
           config: params.config,
@@ -440,6 +447,11 @@ async function settleCodeModeResult(params: {
       // attached to their original bridge ids across the restored snapshot.
       const settledRequests: SettledBridgeRequest[] =
         settledBridgeRequestsInCompletionOrder(pending);
+      for (const entry of pending) {
+        if (entry.settled && entry.trustedPreflight) {
+          trustedPreflightRequestIds.add(entry.id);
+        }
+      }
       pending = pending.filter((entry) => !entry.settled);
       // The resumed guest inherits only the remaining shared budget as its
       // QuickJS interrupt deadline; the extra host margin is watchdog grace,
@@ -450,6 +462,7 @@ async function settleCodeModeResult(params: {
         workerData: {
           kind: "resume",
           snapshotBytes: result.snapshotBytes,
+          settlementCapability: params.settlementCapability,
           config: {
             ...params.config,
             timeoutMs: resumeBudgetMs,
@@ -543,6 +556,7 @@ async function settleCodeModeResult(params: {
           replaySafe: params.replaySafety.safe,
           settlementMode: result.settlementMode,
           snapshotBytes: result.snapshotBytes,
+          settlementCapability: params.settlementCapability,
           parentToolCallId: params.parentToolCallId,
           ctx: params.ctx,
           config: params.config,
@@ -566,6 +580,7 @@ async function settleCodeModeResult(params: {
     return snapshotState({
       pendingRequests: result.pendingRequests,
       snapshotBytes: result.snapshotBytes,
+      settlementCapability: params.settlementCapability,
       parentToolCallId: params.parentToolCallId,
       codeModeReplayId: params.codeModeReplayId,
       ctx: params.ctx,
@@ -592,7 +607,11 @@ async function settleCodeModeResult(params: {
     value: result.status === "completed" ? result.value : undefined,
     config: params.config,
   });
-  return {
+  const trustedPreflight =
+    result.status === "failed" &&
+    typeof result.bridgeRequestId === "string" &&
+    trustedPreflightRequestIds.has(result.bridgeRequestId);
+  const finalResult = {
     ...result,
     ...(result.status === "failed"
       ? {
@@ -604,6 +623,11 @@ async function settleCodeModeResult(params: {
     replaySafe: params.replaySafety.safe,
     telemetry: telemetry(params.runtime),
   };
+  delete (finalResult as { bridgeRequestId?: string }).bridgeRequestId;
+  if (trustedPreflight) {
+    Object.defineProperty(finalResult, CODE_MODE_REPAIR_EVIDENCE, { value: true });
+  }
+  return finalResult;
 }
 
 export async function runWait(params: {
@@ -699,6 +723,7 @@ export async function runWait(params: {
       workerData: {
         kind: "resume",
         snapshotBytes: state.snapshotBytes,
+        settlementCapability: state.settlementCapability,
         config: {
           ...state.config,
           timeoutMs: resumeBudgetMs,
@@ -718,6 +743,7 @@ export async function runWait(params: {
     enforceOutputLimit(output, state.config);
     return await settleCodeModeResult({
       result,
+      settlementCapability: state.settlementCapability,
       output,
       enforceReplaySafeTools: state.enforceReplaySafeTools,
       replaySafety,

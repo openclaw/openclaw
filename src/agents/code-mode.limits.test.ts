@@ -1,5 +1,6 @@
 /** Tests Code Mode runtime and output limits. */
 
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codeModeFailureCode } from "./code-mode-runtime.js";
@@ -22,6 +23,7 @@ const BRIDGE_BACKLOG_ERROR =
   "code mode bridge backlog exceeded; await results or split the work into smaller batches.";
 const BRIDGE_ARGUMENT_BYTES_ERROR =
   "code mode bridge arguments exceeded 8388608 bytes; pass references or split the work into smaller batches.";
+const settlementCapability = randomUUID();
 
 describe("Code Mode runtime and output limits", () => {
   beforeEach(() => {
@@ -255,6 +257,7 @@ describe("Code Mode runtime and output limits", () => {
     const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
         config,
         catalog: [],
@@ -275,6 +278,7 @@ describe("Code Mode runtime and output limits", () => {
     const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: `return await Promise.all(
           Array.from({ length: ${BRIDGE_BACKLOG_LIMIT} }, (_, index) =>
             tools.callValue("fake_backlog", { index }),
@@ -494,6 +498,7 @@ describe("Code Mode runtime and output limits", () => {
     const first = await testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: `
           const pending = Array.from({ length: ${BRIDGE_BACKLOG_LIMIT - 1} }, (_, index) =>
             tools.callValue("fake_backlog", { index }),
@@ -523,6 +528,7 @@ describe("Code Mode runtime and output limits", () => {
       {
         kind: "resume",
         snapshotBytes: first.snapshotBytes,
+        settlementCapability,
         config,
         settledRequests: [{ id: gate.id, ok: true, value: {} }],
         pendingRequests: first.pendingRequests.slice(0, -1),
@@ -536,6 +542,166 @@ describe("Code Mode runtime and output limits", () => {
       error: BRIDGE_BACKLOG_ERROR,
       bridgeDispatchStarted: false,
     });
+  });
+
+  it("fails closed when a resumed bridge settlement uses the wrong capability", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const first = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        settlementCapability,
+        source: 'return await tools.callValue("fake_capability_target", {});',
+        config,
+        catalog: [],
+      },
+      10_000,
+    );
+    expect(first.status).toBe("waiting");
+    if (first.status !== "waiting") {
+      return;
+    }
+    const request = first.pendingRequests[0];
+    expect(request).toBeDefined();
+    if (!request) {
+      return;
+    }
+
+    const resumed = await testing.runCodeModeWorker(
+      {
+        kind: "resume",
+        snapshotBytes: first.snapshotBytes,
+        settlementCapability: "wrong-capability",
+        config,
+        settledRequests: [{ id: request.id, ok: true, value: {} }],
+        pendingRequests: [],
+      },
+      10_000,
+    );
+
+    expect(resumed).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      error: "code mode bridge settlement rejected",
+    });
+  });
+
+  it.each([
+    {
+      label: "unknown request",
+      settlements: (requestId: string) => [
+        { id: `${requestId}-unknown`, ok: true as const, value: {} },
+      ],
+    },
+    {
+      label: "duplicate request",
+      settlements: (requestId: string) => [
+        { id: requestId, ok: true as const, value: {} },
+        { id: requestId, ok: true as const, value: {} },
+      ],
+    },
+  ])("rejects a $label settlement before guest continuation", async ({ settlements }) => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const first = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        settlementCapability,
+        source: `
+          const value = await tools.callValue("fake_settlement_target", {});
+          text("guest continuation ran");
+          return value;
+        `,
+        config,
+        catalog: [],
+      },
+      10_000,
+    );
+    expect(first.status).toBe("waiting");
+    if (first.status !== "waiting") {
+      return;
+    }
+    const request = first.pendingRequests[0];
+    expect(request).toBeDefined();
+    if (!request) {
+      return;
+    }
+
+    const resumed = await testing.runCodeModeWorker(
+      {
+        kind: "resume",
+        snapshotBytes: first.snapshotBytes,
+        settlementCapability,
+        config,
+        settledRequests: settlements(request.id),
+        pendingRequests: [],
+      },
+      10_000,
+    );
+
+    expect(resumed).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      error: "code mode bridge settlement rejected",
+      output: [],
+    });
+  });
+
+  it("preserves bridge settlement after guest intrinsic poisoning", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const first = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        settlementCapability,
+        source: `
+          globalThis.String = () => "poisoned";
+          globalThis.Promise = function PoisonedPromise() {
+            throw new globalThis.Error("poisoned Promise");
+          };
+          globalThis.Error = function PoisonedError() {};
+          Map.prototype.get = () => undefined;
+          Map.prototype.set = () => { throw new globalThis.Error("poisoned Map.set"); };
+          Map.prototype.delete = () => false;
+          WeakMap.prototype.get = () => undefined;
+          WeakMap.prototype.set = () => { throw new globalThis.Error("poisoned WeakMap.set"); };
+          JSON.parse = () => "poisoned";
+          JSON.stringify = () => "poisoned";
+          return await tools.callValue("fake_poison_target", { value: 42 });
+        `,
+        config,
+        catalog: [],
+      },
+      10_000,
+    );
+    expect(first.status).toBe("waiting");
+    if (first.status !== "waiting") {
+      return;
+    }
+    const request = first.pendingRequests[0];
+    expect(request).toBeDefined();
+    if (!request) {
+      return;
+    }
+    expect(request.args).toEqual(["fake_poison_target", { value: 42 }]);
+
+    const resumed = await testing.runCodeModeWorker(
+      {
+        kind: "resume",
+        snapshotBytes: first.snapshotBytes,
+        settlementCapability,
+        config,
+        settledRequests: [{ id: request.id, ok: false, error: "original nested failure" }],
+        pendingRequests: [],
+      },
+      10_000,
+    );
+
+    expect(resumed).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      bridgeRequestId: request.id,
+    });
+    if (resumed.status === "failed") {
+      expect(resumed.error).toContain("original nested failure");
+    }
   });
 
   it("counts carried argument bytes when enforcing a resumed frontier", async () => {
@@ -552,6 +718,7 @@ describe("Code Mode runtime and output limits", () => {
     const first = await testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: `
           const carried = tools.callValue("fake_argument_budget", {
             payload: "x".repeat(6 * 1024 * 1024),
@@ -582,6 +749,7 @@ describe("Code Mode runtime and output limits", () => {
       {
         kind: "resume",
         snapshotBytes: first.snapshotBytes,
+        settlementCapability,
         config,
         settledRequests: [{ id: gate.id, ok: true, value: {} }],
         pendingRequests: first.pendingRequests.slice(0, -1),
@@ -678,6 +846,7 @@ describe("Code Mode runtime and output limits", () => {
     const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: "return 1;",
         config,
         catalog: [],
@@ -699,6 +868,7 @@ describe("Code Mode runtime and output limits", () => {
     const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: "return 1;",
         config,
         catalog: [],
@@ -720,6 +890,7 @@ describe("Code Mode runtime and output limits", () => {
     const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: "return 1;",
         config,
         catalog: [],
@@ -741,6 +912,7 @@ describe("Code Mode runtime and output limits", () => {
     const result = await testing.runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: 'throw new Error("interrupted");',
         config,
         catalog: [],

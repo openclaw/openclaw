@@ -1,4 +1,7 @@
-import { clearBatchAdmittedToolCallsForRun } from "../../agent-tools.before-tool-call.state.js";
+import {
+  clearBatchAdmittedToolCallsForRun,
+  clearCodeModeControlToolCallsForRun,
+} from "../../agent-tools.before-tool-call.state.js";
 import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { normalizeCodeModeExecBeforeHookParams } from "../../code-mode-control-tools.js";
 import type { Agent } from "../../runtime/index.js";
@@ -49,6 +52,7 @@ export function installToolLoopRecoveryCleanup(params: { agent: Agent; runId: st
   params.agent.subscribe((event) => {
     if (event.type === "agent_end") {
       clearBatchAdmittedToolCallsForRun(params.runId);
+      clearCodeModeControlToolCallsForRun(params.runId);
     }
   });
 }

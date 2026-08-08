@@ -3,6 +3,7 @@ import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 // messaging tool capture, approvals, and emitted summaries.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   onAgentEvent as registerAgentEventListener,
   resetAgentEventsForTest,
@@ -17,6 +18,8 @@ import {
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  clearCodeModeControlToolCallsForRun,
+  recordCodeModeControlToolCall,
   recordToolExecutionTracked,
 } from "./agent-tools.before-tool-call.state.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
@@ -1164,6 +1167,9 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
   it("records structured core read actions as replay-safe", async () => {
     for (const [toolName, action] of [
       ["cron", "status"],
+      ["process", "log"],
+      ["message", "read"],
+      ["browser", "snapshot"],
       ["gateway", "config.get"],
       ["gateway", "config.schema.lookup"],
       ["nodes", "status"],
@@ -1187,6 +1193,182 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
 
       expect(ctx.state.replayState.hadPotentialSideEffects, `${toolName}.${action}`).toBe(false);
     }
+  });
+
+  it("records structured core mutating actions as potential side effects", async () => {
+    for (const [toolName, action] of [
+      ["process", "poll"],
+      ["process", "kill"],
+      ["message", "send"],
+      ["browser", "act"],
+      ["gateway", "config.patch"],
+      ["nodes", "approve"],
+    ] as const) {
+      const { ctx } = createTestContext();
+      const toolCallId = `tool-${toolName}-${action}`;
+      recordStructuredReplayTrustForToolCall(
+        toolCallId,
+        { name: toolName, execute: vi.fn() } as never,
+        "run-test",
+      );
+      await executeTool(ctx, {
+        toolName,
+        toolCallId,
+        args: { action },
+        isError: false,
+        result: { details: { ok: true } },
+      });
+
+      expect(ctx.state.replayState.hadPotentialSideEffects, `${toolName}.${action}`).toBe(true);
+    }
+  });
+
+  it("uses finalized safe args for structured replay classification", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-process-rewritten-safe";
+    beforeToolCallTesting.adjustedParamsByToolCallId.set(
+      beforeToolCallTesting.buildAdjustedParamsKey({ runId: "run-test", toolCallId }),
+      { action: "log", sessionId: "process-1" },
+    );
+    recordStructuredReplayTrustForToolCall(
+      toolCallId,
+      { name: "process", execute: vi.fn() } as never,
+      "run-test",
+    );
+
+    await executeTool(ctx, {
+      toolName: "process",
+      toolCallId,
+      args: { action: "kill", sessionId: "process-1" },
+      isError: false,
+      result: { details: { status: "running" } },
+    });
+
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(false);
+  });
+
+  it("uses finalized unsafe args for structured replay classification", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-process-rewritten-unsafe";
+    beforeToolCallTesting.adjustedParamsByToolCallId.set(
+      beforeToolCallTesting.buildAdjustedParamsKey({ runId: "run-test", toolCallId }),
+      { action: "poll", sessionId: "process-1" },
+    );
+    recordStructuredReplayTrustForToolCall(
+      toolCallId,
+      { name: "process", execute: vi.fn() } as never,
+      "run-test",
+    );
+
+    await executeTool(ctx, {
+      toolName: "process",
+      toolCallId,
+      args: { action: "log", sessionId: "process-1" },
+      isError: false,
+      result: { details: { status: "failed" } },
+    });
+
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(true);
+  });
+
+  it("preserves exact Code Mode control identity through terminal replay projection", async () => {
+    const { ctx } = createTestContext();
+    recordCodeModeControlToolCall("tool-code-mode-exec", "run-test");
+
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-exec",
+      args: { code: "return 1" },
+      isError: false,
+      result: { details: { status: "completed", value: 1 } },
+    });
+
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(false);
+  });
+
+  it("keeps a failed side-effect-free Code Mode control nonmutating through terminal payloads", async () => {
+    const { ctx } = createTestContext();
+    recordCodeModeControlToolCall("tool-code-mode-failed", "run-test");
+
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-code-mode-failed",
+      args: { code: "throw new Error('bad input')" },
+      isError: true,
+      result: {
+        content: [{ type: "text", text: "bad input" }],
+        details: { status: "failed", error: "bad input" },
+      },
+    });
+
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(false);
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      mutatingAction: false,
+    });
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      isHeartbeatTrigger: true,
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+    for (const payload of payloads) {
+      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toBeUndefined();
+    }
+  });
+
+  it("does not exempt an unmarked exec that only shares the Code Mode name", async () => {
+    const { ctx } = createTestContext();
+
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-ordinary-exec",
+      args: { command: "touch /tmp/ordinary-exec" },
+      isError: false,
+      result: { details: { status: "completed" } },
+    });
+
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(true);
+  });
+
+  it("does not consume stale Code Mode identity from another run", async () => {
+    const { ctx } = createTestContext();
+    recordCodeModeControlToolCall("tool-reused-id", "run-old");
+
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-reused-id",
+      args: { command: "touch /tmp/reused-id" },
+      isError: false,
+      result: { details: { status: "completed" } },
+    });
+
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(true);
+  });
+
+  it("keeps a same-run reused exec unsafe after Code Mode marker cleanup", async () => {
+    const { ctx } = createTestContext();
+    recordCodeModeControlToolCall("tool-reused-same-run", "run-test");
+    clearCodeModeControlToolCallsForRun("run-test");
+
+    await executeTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-reused-same-run",
+      args: { command: "touch /tmp/reused-same-run" },
+      isError: false,
+      result: { details: { status: "completed" } },
+    });
+
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(true);
   });
 
   it("does not trust replay-safe names without concrete instance provenance", async () => {

@@ -50,6 +50,7 @@ type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
+      settlementCapability: string;
       config: CodeModeConfig;
       catalog: unknown[];
       apiFiles?: CodeModeApiVirtualFile[];
@@ -59,6 +60,7 @@ type CodeModeWorkerInput =
   | {
       kind: "resume";
       snapshotBytes: Uint8Array;
+      settlementCapability: string;
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
       pendingRequests?: PendingBridgeRequest[];
@@ -100,5 +102,6 @@ export type CodeModeWorkerThreadResult =
         | "internal_error";
       failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
       bridgeDispatchStarted: false;
+      bridgeRequestId?: string;
       output: unknown[];
     };

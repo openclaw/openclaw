@@ -31,6 +31,7 @@ import {
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
+import { hasUnsafeToolExecutionAuthority } from "../../tool-side-effect-authority.js";
 import { log } from "../logger.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../run-state.js";
 import {
@@ -38,6 +39,7 @@ import {
   type EmbeddedAgentQueueHandle,
   setActiveEmbeddedRun,
 } from "../runs.js";
+import { resolveEmbeddedAttemptExecutionAttribution } from "./attempt-execution-attribution.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
@@ -45,6 +47,7 @@ import {
 } from "./attempt.async-tasks.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 import { buildEmbeddedSubscriptionParams } from "./attempt.subscription-cleanup.js";
+import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
@@ -69,6 +72,7 @@ type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
 export function prepareEmbeddedAttemptStream(input: {
   attempt: EmbeddedRunAttemptParams;
   activeSession: AgentSession;
+  codeModeControlsEnabledForRun: boolean;
   runtimeChannel?: string;
   hookRunner: HookRunner;
   hookAgentId: string;
@@ -239,6 +243,7 @@ export function prepareEmbeddedAttemptStream(input: {
     : undefined;
 
   let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
+  const executionAttribution = resolveEmbeddedAttemptExecutionAttribution(attempt);
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   const getQueueHandle = (): AttemptStreamQueueHandle => queueHandle;
@@ -320,6 +325,17 @@ export function prepareEmbeddedAttemptStream(input: {
     }),
   );
   toolMetasForTerminal = subscription.toolMetas;
+  if (input.codeModeControlsEnabledForRun) {
+    const inheritedReplayHadPotentialSideEffects =
+      subscription.getReplayState().hadPotentialSideEffects;
+    installCodeModeRepairHook({
+      agent: input.activeSession.agent,
+      hasPotentialSideEffects: () =>
+        inheritedReplayHadPotentialSideEffects ||
+        hasUnsafeToolExecutionAuthority(executionAttribution) ||
+        subscription.getReplayState().hadPotentialSideEffects,
+    });
+  }
 
   const toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor = async (toolParams) => {
     try {

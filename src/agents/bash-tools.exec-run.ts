@@ -153,6 +153,7 @@ export function createExecTool(
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
+      let params = requestPreparation.normalizeParams(args);
       // Review cancellation belongs to this execution, never another call on the shared tool.
       const autoReviewer =
         defaults?.autoReviewer ??
@@ -162,7 +163,6 @@ export function createExecTool(
           reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
           signal,
         });
-      let params = requestPreparation.normalizeParams(args);
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
@@ -318,14 +318,6 @@ export function createExecTool(
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (target.selectedTarget === "sandbox" && !sandbox) {
-        throw new Error(
-          [
-            "exec host=sandbox requires a sandbox runtime for this session.",
-            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or use host=auto/gateway/node.',
-          ].join("\n"),
-        );
-      }
       if (!params.command) {
         throw new Error("Provide a command to start.");
       }

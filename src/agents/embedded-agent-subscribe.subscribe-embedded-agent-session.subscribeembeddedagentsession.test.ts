@@ -9,6 +9,7 @@ import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-respo
 import * as agentEvents from "../infra/agent-events.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
+import { recordCodeModeControlToolCall } from "./agent-tools.before-tool-call.state.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -51,13 +52,15 @@ describe("subscribeEmbeddedAgentSession", () => {
 
   function createToolErrorHarness(runId: string) {
     const { session, emit } = createStubSessionHarness();
+    const onToolStreamBoundary = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
       session,
       runId,
       sessionKey: "test-session",
+      onToolStreamBoundary,
     });
 
-    return { emit, subscription };
+    return { emit, onToolStreamBoundary, subscription };
   }
 
   function createSubscribedHarness(
@@ -1480,6 +1483,33 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
+    expect(subscription.getLastToolError()).toBeUndefined();
+  });
+
+  it("drops a nonmutating Code Mode control failure on compaction retry", async () => {
+    const runId = "run-code-mode-compaction";
+    const toolCallId = "code-mode-failed";
+    const { emit, onToolStreamBoundary, subscription } = createToolErrorHarness(runId);
+    recordCodeModeControlToolCall(toolCallId, runId);
+
+    emitToolRun({
+      emit,
+      toolName: "exec",
+      toolCallId,
+      args: { code: "throw new Error('bad input')" },
+      isError: true,
+      result: {
+        content: [{ type: "text", text: "bad input" }],
+        details: { status: "failed", error: "bad input" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(subscription.getLastToolError()?.mutatingAction).toBe(false);
+      expect(onToolStreamBoundary).toHaveBeenCalledOnce();
+    });
+    emit({ type: "compaction_end", willRetry: true });
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 

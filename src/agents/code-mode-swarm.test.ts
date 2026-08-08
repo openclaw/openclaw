@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
@@ -10,12 +10,14 @@ import {
 } from "./swarm-code-mode.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+const settlementCapability = randomUUID();
 
 function workerExec(source: string, swarmEnabled: boolean) {
   return testing.runCodeModeWorker(
     {
       kind: "exec",
       source,
+      settlementCapability,
       config,
       catalog: [],
       apiFiles: [],
@@ -34,6 +36,7 @@ function workerResume(
     {
       kind: "resume",
       snapshotBytes: waiting.snapshotBytes,
+      settlementCapability,
       config,
       settledRequests,
     },

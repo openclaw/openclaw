@@ -3,51 +3,66 @@ import { CODE_MODE_SWARM_CONTROLLER_SOURCE } from "./code-mode-swarm-controller-
 
 export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
+  const HostError = Error;
+  const HostJsonParse = JSON.parse;
+  const HostJsonStringify = JSON.stringify;
+  const HostPromise = Promise;
+  const HostString = String;
   const output = [];
   const pending = new Map();
+  const pendingDelete = pending.delete.bind(pending);
+  const pendingGet = pending.get.bind(pending);
+  const pendingSet = pending.set.bind(pending);
+  const bridgeFailureIds = new WeakMap();
+  const bridgeFailureGet = bridgeFailureIds.get.bind(bridgeFailureIds);
+  const bridgeFailureSet = bridgeFailureIds.set.bind(bridgeFailureIds);
   const catalog = Array.isArray(globalThis.__openclawCatalog) ? globalThis.__openclawCatalog : [];
   const apiFiles = Array.isArray(globalThis.__openclawApiFiles) ? globalThis.__openclawApiFiles : [];
   const namespaceDescriptors = Array.isArray(globalThis.__openclawNamespaces) ? globalThis.__openclawNamespaces : [];
   const hostRequest = globalThis.__openclawHostRequest;
+  const settlementCapability = HostString(globalThis.__openclawSettlementCapability ?? "");
   delete globalThis.__openclawHostRequest;
+  delete globalThis.__openclawSettlementCapability;
   const bridgeSequences = new Map();
+  const bridgeSequenceGet = bridgeSequences.get.bind(bridgeSequences);
+  const bridgeSequenceSet = bridgeSequences.set.bind(bridgeSequences);
 
   function safe(value) {
     if (value === undefined) return null;
     try {
-      return JSON.parse(JSON.stringify(value));
+      return HostJsonParse(HostJsonStringify(value));
     } catch {
-      if (value instanceof Error) {
+      if (value instanceof HostError) {
         return { name: value.name, message: value.message };
       }
       if (value === null) return null;
       const type = typeof value;
       if (type === "string" || type === "number" || type === "boolean") return value;
-      return String(value);
+      return HostString(value);
     }
   }
 
   function asText(value) {
     if (typeof value === "string") return value;
-    const encoded = JSON.stringify(safe(value));
-    return typeof encoded === "string" ? encoded : String(value);
+    const encoded = HostJsonStringify(safe(value));
+    return typeof encoded === "string" ? encoded : HostString(value);
   }
 
   function request(method, args) {
-    const methodName = String(method);
-    const sequence = (bridgeSequences.get(methodName) ?? 0) + 1;
-    bridgeSequences.set(methodName, sequence);
-    const bridgeId = "bridge:" + methodName + ":" + String(sequence);
-    const id = String(hostRequest(methodName, JSON.stringify(safe(args ?? [])), bridgeId));
-    return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+    const methodName = HostString(method);
+    const sequence = (bridgeSequenceGet(methodName) ?? 0) + 1;
+    bridgeSequenceSet(methodName, sequence);
+    const bridgeId = "bridge:" + methodName + ":" + HostString(sequence);
+    const id = HostString(hostRequest(methodName, HostJsonStringify(safe(args ?? [])), bridgeId));
+    return new HostPromise((resolve, reject) => {
+      pendingSet(id, { resolve, reject });
     });
   }
 
   ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
 
   function namespaceFunction(namespaceId, path) {
-    const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => String(entry)));
+    const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => HostString(entry)));
     return (...args) => request("namespace", [namespaceId, callablePath, args]);
   }
 
@@ -74,24 +89,31 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     return safe(value.value);
   }
 
-  function settle(id, ok, payload) {
-    const entry = pending.get(String(id));
+  function settle(capability, id, ok, payload) {
+    if (capability !== settlementCapability) return false;
+    const requestId = HostString(id);
+    const entry = pendingGet(requestId);
     if (!entry) return false;
-    pending.delete(String(id));
+    pendingDelete(requestId);
     let parsed = null;
     try {
-      parsed = JSON.parse(String(payload));
+      parsed = HostJsonParse(HostString(payload));
     } catch {
-      parsed = String(payload);
+      parsed = HostString(payload);
     }
     if (ok) {
       entry.resolve(parsed);
     } else {
-      const error = new Error(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
+      const error = new HostError(typeof parsed === "string" ? parsed : parsed?.message ?? "nested tool failed");
+      bridgeFailureSet(error, requestId);
       entry.reject(error);
     }
     return true;
   }
+
+  Object.defineProperty(globalThis, "__openclawBridgeFailureId", {
+    value: (error) => bridgeFailureGet(error) ?? null,
+  });
 
   function nodeHandle(descriptor) {
     const handle = Object.create(null);
@@ -141,9 +163,9 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   }
 
   function normalizeApiPath(value) {
-    const text = String(value ?? "").trim().replace(/^\/+/, "");
+    const text = HostString(value ?? "").trim().replace(/^\/+/, "");
     if (!text || text.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
-      throw new Error("invalid API file path");
+      throw new HostError("invalid API file path");
     }
     return text;
   }
@@ -165,7 +187,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     list: async (prefix = "") => {
       // list takes a directory prefix, so tolerate a trailing slash (API.list("mcp/"))
       // that read's exact-path normalizer would otherwise reject as an empty segment.
-      const rawPrefix = prefix == null ? "" : String(prefix).trim().replace(/\/+$/, "");
+      const rawPrefix = prefix == null ? "" : HostString(prefix).trim().replace(/\/+$/, "");
       const normalizedPrefix = rawPrefix === "" ? "" : normalizeApiPath(rawPrefix);
       const files = [...apiFileMap.values()]
         .filter((file) => !normalizedPrefix || file.path === normalizedPrefix || file.path.startsWith(normalizedPrefix.replace(/\/?$/, "/")))
@@ -179,7 +201,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     read: async (path) => {
       const normalizedPath = normalizeApiPath(path);
       const file = apiFileMap.get(normalizedPath);
-      if (!file) throw new Error("Unknown API file: " + normalizedPath);
+      if (!file) throw new HostError("Unknown API file: " + normalizedPath);
       return file;
     },
   });

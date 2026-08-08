@@ -43,6 +43,7 @@ import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
+  consumeCodeModeControlToolCall,
   consumePreExecutionBlockedToolCall,
   consumeStructuredReplaySafeToolCall,
   consumeTrackedToolExecutionStarted,
@@ -96,7 +97,7 @@ import {
   createToolValidationErrorSummary,
   summarizeToolValidationError,
 } from "./tool-error-summary.js";
-import { buildToolMutationState } from "./tool-mutation.js";
+import { buildToolMutationState, resolveToolCallReplaySafe } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
@@ -339,15 +340,29 @@ function buildToolCallSummary(
   meta: string | undefined,
   instanceReplaySafe: boolean,
   structuredReplaySafe: boolean,
+  codeModeControl = false,
 ): ToolCallSummary {
-  const mutation = buildToolMutationState(toolName, args, meta);
+  const mutation = codeModeControl
+    ? {
+        mutatingAction: false,
+        replaySafe: true,
+        actionFingerprint: undefined,
+        fileTarget: undefined,
+      }
+    : buildToolMutationState(toolName, args, meta);
   return {
     meta,
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
-    replaySafe:
-      (instanceReplaySafe && !mutation.mutatingAction) ||
-      (structuredReplaySafe && mutation.replaySafe),
+    replaySafe: resolveToolCallReplaySafe({
+      toolName,
+      args,
+      meta,
+      instanceReplaySafe,
+      structuredReplaySafe,
+      codeModeControl,
+      mutation,
+    }),
     actionFingerprint: mutation.actionFingerprint,
     fileTarget: mutation.fileTarget,
   };
@@ -1444,6 +1459,7 @@ export async function handleToolExecutionEnd(
   const trackedExecutionStarted = consumeTrackedToolExecutionStarted(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
+  const codeModeControl = consumeCodeModeControlToolCall(toolCallId, runId);
   const startArgs =
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
@@ -1454,6 +1470,7 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.meta,
     initialCallSummary?.instanceReplaySafe === true,
     structuredReplaySafe,
+    codeModeControl,
   );
   // A racing observer can consume the active wrapper boundary. Settled and
   // custom producers use their terminal fact, while policy blocks override it.
@@ -1503,6 +1520,14 @@ export async function handleToolExecutionEnd(
           },
         }
       : {}),
+    nativeMutation: {
+      mutatingAction: callSummary.mutatingAction,
+      replaySafe: callSummary.replaySafe,
+      ...(callSummary.actionFingerprint
+        ? { actionFingerprint: callSummary.actionFingerprint }
+        : {}),
+      ...(callSummary.fileTarget ? { fileTarget: callSummary.fileTarget } : {}),
+    },
   });
   ctx.state.lastToolError = terminal.lastToolError;
   const toolErrorSummary = ctx.state.lastToolError

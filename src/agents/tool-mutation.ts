@@ -135,7 +135,7 @@ export type FileTarget = {
   oldpath?: string;
 };
 
-type ToolMutationState = {
+export type ToolMutationState = {
   mutatingAction: boolean;
   replaySafe: boolean;
   actionFingerprint?: string;
@@ -535,6 +535,27 @@ export function buildToolMutationState(
     actionFingerprint,
     ...(fileTarget !== undefined ? { fileTarget } : {}),
   };
+}
+
+/** Resolve replay safety from the concrete instance and final execution args. */
+export function resolveToolCallReplaySafe(params: {
+  toolName: string;
+  args: unknown;
+  meta?: string;
+  instanceReplaySafe: boolean;
+  structuredReplaySafe: boolean;
+  codeModeControl?: boolean;
+  mutation?: ToolMutationState;
+}): boolean {
+  if (params.codeModeControl) {
+    return true;
+  }
+  const mutation =
+    params.mutation ?? buildToolMutationState(params.toolName, params.args, params.meta);
+  return (
+    (params.instanceReplaySafe && !mutation.mutatingAction) ||
+    (params.structuredReplaySafe && mutation.replaySafe)
+  );
 }
 
 export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {

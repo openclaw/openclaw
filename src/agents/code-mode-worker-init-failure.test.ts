@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCodeModeConfig } from "./code-mode-runtime.js";
+
+const settlementCapability = randomUUID();
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
@@ -27,6 +30,7 @@ describe("Code Mode worker initialization", () => {
     const result = await runCodeModeWorker(
       {
         kind: "exec",
+        settlementCapability,
         source: "return true;",
         config,
         catalog: [],

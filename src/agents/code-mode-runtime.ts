@@ -93,6 +93,7 @@ export type CodeModeWorkerResult =
       code: CodeModeFailureCode;
       failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: boolean;
+      bridgeRequestId?: string;
       output: unknown[];
     };
 

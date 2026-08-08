@@ -36,6 +36,11 @@ export function inheritToolExecutionAttribution(
   return bindToolExecutionAttribution(target, attribution);
 }
 
+/** Read the private object identity used by host-owned execution policy. */
+export function resolveBoundToolExecutionAttribution(ctx?: HookContext): object | undefined {
+  return ctx ? attributionByHookContext.get(ctx) : undefined;
+}
+
 /** Bound admission attribution is the only source of exact execution identity. */
 export function resolveToolExecutionCorrelation(ctx?: HookContext): ToolExecutionCorrelation {
   const attribution = ctx ? attributionByHookContext.get(ctx) : undefined;

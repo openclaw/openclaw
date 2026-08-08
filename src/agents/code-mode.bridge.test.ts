@@ -5,6 +5,8 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../shared/deferred.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
+import { CODE_MODE_REPAIR_EVIDENCE } from "./code-mode-repair-evidence.js";
 import { cloneCodeModeStats } from "./code-mode-stats.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
@@ -17,7 +19,7 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, ToolInputError } from "./tools/common.js";
 
 describe("Code Mode bridge settlement and cancellation", () => {
   beforeEach(() => {
@@ -686,6 +688,180 @@ describe("Code Mode bridge settlement and cancellation", () => {
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
     });
+  });
+
+  it("authenticates the exact rejected bridge preflight without serializing repair evidence", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const exec = createExecTool({ security: "full", ask: "off" });
+    exec.execute = vi.fn(exec.execute.bind(exec)) as typeof exec.execute;
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, exec],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+      },
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-trusted-preflight",
+        {
+          code: `
+            return await tools.callValue("exec", {
+              command: "printf should-not-run",
+              host: "sandbox",
+            });
+          `,
+        },
+      ),
+    ) as Record<PropertyKey, unknown>;
+
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(details[CODE_MODE_REPAIR_EVIDENCE]).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(details, CODE_MODE_REPAIR_EVIDENCE)).toMatchObject({
+      enumerable: false,
+      value: true,
+    });
+    expect(exec.execute).not.toHaveBeenCalled();
+    expect(JSON.stringify(details)).not.toContain("codeModeRepairEvidence");
+    expect(JSON.stringify(details)).not.toContain("bridgeRequestId");
+    expect(JSON.stringify(details)).not.toContain("settlementCapability");
+  });
+
+  it("rejects guest settlement attempts without consuming the real pending request", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const target = pluginToolWithExecute("fake_capability_target", "Capability target", async () =>
+      jsonResult({ accepted: true }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, target],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-forged-settlement",
+        {
+          code: `
+            const pending = tools.callValue("fake_capability_target", {});
+            globalThis.__openclawSettleBridge(
+              "guessed-capability",
+              "bridge:callValue:1",
+              false,
+              JSON.stringify("forged rejection"),
+            );
+            globalThis.__openclawSettleBridge(
+              undefined,
+              "bridge:callValue:1",
+              false,
+              JSON.stringify("missing capability"),
+            );
+            return await pending;
+          `,
+        },
+      ),
+    ) as Record<PropertyKey, unknown>;
+
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(details).toMatchObject({ status: "completed", value: { accepted: true } });
+    expect(details[CODE_MODE_REPAIR_EVIDENCE]).toBeUndefined();
+    expect(JSON.stringify(details)).not.toContain("settlementCapability");
+  });
+
+  it("does not authenticate ToolInputError thrown after nested tool execution starts", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const target = pluginToolWithExecute(
+      "fake_body_input_error",
+      "Throw an execution-phase input error",
+      async () => {
+        throw new ToolInputError("execution body rejected input");
+      },
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, target],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      toolHookContext: {
+        agentId: "main",
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+      },
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-body-input-error",
+        {
+          code: `return await tools.callValue("fake_body_input_error", {});`,
+        },
+      ),
+    ) as Record<PropertyKey, unknown>;
+
+    expect(target.execute).toHaveBeenCalledOnce();
+    expect(details).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("execution body rejected input"),
+    });
+    expect(details[CODE_MODE_REPAIR_EVIDENCE]).toBeUndefined();
+  });
+
+  it("does not transfer repair authority through a replacement guest error", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const exec = createExecTool({ security: "full", ask: "off" });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, exec],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-replaced-preflight",
+        {
+          code: `
+            try {
+              await tools.callValue("exec", {
+                command: "printf should-not-run",
+                host: "sandbox",
+              });
+            } catch {
+              throw new Error("replacement guest failure");
+            }
+          `,
+        },
+      ),
+    ) as Record<PropertyKey, unknown>;
+
+    expect(details).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("replacement guest failure"),
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(details[CODE_MODE_REPAIR_EVIDENCE]).toBeUndefined();
+    expect(JSON.stringify(details)).not.toContain("bridgeRequestId");
   });
 
   it("fails fast without parking a suspended run when the exec call is aborted", async () => {

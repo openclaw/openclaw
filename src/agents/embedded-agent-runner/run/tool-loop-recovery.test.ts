@@ -1,8 +1,12 @@
 import type { InternalToolBatchCall } from "@openclaw/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import {
+  consumeCodeModeControlToolCall,
+  recordCodeModeControlToolCall,
+} from "../../agent-tools.before-tool-call.state.js";
 import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { Agent, AgentTool } from "../../runtime/index.js";
 
 const mocks = vi.hoisted(() => ({
   admitToolCallBatch: vi.fn(async (_calls: InternalToolBatchCall[]) => undefined),
@@ -12,7 +16,10 @@ vi.mock("../../tool-loop-admission.js", () => ({
   admitToolCallBatch: mocks.admitToolCallBatch,
 }));
 
-import { createToolLoopBatchAdmission } from "./tool-loop-recovery.js";
+import {
+  createToolLoopBatchAdmission,
+  installToolLoopRecoveryCleanup,
+} from "./tool-loop-recovery.js";
 
 function codeModeExecTool(): AgentTool {
   return markCodeModeControlTool({
@@ -92,5 +99,21 @@ describe("tool-loop recovery batch admission", () => {
       { code: "return 1;", command: "return 1;" },
       { command: "return 1;", code: "return 1;" },
     ]);
+  });
+
+  it("clears orphaned Code Mode control identity when the run ends", () => {
+    let listener: ((event: { type: string }) => void) | undefined;
+    const agent = {
+      subscribe: vi.fn((nextListener) => {
+        listener = nextListener;
+        return () => {};
+      }),
+    } as unknown as Agent;
+    installToolLoopRecoveryCleanup({ agent, runId: "run-1" });
+    recordCodeModeControlToolCall("reused-id", "run-1");
+
+    listener?.({ type: "agent_end" });
+
+    expect(consumeCodeModeControlToolCall("reused-id", "run-1")).toBe(false);
   });
 });

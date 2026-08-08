@@ -25,7 +25,6 @@ import { resolveEmbeddedRunAccountingObservers } from "./accounting-observers.js
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
-import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import {
@@ -212,9 +211,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
   });
-  if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
-    installCodeModeRepairHook({ agent: activeSession.agent });
-  }
   input.markStage("agent-session");
 
   return {

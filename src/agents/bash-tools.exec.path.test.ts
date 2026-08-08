@@ -10,6 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
+import { isTrustedToolExecutionPreflightError } from "./tool-result-error.js";
 
 const isWin = process.platform === "win32";
 const FOREGROUND_TEST_YIELD_MS = 120_000;
@@ -19,6 +20,7 @@ const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
+const processSupervisorCalls = vi.hoisted(() => ({ commands: [] as string[] }));
 
 const parseShellSingleQuoted = (input: string) => {
   if (!input.startsWith("'")) {
@@ -82,6 +84,7 @@ vi.mock("../process/supervisor/index.js", () => ({
       onStdout?: (chunk: string) => void;
     }) => {
       const command = unwrapSnapshotEvalCommand(input.ptyCommand ?? input.argv?.at(-1) ?? "");
+      processSupervisorCalls.commands.push(command);
       const env = input.env ?? {};
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
@@ -186,6 +189,7 @@ describe("exec PATH login shell merge", () => {
   });
 
   beforeEach(() => {
+    processSupervisorCalls.commands.length = 0;
     envSnapshot = captureEnv([...ENV_KEYS]);
     process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
@@ -427,13 +431,37 @@ describe("exec host env validation", () => {
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
-    const tool = createExecTool({ host: "sandbox", security: "full", ask: "off" });
+    const command = "printf openclaw-sandbox-preflight-sentinel";
+    let commandReads = 0;
+    let executionSetupReads = 0;
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      get autoReviewer() {
+        executionSetupReads += 1;
+        return undefined;
+      },
+    });
+    const args = {
+      host: "sandbox" as const,
+      get command() {
+        commandReads += 1;
+        return command;
+      },
+    };
 
-    await expect(
-      tool.execute("call1", {
-        command: "echo ok",
-      }),
-    ).rejects.toThrow(/requires a sandbox runtime/);
+    const failure = await tool.execute("call1", args).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      name: "ToolInputError",
+      message: expect.stringContaining("exec host=sandbox requires a sandbox runtime"),
+    });
+    expect(isTrustedToolExecutionPreflightError(failure)).toBe(true);
+    expect(String((failure as Error).message)).toContain("use host=auto/gateway/node");
+    expect(commandReads).toBe(1);
+    expect(executionSetupReads).toBe(0);
+    expect(processSupervisorCalls.commands).not.toContain(command);
   });
 
   it.each([
