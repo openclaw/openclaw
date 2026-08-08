@@ -162,7 +162,7 @@ describe("ollama production stream UTF-8 rejection over real HTTP", () => {
 
   it("bounds a large valid tail delivered with the terminal record", async () => {
     const terminalChunk = new TextEncoder().encode(`${TERMINAL_NDJSON}\n`);
-    const tail = new Uint8Array(256 * 1024 + 1).fill(0x20);
+    const tail = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
     const initialBody = new Uint8Array(terminalChunk.byteLength + tail.byteLength);
     initialBody.set(terminalChunk);
     initialBody.set(tail, terminalChunk.byteLength);

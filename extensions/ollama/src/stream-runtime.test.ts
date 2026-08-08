@@ -1203,7 +1203,7 @@ describe("parseNdjsonStream", () => {
       const terminal = encoder.encode(
         '{"model":"m","message":{"role":"assistant","content":""},"done":true}',
       );
-      const value = new Uint8Array(terminal.byteLength + 256 * 1024 + 2);
+      const value = new Uint8Array(terminal.byteLength + 16 * 1024 * 1024 + 2);
       value.set(terminal);
       value.fill(0x20, terminal.byteLength, value.length - 1);
       value[value.length - 1] = 0x0a;
@@ -1235,6 +1235,34 @@ describe("parseNdjsonStream", () => {
       expect(chunks).toHaveLength(1);
       expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
       expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not apply the NDJSON record cap to a large later tail", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+      );
+      const tail = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
+      const reader = mockChunkSequenceReader([terminal, tail, null]);
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const chunks = await chunksPromise;
+
+      expect(chunks).toHaveLength(1);
+      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+      expect(reader.read).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

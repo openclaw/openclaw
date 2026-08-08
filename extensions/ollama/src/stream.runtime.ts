@@ -62,6 +62,20 @@ const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
 
+function findNewlineEnd(value: Uint8Array, lineIndex: number): number | undefined {
+  let remaining = lineIndex;
+  for (let offset = 0; offset < value.byteLength; offset += 1) {
+    if (value[offset] !== 0x0a) {
+      continue;
+    }
+    if (remaining === 0) {
+      return offset + 1;
+    }
+    remaining -= 1;
+  }
+  return undefined;
+}
+
 type OllamaStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
 };
@@ -873,21 +887,30 @@ export async function* parseNdjsonStream(
   let terminalTailBytes = 0;
   let terminalTailDeadline: number | undefined;
   try {
-    readLoop: while (true) {
+    while (true) {
       const { done, value } = terminalRecord
         ? await readWithTerminalTailDeadline(reader, terminalTailDeadline)
         : await reader.read();
       if (done) {
         break;
       }
-      pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
+      let nextPendingRecordBytes = pendingRecordBytes;
+      let recordCapError: Error | undefined;
+      if (!terminalRecord) {
+        try {
+          nextPendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
+        } catch (error) {
+          // A terminal record and a large newline-free tail can share one
+          // transport read. Defer the cap decision until the terminal line
+          // is identified so the tail uses its own bounded policy.
+          recordCapError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
       if (terminalRecord) {
         // A terminal record was already parsed; the remaining body bytes only
         // need fatal UTF-8 validation before the completion is exposed.
-        const decodedTail = decoder.decode(value, { stream: true });
-        // Count decoded bytes so a UTF-8 sequence split across reads is counted
-        // when completed instead of losing the bytes buffered by TextDecoder.
-        terminalTailBytes += encoder.encode(decodedTail).byteLength;
+        decoder.decode(value, { stream: true });
+        terminalTailBytes += value.byteLength;
         if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
           // Bound the post-terminal validation drain: a peer that keeps
           // sending valid trailing bytes must not withhold completion forever.
@@ -895,10 +918,13 @@ export async function* parseNdjsonStream(
         }
         continue;
       }
+      const previousBuffer = buffer;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
+      const parsedRecords: OllamaChatResponse[] = [];
+      let terminalFound = false;
       for (const [lineIndex, line] of lines.entries()) {
         const trimmed = line.trim();
         if (!trimmed) {
@@ -912,24 +938,54 @@ export async function* parseNdjsonStream(
           continue;
         }
         if (parsed.done) {
+          const terminalLineEnd = findNewlineEnd(value, lineIndex);
+          if (terminalLineEnd === undefined) {
+            throw new Error("Ollama terminal record was not newline-terminated");
+          }
+          const terminalContentEnd = line.trimEnd().length;
+          const currentLineStart = lineIndex === 0 ? previousBuffer.length : 0;
+          const currentTrailingText = line.slice(Math.max(terminalContentEnd, currentLineStart));
+          const terminalTrailingBytes = encoder.encode(currentTrailingText).byteLength;
+          pendingRecordBytes = checkNdjsonRecordCap(
+            value.subarray(0, terminalLineEnd - terminalTrailingBytes),
+            pendingRecordBytes,
+          );
           // Hold the terminal record until the whole response body has been
           // read and fatal-decoded: the production consumer exits on the
           // terminal record, so malformed bytes in later transport chunks
           // would otherwise complete successfully without validation.
           terminalRecord = parsed;
           terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
-          const terminalTailText = `${line.slice(line.trimEnd().length)}\n${lines
+          const terminalTailText = `${line.slice(terminalContentEnd)}\n${lines
             .slice(lineIndex + 1)
             .join("\n")}${lineIndex + 1 < lines.length ? "\n" : ""}${buffer}`;
           terminalTailBytes += encoder.encode(terminalTailText).byteLength;
           buffer = "";
+          terminalFound = true;
           if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
             // The terminal-containing read can already carry enough valid tail
             // bytes to satisfy the bounded validation window.
-            break readLoop;
+            break;
           }
           break;
         }
+        parsedRecords.push(parsed);
+      }
+
+      if (terminalFound) {
+        for (const parsed of parsedRecords) {
+          yield parsed;
+        }
+        if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
+          break;
+        }
+        continue;
+      }
+      if (recordCapError) {
+        throw recordCapError;
+      }
+      pendingRecordBytes = nextPendingRecordBytes;
+      for (const parsed of parsedRecords) {
         yield parsed;
       }
     }
