@@ -10,8 +10,14 @@ import {
   type ConversationSendResult,
   type ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
+import {
+  resolveConversation,
+  resolveConversationRegistryScope,
+  type ConversationRecord,
+} from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveEffectiveMessageToolsConfig } from "../../infra/outbound/outbound-policy.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -22,6 +28,7 @@ import {
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
+import { buildTurnSendTargetKey, peekTurnSendCount, recordTurnSend } from "./turn-send-ledger.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -55,16 +62,20 @@ type ConversationToolOptions = {
   agentId?: string;
   agentSessionId?: string;
   agentSessionKey?: string;
+  /** Current agent run; scopes the per-turn send ledger to one turn. */
+  runId?: string;
   config?: OpenClawConfig;
   senderIsOwner?: boolean;
 };
 
 type ConversationToolDeps = {
   callGateway: typeof callGateway;
+  resolveConversation: typeof resolveConversation;
 };
 
 const defaultDeps: ConversationToolDeps = {
   callGateway,
+  resolveConversation,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -136,6 +147,46 @@ export function createConversationsListTool(
   };
 }
 
+function resolveConversationBudgetContext(
+  options: ConversationToolOptions,
+  deps: ConversationToolDeps,
+  conversationRef: string,
+): { sessionKey: string; runId: string; targetKey: string } | undefined {
+  const sessionKey = options.agentSessionKey?.trim() || undefined;
+  if (!sessionKey || !options.runId || !options.config) {
+    return undefined;
+  }
+  // Resolve the opaque ref to its real (channel, account, target) route via the local
+  // registry so the ledger key matches the message tool's key for the same recipient;
+  // alternating the two tools at one peer must not evade the nudge or hard cap. Fail
+  // open on any miss — a registry read that comes up empty (or throws) must never
+  // block a send, mirroring resolveOutboundActionRoute returning undefined on ambiguity.
+  let record: ConversationRecord | undefined;
+  try {
+    record = deps.resolveConversation(
+      resolveConversationRegistryScope({
+        agentId: resolveToolAgentId(options),
+        config: options.config,
+      }),
+      conversationRef,
+    );
+  } catch {
+    return undefined;
+  }
+  if (!record) {
+    return undefined;
+  }
+  return {
+    sessionKey,
+    runId: options.runId,
+    targetKey: buildTurnSendTargetKey({
+      channel: record.channel,
+      accountId: record.accountId,
+      target: record.target,
+    }),
+  };
+}
+
 /** Sends directly to one external conversation without invoking its backing local session. */
 export function createConversationsSendTool(
   options: ConversationToolOptions = {},
@@ -162,6 +213,27 @@ export function createConversationsSendTool(
         toolName: "conversations_send",
         conversationRef,
       });
+      // Per-turn send budget, shared with the message tool: count successful sends
+      // per (turn, resolved route) so a reworded resend to the same conversation is
+      // visible even though the loop detector hashes full params and can't see it.
+      // The ref is resolved to its (channel, account, target) route so the ledger key
+      // is identical to the message tool's for the same recipient.
+      const budgetContext = resolveConversationBudgetContext(options, deps, conversationRef);
+      // Optional hard cap (opt-in via tools.message.maxMessagesPerTurnPerTarget):
+      // block before the Gateway call once the cap is reached this turn.
+      if (budgetContext && options.config) {
+        const maxPerTurn = resolveEffectiveMessageToolsConfig({
+          cfg: options.config,
+          agentId: resolveToolAgentId(options),
+        })?.maxMessagesPerTurnPerTarget;
+        if (maxPerTurn !== undefined && peekTurnSendCount(budgetContext) >= maxPerTurn) {
+          return jsonResult({
+            status: "suppressed",
+            reason: "turn_send_budget_exhausted",
+            message: `Blocked: already sent ${maxPerTurn} message(s) to this conversation this turn (maxMessagesPerTurnPerTarget). Finalize your reply instead of sending another message.`,
+          });
+        }
+      }
       const result = await deps.callGateway<ConversationSendResult>({
         method: "conversations.send",
         params: {
@@ -174,7 +246,32 @@ export function createConversationsSendTool(
         ...(options.config ? { config: options.config } : {}),
         ...(signal ? { signal } : {}),
       });
-      return jsonResult(result);
+      const base = jsonResult(result);
+      // Only actual delivery/enqueue counts; a suppressed or unknown status did not
+      // reach the peer. Counting always happens; the soft reminder is appended from
+      // the second send onward unless turnSendNudge is explicitly disabled.
+      if (budgetContext && (result.status === "sent" || result.status === "queued")) {
+        const sendCount = recordTurnSend(budgetContext);
+        const nudgeEnabled =
+          !options.config ||
+          resolveEffectiveMessageToolsConfig({
+            cfg: options.config,
+            agentId: resolveToolAgentId(options),
+          })?.turnSendNudge !== false;
+        if (sendCount >= 2 && nudgeEnabled) {
+          return {
+            ...base,
+            content: [
+              ...base.content,
+              {
+                type: "text" as const,
+                text: `You have already sent ${sendCount} messages to this conversation this turn; if this is a rewrite of the same reply, finalize now instead of sending another variant.`,
+              },
+            ],
+          };
+        }
+      }
+      return base;
     },
   };
 }

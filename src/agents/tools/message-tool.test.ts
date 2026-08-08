@@ -17,6 +17,7 @@ import {
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
+import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
@@ -226,6 +227,9 @@ const openClawToolsFactoryMocks = vi.hoisted(() => {
   });
   return {
     tool,
+    // Captures the options createOpenClawTools passes into the conversation tools
+    // so the assembly test can prove runId/session reach conversations_send.
+    conversationSendOptions: [] as Array<Record<string, unknown>>,
   };
 });
 
@@ -264,6 +268,14 @@ vi.mock("../../channels/plugins/message-tool-api.js", () => ({
 
 vi.mock("./agents-list-tool.js", () => ({
   createAgentsListTool: () => openClawToolsFactoryMocks.tool("agents"),
+}));
+vi.mock("./conversation-tools.js", () => ({
+  createConversationsListTool: () => openClawToolsFactoryMocks.tool("conversations_list"),
+  createConversationsSendTool: (options: Record<string, unknown>) => {
+    openClawToolsFactoryMocks.conversationSendOptions.push(options);
+    return openClawToolsFactoryMocks.tool("conversations_send");
+  },
+  createConversationsTurnTool: () => openClawToolsFactoryMocks.tool("conversations_turn"),
 }));
 vi.mock("./cron-tool.js", () => ({
   createCronTool: () => openClawToolsFactoryMocks.tool("cron"),
@@ -393,6 +405,7 @@ afterEach(() => {
   for (const token of mintedTurnCapabilities.splice(0)) {
     revokeMessageActionTurnCapability(token);
   }
+  resetTurnSendLedgerForTest();
 });
 
 function createChannelPlugin(params: {
@@ -4630,6 +4643,278 @@ describe("message tool sandbox passthrough", () => {
       currentChannelProvider: "discord",
       currentChannelId: "forged-current",
       skipCrossContextDecoration: true,
+    });
+  });
+});
+
+describe("per-turn send budget", () => {
+  const currentChat = "iMessage;-;+15550002222";
+  let sessionCounter = 0;
+
+  function registerImessageSendPlugin() {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createChannelPlugin({
+            id: "imessage",
+            label: "iMessage",
+            docsPath: "/channels/imessage",
+            blurb: "iMessage test plugin",
+            actions: ["send", "sendAttachment"],
+            config: { listAccountIds: () => ["primary"] },
+          }),
+        },
+      ]),
+    );
+  }
+
+  function createBudgetTool(params?: {
+    sessionKey?: string;
+    runId?: string;
+    maxPerTurn?: number;
+    turnSendNudge?: boolean;
+  }) {
+    registerImessageSendPlugin();
+    const sessionKey =
+      params?.sessionKey ?? `agent:test:imessage:direct:budget${(sessionCounter += 1)}`;
+    const messageConfig: Record<string, unknown> = {};
+    if (params?.maxPerTurn !== undefined) {
+      messageConfig.maxMessagesPerTurnPerTarget = params.maxPerTurn;
+    }
+    if (params?.turnSendNudge !== undefined) {
+      messageConfig.turnSendNudge = params.turnSendNudge;
+    }
+    const config =
+      Object.keys(messageConfig).length === 0
+        ? undefined
+        : ({ tools: { message: messageConfig } } as never);
+    return createMessageTool({
+      currentChannelProvider: "imessage",
+      currentChannelId: currentChat,
+      agentAccountId: "primary",
+      agentSessionKey: sessionKey,
+      runId: params?.runId ?? "run-budget-1",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runMessageAction: mocks.runMessageAction as never,
+      ...(config ? { config } : {}),
+    });
+  }
+
+  function stubSend(overrides?: {
+    dryRun?: boolean;
+    kind?: "send" | "broadcast";
+    suppressed?: boolean;
+  }) {
+    mocks.runMessageAction.mockReset();
+    if (overrides?.kind === "broadcast") {
+      mocks.runMessageAction.mockResolvedValue({
+        kind: "broadcast",
+        action: "broadcast",
+        channel: "imessage",
+        handledBy: "core",
+        payload: { results: [] },
+        dryRun: false,
+      } as MessageActionRunResult);
+      return;
+    }
+    // A core send can report deliveryStatus "suppressed" (e.g. no_visible_payload)
+    // without reaching the peer; the ledger must not count it.
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "imessage",
+      to: currentChat,
+      handledBy: overrides?.suppressed ? "core" : "plugin",
+      payload: {},
+      dryRun: overrides?.dryRun ?? false,
+      ...(overrides?.suppressed
+        ? {
+            sendResult: {
+              channel: "imessage",
+              to: currentChat,
+              via: "direct",
+              mediaUrl: null,
+              deliveryStatus: "suppressed",
+            },
+          }
+        : {}),
+    } as MessageActionRunResult);
+  }
+
+  function softNotice(result: { content: Array<{ type: string; text?: string }> }) {
+    return result.content
+      .filter((entry): entry is { type: "text"; text: string } => entry.type === "text")
+      .map((entry) => entry.text)
+      .find((text) => text.includes("already sent"));
+  }
+
+  async function send(tool: ReturnType<CreateMessageTool>, message: string, action = "send") {
+    return tool.execute(`call-${message}`, { action, channel: "imessage", message });
+  }
+
+  it("stays silent on the first send to a target", async () => {
+    stubSend();
+    const tool = createBudgetTool();
+    const result = await send(tool, "first");
+    expect(softNotice(result)).toBeUndefined();
+  });
+
+  it("appends a soft reminder from the second send to the same target this turn", async () => {
+    stubSend();
+    const tool = createBudgetTool();
+    await send(tool, "first");
+    const second = await send(tool, "second variant");
+    const third = await send(tool, "third variant");
+    expect(softNotice(second)).toContain("already sent 2 messages");
+    expect(softNotice(third)).toContain("already sent 3 messages");
+    // Never blocks without an opt-in cap.
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(3);
+  });
+
+  it("resets the count for a new turn (new runId, same session)", async () => {
+    stubSend();
+    const sessionKey = "agent:test:imessage:direct:budget-shared";
+    const firstTurn = createBudgetTool({ sessionKey, runId: "run-a" });
+    await send(firstTurn, "a1");
+    await send(firstTurn, "a2");
+    const secondTurn = createBudgetTool({ sessionKey, runId: "run-b" });
+    const result = await send(secondTurn, "b1");
+    expect(softNotice(result)).toBeUndefined();
+  });
+
+  it("does not count a suppressed core send", async () => {
+    stubSend({ suppressed: true });
+    const tool = createBudgetTool({ maxPerTurn: 1 });
+    const first = await send(tool, "first");
+    // A suppressed delivery reached the runner but not the peer, so no nudge.
+    expect(softNotice(first)).toBeUndefined();
+    // A confirmed delivery to the same target is now the first counted send: it is
+    // not blocked (the suppressed send never consumed the cap slot) and stays silent.
+    stubSend();
+    const second = await send(tool, "second");
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(softNotice(second)).toBeUndefined();
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not count dry-run results", async () => {
+    stubSend({ dryRun: true });
+    const tool = createBudgetTool();
+    await send(tool, "first");
+    const second = await send(tool, "second");
+    expect(softNotice(second)).toBeUndefined();
+  });
+
+  it("does not count a throwing send", async () => {
+    mocks.runMessageAction.mockReset();
+    mocks.runMessageAction.mockRejectedValueOnce(new Error("delivery failed"));
+    const tool = createBudgetTool();
+    await expect(send(tool, "boom")).rejects.toThrow("delivery failed");
+    stubSend();
+    const second = await send(tool, "after failure");
+    // The failed send never incremented the ledger, so this is the first success.
+    expect(softNotice(second)).toBeUndefined();
+  });
+
+  it("does not count broadcast fan-out", async () => {
+    stubSend({ kind: "broadcast" });
+    const tool = createBudgetTool();
+    const first = await tool.execute("bc-1", {
+      action: "broadcast",
+      channel: "all",
+      message: "hi",
+    });
+    const second = await tool.execute("bc-2", {
+      action: "broadcast",
+      channel: "all",
+      message: "hi again",
+    });
+    expect(softNotice(first)).toBeUndefined();
+    expect(softNotice(second)).toBeUndefined();
+  });
+
+  it("isolates counts across sessions", async () => {
+    stubSend();
+    const toolA = createBudgetTool({ sessionKey: "agent:test:imessage:direct:iso-a" });
+    const toolB = createBudgetTool({ sessionKey: "agent:test:imessage:direct:iso-b" });
+    await send(toolA, "a1");
+    const bFirst = await send(toolB, "b1");
+    expect(softNotice(bFirst)).toBeUndefined();
+  });
+
+  it("blocks before dispatch once the opt-in hard cap is reached", async () => {
+    stubSend();
+    const tool = createBudgetTool({ maxPerTurn: 1 });
+    await send(tool, "first");
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+    const blocked = await send(tool, "second");
+    expect(blocked.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
+    // The second send never reached the runner.
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("exempts media actions from the hard cap while still counting them", async () => {
+    stubSend();
+    const tool = createBudgetTool({ maxPerTurn: 1 });
+    await send(tool, "attach-1", "sendAttachment");
+    const second = await send(tool, "attach-2", "sendAttachment");
+    // Not blocked despite the cap, because media is exempt...
+    expect(second.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+    // ...but the soft reminder still fires.
+    expect(softNotice(second)).toContain("already sent 2 messages");
+  });
+
+  it("suppresses the soft reminder when turnSendNudge is disabled", async () => {
+    stubSend();
+    const tool = createBudgetTool({ turnSendNudge: false });
+    await send(tool, "first");
+    const second = await send(tool, "second variant");
+    const third = await send(tool, "third variant");
+    // The nudge text is gated off...
+    expect(softNotice(second)).toBeUndefined();
+    expect(softNotice(third)).toBeUndefined();
+    // ...but every send still reached the runner (counting is unaffected).
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(3);
+  });
+
+  it("still enforces the hard cap when turnSendNudge is disabled", async () => {
+    stubSend();
+    const tool = createBudgetTool({ maxPerTurn: 1, turnSendNudge: false });
+    await send(tool, "first");
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+    const blocked = await send(tool, "second");
+    // Counting kept running past the first send, so the cap still blocks...
+    expect(blocked.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("wires the same run into both message and conversations_send tools", () => {
+    openClawToolsFactoryMocks.conversationSendOptions.length = 0;
+    setActivePluginRegistry(createTestRegistry([]));
+    const tools = createOpenClawTools({
+      agentSessionKey: "agent:main:reef:direct:operator",
+      runId: "run-assembly-1",
+      config: {} as never,
+      agentChannel: "reef",
+    });
+    const names = tools.map((candidate) => candidate.name);
+    expect(names).toContain("message");
+    expect(names).toContain("conversations_send");
+    // conversations_send must receive the same runId so it shares the per-turn
+    // ledger (a module-level map) with the message tool instead of a stale turn.
+    expect(openClawToolsFactoryMocks.conversationSendOptions.at(-1)).toMatchObject({
+      runId: "run-assembly-1",
+      agentSessionKey: "agent:main:reef:direct:operator",
     });
   });
 });

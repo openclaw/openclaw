@@ -74,6 +74,7 @@ import {
 import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
   resolveAllowedMessageActions,
+  resolveEffectiveMessageToolsConfig,
   shouldApplyCrossContextMarker,
 } from "../../infra/outbound/outbound-policy.js";
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
@@ -116,6 +117,7 @@ import {
   type MessageToolSchemaBuilders,
 } from "./message-tool-schema-scoping.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
+import { buildTurnSendTargetKey, peekTurnSendCount, recordTurnSend } from "./turn-send-ledger.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
@@ -216,7 +218,12 @@ const recentPollVoteBySession = new Map<
   { option: string; route: string; recordedAt: number }
 >();
 
-function resolvePollVoteEchoRoute(params: {
+// Canonical, stable route string for one outbound action: `${channel}\0${account}\0${target}`,
+// with the current source folded to a sentinel and multi-target sends bailing to
+// undefined. Shared by the poll-vote-echo guard and the per-turn send ledger so both
+// key on the same normalized destination. Returns undefined when the route cannot be
+// resolved to a single destination.
+function resolveOutboundActionRoute(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   channel?: string | null;
@@ -254,7 +261,7 @@ function resolvePollVoteEchoRoute(params: {
   // Plugin-declared aliases keep owner-specific target fields out of core.
   // A route mismatch fails open; provider/account keys prevent cross-send suppression.
   const routeTarget = !target || currentTargets.has(target) ? "<current-source>" : target;
-  return `${channel}\0${normalizeAccountId(params.accountId ?? "default")}\0${routeTarget}`;
+  return buildTurnSendTargetKey({ channel, accountId: params.accountId, target: routeTarget });
 }
 
 function sanitizeUserVisibleToolTextResult(
@@ -1800,7 +1807,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       ).resolvedConfig;
 
       const accountId = explicitAccountId ?? agentAccountId;
-      const pollVoteEchoRoute = resolvePollVoteEchoRoute({
+      const outboundActionRoute = resolveOutboundActionRoute({
         action,
         args: params,
         channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
@@ -1808,6 +1815,24 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         currentChannelId: effectiveCurrentChannel.currentChannelId,
         currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
       });
+      // Per-turn send budget: the loop detector can't see reworded resends of the
+      // same answer (it hashes full params), so count successful sends per
+      // (turn, target) here and, from the second onward, nudge the model. This runs
+      // independently of loopDetection.enabled — it is on by default. A resolved
+      // context requires a single normalized target, a session key, and a run id;
+      // broadcast fan-out and dry-runs are excluded.
+      const budgetContext =
+        shouldApplyCrossContextMarker(action) &&
+        outboundActionRoute !== undefined &&
+        pollEchoSessionKey !== undefined &&
+        options?.runId !== undefined &&
+        !params.dryRun
+          ? {
+              sessionKey: pollEchoSessionKey,
+              runId: options.runId,
+              targetKey: outboundActionRoute,
+            }
+          : undefined;
       const recentPollVote = pollEchoSessionKey
         ? recentPollVoteBySession.get(pollEchoSessionKey)
         : undefined;
@@ -1819,7 +1844,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       ) {
         if (Date.now() - recentPollVote.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
           recentPollVoteBySession.delete(pollEchoSessionKey);
-        } else if (pollVoteEchoRoute === recentPollVote.route) {
+        } else if (outboundActionRoute === recentPollVote.route) {
           const vote = recentPollVote;
           recentPollVoteBySession.delete(pollEchoSessionKey);
           const outboundText =
@@ -1833,6 +1858,25 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               message: "Suppressed outbound text because it only restated the poll vote just cast.",
             });
           }
+        }
+      }
+
+      // Optional hard cap (opt-in, default off): block a send before dispatch once
+      // the same target has already been sent to `max` times this turn. Media
+      // (sendAttachment/upload-file) is exempt so legitimately split attachments are
+      // never truncated; broadcast fan-out is already excluded from budgeting.
+      const isMediaSendAction = action === "sendAttachment" || action === "upload-file";
+      if (budgetContext && !isMediaSendAction) {
+        const maxPerTurn = resolveEffectiveMessageToolsConfig({
+          cfg: rawConfig,
+          agentId: resolvedAgentId,
+        })?.maxMessagesPerTurnPerTarget;
+        if (maxPerTurn !== undefined && peekTurnSendCount(budgetContext) >= maxPerTurn) {
+          return jsonResult({
+            status: "suppressed",
+            reason: "turn_send_budget_exhausted",
+            message: `Blocked: already sent ${maxPerTurn} message(s) to this target this turn (maxMessagesPerTurnPerTarget). Finalize your reply instead of sending another message.`,
+          });
         }
       }
 
@@ -1977,16 +2021,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       const toolResult = getToolResult(result);
       const normalizationNotice = result.kind === "send" ? result.normalization?.notice : undefined;
-      if (normalizationNotice) {
-        const normalizedResult = toolResult ?? jsonResult(result.payload);
-        return {
-          ...normalizedResult,
-          content: [...normalizedResult.content, { type: "text", text: normalizationNotice }],
-        };
-      }
       if (
         action === "poll-vote" &&
-        pollVoteEchoRoute &&
+        outboundActionRoute &&
         pollEchoSessionKey &&
         sourceReplySinkDeliveryMode === "message_tool_only"
       ) {
@@ -2005,15 +2042,57 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           }
           recentPollVoteBySession.set(pollEchoSessionKey, {
             option,
-            route: pollVoteEchoRoute,
+            route: outboundActionRoute,
             recordedAt,
           });
         }
       }
-      if (toolResult) {
-        return toolResult;
+      // Reaching here without throwing means the action was delivered. Count it in
+      // the per-turn ledger regardless of the nudge toggle. From the second send to
+      // this target onward, append a one-line soft reminder unless turnSendNudge is
+      // explicitly disabled. A `dry-run` result (e.g. no gateway) never counts.
+      //
+      // A core send can return deliveryStatus "suppressed" (e.g. no_visible_payload)
+      // without reaching the peer; that must not consume the cap or fire a false
+      // nudge. Only "suppressed" is checked because "failed"/"partial_failed" already
+      // throw upstream (message.ts) and never reach here, and plugin/gateway sends
+      // carry kind:"send" with no sendResult (deliveryStatus undefined) — those still
+      // count because delivery happened remotely.
+      const deliveryStatus = result.kind === "send" ? result.sendResult?.deliveryStatus : undefined;
+      const deliveredNothing = deliveryStatus === "suppressed";
+      let turnSendNotice: string | undefined;
+      if (
+        budgetContext &&
+        result.kind !== "broadcast" &&
+        !result.dryRun &&
+        !deliveredNothing
+      ) {
+        const sendCount = recordTurnSend(budgetContext);
+        const nudgeEnabled =
+          resolveEffectiveMessageToolsConfig({
+            cfg: rawConfig,
+            agentId: resolvedAgentId,
+          })?.turnSendNudge !== false;
+        if (sendCount >= 2 && nudgeEnabled) {
+          turnSendNotice = `You have already sent ${sendCount} messages to this target this turn; if this is a rewrite of the same reply, finalize now instead of sending another variant.`;
+        }
       }
-      return jsonResult(result.payload);
+      // Single append point for all three return exits so a notice is never dropped
+      // or duplicated across the normalization/toolResult/payload paths.
+      const baseResult = toolResult ?? jsonResult(result.payload);
+      const appendedNotices = [normalizationNotice, turnSendNotice].filter(
+        (notice): notice is string => Boolean(notice),
+      );
+      if (appendedNotices.length === 0) {
+        return baseResult;
+      }
+      return {
+        ...baseResult,
+        content: [
+          ...baseResult.content,
+          ...appendedNotices.map((text) => ({ type: "text" as const, text })),
+        ],
+      };
     },
   };
 }
