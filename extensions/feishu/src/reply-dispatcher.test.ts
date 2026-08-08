@@ -90,10 +90,12 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, getGlobalHookRunner: getGlobalHookRunnerMock };
 });
+const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
+  sendCardFeishu: sendCardFeishuMock,
 }));
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
@@ -187,6 +189,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
+    sendCardFeishuMock.mockResolvedValue({ messageId: "om_interactive" });
     getGlobalHookRunnerMock.mockReturnValue(null);
 
     resolveFeishuAccountMock.mockReturnValue({
@@ -764,6 +767,179 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(firstMockArg(sendStructuredCardFeishuMock, "structured card params")).not.toHaveProperty(
       "mentions",
     );
+  });
+
+  const interactiveApprovalPayload = {
+    text: "Plugin bind approval required",
+    interactive: {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            { label: "Allow once", value: "allow-once", style: "success" as const },
+            { label: "Always allow", value: "always-allow", style: "primary" as const },
+            { label: "Deny", value: "deny", style: "danger" as const },
+          ],
+        },
+      ],
+    },
+  };
+
+  it("delivers interactive button payloads as native Feishu cards on the reply path", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: { mode: "off" },
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_msg",
+    });
+    const delivery = await options.deliver(interactiveApprovalPayload, { kind: "final" });
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const cardArg = firstMockArg(sendCardFeishuMock, "interactive card params") as {
+      card?: Record<string, unknown>;
+    };
+    expect(cardArg.card).toBeTruthy();
+    const cardJson = JSON.stringify(cardArg.card);
+    expect(cardJson).toMatch(/Allow once|allow-once/i);
+    expect(cardJson).toMatch(/Deny|deny/i);
+    expect(delivery?.visibleReplySent).toBe(true);
+  });
+
+  it("discards an active partial streaming preview before interactive card final", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    result.replyOptions.onPartialReply?.({ text: "partial preview" });
+    await options.deliver(interactiveApprovalPayload, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1);
+    expect(requireStreamingInstance(0).close).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const cardJson = JSON.stringify(
+      (firstMockArg(sendCardFeishuMock, "interactive after partial") as { card?: unknown }).card,
+    );
+    expect(cardJson).toMatch(/Allow once|allow-once/i);
+    expect(cardJson).toMatch(/Deny|deny/i);
+  });
+
+  it("discards an active card-mode streaming session before interactive card final", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: { mode: "partial" },
+        httpTimeoutMs: 45_000,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    result.replyOptions.onAssistantMessageStart?.();
+    result.replyOptions.onPartialReply?.({ text: "streaming card preview" });
+    await options.deliver(interactiveApprovalPayload, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances.length).toBeGreaterThanOrEqual(1);
+    expect(requireStreamingInstance(0).discard).toHaveBeenCalled();
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    const cardJson = JSON.stringify(
+      (firstMockArg(sendCardFeishuMock, "interactive after card stream") as { card?: unknown })
+        .card,
+    );
+    expect(cardJson).toMatch(/Allow once|allow-once/i);
+  });
+
+  it("embeds required bot mentions on interactive card replies", async () => {
+    useNonStreamingAutoAccount();
+    const requiredMentionTargets = [{ openId: "ou_peer_bot", name: "Peer Bot", key: "" }];
+    const { options } = createDispatcherHarness({ requiredMentionTargets });
+
+    await options.deliver(interactiveApprovalPayload, { kind: "final" });
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    const cardJson = JSON.stringify(
+      (firstMockArg(sendCardFeishuMock, "interactive with bot mention") as { card?: unknown }).card,
+    );
+    expect(cardJson).toContain("<at id=ou_peer_bot></at>");
+    expect(cardJson).toMatch(/Allow once|allow-once/i);
+  });
+
+  it("keeps envelope-safe cards when required mentions would exceed 200 elements", async () => {
+    useNonStreamingAutoAccount();
+    const requiredMentionTargets = [{ openId: "ou_peer_bot", name: "Peer Bot", key: "" }];
+    const { options } = createDispatcherHarness({ requiredMentionTargets });
+    const elements = Array.from({ length: 200 }, (_entry, index) => ({
+      tag: "markdown",
+      content: String(index),
+    }));
+    const fullCard = {
+      schema: "2.0",
+      config: { width_mode: "fill" },
+      body: { elements },
+    };
+
+    await options.deliver(
+      {
+        text: "envelope boundary",
+        channelData: { feishu: { card: fullCard } },
+      },
+      { kind: "final" },
+    );
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    const sent = firstMockArg(sendCardFeishuMock, "envelope-safe card") as {
+      card?: { body?: { elements?: unknown[] } };
+    };
+    // Mention injection would make 201 elements; fall back to validated card without mention.
+    expect(sent.card?.body?.elements).toHaveLength(200);
+    expect(JSON.stringify(sent.card)).not.toContain("<at id=ou_peer_bot></at>");
+  });
+
+  it("renders presentation replies as a native card with title and fallback text", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness();
+
+    const delivery = await options.deliver(
+      {
+        text: "Fallback text",
+        presentation: {
+          title: "Approve?",
+          blocks: [{ type: "text", text: "Allow acme to read files?" }],
+        },
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    const serialized = JSON.stringify(
+      (firstMockArg(sendCardFeishuMock, "presentation card params") as { card?: unknown }).card,
+    );
+    expect(serialized).toContain("Approve?");
+    expect(serialized).toContain("Allow acme to read files?");
+    expect(delivery?.visibleReplySent).toBe(true);
   });
 
   it("suppresses internal block payload delivery", async () => {
