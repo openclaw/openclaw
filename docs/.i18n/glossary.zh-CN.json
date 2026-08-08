@@ -64,6 +64,14 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
+    "source": "Publishing on ClawHub",
+    "target": "在 ClawHub 上发布"
+  },
+  {
     "source": "Claws",
     "target": "Claws"
   },
