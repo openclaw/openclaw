@@ -13,6 +13,14 @@ import {
   type PendingBridgeRequest,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import {
+  recordCodeModeBridgeCancelledBeforeStart,
+  recordCodeModeBridgeCancelRequested,
+  recordCodeModeBridgeRegistered,
+  recordCodeModeBridgeSettled,
+  recordCodeModeBridgeStarted,
+  type CodeModeStats,
+} from "./code-mode-stats.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import { ToolInputError } from "./tools/common.js";
@@ -37,14 +45,17 @@ type BridgeDispatchEntry = {
 export class CodeModeBridgeDispatchQueue {
   readonly #maxConcurrent: number;
   readonly #queued: BridgeDispatchEntry[] = [];
+  readonly #stats?: CodeModeStats;
   #active = 0;
 
-  constructor(maxConcurrent: number) {
+  constructor(maxConcurrent: number, stats?: CodeModeStats) {
     this.#maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
+    this.#stats = stats;
   }
 
   enqueue(params: {
     id: string;
+    method: PendingBridgeRequest["method"];
     start: () => Promise<SettledBridgeRequest>;
     cancelActive: () => void;
     signal?: AbortSignal;
@@ -72,6 +83,10 @@ export class CodeModeBridgeDispatchQueue {
       const wasActive = entry.status === "active";
       entry.status = "settled";
       params.signal?.removeEventListener("abort", onAbort);
+      recordCodeModeBridgeSettled(this.#stats, {
+        failed: !result.ok && !entry.cancelRequested,
+        settledAfterCancel: wasActive && entry.cancelRequested,
+      });
       resolvePromise(result);
       if (wasActive) {
         this.#active = Math.max(0, this.#active - 1);
@@ -79,19 +94,25 @@ export class CodeModeBridgeDispatchQueue {
       }
     };
     const cancel = () => {
+      if (entry.status === "settled" || entry.cancelRequested) {
+        return;
+      }
+      entry.cancelRequested = true;
+      recordCodeModeBridgeCancelRequested(this.#stats);
       if (entry.status === "queued") {
+        recordCodeModeBridgeCancelledBeforeStart(this.#stats);
         const index = this.#queued.indexOf(entry);
         if (index >= 0) {
           this.#queued.splice(index, 1);
         }
         entry.settle(cancelledBridgeRequest(params.id));
       } else if (entry.status === "active") {
-        entry.cancelRequested = true;
         entry.cancelActive();
       }
     };
+    recordCodeModeBridgeRegistered(this.#stats, params.method);
     if (params.signal?.aborted) {
-      entry.settle(cancelledBridgeRequest(params.id));
+      cancel();
     } else {
       params.signal?.addEventListener("abort", onAbort, { once: true });
       this.#queued.push(entry);
@@ -108,6 +129,7 @@ export class CodeModeBridgeDispatchQueue {
       }
       entry.status = "active";
       this.#active += 1;
+      recordCodeModeBridgeStarted(this.#stats);
       try {
         void entry.start().then(
           (result) =>
@@ -146,6 +168,7 @@ type CodeModeRunState = {
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
+  codeModeStats?: CodeModeStats;
 };
 
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
@@ -326,12 +349,13 @@ export function snapshotState(params: {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   bridgeDispatchQueue?: CodeModeBridgeDispatchQueue;
+  codeModeStats?: CodeModeStats;
 }) {
   enforceSnapshotStateLimits(params);
   const runId = `cm_${randomUUID()}`;
   const bridgeDispatchQueue =
     params.bridgeDispatchQueue ??
-    new CodeModeBridgeDispatchQueue(params.config.maxPendingToolCalls);
+    new CodeModeBridgeDispatchQueue(params.config.maxPendingToolCalls, params.codeModeStats);
   const pending = createPendingBridgeStates({
     ...params,
     activeRunId: runId,
@@ -410,6 +434,7 @@ export function createPendingBridgeStates(params: {
       : abortController.signal;
     const scheduled = params.bridgeDispatchQueue.enqueue({
       id: request.id,
+      method: request.method,
       start: () =>
         runBridgeRequest({
           runtime: params.runtime,
@@ -464,6 +489,7 @@ export function storeSnapshotState(params: {
   bridgeDispatchQueue: CodeModeBridgeDispatchQueue;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
+  codeModeStats?: CodeModeStats;
   output: unknown[];
   deliveredOutputCount?: number;
 }) {
@@ -499,6 +525,7 @@ export function storeSnapshotState(params: {
     agentWaitRetainUntil,
     runtime: params.runtime,
     namespaceRuntime: params.namespaceRuntime,
+    codeModeStats: params.codeModeStats,
   });
   scheduleActiveRunExpiry();
   return {

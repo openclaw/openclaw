@@ -1,7 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 
-type CodeModeBridgeMethod =
+export type CodeModeBridgeMethod =
   | "search"
   | "describe"
   | "call"
@@ -83,6 +83,7 @@ export type CodeModeWorkerThreadResult =
   | {
       status: "waiting";
       snapshotBytes: Uint8Array;
+      snapshotSerializationMs: number;
       pendingRequests: PendingBridgeRequest[];
       settlementMode: CodeModeSettlementMode;
       output: unknown[];

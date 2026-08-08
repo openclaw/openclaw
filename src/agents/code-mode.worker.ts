@@ -409,13 +409,16 @@ function waitingResult(params: {
   output: unknown[];
   config: CodeModeConfig;
 }): CodeModeWorkerResult {
+  const serializationStartedAt = performance.now();
   const snapshotBytes = QuickJS.serializeSnapshot(params.vm.snapshot());
+  const snapshotSerializationMs = Math.max(0, performance.now() - serializationStartedAt);
   if (snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
     throw new CodeModeWorkerFailure("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
   return {
     status: "waiting",
     snapshotBytes,
+    snapshotSerializationMs,
     pendingRequests: params.pendingRequests,
     settlementMode: params.settlementMode,
     output: params.output,

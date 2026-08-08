@@ -90,6 +90,7 @@ type CodeModeTestApi = {
     timeoutMs: number,
     workerUrl?: URL,
     signal?: AbortSignal,
+    onWorkerSpawned?: () => void,
   ): Promise<CodeModeWorkerResult>;
   resolveCodeModeHeadlessConfig(
     ctx: ToolSearchToolContext,

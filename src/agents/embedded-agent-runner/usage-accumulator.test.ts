@@ -1,6 +1,7 @@
 // Usage accumulator tests cover multi-call token aggregation used for billing
 // metadata on embedded run results.
 import { describe, expect, it } from "vitest";
+import { createCodeModeStats } from "../code-mode-stats.js";
 import {
   createUsageAccumulator,
   mergeAttemptRunStatsIntoAccumulator,
@@ -105,6 +106,72 @@ describe("usage-accumulator", () => {
 
       expect(acc.assistantTurns).toBe(1);
       expect(acc.bridgeCalls).toBeUndefined();
+    });
+
+    it("accumulates detailed Code Mode stats across attempts", () => {
+      const acc = createUsageAccumulator();
+      const first = createCodeModeStats();
+      first.controlCalls.exec = 1;
+      first.bridgeCalls.callValue = 2;
+      first.bridgeLifecycle.registered = 2;
+      first.bridgeLifecycle.settled = 2;
+      first.bridgeLifecycle.unresolvedAtExtraction = 2;
+      first.workerRuns.exec = { count: 1, elapsedMs: 10 };
+      first.outcomes.completed = 1;
+      const second = createCodeModeStats();
+      second.controlCalls.exec = 1;
+      second.controlCalls.wait = 1;
+      second.bridgeCalls.agentWait = 1;
+      second.bridgeLifecycle.registered = 1;
+      second.bridgeLifecycle.unresolvedAtExtraction = 1;
+      second.workerRuns.exec = { count: 1, elapsedMs: 5 };
+      second.workerRuns.resume = { count: 1, elapsedMs: 7 };
+      second.outcomes.waiting = 1;
+
+      mergeAttemptRunStatsIntoAccumulator(acc, { codeModeStats: first });
+      mergeAttemptRunStatsIntoAccumulator(acc, { codeModeStats: second });
+
+      expect(acc.codeModeStats).toMatchObject({
+        controlCalls: { exec: 2, wait: 1 },
+        bridgeCalls: { callValue: 2, agentWait: 1 },
+        workerRuns: {
+          exec: { count: 2, elapsedMs: 15 },
+          resume: { count: 1, elapsedMs: 7 },
+        },
+        bridgeLifecycle: { registered: 3, settled: 2, unresolvedAtExtraction: 1 },
+        outcomes: { completed: 1, waiting: 1 },
+      });
+    });
+
+    it.each([
+      { label: "omitted sparse zero", next: undefined },
+      { label: "explicit zero", next: 0 },
+    ])("clears a prior unresolved gauge with $label", ({ next }) => {
+      const acc = createUsageAccumulator();
+      const first = createCodeModeStats();
+      first.bridgeLifecycle.unresolvedAtExtraction = 1;
+      const second = createCodeModeStats();
+      if (next !== undefined) {
+        second.bridgeLifecycle.unresolvedAtExtraction = next;
+      }
+
+      mergeAttemptRunStatsIntoAccumulator(acc, { codeModeStats: first });
+      mergeAttemptRunStatsIntoAccumulator(acc, { codeModeStats: second });
+
+      expect(acc.codeModeStats?.bridgeLifecycle.unresolvedAtExtraction).toBe(next);
+    });
+
+    it("clears a prior unresolved gauge on a non-Code fallback attempt", () => {
+      const acc = createUsageAccumulator();
+      const first = createCodeModeStats();
+      first.bridgeLifecycle.registered = 1;
+      first.bridgeLifecycle.unresolvedAtExtraction = 1;
+
+      mergeAttemptRunStatsIntoAccumulator(acc, { codeModeStats: first });
+      mergeAttemptRunStatsIntoAccumulator(acc, { assistantTurns: 1 });
+
+      expect(acc.codeModeStats?.bridgeLifecycle).toEqual({ registered: 1 });
+      expect(acc.assistantTurns).toBe(1);
     });
   });
 

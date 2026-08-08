@@ -78,6 +78,7 @@ export async function runCodeModeWorker(
   timeoutMs: number,
   workerUrl?: URL,
   signal?: AbortSignal,
+  onWorkerSpawned?: () => void,
 ): Promise<CodeModeWorkerResult> {
   const resolvedWorkerUrl = workerUrl ?? codeModeWorkerUrl();
   const sourceWorkerExecArgv = resolvedWorkerUrl.pathname.endsWith(".ts")
@@ -138,6 +139,7 @@ export async function runCodeModeWorker(
               workerData: isRecord(workerData) ? { ...workerData, wasmModule } : workerData,
               execArgv: sourceWorkerExecArgv,
             });
+            onWorkerSpawned?.();
           } catch (error) {
             finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
             return;

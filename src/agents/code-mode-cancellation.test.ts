@@ -198,6 +198,7 @@ describe("Code Mode cancellation ownership", () => {
     const cancelActive = vi.fn();
     const first = queue.enqueue({
       id: "bridge:call:1",
+      method: "callValue",
       start: () => firstCompletion.promise,
       cancelActive,
     });
@@ -210,6 +211,7 @@ describe("Code Mode cancellation ownership", () => {
     );
     const second = queue.enqueue({
       id: "bridge:call:2",
+      method: "callValue",
       start: secondStart,
       cancelActive: vi.fn(),
     });

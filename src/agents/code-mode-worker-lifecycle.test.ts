@@ -150,10 +150,11 @@ describe("Code Mode worker lifecycle", () => {
     release();
   });
 
-  it("honors an already-aborted execution before starting a worker", async () => {
+  it("honors an already-aborted execution without reporting a spawned worker", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
     const controller = new AbortController();
     controller.abort();
+    const onWorkerSpawned = vi.fn();
 
     const result = await runCodeModeWorker(
       {
@@ -165,6 +166,7 @@ describe("Code Mode worker lifecycle", () => {
       10_000,
       undefined,
       controller.signal,
+      onWorkerSpawned,
     );
 
     expect(result).toMatchObject({
@@ -173,10 +175,36 @@ describe("Code Mode worker lifecycle", () => {
       error: "code mode execution aborted",
       output: [],
     });
+    expect(onWorkerSpawned).not.toHaveBeenCalled();
+  });
+
+  it("does not report a worker when construction fails", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const onWorkerSpawned = vi.fn();
+
+    const result = await runCodeModeWorker(
+      {
+        kind: "exec",
+        source: "return true;",
+        config,
+        catalog: [],
+      },
+      10_000,
+      new URL("https://example.invalid/code-mode.worker.js"),
+      undefined,
+      onWorkerSpawned,
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "runtime_unavailable",
+    });
+    expect(onWorkerSpawned).not.toHaveBeenCalled();
   });
 
   it("shares a compiled QuickJS module with isolated worker threads", async () => {
     const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const onWorkerSpawned = vi.fn();
     const workerUrl = new URL(
       `data:text/javascript,${encodeURIComponent(`
         import { parentPort, workerData } from "node:worker_threads";
@@ -199,6 +227,8 @@ describe("Code Mode worker lifecycle", () => {
           },
           10_000,
           workerUrl,
+          undefined,
+          onWorkerSpawned,
         ),
       ),
     );
@@ -210,6 +240,7 @@ describe("Code Mode worker lifecycle", () => {
         output: [],
       })),
     );
+    expect(onWorkerSpawned).toHaveBeenCalledTimes(4);
   });
 
   it.each([
