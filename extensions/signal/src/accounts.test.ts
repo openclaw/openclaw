@@ -238,6 +238,72 @@ describe("resolveSignalAccount", () => {
     expect(() => resolveSignalAccount({ cfg, accountId: "work" })).toThrow(message);
   });
 
+  it("keeps colliding canonical connection endpoints independent of daemon binds", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            personal: {
+              account: "+15555550123",
+              transport: { kind: "managed-native", url: "http://127.0.0.1:8181" },
+            },
+            work: {
+              account: "+15555550124",
+              transport: { kind: "managed-native", url: "http://127.0.0.1:8181" },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
+      kind: "managed-native",
+      baseUrl: "http://127.0.0.1:8181",
+      httpPort: 8081,
+    });
+  });
+
+  it("preserves a canonical same-port path endpoint", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          transport: {
+            kind: "managed-native",
+            url: "http://127.0.0.1:8181/proxy",
+            httpPort: 8181,
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveSignalAccount({ cfg }).transport).toMatchObject({
+      kind: "managed-native",
+      baseUrl: "http://127.0.0.1:8181/proxy",
+      httpHost: "127.0.0.1",
+      httpPort: 8181,
+    });
+  });
+
+  it("aligns a canonical path endpoint when httpPort is omitted", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          transport: {
+            kind: "managed-native",
+            url: "http://127.0.0.1:8080/proxy",
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveSignalAccount({ cfg }).transport).toMatchObject({
+      kind: "managed-native",
+      baseUrl: "http://127.0.0.1:8080/proxy",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+    });
+  });
+
   it("rejects an explicit managed port used by its own independent local endpoint", () => {
     const cfg = {
       channels: {
@@ -281,6 +347,26 @@ describe("resolveSignalAccount", () => {
       baseUrl: "http://127.0.0.1:8081",
       httpHost: "0.0.0.0",
       httpPort: 8081,
+    });
+  });
+
+  it("preserves an independent canonical connection URL when httpPort is omitted", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          transport: {
+            kind: "managed-native",
+            url: "http://127.0.0.1:8082",
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveSignalAccount({ cfg }).transport).toMatchObject({
+      kind: "managed-native",
+      baseUrl: "http://127.0.0.1:8082",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
     });
   });
 

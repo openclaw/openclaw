@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
+import { resolveSignalAccount } from "./src/accounts.js";
 import { migrateLegacySignalTransportConfig } from "./src/config-compat.js";
 
 function signalConfig(entry: Record<string, unknown>): OpenClawConfig {
@@ -403,6 +404,99 @@ describe("signal transport compatibility", () => {
     });
   });
 
+  it("infers a managed bind port from a legacy loopback httpUrl when httpPort is absent", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:8082",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:8082",
+      httpPort: 8082,
+    });
+  });
+
+  it("infers a managed bind port from a bare legacy loopback httpUrl", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "127.0.0.1:8082",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:8082",
+      httpPort: 8082,
+    });
+    expect(resolveSignalAccount({ cfg: result.config }).transport).toMatchObject({
+      baseUrl: "http://127.0.0.1:8082",
+      httpPort: 8082,
+    });
+  });
+
+  it("keeps the default managed bind for an unported legacy loopback httpUrl", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1",
+    });
+    expect(result.config.channels?.signal?.transport).not.toHaveProperty("httpPort");
+  });
+
+  it("preserves an explicit default port through legacy migration and resolution", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:80",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1",
+      httpPort: 80,
+    });
+    expect(resolveSignalAccount({ cfg: result.config }).transport).toMatchObject({
+      baseUrl: "http://127.0.0.1",
+      httpPort: 80,
+    });
+  });
+
+  it("does not infer an invalid managed bind port from a legacy loopback httpUrl", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:0",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:0",
+    });
+    expect(result.config.channels?.signal?.transport).not.toHaveProperty("httpPort");
+  });
+
   it("reserves managed bind and local connection ports during migration", () => {
     const result = normalizeCompatibilityConfig({
       cfg: signalConfig({
@@ -619,9 +713,10 @@ describe("signal transport compatibility", () => {
       httpHost: "127.0.0.1",
       httpPort: 8181,
     });
+    expect(() => resolveSignalAccount({ cfg: result.config })).not.toThrow();
   });
 
-  it("ignores legacy native URL paths when the daemon bind matches", async () => {
+  it("keeps the explicit daemon bind when a legacy URL carries the same proxy port", async () => {
     const result = await migrateLegacySignalTransportConfig({
       cfg: signalConfig({
         apiMode: "native",
@@ -637,6 +732,23 @@ describe("signal transport compatibility", () => {
       httpHost: "127.0.0.1",
       httpPort: 8181,
     });
+  });
+
+  it("keeps a path-prefixed legacy proxy endpoint independent when httpPort is absent", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: signalConfig({
+        apiMode: "native",
+        autoStart: true,
+        account: "+15555550123",
+        httpUrl: "http://127.0.0.1:8082/proxy",
+      }),
+    });
+
+    expect(result.config.channels?.signal?.transport).toMatchObject({
+      kind: "managed-native",
+      url: "http://127.0.0.1:8082/proxy",
+    });
+    expect(result.config.channels?.signal?.transport).not.toHaveProperty("httpPort");
   });
 
   it("preserves an independent managed connection URL", async () => {

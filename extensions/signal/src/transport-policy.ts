@@ -67,6 +67,45 @@ export function resolveLocalSignalTransportPort(baseUrl: string): number | undef
   }
 }
 
+// Legacy flat config is the only path allowed to infer a daemon bind from its URL.
+// Canonical transport.url may intentionally point at a distinct connection endpoint.
+export function inferLegacyManagedNativePortFromConnectionUrl(
+  transport: SignalTransportConfig,
+  sourceUrl = transport.url,
+): number | undefined {
+  if (transport.kind !== "managed-native" || transport.httpPort !== undefined || !sourceUrl) {
+    return undefined;
+  }
+  let connectionUrl: URL;
+  try {
+    connectionUrl = new URL(normalizeSignalTransportUrl(sourceUrl));
+  } catch {
+    return undefined;
+  }
+  const sourceUrlWithScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(sourceUrl)
+    ? sourceUrl
+    : `http://${sourceUrl}`;
+  const authority = sourceUrlWithScheme.match(/^[a-z][a-z\d+.-]*:\/\/([^/?#]*)/i)?.[1];
+  const hostPort = authority?.slice(authority.lastIndexOf("@") + 1);
+  const hasExplicitPort = hostPort
+    ? hostPort.startsWith("[")
+      ? /^\[[^\]]+\]:\d+$/.test(hostPort)
+      : /:\d+$/.test(hostPort)
+    : false;
+  if (!hasExplicitPort) {
+    return undefined;
+  }
+  const localPort = resolveLocalSignalTransportPort(normalizeSignalTransportUrl(sourceUrl));
+  if (localPort === undefined || !isValidSignalManagedNativePort(localPort)) {
+    return undefined;
+  }
+  if (connectionUrl.pathname !== "/") {
+    return undefined;
+  }
+  const candidate: SignalManagedNativeTransport = { ...transport, httpPort: localPort };
+  return isSignalManagedNativeConnectionUrlForBind(candidate) ? localPort : undefined;
+}
+
 export function isSignalManagedNativeConnectionUrlForBind(
   transport: SignalTransportConfig,
 ): boolean {
@@ -109,12 +148,17 @@ export function isSignalManagedNativeConnectionUrlForBind(
 export function assignSignalManagedNativePort(
   transport: SignalManagedNativeTransport,
   httpPort: number,
+  options: { preservePathUrl?: boolean } = {},
 ): SignalManagedNativeTransport {
   if (!isValidSignalManagedNativePort(httpPort)) {
     throw new Error("Signal managed native port must be an integer between 1 and 65535.");
   }
   const connectionUrlValue = transport.url;
-  if (!connectionUrlValue || !isSignalManagedNativeConnectionUrlForBind(transport)) {
+  if (
+    !connectionUrlValue ||
+    (options.preservePathUrl && new URL(connectionUrlValue).pathname !== "/") ||
+    !isSignalManagedNativeConnectionUrlForBind(transport)
+  ) {
     return { ...transport, httpPort };
   }
   const connectionUrl = new URL(connectionUrlValue);
