@@ -18,6 +18,10 @@ type HistoryAnchorHandoff = {
   data: SessionChatRouteData;
 };
 
+type ChatPageRouteUpdateOptions = {
+  historyAnchor?: SessionHistoryAnchor;
+};
+
 export class ChatPageRouteController {
   private consumedHistoryAnchorData: SessionChatRouteData | null = null;
 
@@ -27,6 +31,7 @@ export class ChatPageRouteController {
     sessionKey: string,
     replace = false,
     face: BoardFace = this.host.data()?.face ?? "chat",
+    updateOptions: ChatPageRouteUpdateOptions = {},
   ): void {
     const data = this.host.data();
     if (data?.sessionKey === sessionKey && (data.face ?? "chat") === face && !data.draft) {
@@ -39,6 +44,7 @@ export class ChatPageRouteController {
       sessionKey,
       agentId: data?.agentId,
       shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
+      ...(updateOptions.historyAnchor ? { historyAnchor: updateOptions.historyAnchor } : {}),
     }).options;
     if (replace) {
       context.replace(face, options);
