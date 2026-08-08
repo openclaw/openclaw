@@ -32,6 +32,7 @@ export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
   accountId?: string;
   token?: string;
+  teamId?: string;
   client?: WebClient;
 };
 
@@ -214,7 +215,14 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     return opts.client;
   }
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
-  return mode === "write" ? getSlackWriteClient(token) : createSlackLookupClient(token);
+  if (mode === "write") {
+    return opts.teamId
+      ? getSlackWriteClient(token, { teamId: opts.teamId })
+      : getSlackWriteClient(token);
+  }
+  return opts.teamId
+    ? createSlackLookupClient(token, { teamId: opts.teamId })
+    : createSlackLookupClient(token);
 }
 
 async function resolveBotUserId(client: WebClient) {

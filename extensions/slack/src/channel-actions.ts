@@ -9,7 +9,11 @@ import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
-import { resolveSlackChannelId } from "./targets.js";
+import {
+  formatSlackTeamTarget,
+  parseSlackTarget,
+  resolveSlackChannelId,
+} from "./target-parsing.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -71,7 +75,7 @@ export function createSlackActions(
       return await handleSlackMessageAction({
         providerId,
         ctx,
-        normalizeChannelId: resolveSlackChannelId,
+        normalizeChannelId: normalizeSlackActionChannelTarget,
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) => {
           const actionContext = resolveSlackActionContext(ctx, toolContext);
@@ -82,4 +86,13 @@ export function createSlackActions(
       });
     },
   };
+}
+
+function normalizeSlackActionChannelTarget(raw: string): string {
+  const target = parseSlackTarget(raw, { defaultKind: "channel" });
+  if (!target?.teamId) {
+    return resolveSlackChannelId(raw);
+  }
+  const channelId = resolveSlackChannelId(raw);
+  return formatSlackTeamTarget({ teamId: target.teamId, kind: "channel", id: channelId });
 }
