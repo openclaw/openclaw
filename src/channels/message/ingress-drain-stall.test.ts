@@ -75,15 +75,23 @@ describe("channel ingress drain: pre-adoption stall watchdog", () => {
       await queue.enqueue("evt-stall-fence", { text: "user message" }, { laneKey: "l1" });
 
       let dispatches = 0;
+      let releaseFirst!: () => void;
+      const firstDispatch = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
       const drain = createChannelIngressDrain<Payload>({
         queue,
         now: () => clock,
         adoptionStallTimeoutMs: 5_000,
         stallQuiesceMs: 1_000,
-        dispatchClaimedEvent: async () => {
+        dispatchClaimedEvent: async (_event, lifecycle) => {
           dispatches += 1;
-          // Abort-ignoring: still running after cancellation.
-          await new Promise(() => {});
+          if (dispatches === 1) {
+            // Abort-ignoring: still running after cancellation, but eventually exits.
+            await firstDispatch;
+            return;
+          }
+          await lifecycle.onAdopted();
         },
       });
 
@@ -101,6 +109,115 @@ describe("channel ingress drain: pre-adoption stall watchdog", () => {
       // A second pump must not re-dispatch the still-running event.
       await drain.drainOnce();
       expect(dispatches).toBe(1);
+
+      // Late quiescence must resume the watchdog-owned release; the lane cannot
+      // remain wedged after the original callback finally exits.
+      releaseFirst();
+      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(0));
+      expect(drain.activeLaneKeys()).toEqual(new Set());
+      clock += 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await drain.waitForIdle();
+      expect(dispatches).toBe(2);
+      drain.dispose();
+    });
+  });
+
+  it("fences the registered deferred participant until it terminally settles", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 10_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-deferred-fence", { text: "user message" }, { laneKey: "l1" });
+
+      let dispatches = 0;
+      let abandonFirst!: () => void | Promise<void>;
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        adoptionStallTimeoutMs: 5_000,
+        stallQuiesceMs: 1_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          dispatches += 1;
+          if (dispatches === 1) {
+            lifecycle.onDeferred();
+            abandonFirst = lifecycle.onAbandoned;
+            return { kind: "deferred" };
+          }
+          await lifecycle.onAdopted();
+          return { kind: "completed" };
+        },
+      });
+
+      await drain.drainOnce();
+      await vi.waitFor(() => expect(dispatches).toBe(1));
+      clock += 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      clock += 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      // The dispatcher promise returned "deferred", but its registered
+      // participant is still live. A second pump must remain fenced.
+      expect(await queue.listClaims()).toHaveLength(1);
+      expect(await drain.drainOnce()).toEqual({ started: 0 });
+      expect(dispatches).toBe(1);
+
+      await abandonFirst();
+      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(0));
+      clock += 1_000;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await drain.waitForIdle();
+      expect(dispatches).toBe(2);
+      drain.dispose();
+    });
+  });
+
+  it("refreshes a guillotined held claim past a short cross-process lease", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => clock });
+      await queue.enqueue("evt-held-lease", { text: "user message" }, { laneKey: "l1" });
+
+      let releaseDispatch!: () => void;
+      const dispatchGate = new Promise<void>((resolve) => {
+        releaseDispatch = resolve;
+      });
+      const claimLeaseMs = 300;
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => clock,
+        claimLeaseMs,
+        adoptionStallTimeoutMs: 100,
+        stallQuiesceMs: 50,
+        dispatchClaimedEvent: async () => {
+          await dispatchGate;
+        },
+      });
+
+      await drain.drainOnce();
+      clock += 100;
+      await vi.advanceTimersByTimeAsync(100);
+      clock += 50;
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Stay held for several lease windows. The watchdog guillotine must not
+      // stop refreshClaim, or another process can recover and double-dispatch.
+      for (let index = 0; index < 6; index += 1) {
+        clock += 100;
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      expect(await queue.listClaims()).toHaveLength(1);
+      expect(
+        await queue.recoverStaleClaims({
+          staleMs: claimLeaseMs,
+          now: clock,
+          shouldRecover: () => true,
+        }),
+      ).toBe(0);
+
+      releaseDispatch();
+      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(0));
       drain.dispose();
     });
   });

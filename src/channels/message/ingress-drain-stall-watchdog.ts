@@ -32,9 +32,9 @@ import {
  * abort and unwind; short enough that a genuinely wedged dispatch does not stall
  * recovery indefinitely.
  */
-export const DEFAULT_INGRESS_STALL_QUIESCE_MS = 10_000;
+const DEFAULT_INGRESS_STALL_QUIESCE_MS = 10_000;
 
-export type IngressStallWatchdogDeps<TPayload, TMetadata> = {
+type IngressStallWatchdogDeps<TPayload, TMetadata> = {
   adoptionStallTimeoutMs: number;
   /** Bounded fence wait; defaults to DEFAULT_INGRESS_STALL_QUIESCE_MS. */
   stallQuiesceMs?: number;
@@ -59,7 +59,7 @@ export type IngressStallWatchdogDeps<TPayload, TMetadata> = {
  * when it is still running. Never rejects: a dispatch that throws has exited,
  * which is exactly the condition the fence is waiting for.
  */
-export async function waitForDispatchQuiesce(
+async function waitForDispatchQuiesce(
   task: Promise<unknown> | undefined,
   quiesceMs: number,
 ): Promise<boolean> {
@@ -123,7 +123,7 @@ export function armIngressStallWatchdog<TPayload, TMetadata>(
       // AbortController.abort is not fallible in practice.
     }
 
-    void (async () => {
+    const settlementTask = (async () => {
       if (deadLetter) {
         // Terminal: the event cannot be re-dispatched, so no fence is needed.
         await state.settleOnce(async () => {
@@ -132,9 +132,9 @@ export function armIngressStallWatchdog<TPayload, TMetadata>(
         return;
       }
       // Fence the release behind dispatch quiescence so a re-claim cannot run
-      // concurrently with an abort-ignoring callback.
+      // concurrently with an abort-ignoring callback or deferred participant.
       const quiesced = await waitForDispatchQuiesce(
-        state.task,
+        state.quiescence.task,
         deps.stallQuiesceMs ?? DEFAULT_INGRESS_STALL_QUIESCE_MS,
       );
       if (!quiesced) {
@@ -143,12 +143,21 @@ export function armIngressStallWatchdog<TPayload, TMetadata>(
             `cancellation fence; holding ownership instead of releasing ` +
             `(duplicate dispatch would be worse than delayed recovery).`,
         );
-        return;
+        // Keep refreshing the claim and finish the original settlement once
+        // delayed quiescence arrives. Returning here would wedge the lane even
+        // after the callback or deferred participant eventually exits.
+        await state.quiescence.task;
+        deps.log(
+          `ingress drain: stalled event ${displayId} eventually quiesced; ` +
+            `releasing the held claim for retry.`,
+        );
       }
       await state.settleOnce(async () => {
         await deps.releaseClaim(state.claim, message);
       });
-    })().catch((err: unknown) => {
+    })();
+    state.stallSettlementTask = settlementTask;
+    void settlementTask.catch((err: unknown) => {
       deps.log(
         `ingress drain: failed to settle stalled event ${displayId}; ` +
           `holding claim: ${deps.formatError(err)}`,
