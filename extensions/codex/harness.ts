@@ -189,7 +189,6 @@ export function createCodexAppServerAgentHarness(options: {
       const { runCodexAppServerRealtimeVoiceSession } =
         await import("./src/app-server/realtime-voice-session.js");
       return runCodexAppServerRealtimeVoiceSession(params, {
-        agentHarnessCodingToolsFactory: options.toolAuthority?.createForAttempt,
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
         nativeHookRelay: { enabled: true },

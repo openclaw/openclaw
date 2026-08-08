@@ -1,7 +1,7 @@
 import type { RealtimeVoiceBridgeCreateRequest } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
-import { realtimeVoiceSessionTesting } from "./realtime-voice-session.js";
+import { realtimeVoiceSessionTesting } from "./realtime-voice-session.test-support.js";
 
 describe("Codex app-server realtime voice bridge", () => {
   it("uses Realtime V3 on the bound thread and projects native media events", async () => {

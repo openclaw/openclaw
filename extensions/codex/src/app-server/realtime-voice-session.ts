@@ -514,7 +514,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 }
 
-export const realtimeVoiceSessionTesting = {
+const realtimeVoiceSessionTesting = {
   createBridge: (
     client: CodexAppServerClient,
     threadId: string,
@@ -523,6 +523,12 @@ export const realtimeVoiceSessionTesting = {
     createAudioPeer?: CodexRealtimeAudioPeerFactory,
   ) => new CodexAppServerRealtimeVoiceBridge(client, threadId, request, signal, createAudioPeer),
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.codexRealtimeVoiceSessionTestApi")
+  ] = realtimeVoiceSessionTesting;
+}
 
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
