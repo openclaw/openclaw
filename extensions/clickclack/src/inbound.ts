@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
 import { createClickClackClient } from "./http-client.js";
-import { sendClickClackText } from "./outbound.js";
+import { sendClickClackInboundReply } from "./outbound.js";
 import {
   createClickClackAgentProgressPublisher,
   type ClickClackItemEventPayload,
@@ -66,7 +66,7 @@ async function dispatchModelReply(params: {
       .warn(`[${params.account.accountId}] ClickClack model reply produced no sendable text`);
     return;
   }
-  await sendClickClackText({
+  await sendClickClackInboundReply({
     cfg: params.cfg as CoreConfig,
     accountId: params.account.accountId,
     to: params.target,
@@ -74,6 +74,7 @@ async function dispatchModelReply(params: {
     threadId: params.message.parent_message_id ? params.message.thread_root_id : undefined,
     replyToId: params.message.id,
     correlationId: params.correlationId,
+    sourceMessageId: params.message.id,
   });
 }
 
@@ -221,6 +222,28 @@ export async function handleClickClackInbound(params: {
     },
   });
   const runId = resolveClickClackAgentRunId(message.id);
+  const replyTextParts: string[] = [];
+  let replyTextFlushed = false;
+  const flushReplyText = async (): Promise<void> => {
+    if (replyTextFlushed || replyTextParts.length === 0) {
+      return;
+    }
+    // Build the complete logical reply before the first visible send. Replays
+    // can change block boundaries, but the source-stable nonce still owns one
+    // atomic ClickClack message instead of a regenerated ordinal sequence.
+    await sendClickClackInboundReply({
+      cfg: params.config,
+      accountId: params.account.accountId,
+      to: target,
+      text: replyTextParts.join("\n\n"),
+      threadId: message.parent_message_id ? message.thread_root_id : undefined,
+      replyToId: message.id,
+      provenance: turnProvenance,
+      correlationId: params.correlationId,
+      sourceMessageId: message.id,
+    });
+    replyTextFlushed = true;
+  };
   const activityReplyOptions = {
     ...(activity
       ? {
@@ -274,21 +297,16 @@ export async function handleClickClackInbound(params: {
           if (!text.trim()) {
             return;
           }
-          await sendClickClackText({
-            cfg: params.config,
-            accountId: params.account.accountId,
-            to: target,
-            text,
-            threadId: message.parent_message_id ? message.thread_root_id : undefined,
-            replyToId: message.id,
-            provenance: turnProvenance,
-            correlationId: params.correlationId,
-          });
+          if (replyTextFlushed) {
+            throw new Error("ClickClack reply text arrived after its atomic reply was sent");
+          }
+          replyTextParts.push(text);
         },
-        durable: (payload) => {
+        durable: async (payload) => {
           if (!hasClickClackReplyMedia(payload)) {
             return false;
           }
+          await flushReplyText();
           const threadId = message.parent_message_id ? message.thread_root_id : undefined;
           return {
             to: target,
@@ -319,6 +337,7 @@ export async function handleClickClackInbound(params: {
     });
   try {
     await dispatch();
+    await flushReplyText();
   } finally {
     // Clear transient UI before awaiting optional durable activity writes:
     // their transport has separate failure/latency characteristics and must

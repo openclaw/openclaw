@@ -685,6 +685,7 @@ describe("ClickClack HTTP client", () => {
     const uploadInit = uploadRequest?.[1] as RequestInit;
     expect(uploadInit.method).toBe("POST");
     expect(uploadInit.body).toBeInstanceOf(FormData);
+    expect(uploadInit.signal).toBeUndefined();
     const uploadHeaders = new Headers(uploadInit.headers);
     expect(uploadHeaders.get("Authorization")).toBe("Bearer fake");
     expect(uploadHeaders.has("Content-Type")).toBe(false);
