@@ -1,4 +1,5 @@
 // Reset boundaries project a logical message window without rewriting raw cursor positions.
+import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -41,6 +42,8 @@ type ResetMessageWindow = {
   indexedSeq: number;
   keptMessagePositions: number[];
   postBoundaryMessagePosition: number;
+  /** Active position of the reset row; events at or before it are pre-boundary. */
+  boundaryActivePosition: number;
 };
 
 type ResetMessageWindowCacheEntry = {
@@ -215,6 +218,7 @@ function findLatestResetMessageWindow(
     indexedSeq: projection.state.indexedSeq,
     keptMessagePositions,
     postBoundaryMessagePosition,
+    boundaryActivePosition: resetRow.active_position,
   };
 }
 
@@ -300,4 +304,58 @@ export function resolveVisibleMessagePositionRange(
     positions.push(visible.postStart + logical - visible.kept.length);
   }
   return positions;
+}
+
+/**
+ * JSONL byte size of the events a model still sees. When the latest boundary is a
+ * reset, pre-boundary events are excluded; otherwise the whole active projection
+ * counts. Without the reset window a `/new` leaves dropped bytes counted forever,
+ * so the byte fuse can never fall back below its threshold.
+ */
+export function readVisibleTranscriptByteStats(projection: ResetWindowProjection): {
+  eventCount: number;
+  sizeBytes: number;
+} {
+  const window = resolveResetMessageWindow(projection);
+  const db = getResetWindowKysely(projection.database);
+  const base = db
+    .selectFrom("session_transcript_active_events as active")
+    .innerJoin("transcript_events as event", (join) =>
+      join
+        .onRef("event.session_id", "=", "active.session_id")
+        .onRef("event.seq", "=", "active.event_seq"),
+    )
+    .select((eb) => [
+      eb.fn.count<number>("active.event_seq").as("event_count"),
+      /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
+      sql<number>`COALESCE(SUM(LENGTH(CAST(event.event_json AS BLOB))), 0)
+        + COUNT(*)`.as("size_bytes"),
+    ])
+    .where("active.session_id", "=", projection.resolved.sessionId);
+  const row = executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    window
+      ? base.where((eb) => {
+          const afterBoundary = eb("active.active_position", ">", window.boundaryActivePosition);
+          const keptMessagePositions = window.keptMessagePositions;
+          if (keptMessagePositions.length === 0) {
+            return afterBoundary;
+          }
+          // A reset retains only the user/assistant messages named by the window, so
+          // count those exact rows rather than the whole pre-boundary span. Including
+          // the span would keep discarded tool results on the byte fuse after `/new`.
+          return eb.or([
+            afterBoundary,
+            eb.and([
+              eb("active.active_position", "<", window.boundaryActivePosition),
+              eb("active.message_position", "in", keptMessagePositions),
+            ]),
+          ]);
+        })
+      : base,
+  );
+  return {
+    eventCount: row?.event_count ?? 0,
+    sizeBytes: row?.size_bytes ?? 0,
+  };
 }
