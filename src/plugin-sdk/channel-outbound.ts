@@ -66,6 +66,7 @@ export {
 export {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
+  warnFencedMediaSkipsForAcceptedOutboundDelivery,
 } from "../infra/outbound/payloads.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 export type { OutboundSessionContext } from "../infra/outbound/session-context.js";
