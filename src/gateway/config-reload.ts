@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import nodePath from "node:path";
+import { isDeepStrictEqual } from "node:util";
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
@@ -179,7 +180,25 @@ export function startGatewayConfigReloader(opts: {
       runtimeApplied: boolean;
       publishSource?: () => Promise<() => Promise<void>>;
     },
-  ) => void | (() => Promise<void>) | Promise<void | (() => Promise<void>)>;
+  ) =>
+    | void
+    | (() => Promise<void>)
+    | {
+        rollback?: () => Promise<void>;
+        /** Coordinator-confirmed retirement of the deferred restart debt. When
+         *  true, the reloader must drop its pending-restart provenance so a
+         *  later ordinary revert to the running config cancels instead of
+         *  re-arming an unnecessary restart. */
+        retireRestartDebt?: boolean;
+      }
+    | Promise<
+        | void
+        | (() => Promise<void>)
+        | {
+            rollback?: () => Promise<void>;
+            retireRestartDebt?: boolean;
+          }
+      >;
   /** Publishes a newer source snapshot when effective runtime bytes are unchanged. */
   onEffectiveConfigUnchanged?: (
     nextConfig: OpenClawConfig,
@@ -251,6 +270,32 @@ export function startGatewayConfigReloader(opts: {
   let currentReapplyRuntimeOverlays =
     initialCandidate?.reapplyRuntimeOverlays ?? ((config: OpenClawConfig) => config);
   let currentRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
+  // Source-space config the running process has actually applied. Unlike the
+  // reload baseline (currentCompareConfig), this does NOT advance when a
+  // restart-required candidate is merely accepted: the gateway keeps running
+  // the previous config until the deferred restart is emitted. Comparing a
+  // settled candidate against this value lets an exact revert cancel the
+  // pending restart instead of being planned as a new bounce.
+  let runtimeAppliedCompareConfig = currentCompareConfig;
+  // Provenance of the currently pending deferred restart. Only planner-derived
+  // restart debt (plan.restartGateway without explicit writer intent) may be
+  // retired by an exact revert to the running config: an explicitly required
+  // restart (afterWrite.mode === "restart" / followUp.requiresRestart) is a
+  // hard lifecycle contract and must survive an ordinary revert, because the
+  // reverting write's followUp says nothing about the earlier writer's intent.
+  let pendingRestartWasExplicit = false;
+  // Compare-space config the runtime was actually running when the pending
+  // deferred restart was armed. While a restart is deferred, a hot/no-op
+  // apply legitimately advances runtimeAppliedCompareConfig (its hot fields
+  // really do reach the runtime), which would otherwise make a later revert
+  // to the original running config look like a fresh restart-required edit
+  // and re-arm an unnecessary Gateway restart. The revert-cancel check
+  // compares against this deferral base instead: settling back to the config
+  // the runtime was running when the debt was armed must retire
+  // planner-derived deferred restart debt regardless of intervening hot
+  // applies. Reset when the pending restart is cancelled (and implicitly on
+  // process restart, which reinitializes the reloader).
+  let pendingRestartBaseCompareConfig: unknown = null;
   const resolveSettings = (config: OpenClawConfig) => {
     const resolved = resolveGatewayReloadSettings(config);
     return opts.testDebounceMs === undefined
@@ -507,6 +552,7 @@ export function startGatewayConfigReloader(opts: {
         committedRuntimeConfig = runtimeConfig;
         currentConfig = runtimeConfig;
         currentCompareConfig = nextCompareConfig;
+        runtimeAppliedCompareConfig = nextCompareConfig;
         currentSourceConfig = nextSourceConfig;
         currentRuntimeEnvSourceConfig = nextSourceConfig;
         currentReapplyRuntimeOverlays = ownership.reapplyRuntimeOverlays;
@@ -584,7 +630,7 @@ export function startGatewayConfigReloader(opts: {
       };
       let rollbackAcceptedSource: (() => Promise<void>) | undefined;
       try {
-        const acceptedSourceRollback = await opts.onConfigAccepted?.(
+        const acceptedSourceResult = await opts.onConfigAccepted?.(
           committedRuntimeConfig ?? nextConfig,
           ownership,
           nextSourceConfig,
@@ -593,8 +639,21 @@ export function startGatewayConfigReloader(opts: {
             ...(options.publishSource ? { publishSource: options.publishSource } : {}),
           },
         );
-        if (typeof acceptedSourceRollback === "function") {
-          rollbackAcceptedSource = acceptedSourceRollback;
+        if (typeof acceptedSourceResult === "function") {
+          rollbackAcceptedSource = acceptedSourceResult;
+        } else if (acceptedSourceResult && typeof acceptedSourceResult === "object") {
+          if (acceptedSourceResult.retireRestartDebt) {
+            // The managed restart coordinator confirmed that the deferred
+            // restart debt is retired (e.g. a mode-none or reload-off write
+            // superseded it). Drop the reloader-local provenance so a later
+            // ordinary revert to the running config is treated as a real
+            // revert-cancel instead of re-arming an unnecessary restart.
+            pendingRestartWasExplicit = false;
+            pendingRestartBaseCompareConfig = null;
+          }
+          if (typeof acceptedSourceResult.rollback === "function") {
+            rollbackAcceptedSource = acceptedSourceResult.rollback;
+          }
         }
         assertCurrent();
         rollbackAcceptedSource ??= await options.publishSource?.();
@@ -692,6 +751,33 @@ export function startGatewayConfigReloader(opts: {
       forceChangedPaths: pluginInstallWholeRecordPaths,
       candidateConfig: nextConfig,
     });
+    // A restart-required edit that settles back to the config the runtime is
+    // currently running. The reload baseline advanced when the earlier
+    // candidate was accepted as a deferred restart, so changedPaths diff
+    // against a superseded state and the settled candidate is not a real
+    // change. Commit it as a no-op: the acceptance path retires the pending
+    // deferred restart instead of re-arming it, and the baseline still
+    // advances so the next edit diffs against the settled bytes. Config-space
+    // only: plugin install record changes still need the restart even when
+    // the config bytes are identical to the running ones. Cancellation is
+    // limited to planner-derived deferred restart debt (plan.restartGateway):
+    // an explicit writer restart intent (afterWrite.mode === "restart",
+    // followUp.requiresRestart) is a hard lifecycle contract and must never be
+    // silently dropped, even when the settled bytes match the running config.
+    // pendingRestartWasExplicit carries that provenance from the write that
+    // armed the pending restart: the reverting write's own followUp only
+    // describes the reverting write, so an ordinary B -> A revert cannot speak
+    // for an explicit A -> B restart it is about to cancel.
+    const revertsToRunningConfig =
+      changedPaths.length > 0 &&
+      pluginInstallRecordChangedPaths.length === 0 &&
+      plan.restartGateway &&
+      !followUp.requiresRestart &&
+      !pendingRestartWasExplicit &&
+      isDeepStrictEqual(
+        nextCompareConfig,
+        pendingRestartBaseCompareConfig ?? runtimeAppliedCompareConfig,
+      );
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       await commitReloadBaseline({ runtimeApplied: false });
@@ -707,18 +793,44 @@ export function startGatewayConfigReloader(opts: {
       await commitReloadBaseline();
       return;
     }
+    if (revertsToRunningConfig) {
+      opts.log.info(
+        `config change detected; reverted to running config, cancelling pending restart (${changedPaths.join(", ")})`,
+      );
+      const revertPlan: GatewayReloadPlan = {
+        ...plan,
+        restartGateway: false,
+        restartReasons: [],
+      };
+      await opts.onConfigChange?.(revertPlan, nextConfig);
+      await opts.onNoopConfigCommit(revertPlan, nextConfig, ownership, nextSourceConfig);
+      assertCurrent();
+      await appliedRevision.apply(revertPlan, nextConfig, nextConfigRevisionHash);
+      await commitReloadBaseline();
+      runtimeAppliedCompareConfig = nextCompareConfig;
+      pendingRestartWasExplicit = false;
+      pendingRestartBaseCompareConfig = null;
+      return;
+    }
     if (followUp.requiresRestart) {
       const restartPlan = {
         ...plan,
         restartGateway: true,
         restartReasons: [...plan.restartReasons, followUp.reason],
       };
+      pendingRestartWasExplicit = true;
+      pendingRestartBaseCompareConfig ??= runtimeAppliedCompareConfig;
       await opts.onConfigChange?.(restartPlan, nextConfig);
       await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       return;
     }
     if (plan.restartGateway) {
+      // A later planner-derived restart re-arms the deferred restart but must
+      // NOT downgrade explicit writer provenance: once an explicit restart is
+      // pending, only an explicit revert-cancel path may retire that debt, and
+      // the reverting write's followUp can never speak for the earlier writer.
+      pendingRestartBaseCompareConfig ??= runtimeAppliedCompareConfig;
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();

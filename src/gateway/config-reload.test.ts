@@ -10,6 +10,7 @@ import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { fingerprintConfigSnapshotAuthoredConfig } from "../config/config-journal-snapshot.js";
 import type {
   ConfigFileSnapshot,
+  ConfigWriteAfterWrite,
   ConfigWriteNotification,
   OpenClawConfig,
 } from "../config/config.js";
@@ -715,7 +716,21 @@ function createReloaderHarness(
         runtimeApplied: boolean;
         publishSource?: () => Promise<() => Promise<void>>;
       },
-    ) => void | (() => Promise<void>) | Promise<void | (() => Promise<void>)>;
+    ) =>
+      | void
+      | (() => Promise<void>)
+      | {
+          rollback?: () => Promise<void>;
+          retireRestartDebt?: boolean;
+        }
+      | Promise<
+          | void
+          | (() => Promise<void>)
+          | {
+              rollback?: () => Promise<void>;
+              retireRestartDebt?: boolean;
+            }
+        >;
     onEffectiveConfigUnchanged?: (
       nextConfig: OpenClawConfig,
       ownership: GatewayConfigReloadTransactionOwnership,
@@ -3421,6 +3436,363 @@ describe("startGatewayConfigReloader", () => {
       gateway: { reload: {} },
       hooks: { enabled: true },
     });
+
+    await harness.reloader.stop();
+  });
+
+  it("cancels a pending restart when a restart-required edit reverts to the running config", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18790 } } satisfies OpenClawConfig;
+    const makeWrite = (config: OpenClawConfig, persistedHash: string): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+      },
+    );
+
+    // Restart-required edit A -> B plans a (deferred) restart.
+    harness.emitWrite(makeWrite(configB, "hash-b"));
+    await vi.runAllTimersAsync();
+    const [firstPlan, firstConfig] = getOnlyRestartCall(harness);
+    expect(firstPlan.restartGateway).toBe(true);
+    expect(firstConfig).toEqual(configB);
+
+    // Exact revert B -> A must cancel the pending restart instead of planning
+    // a new one: the settled candidate equals the config the runtime still runs.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
+    expect(harness.onConfigAccepted).toHaveBeenCalled();
+
+    // The revert still advanced the reload baseline, so a later genuine edit
+    // A -> B plans the restart again.
+    harness.emitWrite(makeWrite(configB, "hash-b2"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart.mock.calls[1]?.[1]).toEqual(configB);
+
+    await harness.reloader.stop();
+  });
+
+  it("preserves an explicit writer-required restart when a revert matches the running config", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18791 } } satisfies OpenClawConfig;
+    const makeWrite = (
+      config: OpenClawConfig,
+      persistedHash: string,
+      afterWrite?: ConfigWriteAfterWrite,
+    ): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+      ...(afterWrite ? { afterWrite } : {}),
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+      },
+    );
+
+    // Restart-required edit A -> B with an explicit writer restart intent
+    // plans a restart.
+    harness.emitWrite(
+      makeWrite(configB, "hash-b", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    const [firstPlan] = getOnlyRestartCall(harness);
+    expect(firstPlan.restartGateway).toBe(true);
+
+    // Exact revert B -> A still carries the explicit restart intent. The
+    // config bytes match the running config, but the writer-required restart
+    // is a hard lifecycle contract and must NOT be cancelled.
+    harness.emitWrite(
+      makeWrite(configA, "hash-a", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart.mock.calls[1]?.[1]).toEqual(configA);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(false);
+
+    await harness.reloader.stop();
+  });
+
+  it("cancels a deferred restart when a hot-only apply lands between the deferral and the revert", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = {
+      gateway: { reload: {}, port: 18793 },
+      agents: { defaults: { params: { temperature: 0.1 } } },
+    } satisfies OpenClawConfig;
+    const configD = {
+      gateway: { reload: {}, port: 18793 },
+      agents: { defaults: { params: { temperature: 0.3 } } },
+    } satisfies OpenClawConfig;
+    const makeWrite = (config: OpenClawConfig, persistedHash: string): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+    });
+    // Production hot reload (server-reload-managed-secrets.ts) activates the
+    // prepared runtime snapshot and advances the runtime-applied baseline via
+    // transactionOwnership.markRuntimeCommitted. Simulate that real commit so
+    // this test exercises the same baseline-advance edge the managed gateway
+    // has while a restart is still deferred.
+    const onHotReload = vi.fn(
+      async (
+        plan: GatewayReloadPlan,
+        nextConfig: OpenClawConfig,
+        ownership: GatewayConfigReloadTransactionOwnership,
+      ) => {
+        ownership.markRuntimeCommitted(nextConfig, plan);
+      },
+    );
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+        onHotReload,
+      },
+    );
+
+    // Restart-required edit A -> B plans a (deferred) restart.
+    harness.emitWrite(makeWrite(configB, "hash-b"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart.mock.calls[0]?.[1]).toEqual(configB);
+
+    // Intervening hot-only apply B -> D: agents.defaults.temperature is a
+    // hot-reload path, so the runtime commits the hot candidate and advances
+    // the runtime-applied baseline while the A -> B restart stays deferred.
+    harness.emitWrite(makeWrite(configD, "hash-d"));
+    await vi.runAllTimersAsync();
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    // Exact revert D -> A must still cancel the deferred restart: the settled
+    // candidate equals the config the runtime was running when the debt was
+    // armed, not the hot candidate the baseline advanced to.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
+
+    // The revert still advanced the reload baseline, so a later genuine edit
+    // A -> B plans the restart again.
+    harness.emitWrite(makeWrite(configB, "hash-b2"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+
+    await harness.reloader.stop();
+  });
+
+  it("drops pending-restart provenance when the coordinator retires the deferred debt on a source-only write", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18793 } } satisfies OpenClawConfig;
+    const configC = { gateway: { reload: {}, port: 18794 } } satisfies OpenClawConfig;
+    const makeWrite = (
+      config: OpenClawConfig,
+      persistedHash: string,
+      afterWrite?: ConfigWriteAfterWrite,
+    ): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+      ...(afterWrite ? { afterWrite } : {}),
+    });
+    // The managed coordinator confirms debt retirement only for source-only
+    // (runtime-skipped) acceptance: a later planner A -> B -> A revert must
+    // cancel instead of re-arming the unnecessary restart.
+    const onConfigAccepted = vi.fn(
+      async (
+        _nextConfig: OpenClawConfig,
+        _ownership: GatewayConfigReloadTransactionOwnership,
+        _sourceConfig: OpenClawConfig,
+        acceptance: { runtimeApplied: boolean },
+      ) => (acceptance.runtimeApplied ? undefined : { retireRestartDebt: true }),
+    );
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+        onConfigAccepted,
+      },
+    );
+
+    // Explicit writer-required restart A -> B plans a restart and arms
+    // explicit provenance.
+    harness.emitWrite(
+      makeWrite(configB, "hash-b", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    onConfigAccepted.mockClear();
+
+    // A source-only (mode none) write reaches managed acceptance; the
+    // coordinator retires the deferred restart debt and reports it back.
+    harness.emitWrite(makeWrite(configC, "hash-c", { mode: "none", reason: "source-only" }));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(onConfigAccepted.mock.calls.some((call) => call[3]?.runtimeApplied === false)).toBe(
+      true,
+    );
+
+    // The provenance is gone, so an ordinary revert to the running config
+    // cancels the (already retired) pending restart instead of re-arming it.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
+
+    await harness.reloader.stop();
+  });
+
+  it("preserves an earlier explicit restart across an ordinary exact revert", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18792 } } satisfies OpenClawConfig;
+    const makeWrite = (
+      config: OpenClawConfig,
+      persistedHash: string,
+      afterWrite?: ConfigWriteAfterWrite,
+    ): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+      ...(afterWrite ? { afterWrite } : {}),
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+      },
+    );
+
+    // Explicit writer-required restart A -> B plans a restart.
+    harness.emitWrite(
+      makeWrite(configB, "hash-b", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    const [firstPlan] = getOnlyRestartCall(harness);
+    expect(firstPlan.restartGateway).toBe(true);
+
+    // Ordinary exact revert B -> A: the reverting write carries no restart
+    // intent, but the pending restart was explicitly required by the earlier
+    // writer. The revert must NOT retire that debt — the process still needs
+    // the bounce to reconcile the writer's runtime contract.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart.mock.calls[1]?.[1]).toEqual(configA);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(false);
+
+    await harness.reloader.stop();
+  });
+
+  it("retains an earlier explicit restart across a later planner-derived restart and an ordinary exact revert", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = { gateway: { reload: {}, port: 18793 } } satisfies OpenClawConfig;
+    const configC = { gateway: { reload: {}, port: 18794 } } satisfies OpenClawConfig;
+    const makeWrite = (
+      config: OpenClawConfig,
+      persistedHash: string,
+      afterWrite?: ConfigWriteAfterWrite,
+    ): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+      ...(afterWrite ? { afterWrite } : {}),
+    });
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+      },
+    );
+
+    // 1. Explicit writer-required restart A -> B arms a deferred restart with
+    //    explicit provenance (hard lifecycle contract).
+    harness.emitWrite(
+      makeWrite(configB, "hash-b", { mode: "restart", reason: "writer requires bounce" }),
+    );
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart.mock.calls[0]?.[1]).toEqual(configB);
+
+    // 2. A later planner-derived restart B -> C re-arms the deferred restart.
+    //    The earlier explicit writer intent must survive this re-arm: the
+    //    reverting write's followUp can never speak for the earlier writer.
+    harness.emitWrite(makeWrite(configC, "hash-c"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(2);
+    expect(harness.onRestart.mock.calls[1]?.[1]).toEqual(configC);
+
+    // 3. Ordinary exact revert C -> A matches the running config, but the
+    //    pending restart debt is still explicit (retained through the
+    //    planner-derived re-arm). The revert must NOT cancel the restart.
+    harness.emitWrite(makeWrite(configA, "hash-a"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(3);
+    expect(harness.onRestart.mock.calls[2]?.[1]).toEqual(configA);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(false);
 
     await harness.reloader.stop();
   });
