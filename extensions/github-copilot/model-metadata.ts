@@ -159,7 +159,6 @@ export function resolveCopilotExtendedThinkingLevels(
     levels.push("xhigh");
   }
   if (
-    isClaudeModel &&
     supportsAdaptiveClaudeEffort &&
     (compatSupportsEffort(compat, "max") || compatSupportsEffort(staticCompat, "max"))
   ) {
