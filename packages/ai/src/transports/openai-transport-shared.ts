@@ -70,6 +70,7 @@ export type MutableAssistantOutput = {
 
 export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
+    cached_tokens?: number;
     cost?: unknown;
     prompt_cache_hit_tokens?: number;
   },
@@ -77,7 +78,10 @@ export function parseOpenAICompletionsUsage(
   options?: { includeReasoningTokens?: boolean },
 ): MutableAssistantOutput["usage"] {
   const cacheRead =
-    rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
+    rawUsage.prompt_tokens_details?.cached_tokens ??
+    rawUsage.prompt_cache_hit_tokens ??
+    rawUsage.cached_tokens ??
+    0;
   const cacheWrite = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
   const input = Math.max(0, (rawUsage.prompt_tokens || 0) - cacheRead - cacheWrite);
   const output = rawUsage.completion_tokens || 0;
