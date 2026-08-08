@@ -33,21 +33,26 @@ function sanitizeImageContentRecord(
     const commaIndex = imageUrl.indexOf(",");
     const metadata = imageUrl.slice(INLINE_IMAGE_DATA_URL_PREFIX.length, commaIndex);
     const mime = metadata.split(";")[0] ?? mimeType;
-    return { ...record, mimeType: mime, data: imageUrl.slice(commaIndex + 1) };
+    const data = imageUrl.slice(commaIndex + 1);
+    return record.mimeType === mime && record.data === data
+      ? record
+      : { ...record, mimeType: mime, data };
   }
 
   if (record.type === "inputImage" && typeof record.imageUrl === "string") {
     const imageUrl = sanitizeInlineImageDataUrl(record.imageUrl);
-    return imageUrl
-      ? { ...record, imageUrl }
-      : { type: "inputText", text: invalidInlineImageText(label) };
+    if (!imageUrl) {
+      return { type: "inputText", text: invalidInlineImageText(label) };
+    }
+    return imageUrl === record.imageUrl ? record : { ...record, imageUrl };
   }
 
   if (record.type === "input_image" && typeof record.image_url === "string") {
     const imageUrl = sanitizeInlineImageDataUrl(record.image_url);
-    return imageUrl
-      ? { ...record, image_url: imageUrl }
-      : { type: "input_text", text: invalidInlineImageText(label) };
+    if (!imageUrl) {
+      return { type: "input_text", text: invalidInlineImageText(label) };
+    }
+    return imageUrl === record.image_url ? record : { ...record, image_url: imageUrl };
   }
 
   return undefined;
@@ -56,7 +61,18 @@ function sanitizeImageContentRecord(
 /** Recursively sanitizes all Codex history image shapes while preserving unknown structure. */
 export function sanitizeCodexHistoryImagePayloads<T>(value: T, label: string): T {
   if (Array.isArray(value)) {
-    return value.map((entry) => sanitizeCodexHistoryImagePayloads(entry, label)) as T;
+    let next: unknown[] | undefined;
+    for (let index = 0; index < value.length; index += 1) {
+      const entry = value[index];
+      const sanitized = sanitizeCodexHistoryImagePayloads(entry, label);
+      if (!Object.is(sanitized, entry)) {
+        // Preserve every untouched branch by identity; only ancestors of an
+        // actual image repair should allocate during long-history replay.
+        next ??= value.slice();
+        next[index] = sanitized;
+      }
+    }
+    return (next ?? value) as T;
   }
   if (!isRecord(value)) {
     return value;
@@ -67,9 +83,14 @@ export function sanitizeCodexHistoryImagePayloads<T>(value: T, label: string): T
     return imageRecord as T;
   }
 
-  const next: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    next[key] = sanitizeCodexHistoryImagePayloads(child, label);
+  let next: Record<string, unknown> | undefined;
+  for (const key of Object.keys(value)) {
+    const child = value[key];
+    const sanitized = sanitizeCodexHistoryImagePayloads(child, label);
+    if (!Object.is(sanitized, child)) {
+      next ??= { ...value };
+      next[key] = sanitized;
+    }
   }
-  return next as T;
+  return (next ?? value) as T;
 }
