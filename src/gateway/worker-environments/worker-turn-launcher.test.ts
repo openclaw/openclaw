@@ -52,7 +52,7 @@ import {
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
 import {
-  validateAgentRuntimeDelegatedAuthority,
+  createAgentRuntimeApprovalAuthorityValidator,
   verifyAgentRuntimeIdentityToken,
 } from "../agent-runtime-identity-token.js";
 import type { MintedWorkerCredential } from "./credential.js";
@@ -728,10 +728,7 @@ describe("worker turn launcher", () => {
         expect(activeRuntimeIdentity?.delegatedAuthority.kind).toBe("worker");
         expect(
           activeRuntimeIdentity &&
-            validateAgentRuntimeDelegatedAuthority(
-              activeRuntimeIdentity.delegatedAuthority,
-              placements,
-            ),
+            createAgentRuntimeApprovalAuthorityValidator(placements)(activeRuntimeIdentity),
         ).toBe(true);
         expect(command.argv).toEqual([
           "sh",
@@ -856,10 +853,7 @@ describe("worker turn launcher", () => {
     expect(verifiedRuntimeIdentity?.executionIdentity?.runId).toBe("run-worker-turn");
     expect(
       verifiedRuntimeIdentity &&
-        validateAgentRuntimeDelegatedAuthority(
-          verifiedRuntimeIdentity.delegatedAuthority,
-          placements,
-        ),
+        createAgentRuntimeApprovalAuthorityValidator(placements)(verifiedRuntimeIdentity),
     ).toBe(false);
     expect(admissionWork?.kind).toBe("capture");
     if (admissionWork?.kind === "capture") {

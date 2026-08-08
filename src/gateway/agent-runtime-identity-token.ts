@@ -585,7 +585,7 @@ type WorkerTurnClaimValidator = {
   validateTurnClaim(claim: WorkerSessionTurnClaim): boolean;
 };
 
-export function validateAgentRuntimeDelegatedAuthority(
+function validateAgentRuntimeDelegatedAuthority(
   authority: AgentRuntimeDelegatedAuthority,
   placements?: WorkerTurnClaimValidator,
 ): boolean {
