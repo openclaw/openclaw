@@ -927,10 +927,10 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it("redacts command action-required summaries before webhook completion delivery", async () => {
+  it("redacts command summaries before webhook completion delivery", async () => {
     const logger = { warn: vi.fn() };
     const sensitiveSummary =
-      "action-required output preserved:\nVisit www.example.com/device and enter code 123456\nLog in with token=opaque-secret-value";
+      "Visit https://example.com/device\nThen type WDJBMJHT in the browser\nLog in with token=opaque-secret-value";
     const job = {
       id: "cron-command-webhook-redact",
       name: "command webhook redact",
@@ -957,7 +957,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
               ts: 1,
               source: "exec",
               severity: "warn",
-              message: sensitiveSummary,
+              message: `argv: node -e ${sensitiveSummary}`,
             },
           ],
         },
@@ -977,8 +977,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
               ts: 1,
               source: "exec",
               severity: "warn",
-              message:
-                "argv: node -e Visit www.example.com/device and enter code 123456; Log in with token=opaque-secret-value",
+              message: `argv: node -e ${sensitiveSummary}`,
             },
           ],
         },
@@ -995,15 +994,15 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(body.summary).toContain("[redacted-url]");
     expect(body.summary).toContain("[redacted-code]");
     expect(body.summary).toContain("token=***");
-    expect(body.summary).not.toContain("www.example.com/device");
-    expect(body.summary).not.toContain("123456");
+    expect(body.summary).not.toContain("https://example.com/device");
+    expect(body.summary).not.toContain("WDJBMJHT");
     expect(body.summary).not.toContain("opaque-secret-value");
     expect(body.diagnostics.summary).toBe(body.summary);
     expect(body.diagnostics.entries[0].message).toContain("[redacted-url]");
     expect(body.diagnostics.entries[0].message).toContain("[redacted-code]");
     expect(body.diagnostics.entries[0].message).toContain("token=***");
-    expect(body.diagnostics.entries[0].message).not.toContain("www.example.com/device");
-    expect(body.diagnostics.entries[0].message).not.toContain("123456");
+    expect(body.diagnostics.entries[0].message).not.toContain("https://example.com/device");
+    expect(body.diagnostics.entries[0].message).not.toContain("WDJBMJHT");
     expect(body.diagnostics.entries[0].message).not.toContain("opaque-secret-value");
     expect(body.job.state).not.toHaveProperty("lastDiagnosticSummary");
     expect(body.job.state).not.toHaveProperty("lastDiagnostics");

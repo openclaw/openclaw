@@ -1954,7 +1954,7 @@ describe("buildGatewayCronService", () => {
           argv: [
             process.execPath,
             "-e",
-            "process.stdout.write('Log in with token=opaque-secret-value\\n')",
+            "process.stdout.write('Visit https://example.com/device\\nThen type WDJBMJHT in the browser\\nLog in with token=opaque-secret-value\\n')",
           ],
         },
         delivery: {
@@ -1971,7 +1971,11 @@ describe("buildGatewayCronService", () => {
         "cron announce payload",
       );
       const message = typeof announcePayload.message === "string" ? announcePayload.message : "";
+      expect(message).toContain("Visit [redacted-url]");
+      expect(message).toContain("Then type [redacted-code] in the browser");
       expect(message).toContain("token=***");
+      expect(message).not.toContain("https://example.com/device");
+      expect(message).not.toContain("WDJBMJHT");
       expect(message).not.toContain("opaque-secret-value");
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
       expect(state.cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("delivered");
