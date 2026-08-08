@@ -4,7 +4,6 @@ import type { Block, KnownBlock } from "@slack/web-api";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
   warnFencedMediaSkipsForAcceptedOutboundDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -189,14 +188,15 @@ export async function deliverReplies(params: {
     });
   };
   const candidateReplies = params.replies.filter((payload) => payload.isReasoning !== true);
+  // Diagnostic-only plan: do not project delivery payloads (main keeps raw
+  // direct Slack replies; projecting would parse unfenced MEDIA into mediaUrls).
   const outboundPlan = createOutboundPayloadPlan(candidateReplies, {
     cfg: params.cfg,
     surface: "slack",
   });
-  const normalizedReplies = projectOutboundPayloadPlanForDelivery(outboundPlan);
-  for (let projectedIndex = 0; projectedIndex < normalizedReplies.length; projectedIndex++) {
-    const payload = normalizedReplies[projectedIndex]!;
-    const planEntry = outboundPlan[projectedIndex];
+  for (let candidateIndex = 0; candidateIndex < candidateReplies.length; candidateIndex++) {
+    const payload = candidateReplies[candidateIndex]!;
+    const planEntry = outboundPlan[candidateIndex];
     const threadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: params.replyToMode,
       payloadReplyToId: payload.replyToId,
@@ -204,7 +204,7 @@ export async function deliverReplies(params: {
     });
     const reply = resolveSendableOutboundReplyParts(payload);
     // Direct Slack delivery bypasses prepareOutboundPayloadBatch; emit shared
-    // fenced MEDIA diagnostic on accepted text (#41966).
+    // fenced MEDIA diagnostic on accepted text without mutating the payload (#41966).
     if (planEntry) {
       warnFencedMediaSkipsForAcceptedOutboundDelivery([
         {

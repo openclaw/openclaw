@@ -4,7 +4,6 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
   warnFencedMediaSkipsForAcceptedOutboundDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
@@ -340,14 +339,15 @@ export async function deliverReplies(params: {
     accountId,
     chatType: params.chatType,
   });
+  // Diagnostic-only plan: keep raw direct Signal payloads (main behavior).
+  // Projecting would parse unfenced MEDIA into mediaUrls (#41966).
   const outboundPlan = createOutboundPayloadPlan(replies, {
     cfg: params.cfg,
     surface: "signal",
   });
-  const normalizedReplies = projectOutboundPayloadPlanForDelivery(outboundPlan);
-  for (let projectedIndex = 0; projectedIndex < normalizedReplies.length; projectedIndex++) {
-    const payload = normalizedReplies[projectedIndex]!;
-    const planEntry = outboundPlan[projectedIndex];
+  for (let replyIndex = 0; replyIndex < replies.length; replyIndex++) {
+    const payload = replies[replyIndex]!;
+    const planEntry = outboundPlan[replyIndex];
     const deliveryResults: Array<{
       channel: "signal";
       messageId: string;

@@ -330,4 +330,17 @@ describe("Signal deliverReplies fenced MEDIA warn (#41966)", () => {
       expect(entry?.mediaTokenSkippedInFence).not.toBe(true);
     }
   });
+
+  it("keeps unfenced MEDIA as raw text (no plan projection into mediaUrls)", async () => {
+    await deliverReplyPayload({ text: "MEDIA:https://example.com/plain.png" });
+    expect(sendMocks.sendMessageSignal).toHaveBeenCalled();
+    for (const call of sendMocks.sendMessageSignal.mock.calls) {
+      // sendMessageSignal(target, text, opts)
+      const textArg = call[1];
+      const opts = call[2] as { mediaUrl?: string; mediaUrls?: string[] } | undefined;
+      expect(String(textArg ?? "")).toContain("MEDIA:https://example.com/plain.png");
+      expect(opts?.mediaUrl).toBeUndefined();
+      expect(opts?.mediaUrls).toBeUndefined();
+    }
+  });
 });
