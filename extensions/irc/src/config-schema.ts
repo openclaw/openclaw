@@ -32,11 +32,21 @@ const IrcNickServSchema = z
     }
   });
 
+// Mirrors the core channel health-monitor leaf; the gateway supervisor reads
+// channels.irc.healthMonitor.enabled for any started account.
+const IrcHealthMonitorSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    healthMonitor: IrcHealthMonitorSchema,
     dangerouslyAllowNameMatching: z.boolean().optional(),
     host: z.string().optional(),
     port: z.number().int().min(1).max(65535).optional(),
