@@ -49,6 +49,7 @@ import {
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import {
+  CONTROL_UI_OPERATOR_ROLE,
   gatewayRecoveryScopeMaterial,
   GatewayRecoveryScopeTracker,
   storedDeviceTokenScopesAllowRead,
@@ -139,8 +140,6 @@ export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | 
   snapshot?: unknown;
   policy?: Partial<HelloOk["policy"]>;
 };
-
-const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.admin",

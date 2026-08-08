@@ -1,6 +1,6 @@
 import type { GatewayConnectAuthSelection } from "@openclaw/gateway-client/browser";
 
-const CONTROL_UI_OPERATOR_ROLE = "operator";
+export const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export function storedDeviceTokenScopesAllowRead(role: string, scopes: readonly string[]): boolean {
   return (

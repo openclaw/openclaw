@@ -4,6 +4,7 @@ import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigatio
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
+import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -22,6 +23,7 @@ import {
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import type {
   SidebarMenusController,
@@ -184,9 +186,12 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
     presenceInstanceId: host.sessionData.presenceInstanceId,
   });
+  const gateway = host.sessionDataContext?.gateway;
   return renderSidebarIdentityMenu({
     position,
     canPairDevice: host.canPairDevice,
+    // Probe browser storage only while the menu is actually open.
+    canForgetDevice: position !== null && (gateway?.hasStoredDeviceToken?.() ?? false),
     basePath: host.basePath,
     gatewayVersion: host.gatewayVersion,
     selfName: selfUser?.name ?? undefined,
@@ -203,6 +208,18 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     },
     onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
     onPairMobile: () => host.onPairMobile?.(),
+    onForgetDevice: () => {
+      void showConfirmDialog({
+        title: t("profilePage.identity.forgetDeviceConfirmTitle"),
+        message: t("profilePage.identity.forgetDeviceConfirmMessage"),
+        confirmLabel: t("profilePage.identity.forgetDeviceConfirmLabel"),
+        danger: true,
+      }).then((confirmed) => {
+        if (confirmed) {
+          gateway?.forgetDeviceToken?.();
+        }
+      });
+    },
     onRetryConnect: host.onRetryConnect,
   });
 }
