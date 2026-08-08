@@ -10,6 +10,7 @@ import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-
  * handlers before it starts or resumes the harness-owned Codex thread.
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import {
@@ -797,22 +798,63 @@ async function resolveInProgressTurnId(params: {
   }
 }
 
-function redactString(value: string): string {
-  return value
-    .replace(/\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b/g, "[redacted]")
-    .replace(/\b(?:ghp|gho|ghu|ghs)_[-_a-zA-Z0-9]{12,}\b/g, "[redacted]")
-    .replace(/\bBearer\s+[-._~+/a-zA-Z0-9]+=*/g, "Bearer [redacted]");
-}
+// Sensitive field names that receive full [redacted] replacement. The core
+// SDK has a broader isSensitiveFieldKey set, but it is not exported; this
+// local set preserves the existing supervision contract and can be aligned
+// with core if the security owner decides to export that boundary.
+const SUPERVISION_SENSITIVE_KEY_RE = /authorization|password|secret|token|api[-_]?key/i;
 
-/** Redacts secret-bearing fields before legacy tool results leave the plugin. */
+// Legacy credential classes that current main fully replaces with [redacted]
+// in ordinary fields. Keep full replacement for these BEFORE applying the
+// shared helper, so the fix does not weaken existing coverage to partial
+// token hints (e.g. sk-abc…7890) for classes both paths recognize.
+const LEGACY_FULL_REDACT_RE =
+  /\b(?:sk|glpat|xox[baprs])-[-_a-zA-Z0-9]{12,}\b|\b(?:ghp|gho|ghu|ghs)_[-_a-zA-Z0-9]{12,}\b|\bBearer\s+([-._~+/a-zA-Z0-9]+=*)/g;
+
+const LEGACY_FULL_REDACT_REPLACE = (_match: string, bearerToken?: string) =>
+  bearerToken ? "Bearer [redacted]" : "[redacted]";
+
+/**
+ * Redacts secret-bearing fields before legacy tool results leave the plugin.
+ *
+ * Sensitive field names matching the local regex (authorization/password/
+ * secret/token/api[-_]?key) are fully replaced with "[redacted]" to preserve
+ * the existing supervision contract without prefix/suffix disclosure.
+ *
+ * Other field names are checked with the shared field-aware redactor
+ * (redactSensitiveFieldValue) so opaque sensitive keys that the local regex
+ * misses (cookie, session, jwt, credential, privateKey, …) are still masked
+ * via the core policy. This composes the same text + field-aware pattern the
+ * Codex context projection uses.
+ *
+ * Finally, ordinary free-text values get full [redacted] for legacy token
+ * classes (sk-/glpat-/xox-/gh[opsu]_/Bearer), then the shared core policy
+ * (redactToolPayloadText) layers on top to catch the broader credential set
+ * (AIza, github_pat_, AKIA, ya29., …) plus any exact-registered secrets.
+ */
 function redactCodexSupervisionValue(value: unknown, key = ""): unknown {
   if (typeof value === "string") {
-    return /authorization|password|secret|token|api[-_]?key/i.test(key)
-      ? "[redacted]"
-      : redactString(value);
+    if (SUPERVISION_SENSITIVE_KEY_RE.test(key)) {
+      return "[redacted]";
+    }
+    // Legacy token classes first: full [redacted] so they are not weakened to
+    // partial hints by the field-aware or text helpers that run afterwards.
+    const legacyRedacted = value.replace(LEGACY_FULL_REDACT_RE, LEGACY_FULL_REDACT_REPLACE);
+    // Field-aware: let the shared helper apply key-specific masking for opaque
+    // sensitive keys (cookie/session/jwt/credential/privateKey) the local regex
+    // does not cover, then apply text patterns for credential shapes.
+    const fieldAware = redactSensitiveFieldValue(key, legacyRedacted);
+    if (fieldAware !== legacyRedacted) {
+      return fieldAware;
+    }
+    return redactToolPayloadText(legacyRedacted);
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => redactCodexSupervisionValue(entry));
+    // Carry the parent key so sensitive-key context propagates into array
+    // entries (e.g. cookie: ["secret"]) — the core structured redactor does
+    // the same. Without this, opaque values in sensitive-key arrays bypass
+    // both structured-key masking and pattern matching.
+    return value.map((entry) => redactCodexSupervisionValue(entry, key));
   }
   if (!isRecord(value)) {
     return value;

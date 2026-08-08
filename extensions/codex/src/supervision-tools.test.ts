@@ -1033,4 +1033,43 @@ describe("Codex supervision compatibility tools", () => {
       }),
     ).resolves.toMatchObject({ details: { summary: "codex steer: turn-1" } });
   });
+
+  it("redacts broad credential classes, sensitive keys fully, and nested values", async () => {
+    const g = "AIzaSyDaBcDeFgHiJkLmNoPqRsTuVwXyZ0123456";
+    const fp = "github_pat_11ABCDEFGH0abcdefghijklmnopqrstuvwxyz1234567890ABCDEF";
+    const ak = "AKIAIOSFODNN7EXAMPLE";
+    const sk = "sk-abcdef1234567890abcdef1234567890abcdef1234567890";
+    const gh = "ghp_abcdef1234567890abcdef1234567890abcd";
+    const op = "opaque-jwt-credential-value-1234567890abcdef";
+    const { request } = createRequest({
+      id: "t1",
+      status: { type: "idle" },
+      description: `contact ${g} legacy ${sk} gh ${gh}`,
+      notes: `repo ${fp} aws ${ak}`,
+      token: sk,
+      password: sk,
+      apiKey: sk,
+      authorization: `Bearer ${sk}`,
+      cookie: op,
+      jwt: op,
+      credential: op,
+      privateKey: op,
+      turns: [{ id: "t1", status: "completed", items: [{ type: "message", text: `key=${g}` }] }],
+    });
+    const s = JSON.stringify(
+      await toolByName(createTools(request), "codex_session_read").execute("read", {
+        endpoint_id: "local",
+        thread_id: "t1",
+      }),
+    );
+    expect(s).not.toContain(g);
+    expect(s).not.toContain(fp);
+    expect(s).not.toContain(ak);
+    expect(s).not.toContain(sk);
+    expect(s).not.toContain(gh);
+    expect(s).not.toContain("sk-abc");
+    expect(s).not.toContain("ghp_abcd");
+    expect(s).toContain('"[redacted]"');
+    expect(s).not.toContain(op);
+  });
 });
