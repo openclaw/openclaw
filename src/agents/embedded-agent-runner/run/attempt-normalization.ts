@@ -28,7 +28,6 @@ import {
   type createIdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
 import { resolveReplayInvalidFlag } from "./incomplete-turn.js";
-import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
@@ -67,7 +66,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
   | { action: "complete"; result: EmbeddedAgentRunResult }
   | {
       action: "retry";
-      retryKind: RunRetryKind;
       bootstrapPromptWarningSignaturesSeen: string[];
       lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       replayState: ReplayState;
@@ -113,7 +111,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
   }
   const {
     terminal,
-    preflightRecovery,
     sessionIdUsed,
     sessionFileUsed,
     lastAssistant: sessionLastAssistant,
@@ -135,7 +132,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     assistant: currentAttemptAssistant,
     abortSignal: params.abortSignal,
   });
-  const { outcome: terminalOutcome, signalOwnedInterruption } = terminalState;
+  const { outcome: terminalOutcome } = terminalState;
   const terminalAborted = isEmbeddedRunTerminalAbort(terminalOutcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(terminalOutcome);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalOutcome);
@@ -255,28 +252,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
     sessionAssistantForCandidate?.stopReason === "error"
       ? sessionAssistantForCandidate.errorMessage?.trim() || formattedAssistantErrorText
       : undefined;
-  if (!signalOwnedInterruption && !preparedRuntime.nativeModelOwned && preflightRecovery?.handled) {
-    const retryingFromTranscript = preflightRecovery.source === "mid-turn";
-    log.info(
-      `[context-overflow-precheck] early recovery route=${preflightRecovery.route} completed for ${provider}/${modelId}; ` +
-        (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
-    );
-    if (retryingFromTranscript) {
-      sessionPromptState.continueFromCurrentTranscript();
-    }
-    const retryKind = resolveRunRetryKind({
-      preflightRecovery,
-      retryingFromTranscript,
-      toolMetas: attempt.toolMetas,
-    });
-    return {
-      action: "retry",
-      retryKind,
-      bootstrapPromptWarningSignaturesSeen,
-      lastRunPromptUsage,
-      replayState,
-    };
-  }
   return {
     action: "proceed",
     bootstrapPromptWarningSignaturesSeen,

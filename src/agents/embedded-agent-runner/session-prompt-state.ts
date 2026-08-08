@@ -48,6 +48,17 @@ export function cloneToolResultPromptProjectionState(
   };
 }
 
+/** Adopts a candidate projection after the provider accepts its prompt. */
+export function replaceToolResultPromptProjectionState(
+  target: ToolResultPromptProjectionState,
+  source: ToolResultPromptProjectionState,
+): void {
+  target.replacements = source.replacements;
+  target.frozen = source.frozen;
+  target.ambiguousBaseKeys = source.ambiguousBaseKeys;
+  target.sourceTextByKey = source.sourceTextByKey;
+}
+
 export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
   const existing = sessionPromptStates.get(sessionId);
   if (existing) {

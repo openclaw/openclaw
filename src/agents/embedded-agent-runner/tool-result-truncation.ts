@@ -636,6 +636,7 @@ export function truncateOversizedToolResultsInMessages(
   maxCharsOverride?: number,
   aggregateMaxCharsOverride?: number,
   projectionState?: ToolResultPromptProjectionState,
+  protectTrailingToolResults = Boolean(projectionState),
 ): {
   messages: AgentMessage[];
   truncatedCount: number;
@@ -667,7 +668,7 @@ export function truncateOversizedToolResultsInMessages(
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
-    protectTrailingToolResults: Boolean(projectionState),
+    protectTrailingToolResults,
   });
   const replacedBranch = plan.branch;
   if (projectionState) {
@@ -1309,27 +1310,6 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   };
 }
 
-export function truncateOversizedToolResultsInSessionManager(params: {
-  sessionManager: SessionManager;
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-  aggregateMaxCharsOverride?: number;
-  protectTrailingToolResults?: boolean;
-  projectionState?: ToolResultPromptProjectionState;
-  sessionFile?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): { truncated: boolean; truncatedCount: number; reason?: string } {
-  try {
-    return truncateOversizedToolResultsInExistingSessionManager(params);
-  } catch (err) {
-    const errMsg = formatErrorMessage(err);
-    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
-    return { truncated: false, truncatedCount: 0, reason: errMsg };
-  }
-}
-
 export async function truncateOversizedToolResultsInActiveTarget(params: {
   scope: RuntimeTranscriptScope;
   contextWindowTokens: number;
@@ -1364,6 +1344,7 @@ export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
 }): boolean {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;

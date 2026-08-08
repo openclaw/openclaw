@@ -123,92 +123,6 @@ describe("normalizeEmbeddedRunAttempt", () => {
     expect(state.suppressNextUserMessagePersistence).toBe(true);
   });
 
-  it("retries the original prompt after handled preflight truncation", async () => {
-    const state = makePromptState();
-
-    const result = await normalizeEmbeddedRunAttempt(
-      makeNormalizationInput(
-        makeAttempt({
-          route: "truncate_tool_results_only",
-          handled: true,
-          truncatedCount: 2,
-        }),
-        state,
-      ),
-    );
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("recovery");
-    expect(state.continueFromCurrentTranscript).not.toHaveBeenCalled();
-  });
-
-  it("continues from the current transcript after handled mid-turn truncation", async () => {
-    const state = makePromptState();
-
-    const result = await normalizeEmbeddedRunAttempt(
-      makeNormalizationInput(
-        makeAttempt({
-          route: "truncate_tool_results_only",
-          source: "mid-turn",
-          handled: true,
-          truncatedCount: 2,
-        }),
-        state,
-      ),
-    );
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("recovery");
-    expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("marks a successful no-op mid-turn retry as a progress continuation", async () => {
-    const state = makePromptState();
-    const attempt = makeAttempt({
-      route: "truncate_tool_results_only",
-      source: "mid-turn",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.toolMetas = [{ toolName: "read", isError: false }];
-
-    const input = makeNormalizationInput(attempt, state);
-    input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
-    const result = await normalizeEmbeddedRunAttempt(input);
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("progress_continuation");
-    expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a failed no-op mid-turn retry in the recovery budget", async () => {
-    const state = makePromptState();
-    const attempt = makeAttempt({
-      route: "truncate_tool_results_only",
-      source: "mid-turn",
-      handled: true,
-      truncatedCount: 0,
-    });
-    attempt.toolMetas = [{ toolName: "read", isError: true }];
-
-    const result = await normalizeEmbeddedRunAttempt(makeNormalizationInput(attempt, state));
-
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
-    }
-    expect(result.retryKind).toBe("recovery");
-  });
-
   it("keeps replay state unsafe after a later clean attempt", async () => {
     const state = makePromptState();
     const dirty = await normalizeEmbeddedRunAttempt(
@@ -266,7 +180,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
     expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
   });
 
-  it("keeps the unavailable sentinel across a retry instead of reviving prior usage", async () => {
+  it("keeps the current unavailable sentinel instead of reviving prior usage", async () => {
     const state = makePromptState();
     const legacyAssistant = {
       role: "assistant",
@@ -278,21 +192,18 @@ describe("normalizeEmbeddedRunAttempt", () => {
       stopReason: "stop",
       timestamp: 1,
     };
-    const attempt = makeAttempt({
-      route: "compact_only",
-      handled: true,
-      truncatedCount: 0,
-    });
+    const attempt = makeAttempt();
     attempt.messagesSnapshot = [legacyAssistant] as never;
     attempt.lastAssistant = legacyAssistant as never;
+    attempt.currentAttemptAssistant = legacyAssistant as never;
     const input = makeNormalizationInput(attempt, state);
     input.lastRunPromptUsage = { input: 42_000, output: 1_000, total: 43_000 };
 
     const result = await normalizeEmbeddedRunAttempt(input);
 
-    expect(result.action).toBe("retry");
-    if (result.action !== "retry") {
-      throw new Error(`expected retry, got ${result.action}`);
+    expect(result.action).toBe("proceed");
+    if (result.action !== "proceed") {
+      throw new Error(`expected proceed, got ${result.action}`);
     }
     expect(result.lastRunPromptUsage).toEqual({ contextUsage: { state: "unavailable" } });
   });

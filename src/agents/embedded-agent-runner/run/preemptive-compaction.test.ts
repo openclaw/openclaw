@@ -3,7 +3,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
-import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
+import {
+  estimateToolResultReductionPotential,
+  truncateOversizedToolResultsInMessages,
+} from "../tool-result-truncation.js";
 
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
@@ -101,6 +104,37 @@ describe("preemptive-compaction", () => {
     });
 
     expect(larger).toBeGreaterThan(smaller);
+  });
+
+  it("ignores runtime-only metadata when estimating provider tool schemas", () => {
+    const providerTool = {
+      name: "lookup",
+      description: "Look up one record",
+      parameters: {
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+    };
+    const baseline = estimateLlmBoundaryTokenPressure({
+      messages: [],
+      prompt: "continue",
+      tools: [providerTool],
+    });
+    const withRuntimeMetadata = estimateLlmBoundaryTokenPressure({
+      messages: [],
+      prompt: "continue",
+      tools: [
+        {
+          ...providerTool,
+          label: "x".repeat(100_000),
+          outputSchema: { description: "y".repeat(100_000) },
+          displaySummary: "z".repeat(100_000),
+        },
+      ],
+    });
+
+    expect(withRuntimeMetadata).toBe(baseline);
   });
 
   it("requests preemptive compaction when the reserve-based prompt budget would be exceeded", () => {
@@ -390,6 +424,39 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(false);
     expect(result.overflowTokens).toBeGreaterThan(0);
     expect(result.toolResultReducibleChars).toBeGreaterThan(0);
+  });
+
+  it("derives an aggregate truncation budget for many medium results in one turn", () => {
+    const mediumResult = "x".repeat(31_775);
+    const messages = Array.from({ length: 11 }, () => makeToolResultMessage(mediumResult));
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "",
+      contextTokenBudget: 200_000,
+      reserveTokens: 50_000,
+    });
+
+    expect(messages.every((message) => JSON.stringify(message).length < 64_000)).toBe(true);
+    expect(result.estimatedPromptTokens).toBeGreaterThan(result.promptBudgetBeforeReserve);
+    expect(result.route).toBe("truncate_tool_results_only");
+    expect(result.toolResultReducibleChars).toBeGreaterThan(0);
+    expect(result.toolResultAggregateBudgetChars).toBeLessThan(400_000);
+
+    const truncated = truncateOversizedToolResultsInMessages(
+      messages,
+      200_000,
+      undefined,
+      result.toolResultAggregateBudgetChars,
+    );
+    const recoveredPromptTokens = estimateLlmBoundaryTokenPressure({
+      messages: truncated.messages,
+      systemPrompt: "sys",
+      prompt: "",
+    });
+    expect(truncated.aggregatePressureEngaged).toBe(true);
+    expect(truncated.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(recoveredPromptTokens).toBeLessThanOrEqual(result.promptBudgetBeforeReserve);
   });
 
   it("routes to compact then truncate when recent tool tails help but cannot fully cover the overflow", () => {

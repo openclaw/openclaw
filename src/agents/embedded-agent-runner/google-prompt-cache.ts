@@ -17,6 +17,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
+import { withProviderPromptAccountingContext } from "../../llm/providers/stream-wrappers/provider-prompt-accounting.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -624,11 +625,15 @@ export async function prepareGooglePromptCacheStreamFn(
       return inner(model, context, options);
     }
 
+    const accountingOptions = withProviderPromptAccountingContext(options, {
+      systemPrompt,
+      tools: context.tools,
+    });
     return streamWithPayloadPatch(
       inner,
       model,
       buildManagedContextForCachedContent(context),
-      options,
+      accountingOptions,
       (payload) => {
         payload.cachedContent = cachedContent;
       },

@@ -9,9 +9,6 @@ import type {
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { log } from "./logger.js";
-import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
-import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
 import {
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
@@ -34,16 +31,6 @@ type GuardableAgent = object;
 
 type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
-};
-
-type MidTurnPrecheckOptions = {
-  enabled?: boolean;
-  contextTokenBudget: number;
-  reserveTokens: () => number;
-  toolResultMaxChars?: number;
-  getSystemPrompt?: () => string | undefined;
-  getPrePromptMessageCount?: () => number;
-  onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
 
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
@@ -195,34 +182,6 @@ function enforceToolResultLimit(params: {
     return next;
   });
   return changed ? guarded : messages;
-}
-
-function hasNewToolResultAfterFence(params: {
-  messages: AgentMessage[];
-  prePromptMessageCount: number;
-}): boolean {
-  for (const message of params.messages.slice(params.prePromptMessageCount)) {
-    if (isToolResultMessage(message)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function toMidTurnPrecheckRequest(
-  result: ReturnType<typeof shouldPreemptivelyCompactBeforePrompt>,
-): MidTurnPrecheckRequest | null {
-  if (result.route === "fits") {
-    return null;
-  }
-  return {
-    route: result.route,
-    estimatedPromptTokens: result.estimatedPromptTokens,
-    promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
-    overflowTokens: result.overflowTokens,
-    toolResultReducibleChars: result.toolResultReducibleChars,
-    effectiveReserveTokens: result.effectiveReserveTokens,
-  };
 }
 
 /**
@@ -378,7 +337,6 @@ export function installContextEngineLoopHook(params: {
 export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
-  midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
   const maxSingleToolResultChars = Math.max(
@@ -392,7 +350,6 @@ export function installToolResultContextGuard(params: {
   // narrow runtime view to keep callsites type-safe while preserving behavior.
   const mutableAgent = params.agent as GuardableAgentRecord;
   const originalTransformContext = mutableAgent.transformContext;
-  let lastSeenLength: number | null = null;
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
     const transformed = originalTransformContext
@@ -404,50 +361,6 @@ export function installToolResultContextGuard(params: {
       messages: sourceMessages,
       maxSingleToolResultChars,
     });
-    if (params.midTurnPrecheck?.enabled) {
-      const prePromptMessageCount = Math.max(
-        0,
-        Math.min(
-          contextMessages.length,
-          lastSeenLength ??
-            params.midTurnPrecheck.getPrePromptMessageCount?.() ??
-            contextMessages.length,
-        ),
-      );
-      lastSeenLength = prePromptMessageCount;
-      if (
-        hasNewToolResultAfterFence({
-          messages: contextMessages,
-          prePromptMessageCount,
-        })
-      ) {
-        // Use the same post-truncation view the runtime will send to the next model call.
-        // Recovery re-applies truncation to the persisted session manager, so
-        // this precheck is only a routing signal, not the source of truth.
-        const precheck = shouldPreemptivelyCompactBeforePrompt({
-          messages: contextMessages,
-          systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
-          // During a tool loop, the active user prompt is already part of messages.
-          prompt: "",
-          contextTokenBudget: params.midTurnPrecheck.contextTokenBudget,
-          reserveTokens: params.midTurnPrecheck.reserveTokens(),
-          toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
-        });
-        const request = toMidTurnPrecheckRequest(precheck);
-        log.debug(
-          `[context-overflow-midturn-precheck] tool-result-guard check route=${precheck.route} ` +
-            `messages=${contextMessages.length} prePromptMessageCount=${prePromptMessageCount} ` +
-            `estimatedPromptTokens=${precheck.estimatedPromptTokens} ` +
-            `promptBudgetBeforeReserve=${precheck.promptBudgetBeforeReserve} ` +
-            `overflowTokens=${precheck.overflowTokens}`,
-        );
-        if (request) {
-          params.midTurnPrecheck.onMidTurnPrecheck?.(request);
-          throw new MidTurnPrecheckSignal(request);
-        }
-      }
-      lastSeenLength = contextMessages.length;
-    }
     return contextMessages;
   }) as GuardableTransformContext;
 

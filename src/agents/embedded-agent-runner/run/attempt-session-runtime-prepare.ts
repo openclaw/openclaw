@@ -175,7 +175,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     getPrePromptMessageCount: () => state.prePromptMessageCount,
     getPromptCache: () => state.promptCache,
     getPromptCacheRetention: () => promptCacheRetentionRef.current,
-    getSystemPrompt: () => state.systemPromptText,
     isOpenAIResponsesApi,
     repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
     sessionAgentId: input.sessionManager.sessionAgentId,
@@ -239,6 +238,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         1,
         Math.floor(attempt.contextTokenBudget ?? attempt.model.contextWindow),
       ),
+      reserveTokens: Math.max(0, Math.floor(settingsManager.getCompactionReserveTokens())),
       ...(trajectoryRecorder ? { recordEvent: trajectoryRecorder.recordEvent } : {}),
     },
   });

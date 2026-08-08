@@ -1467,7 +1467,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       label: "preflight recovery request",
       finalAttempt: {
         assistantTexts: [],
-        preflightRecovery: { route: "compact_only" as const, handled: true as const },
+        preflightRecovery: { route: "compact_only" as const },
       },
     },
     {

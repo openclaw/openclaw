@@ -50,7 +50,6 @@ import {
   beginRunAttempt,
   createRunRetryBudget,
   isRunRetryBudgetExhausted,
-  recordRunRetry,
 } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
@@ -410,7 +409,6 @@ export async function runPreparedEmbeddedLoop(
           normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
         lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
         accumulatedReplayState = normalizedAttempt.replayState;
-        recordRunRetry(runRetryBudget, normalizedAttempt.retryKind);
         continue;
       }
       bootstrapPromptWarningSignaturesSeen = normalizedAttempt.bootstrapPromptWarningSignaturesSeen;

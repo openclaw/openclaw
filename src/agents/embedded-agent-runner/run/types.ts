@@ -177,24 +177,13 @@ export type EmbeddedRunAttemptResult = {
   assistantTranscriptIdempotencyKey?: string;
   /** Host-private terminal identity used to close the accepted transcript turn. */
   contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
-  preflightRecovery?:
-    | {
-        route: Exclude<PreemptiveCompactionRoute, "fits">;
-        source?: "mid-turn";
-        estimatedPromptTokens?: number;
-        promptBudgetBeforeReserve?: number;
-        overflowTokens?: number;
-        handled: true;
-        truncatedCount?: number;
-      }
-    | {
-        route: Exclude<PreemptiveCompactionRoute, "fits">;
-        source?: "mid-turn";
-        estimatedPromptTokens?: number;
-        promptBudgetBeforeReserve?: number;
-        overflowTokens?: number;
-        handled?: false;
-      };
+  preflightRecovery?: {
+    route: Exclude<PreemptiveCompactionRoute, "fits">;
+    source?: "mid-turn";
+    estimatedPromptTokens?: number;
+    promptBudgetBeforeReserve?: number;
+    overflowTokens?: number;
+  };
   sessionIdUsed: string;
   sessionFileUsed?: string;
   diagnosticTrace?: DiagnosticTraceContext;

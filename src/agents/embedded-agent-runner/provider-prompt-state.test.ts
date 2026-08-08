@@ -6,12 +6,18 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { createCodexNativeWebSearchWrapper } from "../../llm/providers/stream-wrappers/openai.js";
+import { isLikelyContextOverflowError } from "../embedded-agent-helpers.js";
+import type { AgentMessage } from "../runtime/index.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
+  installProviderPromptContextAdmission,
   markLastProviderPromptContextRejected,
   wrapStreamFnWithProviderPromptState,
 } from "./provider-prompt-state.js";
+import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
+import { admitProviderPrompt } from "./run/provider-prompt-admission.js";
 
 const model = {
   id: "model-1",
@@ -335,6 +341,255 @@ describe("provider prompt state", () => {
       timestamp: 1,
     });
     await result.result();
+    clearProviderPromptState(runId);
+  });
+
+  it("routes a near-budget native web-search prompt before transport", async () => {
+    const runId = "native-web-search-admission";
+    const state = getProviderPromptState(runId);
+    const context = {
+      messages: [{ role: "user", content: "m".repeat(4_000), timestamp: 1 }],
+      tools: [],
+    } as Context;
+    const baseEstimate = estimateLlmBoundaryTokenPressure({
+      messages: context.messages as AgentMessage[],
+      prompt: "",
+      tools: [],
+    });
+    const transport = vi.fn<StreamFn>(() => createResultStream("stop"));
+    const providerBoundary = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: baseEstimate + 1,
+    });
+    const removeAdmission = installProviderPromptContextAdmission(
+      state,
+      (providerContext, accountingContext) => {
+        const admission = admitProviderPrompt({
+          context: providerContext,
+          accountingContext,
+          contextTokenBudget: baseEstimate + 1,
+          midTurnPrecheckEnabled: true,
+          reserveTokens: 0,
+          toolResultAggregateMaxChars: 1_000_000,
+          toolResultMaxChars: 64_000,
+          projectionState: {
+            replacements: new Map(),
+            frozen: new Set(),
+            ambiguousBaseKeys: new Set(),
+            sourceTextByKey: new Map(),
+          },
+        });
+        if (admission.status === "recovery_required") {
+          throw new Error("provider prompt requires recovery");
+        }
+        return admission.context;
+      },
+    );
+    const wrapped = createCodexNativeWebSearchWrapper(providerBoundary, {
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      wrapped(
+        {
+          api: "openai-chatgpt-responses",
+          provider: "gateway",
+          id: "gpt-5.5",
+        } as Model,
+        context,
+      ),
+    ).rejects.toThrow("provider prompt requires recovery");
+    expect(transport).not.toHaveBeenCalled();
+
+    removeAdmission();
+    clearProviderPromptState(runId);
+  });
+
+  it("rejects a final payload that outbound transforms grew past the context window", async () => {
+    const runId = "final-payload-overflow";
+    const state = getProviderPromptState(runId);
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "small prompt", timestamp: 1 }],
+      tools: [],
+    } as Context;
+    const networkSend = vi.fn();
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      networkSend();
+      return createResultStream("stop");
+    });
+    const oversizedPayload = {
+      messages: [{ role: "user", content: "x".repeat(100_000) }],
+      model: model.id,
+    };
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 4_000,
+    });
+
+    let caught: unknown;
+    try {
+      await wrapped(model, context, { onPayload: () => oversizedPayload });
+    } catch (error) {
+      caught = error;
+    }
+    expect(String(caught)).toContain("Context overflow: final provider payload exceeds");
+    expect(isLikelyContextOverflowError(caught instanceof Error ? caught.message : undefined)).toBe(
+      true,
+    );
+    expect(networkSend).not.toHaveBeenCalled();
+
+    markLastProviderPromptContextRejected(state);
+    await expect(wrapped(model, context, { onPayload: () => oversizedPayload })).rejects.toThrow(
+      "byte-identical provider payload",
+    );
+    expect(networkSend).not.toHaveBeenCalled();
+    clearProviderPromptState(runId);
+  });
+
+  it("runs the acknowledgement hook only after the provider responds", async () => {
+    const runId = "acknowledgement-hook-boundary";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const acknowledged = vi.fn(() => true);
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      await options?.onResponse?.({ status: 200, headers: {} }, model);
+      return createResultStream("stop");
+    });
+    const recordEvent = vi.fn();
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 128_000,
+      recordEvent,
+    });
+    const removeHooks = installProviderPromptContextAdmission(
+      state,
+      (providerContext) => providerContext,
+      acknowledged,
+    );
+
+    const first = await wrapped(model, context);
+    await first.result();
+    expect(acknowledged).toHaveBeenCalledTimes(1);
+    expect(recordEvent).toHaveBeenCalledWith(
+      "provider.prompt.admitted",
+      expect.objectContaining({ byteWeight: expect.any(Number) }),
+    );
+
+    await expect(
+      wrapped(model, context, {
+        onResponse: () => {
+          throw new Error("response observer failed");
+        },
+      }),
+    ).rejects.toThrow("response observer failed");
+    expect(acknowledged).toHaveBeenCalledTimes(2);
+    expect(recordEvent).toHaveBeenCalledTimes(2);
+
+    removeHooks();
+    clearProviderPromptState(runId);
+  });
+
+  it("does not acknowledge a request that fails after the payload hook", async () => {
+    const runId = "acknowledgement-hook-setup-failure";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const acknowledged = vi.fn(() => true);
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      throw new Error("connection refused");
+    });
+    const recordEvent = vi.fn();
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 128_000,
+      recordEvent,
+    });
+    const removeHooks = installProviderPromptContextAdmission(
+      state,
+      (providerContext) => providerContext,
+      acknowledged,
+    );
+
+    await expect(wrapped(model, context)).rejects.toThrow("connection refused");
+    expect(acknowledged).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith("provider.prompt.admitted", expect.anything());
+
+    removeHooks();
+    clearProviderPromptState(runId);
+  });
+
+  it("rejects an extra_body replacement above the reserve-aware prompt budget", async () => {
+    const runId = "final-payload-reserve-overflow";
+    const state = getProviderPromptState(runId);
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "small prompt", timestamp: 1 }],
+      tools: [],
+    } as Context;
+    const networkSend = vi.fn();
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      networkSend();
+      return createResultStream("stop");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 40_000,
+      reserveTokens: 8_000,
+    });
+    const replacedPayload = {
+      messages: [{ role: "user", content: "x".repeat(140_000) }],
+      model: model.id,
+    };
+
+    await expect(wrapped(model, context, { onPayload: () => replacedPayload })).rejects.toThrow(
+      "Context overflow: final provider payload exceeds the prompt budget",
+    );
+    expect(networkSend).not.toHaveBeenCalled();
+    clearProviderPromptState(runId);
+  });
+
+  it("admits a final payload within the reserve-aware prompt budget", async () => {
+    const runId = "final-payload-reserve-within";
+    const state = getProviderPromptState(runId);
+    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
+      await options?.onPayload?.({ input: "raw", model: model.id }, model);
+      return createResultStream("stop");
+    });
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      streamFn: transport,
+      state,
+      effectiveContextTokenBudget: 40_000,
+      reserveTokens: 8_000,
+    });
+
+    const result = await wrapped(model, context, {
+      onPayload: () => ({
+        messages: [{ role: "user", content: "x".repeat(100_000) }],
+        model: model.id,
+      }),
+    });
+    await result.result();
+
+    expect(transport).toHaveBeenCalledTimes(1);
     clearProviderPromptState(runId);
   });
 });
