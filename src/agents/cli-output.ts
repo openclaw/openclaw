@@ -863,26 +863,39 @@ function emitToolStartOnce(
   args: Record<string, unknown>,
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
-  // Streaming and final assistant records may both describe the same tool call.
-  // When the first emission carried empty args (e.g. the provider streamed no
-  // input_json_delta chunks) but a later record carries the resolved args, re-emit
-  // once so renderers can backfill the command/args instead of freezing on an
-  // empty tool row. See #120306 (Discord progress draft dropped tool args).
   if (tracker.startedIds.has(toolCallId)) {
-    const prev = tracker.emittedArgsById.get(toolCallId);
-    const prevEmpty = !prev || Object.keys(prev).length === 0;
-    const nowNonEmpty = Object.keys(args).length > 0;
-    if (!prevEmpty || !nowNonEmpty) {
-      return;
-    }
-    tracker.emittedArgsById.set(toolCallId, args);
-    onToolUseStart?.({ toolCallId, name, kind, args });
     return;
   }
   tracker.startedIds.add(toolCallId);
   tracker.nameById.set(toolCallId, name);
   tracker.emittedArgsById.set(toolCallId, args);
   onToolUseStart?.({ toolCallId, name, kind, args });
+}
+
+// A tool may start with empty args (the provider streamed no input_json_delta
+// chunks) and later carry the resolved args in the final assistant snapshot.
+// Emit that as a tool *update* so renderers (e.g. the Discord progress draft)
+// can backfill the command/args on the existing row instead of starting a second
+// lifecycle event, which would double-count the completion receipt. See #120306.
+function emitToolArgsBackfill(
+  tracker: ToolUseTracker,
+  toolCallId: string,
+  name: string,
+  kind: CliToolUseStartDelta["kind"],
+  args: Record<string, unknown>,
+  onToolUseUpdate?: (delta: CliToolUseStartDelta) => void,
+): void {
+  if (!tracker.startedIds.has(toolCallId)) {
+    return;
+  }
+  const prev = tracker.emittedArgsById.get(toolCallId);
+  const prevEmpty = !prev || Object.keys(prev).length === 0;
+  const nowNonEmpty = Object.keys(args).length > 0;
+  if (!prevEmpty || !nowNonEmpty) {
+    return;
+  }
+  tracker.emittedArgsById.set(toolCallId, args);
+  onToolUseUpdate?.({ toolCallId, name, kind, args });
 }
 
 function emitToolResultOnce(
@@ -935,6 +948,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
   parsed: Record<string, unknown>;
   tracker: ToolUseTracker;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolUseUpdate?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
 }): void {
   if (!supportsCliJsonlToolEvents(params)) {
@@ -1027,6 +1041,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
         }
         const args: Record<string, unknown> = isRecord(block.input) ? block.input : {};
         emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
+        emitToolArgsBackfill(tracker, toolCallId, name, block.type, args, params.onToolUseUpdate);
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
         const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
         if (!toolCallId) {
@@ -1434,6 +1449,7 @@ export function createCliJsonlStreamingParser(params: {
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onPlanUpdate?: (update: CliPlanUpdate) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolUseUpdate?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;
@@ -1915,6 +1931,7 @@ export function createCliJsonlStreamingParser(params: {
         parsed,
         tracker: toolTracker,
         onToolUseStart: params.onToolUseStart,
+        onToolUseUpdate: params.onToolUseUpdate,
         onToolResult: params.onToolResult,
       });
     }

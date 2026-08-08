@@ -3169,8 +3169,9 @@ describe("createCliJsonlStreamingParser", () => {
     expect(starts).toEqual(expected);
   });
 
-  it("backfills resolved tool args when the provider skips input_json_delta (#120306)", () => {
+  it("emits resolved tool args as an update when the provider skips input_json_delta (#120306)", () => {
     const starts: CliToolUseStartDelta[] = [];
+    const updates: CliToolUseStartDelta[] = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "local-cli",
@@ -3181,11 +3182,13 @@ describe("createCliJsonlStreamingParser", () => {
       providerId: "claude-cli",
       onAssistantDelta: () => undefined,
       onToolUseStart: (delta) => starts.push(delta),
+      onToolUseUpdate: (delta) => updates.push(delta),
     });
 
     // Streaming emits an empty tool_start (no input_json_delta chunks), then the
     // final assistant snapshot carries the resolved args. The args must not be
-    // dropped: renderers should be able to backfill the command/args.
+    // dropped: renderers should receive them as a tool *update* on the existing
+    // row, not as a second start (which would double-count the completion receipt).
     parser.push(
       [
         JSON.stringify({
@@ -3211,11 +3214,12 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(
-      starts.some(
-        (s) => s.toolCallId === "toolu_1" && (s.args as { command?: string }).command === "ls -la",
-      ),
-    ).toBe(true);
+    // Exactly one start, carrying the empty args from streaming.
+    expect(starts).toEqual([{ toolCallId: "toolu_1", name: "Bash", kind: "tool_use", args: {} }]);
+    // The resolved args arrive as a single update, never as a second start.
+    expect(updates).toEqual([
+      { toolCallId: "toolu_1", name: "Bash", kind: "tool_use", args: { command: "ls -la" } },
+    ]);
   });
 
   it("uses content_block_start input when no input_json_delta chunks arrive (#120306)", () => {
