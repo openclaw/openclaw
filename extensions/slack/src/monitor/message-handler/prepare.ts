@@ -990,7 +990,7 @@ export async function prepareSlackMessage(params: {
               accountId: account.accountId,
               channelId: message.channel,
               threadTs: message.thread_ts,
-              ...(opts.eventScope ? { teamId: opts.eventScope.teamId } : {}),
+              teamId: opts.eventScope?.teamId,
             }),
           );
   }

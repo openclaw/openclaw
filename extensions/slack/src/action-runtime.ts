@@ -379,7 +379,7 @@ async function assertSlackReadTargetAllowed(params: {
       cfg: params.cfg,
       accountId: params.account.accountId,
       channelId: params.channelId,
-      ...(params.teamId ? { teamId: params.teamId } : {}),
+      teamId: params.teamId,
       operation: "read",
     });
     if (
@@ -414,7 +414,7 @@ async function assertSlackReadTargetAllowed(params: {
     cfg: params.cfg,
     accountId: params.account.accountId,
     channelId: params.channelId,
-    ...(params.teamId ? { teamId: params.teamId } : {}),
+    teamId: params.teamId,
     operation: "read",
     ...(preliminary.shouldResolveName ? { requireFreshName: true } : {}),
   });
@@ -545,7 +545,7 @@ function resolveSlackActionChannelTarget(
   const channelId = resolveSlackChannelId(raw);
   return {
     channelId,
-    ...(resolved.teamId ? { teamId: resolved.teamId } : {}),
+    teamId: resolved.teamId,
   };
 }
 

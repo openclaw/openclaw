@@ -392,7 +392,7 @@ async function resolveSlackOutboundSessionRoute(params: {
       cfg: params.cfg,
       accountId: params.accountId,
       channelId: apiTargetId,
-      ...(parsed.teamId ? { teamId: parsed.teamId } : {}),
+      teamId: parsed.teamId,
     });
     if (conversation.type !== "dm" || !conversation.user) {
       return null;
@@ -407,7 +407,7 @@ async function resolveSlackOutboundSessionRoute(params: {
       cfg: params.cfg,
       accountId: params.accountId,
       channelId: apiTargetId,
-      ...(parsed.teamId ? { teamId: parsed.teamId } : {}),
+      teamId: parsed.teamId,
     });
     if (channelType === "group") {
       peerKind = "group";

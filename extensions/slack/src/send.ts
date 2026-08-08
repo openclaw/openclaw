@@ -367,7 +367,7 @@ function parseRecipient(raw: string): SlackRecipient {
   return {
     kind: target.kind,
     id: canonicalizeSlackApiTargetId(target.kind, target.id, raw),
-    ...(target.teamId ? { teamId: target.teamId } : {}),
+    teamId: target.teamId,
   };
 }
 
@@ -1049,7 +1049,7 @@ export async function sendMessageSlack(
     token,
     recipient,
     threadTs: opts.threadTs,
-    ...(deliveryTeamId ? { teamId: deliveryTeamId } : {}),
+    teamId: deliveryTeamId,
   });
   const queuedOpts = enterpriseDelivery
     ? Object.freeze({ ...opts, client: enterpriseDelivery.client })
