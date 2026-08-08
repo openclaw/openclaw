@@ -484,27 +484,69 @@ type SlackActionChannelTarget = {
   teamId?: string;
 };
 
-function assertSlackActionTargetAllowed(account: ResolvedSlackAccount, raw: string) {
-  const target = parseSlackTarget(raw, { defaultKind: "channel" });
-  if (!target) {
+function resolveTrustedCurrentSlackTeamId(params: {
+  account: ResolvedSlackAccount;
+  target: NonNullable<ReturnType<typeof parseSlackTarget>>;
+  context?: SlackActionContext;
+}): string | undefined {
+  const requesterAccountId = params.context?.requesterAccountId?.trim();
+  if (
+    params.account.config.enterpriseOrgInstall !== true ||
+    normalizeOptionalLowercaseString(params.context?.currentChannelProvider) !== "slack" ||
+    !requesterAccountId ||
+    normalizeAccountId(requesterAccountId) !== normalizeAccountId(params.account.accountId)
+  ) {
+    return undefined;
+  }
+
+  const matchingTeams = new Map<string, string>();
+  for (const raw of [params.context?.currentChannelId, params.context?.currentMessagingTarget]) {
+    if (!raw) {
+      continue;
+    }
+    const current = parseSlackTarget(raw);
+    if (
+      current?.teamId &&
+      current.kind === params.target.kind &&
+      current.id.toLowerCase() === params.target.id.toLowerCase()
+    ) {
+      matchingTeams.set(current.teamId.toLowerCase(), current.teamId);
+    }
+  }
+  return matchingTeams.size === 1 ? matchingTeams.values().next().value : undefined;
+}
+
+function resolveSlackActionTarget(
+  account: ResolvedSlackAccount,
+  raw: string,
+  context?: SlackActionContext,
+) {
+  const parsed = parseSlackTarget(raw, { defaultKind: "channel" });
+  if (!parsed) {
     throw new Error("Slack target is required.");
   }
-  assertSlackDirectSendAllowed(account, target.teamId);
-  return target;
+  const teamId =
+    parsed.teamId ?? resolveTrustedCurrentSlackTeamId({ account, target: parsed, context });
+  assertSlackDirectSendAllowed(account, teamId);
+  return {
+    routingTarget: teamId
+      ? formatSlackTeamTarget({ teamId, kind: parsed.kind, id: parsed.id })
+      : raw,
+    teamId,
+  };
 }
 
 function resolveSlackActionChannelTarget(
   account: ResolvedSlackAccount,
   raw: string,
+  context?: SlackActionContext,
 ): SlackActionChannelTarget {
-  const target = assertSlackActionTargetAllowed(account, raw);
+  const resolved = resolveSlackActionTarget(account, raw, context);
   const channelId = resolveSlackChannelId(raw);
   return {
     channelId,
-    routingTarget: target.teamId
-      ? formatSlackTeamTarget({ teamId: target.teamId, kind: "channel", id: channelId })
-      : raw,
-    ...(target.teamId ? { teamId: target.teamId } : {}),
+    routingTarget: resolved.routingTarget,
+    ...(resolved.teamId ? { teamId: resolved.teamId } : {}),
   };
 }
 
@@ -532,6 +574,7 @@ export async function handleSlackAction(
       readStringParam(params, "channelId", {
         required: true,
       }),
+      context,
     );
   const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
@@ -764,7 +807,8 @@ export async function handleSlackAction(
       }
       case "uploadFile": {
         const to = readStringParam(params, "to", { required: true });
-        assertSlackActionTargetAllowed(account, to);
+        const target = resolveSlackActionTarget(account, to, context);
+        const destination = target.routingTarget;
         const filePath = readStringParam(params, "filePath", {
           required: true,
           trim: false,
@@ -782,24 +826,28 @@ export async function handleSlackAction(
         }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
-          to,
+          destination,
           context,
           {
             suppressImplicitThread: params.topLevel === true || params.threadTs === null,
           },
         );
-        const result = await slackActionRuntime.sendSlackMessage(to, initialComment ?? "", {
-          ...writeOpts,
-          mediaUrl: filePath,
-          mediaAccess: context?.mediaAccess,
-          mediaLocalRoots: context?.mediaLocalRoots,
-          mediaReadFile: context?.mediaReadFile,
-          threadTs: threadTs ?? undefined,
-          ...(filename ? { uploadFileName: filename } : {}),
-          ...(title ? { uploadTitle: title } : {}),
-        });
+        const result = await slackActionRuntime.sendSlackMessage(
+          destination,
+          initialComment ?? "",
+          {
+            ...writeOpts,
+            mediaUrl: filePath,
+            mediaAccess: context?.mediaAccess,
+            mediaLocalRoots: context?.mediaLocalRoots,
+            mediaReadFile: context?.mediaReadFile,
+            threadTs: threadTs ?? undefined,
+            ...(filename ? { uploadFileName: filename } : {}),
+            ...(title ? { uploadTitle: title } : {}),
+          },
+        );
 
-        if (context?.hasRepliedRef && slackContextTargetsMatch(to, context)) {
+        if (context?.hasRepliedRef && slackContextTargetsMatch(destination, context)) {
           context.hasRepliedRef.value = true;
         }
 

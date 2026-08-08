@@ -335,6 +335,98 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("qualifies a bare Enterprise Grid reaction target from the trusted current conversation", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId: "C123",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it.each([
+    {
+      name: "provider does not match",
+      context: {
+        currentChannelProvider: "discord",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    },
+    {
+      name: "account does not match",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "other",
+      },
+    },
+    {
+      name: "requester account is missing",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+      },
+    },
+    {
+      name: "channel does not match",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C456",
+        requesterAccountId: "default",
+      },
+    },
+    {
+      name: "current target is not workspace-qualified",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+        requesterAccountId: "default",
+      },
+    },
+    {
+      name: "current targets disagree on workspace",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        currentMessagingTarget: "team:T456:channel:C123",
+        requesterAccountId: "default",
+      },
+    },
+  ])(
+    "rejects bare Enterprise Grid reaction targets when the trusted $name",
+    async ({ context }) => {
+      await expect(
+        handleSlackAction(
+          {
+            action: "react",
+            channelId: "C123",
+            messageId: "123.456",
+            emoji: "✅",
+          },
+          slackConfig({ enterpriseOrgInstall: true }),
+          context,
+        ),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(reactSlackMessage).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes Enterprise Grid reaction removal through the target workspace client", async () => {
     const cfg = slackConfig({ enterpriseOrgInstall: true });
     const channelId = "team:T123:channel:C123";
@@ -730,6 +822,31 @@ describe("handleSlackAction", () => {
         initialComment: "fresh report",
       },
       cfg,
+    );
+
+    expectSlackSendCall(0, "team:T123:channel:C123", "fresh report", {
+      cfg,
+      mediaUrl: "/tmp/report.png",
+      threadTs: undefined,
+    });
+  });
+
+  it("qualifies a bare Enterprise Grid upload destination from the trusted current conversation", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
     );
 
     expectSlackSendCall(0, "team:T123:channel:C123", "fresh report", {
