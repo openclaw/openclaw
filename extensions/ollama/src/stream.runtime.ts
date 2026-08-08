@@ -76,6 +76,18 @@ function findNewlineEnd(value: Uint8Array, lineIndex: number): number | undefine
   return undefined;
 }
 
+function countTerminalTrailingWhitespaceBytes(value: Uint8Array, terminalLineEnd: number): number {
+  let count = 0;
+  for (let offset = terminalLineEnd - 2; offset >= 0; offset -= 1) {
+    const byte = value[offset];
+    if (byte !== 0x20 && byte !== 0x09 && byte !== 0x0d) {
+      break;
+    }
+    count += 1;
+  }
+  return count;
+}
+
 type OllamaStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
 };
@@ -880,7 +892,6 @@ export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const encoder = new TextEncoder();
   let buffer = "";
   let pendingRecordBytes = 0;
   let terminalRecord: OllamaChatResponse | undefined;
@@ -918,7 +929,6 @@ export async function* parseNdjsonStream(
         }
         continue;
       }
-      const previousBuffer = buffer;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
@@ -942,12 +952,13 @@ export async function* parseNdjsonStream(
           if (terminalLineEnd === undefined) {
             throw new Error("Ollama terminal record was not newline-terminated");
           }
-          const terminalContentEnd = line.trimEnd().length;
-          const currentLineStart = lineIndex === 0 ? previousBuffer.length : 0;
-          const currentTrailingText = line.slice(Math.max(terminalContentEnd, currentLineStart));
-          const terminalTrailingBytes = encoder.encode(currentTrailingText).byteLength;
+          const terminalTrailingBytes = countTerminalTrailingWhitespaceBytes(
+            value,
+            terminalLineEnd,
+          );
+          const terminalTailStart = terminalLineEnd - terminalTrailingBytes - 1;
           pendingRecordBytes = checkNdjsonRecordCap(
-            value.subarray(0, terminalLineEnd - terminalTrailingBytes),
+            value.subarray(0, terminalTailStart),
             pendingRecordBytes,
           );
           // Hold the terminal record until the whole response body has been
@@ -956,10 +967,7 @@ export async function* parseNdjsonStream(
           // would otherwise complete successfully without validation.
           terminalRecord = parsed;
           terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
-          const terminalTailText = `${line.slice(terminalContentEnd)}\n${lines
-            .slice(lineIndex + 1)
-            .join("\n")}${lineIndex + 1 < lines.length ? "\n" : ""}${buffer}`;
-          terminalTailBytes += encoder.encode(terminalTailText).byteLength;
+          terminalTailBytes += value.byteLength - terminalTailStart;
           buffer = "";
           terminalFound = true;
           if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {

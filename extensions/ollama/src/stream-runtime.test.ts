@@ -1275,7 +1275,7 @@ describe("parseNdjsonStream", () => {
       const terminal = encoder.encode(
         '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
       );
-      const firstTail = new Uint8Array(256 * 1024 - 1 + 1).fill(0x20);
+      const firstTail = new Uint8Array(256 * 1024 - 1).fill(0x20);
       firstTail[firstTail.length - 1] = 0xc3;
       const first = new Uint8Array(terminal.byteLength + firstTail.byteLength);
       first.set(terminal);
@@ -1295,6 +1295,37 @@ describe("parseNdjsonStream", () => {
       expect(chunks).toHaveLength(1);
       expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
       expect(reader.read).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts a split three-byte UTF-8 prefix before the terminal-tail cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+      );
+      const firstTail = new Uint8Array(256 * 1024).fill(0x20);
+      firstTail[firstTail.length - 3] = 0xf0;
+      firstTail[firstTail.length - 2] = 0x9f;
+      firstTail[firstTail.length - 1] = 0x98;
+      const first = new Uint8Array(terminal.byteLength + firstTail.byteLength);
+      first.set(terminal);
+      first.set(firstTail, terminal.byteLength);
+      const reader = mockChunkSequenceReader([first, new Uint8Array([0x80]), null]);
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+
+      await expect(chunksPromise).rejects.toThrow(/utf-8/i);
+      expect(reader.read).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
