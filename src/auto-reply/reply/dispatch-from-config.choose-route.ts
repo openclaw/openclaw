@@ -120,17 +120,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     !sendPolicyDenied &&
     shouldEmitVerboseProgress() &&
     shouldSendVerboseProgressMessages();
-  const shouldDeliverForcedToolProgressDespiteSourceSuppression = () =>
-    suppressAutomaticSourceDelivery &&
-    sourceReplyDeliveryMode === "message_tool_only" &&
-    ctx.InboundEventKind !== "room_event" &&
+  const shouldForceToolProgressDelivery = () =>
     !sendPolicyDenied &&
-    params.replyOptions?.forceToolResultProgress === true;
-  const shouldDeliverFastModeAutoProgressDespiteSourceSuppression = () =>
-    suppressAutomaticSourceDelivery &&
-    sourceReplyDeliveryMode === "message_tool_only" &&
-    ctx.InboundEventKind !== "room_event" &&
-    !sendPolicyDenied;
+    params.replyOptions?.forceToolResultProgress === true &&
+    (!suppressAutomaticSourceDelivery ||
+      (sourceReplyDeliveryMode === "message_tool_only" && ctx.InboundEventKind !== "room_event"));
   let finalReplyDeliveryStarted = false;
   const hasExecApprovalPayload = (payload: ReplyPayload) => {
     const execApproval =
@@ -693,8 +687,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     shouldSendToolSummaries,
     notifySessionMetadataChanges,
     shouldDeliverVerboseProgressDespiteSourceSuppression,
-    shouldDeliverForcedToolProgressDespiteSourceSuppression,
-    shouldDeliverFastModeAutoProgressDespiteSourceSuppression,
+    shouldForceToolProgressDelivery,
     hasExecApprovalPayload,
     hasAskUserPayload,
     readAskUserQuestionId,

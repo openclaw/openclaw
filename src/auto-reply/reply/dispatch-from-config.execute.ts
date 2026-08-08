@@ -211,25 +211,20 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       return;
                     }
                     const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-                    const isFastModeAutoProgressDelivery =
-                      isFastModeAutoProgress &&
-                      state.shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
-                    const isForcedToolProgress =
-                      state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
-                    const progressCallbackForwarded = state.shouldForwardToolResultProgressCallback(
-                      payload,
-                      isFastModeAutoProgress,
-                    );
-                    if (progressCallbackForwarded) {
-                      await onToolResultFromReplyOptions?.(payload);
-                    }
+                    const isForcedToolProgress = state.shouldForceToolProgressDelivery();
+                    const progressCallbackForwarded =
+                      state.shouldForwardToolResultProgressCallback(payload);
+                    const progressCallbackResult = progressCallbackForwarded
+                      ? await onToolResultFromReplyOptions?.(payload)
+                      : undefined;
                     if (isDispatchOperationAborted()) {
                       return;
                     }
                     if (
                       isFastModeAutoProgress &&
                       progressCallbackForwarded &&
-                      onToolResultFromReplyOptions
+                      onToolResultFromReplyOptions &&
+                      progressCallbackResult !== false
                     ) {
                       return;
                     }
@@ -238,7 +233,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       state.shouldSuppressProgressDelivery() &&
-                      !isFastModeAutoProgressDelivery &&
                       !isForcedToolProgress &&
                       !hasAskUserPayload(payload)
                     ) {
@@ -271,7 +265,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       state.shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
-                      !isFastModeAutoProgressPayload(deliveryPayload) &&
                       !isForcedToolProgress
                     ) {
                       return;
@@ -279,11 +272,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (state.shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)) {
                       return;
                     }
-                    if (
-                      shouldSuppressDefaultToolProgressMessages() &&
-                      !isFastModeAutoProgressPayload(deliveryPayload) &&
-                      !isForcedToolProgress
-                    ) {
+                    if (shouldSuppressDefaultToolProgressMessages() && !isForcedToolProgress) {
                       const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
                       if (
                         !hasMedia &&

@@ -748,6 +748,26 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expect(draftStream.updatePreview).not.toHaveBeenCalled();
   });
 
+  it("does not send fast-auto progress when no progress draft can accept it", async () => {
+    let rendered: boolean | void = undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      rendered = await replyOptions?.onToolResult?.({
+        text: "Fast mode enabled",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramCfg: { streaming: { mode: "off" } },
+    });
+
+    expect(rendered).toBe(false);
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("retracts the Telegram preamble headline by item identity", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

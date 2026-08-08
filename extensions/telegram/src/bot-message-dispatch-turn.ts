@@ -9,7 +9,6 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isFastModeAutoProgressPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -271,13 +270,6 @@ export async function runTelegramDispatchTurn(params: {
                 startImmediately: true,
               });
               if (updatedDraft) {
-                return true;
-              }
-              if (
-                isFastModeAutoProgressPayload(payload) &&
-                !params.progress.canPushToolProgress()
-              ) {
-                await params.delivery.sendPayload(payload);
                 return true;
               }
               return false;

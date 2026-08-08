@@ -138,9 +138,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (state.hasAskUserPayload(payload)) {
       return payload;
     }
-    if (isFastModeAutoProgressPayload(payload)) {
-      return payload;
-    }
     // Group/native flows intentionally suppress tool summary text, but media-only
     // tool results (for example TTS audio) must still be delivered.
     const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
@@ -201,20 +198,22 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     const text = normalizeOptionalString(payload.text);
     return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
   };
-  const shouldForwardToolResultProgressCallback = (
-    payload: ReplyPayload,
-    isFastModeAutoProgress: boolean,
-  ) => {
-    if (isFastModeAutoProgress) {
-      return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
-    }
+  const shouldForwardToolResultProgressCallback = (payload: ReplyPayload) => {
     if (
       allowSuppressedSourceProgressCallbacks &&
       isChannelOwnedToolResultProgressPayload(payload)
     ) {
       return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
     }
-    return shouldSendToolSummaries() && shouldForwardProgressCallback();
+    const progressEnabled =
+      shouldSendToolSummaries() || params.replyOptions?.forceToolResultProgress === true;
+    if (!progressEnabled) {
+      return false;
+    }
+    if (allowSuppressedSourceProgressCallbacks && isFastModeAutoProgressPayload(payload)) {
+      return shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true });
+    }
+    return shouldForwardProgressCallback();
   };
   const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
     allowWhenToolSummariesHidden?: boolean;
@@ -238,6 +237,9 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     forwardWhenSourceDeliverySuppressed?: boolean;
     requiresToolSummaryVisibility?: boolean;
   }) => {
+    if (sendPolicyDenied) {
+      return false;
+    }
     if (
       options?.requiresToolSummaryVisibility === true &&
       !shouldSendToolSummaries() &&
@@ -248,7 +250,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     return (
       !suppressAutomaticSourceDelivery ||
       (allowSuppressedSourceProgressCallbacks &&
-        !sendPolicyDenied &&
         options?.forwardWhenSourceDeliverySuppressed === true)
     );
   };
