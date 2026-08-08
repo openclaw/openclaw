@@ -1,5 +1,6 @@
 // OpenAI-compatible speech provider tests cover speech request and file output.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withSpeakerSelectionFallbackCompat } from "../../packages/speech-core/speaker.js";
 import { createOpenAiCompatibleSpeechProvider } from "./openai-compatible-speech-provider.js";
 
 const {
@@ -104,6 +105,127 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
       responseFormat: "pcm",
     });
   });
+
+  it.each([
+    {
+      providerId: "openrouter",
+      scenario: "speakerVoice before every legacy alias",
+      voiceConfig: {
+        speakerVoice: " af_sky ",
+        speakerVoiceId: "canonical-id",
+        voice: "legacy-voice",
+        voiceId: "legacy-id",
+      },
+      expectedVoice: "af_sky",
+    },
+    {
+      providerId: "deepinfra",
+      scenario: "speakerVoiceId after a blank speakerVoice",
+      voiceConfig: {
+        speakerVoice: "  ",
+        speakerVoiceId: " af_heart ",
+        voice: "legacy-voice",
+        voiceId: "legacy-id",
+      },
+      expectedVoice: "af_heart",
+    },
+    {
+      providerId: "openrouter",
+      scenario: "the shipped voice alias after blank canonical values",
+      voiceConfig: {
+        speakerVoice: "  ",
+        speakerVoiceId: "  ",
+        voice: " af_nova ",
+        voiceId: "legacy-id",
+      },
+      expectedVoice: "af_nova",
+    },
+    {
+      providerId: "deepinfra",
+      scenario: "the shipped voiceId alias after a blank voice",
+      voiceConfig: {
+        speakerVoice: "  ",
+        speakerVoiceId: "  ",
+        voice: "  ",
+        voiceId: " af_echo ",
+      },
+      expectedVoice: "af_echo",
+    },
+  ] as const)(
+    "$providerId honors $scenario",
+    async ({ providerId, voiceConfig, expectedVoice }) => {
+      const providers = {
+        openrouter: {
+          label: "OpenRouter",
+          model: "hexgrad/kokoro-82m",
+          defaultVoice: "af_alloy",
+          baseUrl: "https://openrouter.ai/api/v1",
+          envKey: "OPENROUTER_API_KEY",
+        },
+        deepinfra: {
+          label: "DeepInfra",
+          model: "hexgrad/Kokoro-82M",
+          defaultVoice: "af_bella",
+          baseUrl: "https://api.deepinfra.com/v1/openai",
+          envKey: "DEEPINFRA_API_KEY",
+        },
+      } as const;
+      const fixture = providers[providerId];
+      const provider = createOpenAiCompatibleSpeechProvider({
+        id: providerId,
+        label: fixture.label,
+        autoSelectOrder: 40,
+        models: [fixture.model],
+        voices: [fixture.defaultVoice],
+        defaultModel: fixture.model,
+        defaultVoice: fixture.defaultVoice,
+        defaultBaseUrl: fixture.baseUrl,
+        envKey: fixture.envKey,
+        responseFormats: ["mp3"],
+        defaultResponseFormat: "mp3",
+        voiceCompatibleResponseFormats: ["mp3"],
+      });
+      const providerConfig = { apiKey: "test-api-key", ...voiceConfig };
+      const resolvedConfig = provider.resolveConfig?.({
+        cfg: {} as never,
+        timeoutMs: 1_000,
+        rawConfig: { providers: { [providerId]: providerConfig } },
+      });
+      if (!resolvedConfig) {
+        throw new Error("missing resolved speech config");
+      }
+      const talkConfig = provider.resolveTalkConfig?.({
+        cfg: {} as never,
+        baseTtsConfig: { providers: { [providerId]: { voice: "base-voice" } } },
+        talkProviderConfig: withSpeakerSelectionFallbackCompat(providerConfig),
+        timeoutMs: 1_000,
+      });
+      if (!talkConfig) {
+        throw new Error("missing resolved Talk speech config");
+      }
+
+      postJsonRequestMock.mockImplementation(async () => ({
+        response: new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
+        release: async () => {},
+      }));
+      for (const config of [providerConfig, resolvedConfig, talkConfig]) {
+        await provider.synthesize({
+          text: "Speak in the configured voice.",
+          cfg: {} as never,
+          providerConfig: config,
+          target: "audio-file",
+          timeoutMs: 1_000,
+        });
+      }
+
+      const requestVoices = postJsonRequestMock.mock.calls.map(
+        ([request]) => (request as { body: { voice: unknown } }).body.voice,
+      );
+      expect(requestVoices).toEqual([expectedVoice, expectedVoice, expectedVoice]);
+      expect(resolvedConfig.voice).toBe(expectedVoice);
+      expect(talkConfig.voice).toBe(expectedVoice);
+    },
+  );
 
   it("maps configured extra JSON body fields into synthesis requests", async () => {
     const release = vi.fn(async () => {});
