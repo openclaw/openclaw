@@ -22,6 +22,7 @@ import {
   promoteAuthProfileInOrder,
   removeAuthProfilesAcrossOwnerStores,
   removeAuthProfilesWithLock,
+  setAuthProfileOrder,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
 import {
@@ -1396,6 +1397,99 @@ describe("promoteAuthProfileInOrder", () => {
 
       expect(loadAuthProfileStoreForRuntime(agentDir).lastGood?.["openai"]).toBe(goodProfileId);
     });
+  });
+});
+
+describe("setAuthProfileOrder", () => {
+  it("preserves inherited main OAuth profile IDs in a secondary agent order without copying credentials", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-order-set-inherited-",
+      async ({ agentDirFor }) => {
+        const mainAgentDir = agentDirFor("main");
+        const customAgentDir = agentDirFor("custom");
+        fs.mkdirSync(mainAgentDir, { recursive: true });
+        fs.mkdirSync(customAgentDir, { recursive: true });
+        // Main agent owns two OAuth profiles; the secondary agent inherits them
+        // at runtime and has no local credential copies.
+        const mainStore = (): AuthProfileStore => ({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:profile-a": {
+              type: "oauth",
+              provider: "openai",
+              access: "access-a",
+              refresh: "refresh-a",
+              expires: Date.now() + 60_000,
+            },
+            "openai:profile-b": {
+              type: "oauth",
+              provider: "openai",
+              access: "access-b",
+              refresh: "refresh-b",
+              expires: Date.now() + 60_000,
+            },
+          },
+          order: { openai: ["openai:profile-a"] },
+        });
+        saveAuthProfileStore(mainStore());
+
+        // The secondary agent selects the other inherited profile ID. Before the
+        // fix, the local save pruned this ID because the secondary store does
+        // not own the OAuth credential, so `order get` fell back to main's
+        // profile-a (issue #119233).
+        const updated = await setAuthProfileOrder({
+          agentDir: customAgentDir,
+          provider: "openai",
+          order: ["openai:profile-b"],
+        });
+
+        expect(updated?.order?.openai).toEqual(["openai:profile-b"]);
+        // Reload from persistence: the inherited ID must survive, not be pruned.
+        expect(loadPersistedAuthProfileStore(customAgentDir)?.order?.openai).toEqual([
+          "openai:profile-b",
+        ]);
+        // The runtime store for the secondary agent reflects the local override.
+        expect(loadAuthProfileStoreForRuntime(customAgentDir).order?.openai).toEqual([
+          "openai:profile-b",
+        ]);
+        // The secondary agent must not gain a local copy of the inherited OAuth
+        // credential — only the order reference is preserved.
+        const persistedCustom = loadPersistedAuthProfileStore(customAgentDir);
+        expect(persistedCustom?.profiles["openai:profile-b"]).toBeUndefined();
+        expect(persistedCustom?.profiles["openai:profile-a"]).toBeUndefined();
+      },
+      { clearOAuthDir: true },
+    );
+  });
+
+  it("clears a provider order without preserving any profile IDs", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-order-set-clear-",
+      async ({ agentDir }) => {
+        fs.mkdirSync(agentDir, { recursive: true });
+        saveAuthProfileStore({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:local": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-local",
+            },
+          },
+          order: { openai: ["openai:local"] },
+        });
+
+        const updated = await setAuthProfileOrder({
+          agentDir,
+          provider: "openai",
+          order: null,
+        });
+
+        expect(updated?.order?.openai ?? null).toBeNull();
+        expect(loadPersistedAuthProfileStore(agentDir)?.order?.openai ?? null).toBeNull();
+      },
+      { clearOAuthDir: true },
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

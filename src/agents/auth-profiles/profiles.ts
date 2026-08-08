@@ -81,26 +81,48 @@ export async function setAuthProfileOrder(params: {
   provider: string;
   order?: string[] | null;
 }): Promise<AuthProfileStore | null> {
-  const providerKey = normalizeProviderId(params.provider);
+  const providerKey = resolveProviderIdForAuth(params.provider);
   const sanitized =
     params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    // Preserve requested IDs that the agent inherits (not owns) so the local
+    // save path does not prune them from the order. Without this, a secondary
+    // agent's `models auth order set --agent` accepts an inherited profile ID
+    // (validated against the merged store) but drops it while persisting, so
+    // `order get` falls back to the inherited main order — the CLI reports a
+    // switch that never happened (issue #119233). Mirrors the adjacent
+    // promoteAuthProfileInOrder preservation contract; the clear-order path
+    // (deduped.length === 0) must not preserve anything.
+    ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
     updater: (store) => {
       store.order = store.order ?? {};
+      // Order keys may already exist under an auth alias (e.g. a manifest
+      // provider pinned to a canonical auth provider). Prefer the canonical
+      // normalized key first: runtime order resolution reads the canonical
+      // entry before alias-equivalent keys, so updating a stale alias key
+      // while a canonical entry exists would leave the effective order
+      // unchanged (the set command reports success but nothing switches).
+      // Fall back to an alias-equivalent key only when no canonical entry
+      // exists, matching the findProviderAuthStateKey contract used by the
+      // adjacent promoteAuthProfileInOrder/clearLastGoodProfileWithLock.
+      const orderKey =
+        findNormalizedProviderKey(store.order, providerKey) ??
+        findProviderAuthStateKey(store.order, providerKey) ??
+        normalizeProviderId(providerKey);
       if (deduped.length === 0) {
-        if (!store.order[providerKey]) {
+        if (!store.order[orderKey]) {
           return false;
         }
-        delete store.order[providerKey];
+        delete store.order[orderKey];
         if (Object.keys(store.order).length === 0) {
           store.order = undefined;
         }
         return true;
       }
-      store.order[providerKey] = deduped;
+      store.order = { ...store.order, [orderKey]: deduped };
       return true;
     },
   });
