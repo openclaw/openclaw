@@ -252,7 +252,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show model provider usage/quota snapshots", false)
     .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
-    .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
+    .option("--timeout <ms>", "Probe timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
@@ -296,7 +296,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("health")
     .description("Fetch health from the running gateway")
     .option("--json", "Output JSON instead of text", false)
-    .option("--timeout <ms>", "Connection timeout in milliseconds", "10000")
+    .option("--timeout <ms>", "Connection timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(

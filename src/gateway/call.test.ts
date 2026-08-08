@@ -4,7 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
+import {
+  GATEWAY_SERVER_CAPS,
+  type HelloOk,
+} from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
@@ -250,6 +253,48 @@ function resetGatewayCallMocks() {
     scopes: ["operator.read"],
     updatedAtMs: 123,
   });
+}
+
+function installDeferredRequestGateway(capabilities: string[]) {
+  let releaseRequest: (() => void) | undefined;
+  testing.setDepsForTests({
+    createGatewayClient: (opts) =>
+      ({
+        async request(
+          method: string,
+          params: unknown,
+          requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+        ) {
+          lastRequestOptions = { method, params, opts: requestOpts };
+          await new Promise<void>((resolve) => {
+            releaseRequest = resolve;
+          });
+          return { ok: true };
+        },
+        start() {
+          const hello = makeStubGatewayHello();
+          opts.onHelloOk?.({
+            ...hello,
+            features: { ...hello.features, capabilities },
+          });
+        },
+        stop() {},
+        async stopAndWait() {},
+      }) as never,
+    getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
+    loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+    loadDeviceAuthToken: loadDeviceAuthTokenMock,
+    resolveGatewayPort: resolveGatewayPort as unknown as (
+      cfg?: OpenClawConfig,
+      env?: NodeJS.ProcessEnv,
+    ) => number,
+  });
+  return () => {
+    if (!releaseRequest) {
+      throw new Error("Expected request release callback to be initialized");
+    }
+    releaseRequest();
+  };
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -1936,6 +1981,57 @@ describe("callGateway error details", () => {
     if (!releaseRequest) {
       throw new Error("Expected request release callback to be initialized");
     }
+    releaseRequest();
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
+  it("keeps the legacy wrapper deadline when an unbounded capability is missing", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    const releaseRequest = installDeferredRequestGateway([]);
+    let error: unknown;
+
+    const promise = callGateway({
+      method: "health",
+      timeoutMs: null,
+      unboundedRequestCapability: GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+    }).catch((caught: unknown) => {
+      error = caught;
+    });
+
+    await waitForFast(() => {
+      expect(lastRequestOptions?.opts?.timeoutMs).toBeNull();
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
+
+    expect(error).toMatchObject({ kind: "timeout", timeoutMs: 10_000 });
+    releaseRequest();
+  });
+
+  it("removes the wrapper deadline when the Gateway advertises the required capability", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    const releaseRequest = installDeferredRequestGateway([
+      GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+    ]);
+    let settled = false;
+
+    const promise = callGateway({
+      method: "health",
+      timeoutMs: null,
+      unboundedRequestCapability: GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await waitForFast(() => {
+      expect(lastRequestOptions?.opts?.timeoutMs).toBeNull();
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+
     releaseRequest();
     await expect(promise).resolves.toEqual({ ok: true });
   });

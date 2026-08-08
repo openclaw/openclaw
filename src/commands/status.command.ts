@@ -110,10 +110,13 @@ export async function statusCommand(
   runtime: RuntimeEnv,
 ) {
   if (opts.all && !opts.json) {
-    // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
+    // Human `--all` has a dedicated bounded report path; only deep health negotiates
+    // an omitted timeout. JSON `--all` stays on the JSON schema.
     await statusAllModuleLoader
       .load()
-      .then(({ statusAllCommand }) => statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }));
+      .then(({ statusAllCommand }) =>
+        statusAllCommand(runtime, { timeoutMs: opts.timeoutMs ?? 10_000 }),
+      );
     return;
   }
 

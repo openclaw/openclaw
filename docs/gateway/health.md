@@ -85,9 +85,13 @@ unreachable or the probe fails/times out.
 Options:
 
 - `--json`: machine-readable JSON output
-- `--timeout <ms>`: override the default 10s probe timeout
+- `--timeout <ms>`: set the maximum wait for the Gateway response
 - `--verbose`: force a live probe and print gateway connection details
 - `--debug`: alias for `--verbose`
+
+Without `--timeout`, cached health and older Gateways use a 10-second response
+timeout; verbose health waits for a current Gateway's bounded live probes. If
+verbose health still times out after an update, restart the Gateway.
 
 The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
 

@@ -193,6 +193,15 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("preserves an omitted timeout for status command ownership", async () => {
+    await runCli(["status", "--usage"]);
+
+    expectCommandOptions(statusCommand, {
+      usage: true,
+      timeoutMs: undefined,
+    });
+  });
+
   it("rejects invalid status timeout without calling status command", async () => {
     await runCli(["status", "--timeout", "nope"]);
 
@@ -211,6 +220,26 @@ describe("registerStatusHealthSessionsCommands", () => {
       json: true,
       timeoutMs: 2500,
       verbose: true,
+    });
+  });
+
+  it.each(["--verbose", "--debug"])("preserves an omitted timeout for health %s", async (flag) => {
+    await runCli(["health", flag]);
+
+    expectCommandOptions(healthCommand, {
+      json: false,
+      timeoutMs: undefined,
+      verbose: true,
+    });
+  });
+
+  it("preserves an omitted timeout for cached health", async () => {
+    await runCli(["health"]);
+
+    expectCommandOptions(healthCommand, {
+      json: false,
+      timeoutMs: undefined,
+      verbose: false,
     });
   });
 

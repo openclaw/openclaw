@@ -1,5 +1,6 @@
 // Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealth,
@@ -341,6 +342,18 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("waits for complete live health when no deep-status timeout was supplied", async () => {
+    await resolveStatusGatewayHealth({ config: { gateway: {} } });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "health",
+      params: { probe: true },
+      timeoutMs: null,
+      unboundedRequestCapability: GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+      config: { gateway: {} },
+    });
+  });
+
   it("returns a fallback health error when the gateway is unreachable", async () => {
     await expect(
       resolveStatusGatewayHealthSafe({
@@ -350,6 +363,21 @@ describe("status-runtime-shared", () => {
       }),
     ).resolves.toEqual({ error: "timeout" });
     expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("negotiates Gateway-owned deadlines on the safe live-health path", async () => {
+    await resolveStatusGatewayHealthSafe({
+      config: { gateway: {} },
+      gatewayReachable: true,
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "health",
+      params: { probe: true },
+      timeoutMs: null,
+      unboundedRequestCapability: GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+      config: { gateway: {} },
+    });
   });
 
   it("passes gateway call overrides through the safe health path", async () => {
@@ -425,6 +453,37 @@ describe("status-runtime-shared", () => {
       loadPluginSecurityCollectors: false,
       plugins: [{ id: "telegram" }],
     });
+  });
+
+  it("keeps the status default while preserving an omitted live-health override", async () => {
+    await resolveStatusRuntimeSnapshot({
+      config: { gateway: {} },
+      sourceConfig: { gateway: {} },
+      usage: true,
+      deep: true,
+      gatewayReachable: true,
+      includeSecurityAudit: true,
+    });
+
+    expect(requireProviderUsageCall().timeoutMs).toBe(10_000);
+    expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ deepTimeoutMs: 10_000 }),
+    );
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
+      method: "health",
+      params: { probe: true },
+      timeoutMs: null,
+      unboundedRequestCapability: GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS,
+      config: { gateway: {} },
+    });
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(2, {
+      method: "last-heartbeat",
+      params: {},
+      timeoutMs: 10_000,
+      config: { gateway: {} },
+    });
+    expect(mocks.getDaemonStatusSummary).toHaveBeenCalledWith(10_000);
+    expect(mocks.getNodeDaemonStatusSummary).toHaveBeenCalledWith(10_000);
   });
 
   it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {

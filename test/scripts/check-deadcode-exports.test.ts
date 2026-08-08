@@ -111,9 +111,7 @@ describe("check-deadcode-exports", () => {
       expect(fs.existsSync(executionPath), executionPath).toBe(true);
       expect(rootEntries, executionPath).toContain(`${executionPath}!`);
     }
-    expect(rootEntries).toContain(
-      "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
-    );
+    expect(rootEntries).toContain("test/e2e/qa-lab/runtime/fixtures/*/index.js!");
   });
 
   it("keeps the script unused-export scan scoped to real executable roots", () => {

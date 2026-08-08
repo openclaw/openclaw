@@ -427,6 +427,7 @@ async function withOptionalEnvVar<T>(
 }
 
 const mocks = vi.hoisted(() => ({
+  statusAllCommand: vi.fn(),
   loadConfig: vi.fn().mockReturnValue({ session: {} }),
   loadSessionStore: vi.fn().mockReturnValue({
     "+1000": createDefaultSessionStoreEntry(),
@@ -782,6 +783,10 @@ vi.mock("./status.scan.js", () => ({
   scanStatus: vi.fn(async () => createMockStatusScanResult()),
 }));
 
+vi.mock("./status-all.js", () => ({
+  statusAllCommand: mocks.statusAllCommand,
+}));
+
 vi.mock("./status-runtime-shared.ts", () => ({
   loadStatusProviderUsageModule: vi.fn(async () => ({
     formatUsageReportLines: vi.fn(() => []),
@@ -914,6 +919,7 @@ vi.mock("./status.daemon.js", () => ({
 
 describe("statusCommand", () => {
   afterEach(() => {
+    mocks.statusAllCommand.mockClear();
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
     mocks.loadSessionStore.mockReset();
@@ -1015,6 +1021,12 @@ describe("statusCommand", () => {
     });
     runtimeLogMock.mockClear();
     (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
+  });
+
+  it("keeps the 10-second default for human status --all", async () => {
+    await statusCommand({ all: true }, runtime as never);
+
+    expect(mocks.statusAllCommand).toHaveBeenCalledWith(runtime, { timeoutMs: 10_000 });
   });
 
   it("prints JSON and includes full diagnostics only when all is requested", async () => {

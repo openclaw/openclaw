@@ -1,6 +1,7 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
@@ -161,6 +162,29 @@ describe("healthCommand", () => {
     isGatewaySecretRefUnavailableErrorMock.mockReturnValue(false);
     probeGatewayStatusMock.mockReset();
   });
+
+  it.each([
+    { verbose: false, timeoutMs: undefined, expected: undefined },
+    { verbose: true, timeoutMs: undefined, expected: null },
+    { verbose: true, timeoutMs: 2500, expected: 2500 },
+  ])(
+    "uses the shared live-health response deadline for $verbose/$timeoutMs",
+    async ({ verbose, timeoutMs, expected }) => {
+      callGatewayMock.mockResolvedValueOnce(
+        createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} }),
+      );
+
+      await healthCommand({ json: true, verbose, timeoutMs, config: {} }, runtime as never);
+
+      const request = requireFirstGatewayRequest();
+      expect(request.timeoutMs).toBe(expected);
+      expect(request.unboundedRequestCapability).toBe(
+        verbose && timeoutMs === undefined
+          ? GATEWAY_SERVER_CAPS.HEALTH_BOUNDED_CHANNEL_HOOKS
+          : undefined,
+      );
+    },
+  );
 
   it("outputs JSON from gateway", async () => {
     const agentSessions = {

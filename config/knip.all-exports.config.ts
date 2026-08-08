@@ -60,8 +60,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   ...QA_SCENARIO_EXECUTION_ENTRIES,
   // Invoked directly by the sandbox bind-conflict E2E verification script.
   "scripts/e2e-sandbox-bind-conflict.mjs!",
-  // The Voice Call QA scenario loads this fixture through a generated plugin directory.
-  "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
+  // QA scenarios load these fixture plugins through configured filesystem paths.
+  "test/e2e/qa-lab/runtime/fixtures/*/index.js!",
   // Loaded with cache-busting query strings so configuration fallback tests
   // get independent module initialization.
   "test/helpers/config/bundled-channel-config-runtime.ts!",

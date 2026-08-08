@@ -9,6 +9,7 @@ const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const runGatewayHealthJsonRouteMock = vi.hoisted(() => vi.fn(async () => {}));
+const healthCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksListJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksAuditJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -36,6 +37,10 @@ vi.mock("../daemon-cli/status.js", () => ({
 
 vi.mock("../gateway-cli/health-route.js", () => ({
   runGatewayHealthJsonRoute: runGatewayHealthJsonRouteMock,
+}));
+
+vi.mock("../../commands/health.js", () => ({
+  healthCommand: healthCommandMock,
 }));
 
 vi.mock("../../commands/status-json.js", () => ({
@@ -104,6 +109,20 @@ describe("program routes", () => {
     const route = expectRoute(["health"]);
     expect(route.loadPlugins).toBeUndefined();
   });
+
+  it.each(["--verbose", "--debug"])(
+    "preserves an omitted timeout through the route-first health %s path",
+    async (flag) => {
+      const route = expectRoute(["health"]);
+
+      await expect(route.run(["node", "openclaw", "health", flag])).resolves.toBe(true);
+
+      expect(healthCommandMock).toHaveBeenCalledWith(
+        { json: false, timeoutMs: undefined, verbose: true },
+        defaultRuntime,
+      );
+    },
+  );
 
   it("matches channel read-only routes without plugin preload", () => {
     expect(expectRoute(["channels", "list"]).loadPlugins).toBeUndefined();
