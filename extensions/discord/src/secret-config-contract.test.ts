@@ -6,14 +6,38 @@ import {
   secretTargetRegistryEntries,
 } from "./secret-config-contract.js";
 
-const { canonicalizeRealtimeVoiceProviderIdMock } = vi.hoisted(() => ({
-  canonicalizeRealtimeVoiceProviderIdMock: vi.fn((providerId: string | undefined) =>
-    providerId === "codex-realtime" ? "codex" : providerId,
-  ),
-}));
+const { canonicalizeRealtimeVoiceProviderIdMock, listRealtimeVoiceProvidersMock } = vi.hoisted(
+  () => ({
+    canonicalizeRealtimeVoiceProviderIdMock: vi.fn((providerId: string | undefined) =>
+      providerId === "codex-realtime" ? "codex" : providerId,
+    ),
+    listRealtimeVoiceProvidersMock: vi.fn(() => {
+      const isConfigured = ({ providerConfig }: { providerConfig: Record<string, unknown> }) =>
+        typeof providerConfig.apiKey === "string";
+      return [
+        {
+          id: "openai",
+          autoSelectOrder: 10,
+          isConfigured,
+        },
+        {
+          id: "google",
+          autoSelectOrder: 20,
+          isConfigured,
+        },
+        {
+          id: "codex",
+          autoSelectOrder: 40,
+          isConfigured,
+        },
+      ];
+    }),
+  }),
+);
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
   canonicalizeRealtimeVoiceProviderId: canonicalizeRealtimeVoiceProviderIdMock,
+  listRealtimeVoiceProviders: listRealtimeVoiceProvidersMock,
   normalizeRealtimeVoiceProviderId: (providerId: string | undefined) =>
     providerId?.trim().toLowerCase() || undefined,
 }));
@@ -148,6 +172,91 @@ describe("Discord secret config contract", () => {
     expect(context.assignments.map(({ path }) => path)).toEqual([
       "channels.discord.voice.realtime.providers.codex.apiKey",
       "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
+    ]);
+    expect(context.warnings).toStrictEqual([]);
+  });
+
+  it("keeps realtime API keys inactive in stt-tts mode", () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          voice: {
+            mode: "stt-tts",
+            realtime: {
+              providers: {
+                openai: {
+                  apiKey: { source: "env", provider: "default", id: "ROOT_OPENAI" },
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              voice: {
+                mode: "stt-tts",
+                realtime: {
+                  providers: {
+                    google: {
+                      apiKey: { source: "env", provider: "default", id: "WORK_GOOGLE" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig, env: {} });
+
+    collectRuntimeConfigAssignments({
+      config: structuredClone(sourceConfig),
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments).toStrictEqual([]);
+    expect(context.warnings.map(({ code, path }) => ({ code, path }))).toEqual([
+      {
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.discord.voice.realtime.providers.openai.apiKey",
+      },
+      {
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.discord.accounts.work.voice.realtime.providers.google.apiKey",
+      },
+    ]);
+  });
+
+  it("auto-selects the first configured realtime provider", () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          voice: {
+            realtime: {
+              providers: {
+                google: {
+                  apiKey: { source: "env", provider: "default", id: "LOWER_GOOGLE" },
+                },
+                openai: {
+                  apiKey: { source: "env", provider: "default", id: "FIRST_OPENAI" },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig, env: { FIRST_OPENAI: "available" } });
+
+    collectRuntimeConfigAssignments({
+      config: structuredClone(sourceConfig),
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments.map(({ path }) => path)).toEqual([
+      "channels.discord.voice.realtime.providers.openai.apiKey",
     ]);
     expect(context.warnings).toStrictEqual([]);
   });

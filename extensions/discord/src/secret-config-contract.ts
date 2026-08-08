@@ -13,7 +13,50 @@ import {
   type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectNestedChannelTtsAssignments } from "openclaw/plugin-sdk/channel-secret-tts-runtime";
-import { canonicalizeRealtimeVoiceProviderId } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  canonicalizeRealtimeVoiceProviderId,
+  listRealtimeVoiceProviders,
+} from "openclaw/plugin-sdk/realtime-voice";
+
+function isRealtimeVoiceEnabled(voice: Record<string, unknown>): boolean {
+  return isEnabledFlag(voice) && voice.mode !== "stt-tts";
+}
+
+function resolveAutoRealtimeProviderId(params: {
+  providers: Record<string, unknown>;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): string | undefined {
+  for (const provider of listRealtimeVoiceProviders(params.context.sourceConfig).toSorted(
+    (left, right) =>
+      (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
+      (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER),
+  )) {
+    const providerConfig = params.providers[provider.id];
+    const rawConfig = isRecord(providerConfig) ? { ...providerConfig } : {};
+    if (hasConfiguredSecretInputValue(rawConfig.apiKey, params.defaults)) {
+      rawConfig.apiKey = "configured-secret";
+    }
+    try {
+      const resolvedConfig =
+        provider.resolveConfig?.({
+          cfg: params.context.sourceConfig,
+          rawConfig,
+        }) ?? rawConfig;
+      if (
+        provider.isConfigured({
+          cfg: params.context.sourceConfig,
+          providerConfig: resolvedConfig,
+        })
+      ) {
+        return provider.id;
+      }
+    } catch {
+      // Invalid provider config remains a provider/runtime validation concern.
+    }
+  }
+  return undefined;
+}
 
 export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
@@ -132,7 +175,11 @@ function collectRealtimeProviderApiKeyAssignments(params: {
     ? isRecord(selectedProviderConfig) && Object.hasOwn(selectedProviderConfig, "apiKey")
       ? selectedProviderId
       : canonicalizeRealtimeVoiceProviderId(selectedProviderId, params.context.sourceConfig)
-    : undefined;
+    : resolveAutoRealtimeProviderId({
+        providers: params.realtime.providers,
+        defaults: params.defaults,
+        context: params.context,
+      });
   for (const [providerId, providerConfig] of Object.entries(params.realtime.providers)) {
     if ((activeProviderId && providerId !== activeProviderId) || !isRecord(providerConfig)) {
       continue;
@@ -238,9 +285,10 @@ export function collectRuntimeConfigAssignments(params: {
       pathPrefix: "channels.discord.voice.realtime",
       defaults: params.defaults,
       context: params.context,
-      active: isBaseFieldActiveForChannelSurface(surface, "voice") && isEnabledFlag(rootVoice),
+      active:
+        isBaseFieldActiveForChannelSurface(surface, "voice") && isRealtimeVoiceEnabled(rootVoice),
       inactiveReason:
-        "no enabled Discord surface inherits this top-level voice config or voice is disabled.",
+        "no enabled Discord surface inherits this top-level voice config, voice is disabled, or voice mode is stt-tts.",
     });
   }
   if (!surface.hasExplicitAccounts) {
@@ -256,8 +304,9 @@ export function collectRuntimeConfigAssignments(params: {
       pathPrefix: `channels.discord.accounts.${accountId}.voice.realtime`,
       defaults: params.defaults,
       context: params.context,
-      active: enabled && isEnabledFlag(accountVoice),
-      inactiveReason: "Discord account is disabled or voice is disabled for this account.",
+      active: enabled && isRealtimeVoiceEnabled(accountVoice),
+      inactiveReason:
+        "Discord account is disabled, voice is disabled, or voice mode is stt-tts for this account.",
     });
   }
 }
