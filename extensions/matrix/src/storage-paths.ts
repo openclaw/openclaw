@@ -4,6 +4,23 @@ import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+const MATRIX_TOKEN_HASH_DIRECTORY_PATTERN = /^[a-f0-9]{16}$/u;
+const MATRIX_TOKEN_HASH_ARCHIVE_PATTERN = /^[a-f0-9]{16}[._-].+$/u;
+const MATRIX_NAMED_ARCHIVE_PATTERN =
+  /^(?:(?:sync-cache-backup|crypto-backup)(?:[._-].*)?|.*\.migrated(?:[._-].*)?|\.(?:[^.]*-)?(?:cutover|backup|reset|pre-stable-token)(?:[._-].*)?)$/iu;
+
+export function classifyMatrixStateRootDirectory(
+  name: string,
+): "active-token" | "archive" | "other" {
+  if (MATRIX_TOKEN_HASH_DIRECTORY_PATTERN.test(name)) {
+    return "active-token";
+  }
+  if (MATRIX_TOKEN_HASH_ARCHIVE_PATTERN.test(name) || MATRIX_NAMED_ARCHIVE_PATTERN.test(name)) {
+    return "archive";
+  }
+  return "other";
+}
+
 export function sanitizeMatrixPathSegment(value: string): string {
   const cleaned = normalizeLowercaseStringOrEmpty(value)
     .replace(/[^a-z0-9._-]+/g, "_")
