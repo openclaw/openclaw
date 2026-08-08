@@ -1,5 +1,6 @@
 // Memory Core tests cover qmd manager plugin behavior.
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -864,6 +865,14 @@ describe("QmdMemoryManager", () => {
 
   function qmdIndexConfigPath(selectedAgentId = agentId): string {
     return path.join(stateDir, "agents", selectedAgentId, "qmd", "xdg-config", "qmd", "index.yml");
+  }
+
+  function seedQmdIndex(manager: QmdMemoryManager): string {
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    fsSync.mkdirSync(path.dirname(indexPath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    new DatabaseSync(indexPath).close();
+    return indexPath;
   }
 
   function resolveMemoryBackendConfigForTest(sourceCfg: OpenClawConfig, selectedAgentId: string) {
@@ -6044,6 +6053,7 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager();
+    seedQmdIndex(manager);
 
     const probe = manager.probeVectorAvailability();
     await vi.advanceTimersByTimeAsync(5000);
@@ -6056,6 +6066,35 @@ describe("QmdMemoryManager", () => {
       semanticAvailable: false,
       loadError: expect.stringContaining("timed out after 6000ms"),
     });
+    await manager.close();
+  });
+
+  it("keeps missing-index status reads side-effect free", async () => {
+    const { manager } = await createManager();
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    const baselineCalls = spawnMock.mock.calls.length;
+
+    expect(manager.status()).toMatchObject({ files: 0, chunks: 0 });
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls);
+    await expect(fs.stat(indexPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await manager.close();
+  });
+
+  it("does not run qmd status when the index is missing", async () => {
+    configureQmd({ searchMode: "query" });
+    const { manager } = await createManager();
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    const baselineCalls = spawnMock.mock.calls.length;
+
+    await expect(manager.probeVectorAvailability()).resolves.toBe(false);
+    expect(spawnMock.mock.calls.length).toBe(baselineCalls);
+    expect(manager.status().vector).toEqual({
+      enabled: true,
+      available: false,
+      semanticAvailable: false,
+      loadError: "QMD index is missing; semantic search is unavailable",
+    });
+    await expect(fs.stat(indexPath)).rejects.toMatchObject({ code: "ENOENT" });
     await manager.close();
   });
 
@@ -6104,6 +6143,7 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig,
     });
+    seedQmdIndex(manager);
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(false);
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
@@ -6136,6 +6176,7 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig,
     });
+    seedQmdIndex(manager);
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(true);
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
@@ -6173,6 +6214,7 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig,
     });
+    seedQmdIndex(manager);
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(true);
     await manager.close();
@@ -6195,6 +6237,7 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig,
     });
+    seedQmdIndex(manager);
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(false);
     expect(manager.status().vector).toEqual({
