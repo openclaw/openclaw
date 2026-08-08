@@ -3169,6 +3169,98 @@ describe("createCliJsonlStreamingParser", () => {
     expect(starts).toEqual(expected);
   });
 
+  it("emits resolved tool args as an update when the provider skips input_json_delta (#120306)", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const updates: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolUseUpdate: (delta) => updates.push(delta),
+    });
+
+    // Streaming emits an empty tool_start (no input_json_delta chunks), then the
+    // final assistant snapshot carries the resolved args. The args must not be
+    // dropped: renderers should receive them as a tool *update* on the existing
+    // row, not as a second start (which would double-count the completion receipt).
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "content_block_stop", index: 0 } }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls -la" } },
+              { type: "tool_result", tool_use_id: "toolu_1", content: "total 0", is_error: false },
+            ],
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    // Exactly one start, carrying the empty args from streaming.
+    expect(starts).toEqual([{ toolCallId: "toolu_1", name: "Bash", kind: "tool_use", args: {} }]);
+    // The resolved args arrive as a single update, never as a second start.
+    expect(updates).toEqual([
+      { toolCallId: "toolu_1", name: "Bash", kind: "tool_use", args: { command: "ls -la" } },
+    ]);
+  });
+
+  it("uses content_block_start input when no input_json_delta chunks arrive (#120306)", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: {
+              type: "tool_use",
+              id: "toolu_2",
+              name: "Bash",
+              input: { command: "echo hi" },
+            },
+          },
+        }),
+        JSON.stringify({ type: "stream_event", event: { type: "content_block_stop", index: 0 } }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_2", name: "Bash", kind: "tool_use", args: { command: "echo hi" } },
+    ]);
+  });
+
   it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
     const starts: CliToolUseStartDelta[] = [];
     const parser = createCliJsonlStreamingParser({

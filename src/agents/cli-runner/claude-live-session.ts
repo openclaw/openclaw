@@ -1668,6 +1668,7 @@ function createTurn(params: {
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolUseUpdate?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   resolveToolResultTerminalOutcome?: (
     delta: CliToolResultDelta,
@@ -1716,6 +1717,9 @@ function createTurn(params: {
       onToolUseStart: (delta) => {
         markClaudeLiveToolStarted(turn, delta);
         params.onToolUseStart?.(delta);
+      },
+      onToolUseUpdate: (delta) => {
+        params.onToolUseUpdate?.(delta);
       },
       onToolResult: (delta) => {
         markClaudeLiveToolCompleted(turn, delta, params.resolveToolResultTerminalOutcome?.(delta));
@@ -1815,6 +1819,7 @@ type RunClaudeLiveSessionTurnParams = {
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolUseUpdate?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   resolveToolResultTerminalOutcome?: (
     delta: CliToolResultDelta,
@@ -2156,6 +2161,7 @@ async function runSerializedClaudeLiveSessionTurn(
       onThinkingDelta: params.onThinkingDelta,
       onThinkingProgress: params.onThinkingProgress,
       onToolUseStart: params.onToolUseStart,
+      onToolUseUpdate: params.onToolUseUpdate,
       onToolResult: params.onToolResult,
       resolveToolResultTerminalOutcome: params.resolveToolResultTerminalOutcome,
       onCommentaryText: params.onCommentaryText,

@@ -110,6 +110,26 @@ export function createCliEventHandlers(params: {
       });
     }
   };
+  // Refresh an already-started tool row with resolved args (provider omitted
+  // input_json_delta on the start, later assistant snapshot carries them). This
+  // is an update, not a second start: it must not re-trigger start-only consumers
+  // (e.g. the Discord progress completion receipt). See #120306.
+  const emitCliToolUseUpdate = (event: CliToolUseStartDelta) => {
+    observedCliActivity = true;
+    recordToolStart(event);
+    if (emitLiveEvents) {
+      emitAgentEvent({
+        runId: runParams.runId,
+        stream: "tool",
+        data: {
+          phase: "update",
+          name: event.name,
+          toolCallId: event.toolCallId,
+          args: sanitizeToolArgs(event.args),
+        },
+      });
+    }
+  };
   const emitCliToolResult = (event: CliToolResult) => {
     observedCliActivity = true;
     recordToolResult(event);
@@ -198,6 +218,9 @@ export function createCliEventHandlers(params: {
       toolCallId: event.toolCallId,
     });
     emitCliToolUseStart(event);
+  };
+  const emitParsedToolUseUpdate = (event: CliToolUseStartDelta) => {
+    emitCliToolUseUpdate(event);
   };
   const emitParsedToolTerminal = (event: {
     toolCallId: string;
@@ -384,10 +407,12 @@ export function createCliEventHandlers(params: {
   return {
     emitLiveEvents,
     emitCliToolUseStart,
+    emitCliToolUseUpdate,
     emitCliToolResult,
     emitCliDisplayToolUseStart,
     emitCliDisplayToolResult,
     emitParsedToolUseStart,
+    emitParsedToolUseUpdate,
     emitParsedToolResult,
     finalizeParsedTools,
     emitCliCommentaryText,
