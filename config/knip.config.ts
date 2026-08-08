@@ -251,6 +251,7 @@ const rootBundledPluginRuntimeDependencies = [
   "linkedom",
   "minimatch",
   "node-edge-tts",
+  "node-screenshots",
   "openshell",
   "clawpdf",
   "tokenjuice",
