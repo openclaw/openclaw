@@ -3148,6 +3148,20 @@ describe("active-memory plugin", () => {
             { type: "message", message: { role: "user", content: "ignore this user text" } },
             {
               type: "message",
+              message: {
+                role: "toolResult",
+                toolName: "memory_search",
+                details: { results: [{ text: "user prefers ramen" }] },
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({ results: [{ text: "user prefers ramen" }] }),
+                  },
+                ],
+              },
+            },
+            {
+              type: "message",
               message: { role: "assistant", content: "alpha beta gamma delta" },
             },
             {
@@ -3196,6 +3210,19 @@ describe("active-memory plugin", () => {
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
         tempSessionFile = params.sessionFile;
         await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: { results: [{ text: "user prefers ramen" }] },
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ results: [{ text: "user prefers ramen" }] }),
+                },
+              ],
+            },
+          },
           {
             type: "message",
             message: { role: "assistant", content: "temporary partial recall summary" },
@@ -3246,6 +3273,17 @@ describe("active-memory plugin", () => {
         if (!target) {
           throw new Error("expected active-memory runtime session target");
         }
+        await appendSessionTranscriptMessageByIdentity({
+          ...target,
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: { results: [{ text: "user prefers ramen" }] },
+            content: [
+              { type: "text", text: JSON.stringify({ results: [{ text: "user prefers ramen" }] }) },
+            ],
+          },
+        });
         await appendSessionTranscriptMessageByIdentity({
           ...target,
           message: {
@@ -3308,6 +3346,43 @@ describe("active-memory plugin", () => {
     expect(lines).toHaveLength(1);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
     expectLinesNotToContain(lines, "timeout_partial");
+  });
+
+  it("rejects timeout-partial summary without recorded memory evidence", async () => {
+    // Evidence gate (#84034): a timeout-partial assistant reply must only be
+    // admitted when the transcript contains at least one usable memory-tool
+    // result. Without evidence, the reply is ungrounded and must not enter
+    // main-agent session context — even if it is not chitchat.
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    registerPluginConfig({ timeoutMs: 1, persistTranscripts: true, logging: true });
+    const sessionKey = "agent:main:timeout-no-evidence";
+    seedSession(sessionKey, "s-timeout-no-evidence", 0);
+    runEmbeddedAgent.mockImplementationOnce(
+      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            type: "message",
+            message: {
+              role: "assistant",
+              content: "user prefers aisle seats and extra legroom",
+            },
+          },
+        ]);
+        return await waitForAbort(params.abortSignal);
+      },
+    );
+
+    const result = await runPromptBuild(
+      { prompt: "what wings should i order? timeout no evidence" },
+      { sessionKey },
+    );
+
+    expect(result).toBeUndefined();
+    const lines = getActiveMemoryLines(sessionKey);
+    expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
+    expectLinesNotToContain(lines, "timeout_partial");
+    expectLinesNotToContain(lines, "aisle seats");
   });
 
   it("keeps timeout status when the timeout transcript path does not exist", async () => {
@@ -3376,6 +3451,19 @@ describe("active-memory plugin", () => {
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
         await writeTranscriptJsonl(params.sessionFile, [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "memory_search",
+              details: { results: [{ text: "user prefers ramen" }] },
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ results: [{ text: "user prefers ramen" }] }),
+                },
+              ],
+            },
+          },
           {
             type: "message",
             message: { role: "assistant", content: "partial abort summary" },

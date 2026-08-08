@@ -7,6 +7,7 @@ import { extractTextContentParts } from "./query.js";
 import {
   ACTIVE_MEMORY_PLUGIN_TAG,
   ACTIVE_MEMORY_CONTEXT_HEADER,
+  CHITCHAT_PATTERNS,
   NO_RECALL_VALUES,
   STRUCTURED_MEMORY_EMPTY_STATUSES,
   STRUCTURED_MEMORY_FAILURE_STATUSES,
@@ -247,6 +248,10 @@ function isTimeoutBoilerplateSummary(value: string): boolean {
   return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+function isChitchatSummary(value: string): boolean {
+  return CHITCHAT_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 function normalizeActiveSummary(rawReply: string): string | null {
   const trimmed = rawReply.trim();
   if (normalizeNoRecallValue(trimmed)) {
@@ -256,7 +261,8 @@ function normalizeActiveSummary(rawReply: string): string | null {
   if (
     !singleLine ||
     normalizeNoRecallValue(singleLine) ||
-    isTimeoutBoilerplateSummary(singleLine)
+    isTimeoutBoilerplateSummary(singleLine) ||
+    isChitchatSummary(singleLine)
   ) {
     return null;
   }
@@ -312,6 +318,7 @@ export {
   buildMetadata,
   buildPromptPrefix,
   buildRecallPrompt,
+  isChitchatSummary,
   normalizeActiveSummary,
   readExplicitMemoryEvidence,
   readStructuredMemoryEvidenceFromContent,

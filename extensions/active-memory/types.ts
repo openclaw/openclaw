@@ -120,6 +120,53 @@ const TIMEOUT_BOILERPLATE_PATTERNS = [
   /^(?:error:\s*)?active-memory timeout after \d+ms\b/i,
 ];
 
+const CHITCHAT_PATTERNS = [
+  // Chinese greetings and help offers (anchored — must start the line).
+  // Accept both 您 and 你 before 好; the prior `您?好` form could not match
+  // `你好` because `你` ≠ `您`. Also accept both ！and ？as terminal greeting
+  // punctuation so `你好？请问…` is rejected, not only `你好！`.
+  /^(?:您|你)?好[！？]?[\s,，]*(?:请问|有什么|如果|请随时)/u,
+  /^(?:您|你)好[！？]/u,
+  /^嗨[！？]/u,
+  // Chinese "your message was cut off" variants (anchored — these are always complete replies)
+  /^(?:看起来|似乎).{0,6}(?:消息|信息).{0,6}(?:没有|未|被截|不完整)/u,
+  /^(?:请|能否).{0,4}(?:提供|补充|再说).{0,4}(?:更多|详细|具体)/u,
+  // Chinese time/date announcements followed by help offers (anchored)
+  /^(?:当前|今天的?).{0,6}(?:日期|时间|时间是).{0,30}(?:帮助|请|如果)/u,
+  // English greetings with help/question offers (anchored). An optional filler
+  // word (e.g. "there" in "Hi there!") is allowed between the greeting and the
+  // assistance/question continuation. The continuation must be actual
+  // help/question language — not a factual verb like "is" — so factual recalls
+  // such as "Hello is the user's preferred project name." are not dropped.
+  /^(?:hello|hi|hey|greetings)[!.,]?\s+(?:\w{1,12}[!.,]?\s+)?(?:how\s+(?:can|may|do|are)|what\s+(?:can|do|may)|can\s+i\s+(?:help|do|assist)|let\s+me\s+(?:help|know|assist)|i(?:'?m|\s+am)\s+(?:here|happy|ready|glad))/i,
+  /^(?:hello|hi|hey|greetings)[!.,]?\s*$/i,
+  // English "your message got cut off" variants (anchored — these are always complete replies)
+  /^(?:it\s+)?(?:seems?\s+)?(?:like\s+)?(?:your\s+)?(?:message|text|input|query).{0,10}(?:cut\s+off|incomplete|didn'?t\s+come|missing)/i,
+  // English greeting-prefixed cut-off/clarification boilerplate (anchored).
+  // Reported in #84034: "Hello! It seems like your message got cut off." and
+  // "Hello! It looks like you didn't finish your message." start with a greeting
+  // and then continue with cut-off language. Neither the greeting-help rule
+  // above nor the bare cut-off rule (anchored at "It"/"message") matches this
+  // combined form, so it must be covered explicitly. Retains the factual
+  // greeting case ("Hello is the user's preferred project name.") because the
+  // continuation must be (seems|looks) like ... (cut off|incomplete|didn't ...).
+  /^(?:hello|hi|hey|greetings)[!.,]?\s+(?:it\s+)?(?:seems?|looks?)\s+like\s+.{0,40}(?:cut\s+off|incomplete|didn'?t\s+(?:come|finish)|missing)/i,
+  // English request to provide more details — anchored to avoid matching factual summaries
+  // that happen to contain "provide more details" in the middle (e.g. "User prefers vendors
+  // that can provide more details about their supply chain").
+  /^(?:could|can|would|please).{0,10}(?:you\s+)?(?:provide|share|give|clarify|elaborate|repeat).{0,10}(?:more|details|information|context)/i,
+  // Generic help offers without factual content (anchored)
+  /^(?:please\s+)?(?:let\s+me\s+know|tell\s+me|feel\s+free|i'?m\s+here).{0,30}(?:help|assist|support|question|need)/i,
+  // "I can help" / "here to help" / "happy to help" boilerplate (anchored).
+  // Two bounded branches: (1) I'm + here/ready/happy/glad to + help, and
+  // (2) I can + help/assist. Both require an actual assistance phrase so the
+  // rule does not match factual recalls beginning with "help" such as
+  // "Helpdesk is the user's current team." or "Help the user set up their API."
+  /^(?:(?:i(?:'?m|\s+am)\s+)?(?:here\s+to\s+|ready\s+to\s+|happy\s+to\s+|glad\s+to\s+)help|i\s+can\s+(?:help|assist))/i,
+  // Restating visible model metadata as assistant output (anchored)
+  /^(?:当前模型|current model).{0,80}(?:帮助|请|如果|help|please)/iu,
+];
+
 const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^🧩\s*active memory:/i,
   /^🔎\s*active memory debug:/i,
@@ -262,6 +309,7 @@ type ActiveMemoryPartialTimeoutError = Error & {
   activeMemoryPartialReply?: string;
   activeMemorySearchDebug?: ActiveMemorySearchDebug;
   activeMemoryUnavailableMemorySearch?: boolean;
+  activeMemoryHasUsableMemoryResult?: boolean;
 };
 
 type TranscriptReadLimits = {
@@ -391,6 +439,7 @@ export {
   TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS,
   TIMEOUT_BOILERPLATE_PATTERNS,
   TIMEOUT_PARTIAL_DATA_GRACE_MS,
+  CHITCHAT_PATTERNS,
 };
 
 export type {

@@ -376,6 +376,7 @@ async function runRecallSubagent(params: {
         partialReply,
         transcriptState.searchDebug,
         transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
+        transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
       );
     }
     if (
