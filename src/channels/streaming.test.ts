@@ -16,6 +16,7 @@ import {
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingProgressCommentary,
   resolveChannelStreamingProgressNarration,
+  type ChannelProgressDraftLine,
 } from "./streaming.js";
 
 describe("buildChannelProgressDraftLine", () => {
@@ -436,5 +437,40 @@ describe("progress narration", () => {
         streaming: { mode: "progress", progress: { narration: false } },
       }),
     ).toBe(false);
+  });
+});
+
+describe("mergeChannelProgressDraftLine", () => {
+  it("carries a prior tool detail forward when a later status-only tool update drops it", () => {
+    const prior: ChannelProgressDraftLine = {
+      id: "tool:call-1",
+      kind: "tool",
+      text: "🛠️ echo hi",
+      label: "Bash",
+      icon: "🛠️",
+      detail: "echo hi",
+      toolName: "bash",
+    };
+    const statusOnly: ChannelProgressDraftLine = {
+      id: "tool:call-1",
+      kind: "tool",
+      text: "🛠️ Bash: completed",
+      label: "Bash",
+      icon: "🛠️",
+      status: "completed",
+      toolName: "bash",
+    };
+
+    const merged = mergeChannelProgressDraftLine([prior], statusOnly, { maxLines: 4 });
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      id: "tool:call-1",
+      kind: "tool",
+      detail: "echo hi",
+      status: "completed",
+      toolName: "bash",
+    });
+    expect(merged[0]?.text).toBe("🛠️ echo hi");
   });
 });

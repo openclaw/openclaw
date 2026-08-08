@@ -3149,6 +3149,24 @@ describe("createCliJsonlStreamingParser", () => {
       ],
       expected: [{ toolCallId: "toolu_bad", name: "Bash", kind: "tool_use", args: {} }],
     },
+    {
+      name: "uses block.input from content_block_start when no input_json_delta arrives",
+      frames: [
+        claudeBlockStart(
+          { type: "tool_use", id: "toolu_inline", name: "Bash", input: { command: "ls -la" } },
+          0,
+        ),
+        claudeBlockStop(0),
+      ],
+      expected: [
+        {
+          toolCallId: "toolu_inline",
+          name: "Bash",
+          kind: "tool_use",
+          args: { command: "ls -la" },
+        },
+      ],
+    },
   ])("$name", ({ frames, expected }) => {
     const starts: CliToolUseStartDelta[] = [];
     const parser = createCliJsonlStreamingParser({
@@ -3167,6 +3185,80 @@ describe("createCliJsonlStreamingParser", () => {
     parser.finish();
 
     expect(starts).toEqual(expected);
+  });
+
+  it("upgrades an empty-args start from the assistant-record snapshot", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudeBlockStart({ type: "tool_use", id: "toolu_upgrade", name: "Bash", input: {} }, 0),
+        claudeBlockStop(0),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "tool_use", id: "toolu_upgrade", name: "Bash", input: { command: "echo hi" } },
+        ]),
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_upgrade", name: "Bash", kind: "tool_use", args: {} },
+      {
+        toolCallId: "toolu_upgrade",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "echo hi" },
+      },
+    ]);
+  });
+
+  it("does not upgrade a start that already carried args", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        claudeBlockStart({ type: "tool_use", id: "toolu_full", name: "Bash", input: {} }, 0),
+        claudeInputJsonDelta('{"command":"ls"}', 0),
+        claudeBlockStop(0),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "tool_use", id: "toolu_full", name: "Bash", input: { command: "ls" } },
+        ]),
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      {
+        toolCallId: "toolu_full",
+        name: "Bash",
+        kind: "tool_use",
+        args: { command: "ls" },
+      },
+    ]);
   });
 
   it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
