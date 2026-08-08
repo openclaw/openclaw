@@ -56,6 +56,8 @@ const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
+// A real worker can have the fixture PID; keep the managed gateway outside its ancestry.
+const managedGatewayPid = process.pid === 4242 ? 4243 : 4242;
 const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
@@ -1175,7 +1177,11 @@ describe("update-cli", () => {
       },
     });
     serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: managedGatewayPid,
+      state: "running",
+    });
   };
 
   const mockStoppedManagedGitGateway = () => {
@@ -1188,7 +1194,11 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(false);
     serviceLoaded.mockResolvedValueOnce(true);
     serviceReadRuntime.mockResolvedValue({ status: "stopped", pid: null, state: "stopped" });
-    serviceReadRuntime.mockResolvedValueOnce({ status: "running", pid: 4242, state: "running" });
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "running",
+      pid: managedGatewayPid,
+      state: "running",
+    });
   };
 
   const expectFailedManagedGitRestart = (message: string) => {
@@ -1428,7 +1438,7 @@ describe("update-cli", () => {
     );
     serviceReadRuntime.mockResolvedValue({
       status: "running",
-      pid: 4242,
+      pid: managedGatewayPid,
       state: "running",
     });
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
@@ -1437,7 +1447,7 @@ describe("update-cli", () => {
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",
-      listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+      listeners: [{ pid: managedGatewayPid, command: "openclaw-gateway" }],
       hints: [],
     });
     classifyPortListener.mockReturnValue("gateway");
@@ -3830,7 +3840,7 @@ describe("update-cli", () => {
     serviceReadCommand.mockResolvedValue(null);
     serviceReadRuntime.mockResolvedValueOnce({
       status: "running",
-      pid: 4242,
+      pid: managedGatewayPid,
       state: "running",
     });
 
@@ -3851,7 +3861,9 @@ describe("update-cli", () => {
   it("refuses package updates from inside the active gateway process tree", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
     serviceLoaded.mockResolvedValue(true);
-    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 4242]));
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(
+      new Set<number>([process.pid, managedGatewayPid]),
+    );
 
     await updateCommand({ yes: true });
 
@@ -3859,7 +3871,7 @@ describe("update-cli", () => {
     expect(errors).toContain(
       "openclaw update detected it is running inside the gateway process tree.",
     );
-    expect(errors).toContain("Gateway PID 4242 is an ancestor");
+    expect(errors).toContain(`Gateway PID ${managedGatewayPid} is an ancestor`);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -3870,18 +3882,21 @@ describe("update-cli", () => {
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({
       status: "running",
-      pid: 4242,
+      pid: managedGatewayPid,
       state: "running",
     });
     mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
 
-    await runWithGatewayServiceEnv({ yes: true }, { [GATEWAY_SERVICE_RUNTIME_PID_ENV]: "4242" });
+    await runWithGatewayServiceEnv(
+      { yes: true },
+      { [GATEWAY_SERVICE_RUNTIME_PID_ENV]: String(managedGatewayPid) },
+    );
 
     const errors = getErrorOutput();
     expect(errors).toContain(
       "openclaw update detected it is running inside the gateway process tree.",
     );
-    expect(errors).toContain("Gateway PID 4242 is an ancestor");
+    expect(errors).toContain(`Gateway PID ${managedGatewayPid} is an ancestor`);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -4550,7 +4565,7 @@ describe("update-cli", () => {
       });
       serviceReadRuntime.mockResolvedValue(
         runtimeStatus === "running"
-          ? { status: "running", state: "running", pid: 4242 }
+          ? { status: "running", state: "running", pid: managedGatewayPid }
           : { status: "stopped", state: "stopped" },
       );
       suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
@@ -4637,7 +4652,7 @@ describe("update-cli", () => {
       portUsage: {
         port: 18789,
         status: "busy",
-        listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+        listeners: [{ pid: managedGatewayPid, command: "openclaw-gateway" }],
         hints: [],
       },
       healthy: true,
