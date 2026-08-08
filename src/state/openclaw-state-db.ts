@@ -78,6 +78,13 @@ import {
 } from "./openclaw-state-db-schema-repair.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import {
+  createPreMigrationStateBackup,
+  describePreMigrationSnapshot,
+  PRE_MIGRATION_BACKUP_RETENTION,
+  type PreMigrationBackupResult,
+  prunePreMigrationStateBackups,
+} from "./openclaw-state-pre-migration-backup.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export {
@@ -257,6 +264,17 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
+    // Gated on the same condition markCurrentStateSchemaVersion uses: a pre-v2
+    // database (no audit ledger) keeps its recorded version here, because repair
+    // leaves that bump to normal open, which creates the complete schema first.
+    // Without this guard a database that is NOT being migrated gets copied, which
+    // is both wasted disk and a misleading "backed up before migration" report.
+    // The deferred bump is not left uncovered: ensureSchema snapshots it through
+    // the same boundary when normal open performs it.
+    const willBumpSchemaVersion = tableExists(db, "audit_events");
+    const preMigrationBackup: PreMigrationBackupResult = willBumpSchemaVersion
+      ? snapshotBeforeForwardMigration(db, pathname)
+      : { status: "skipped", reason: "repair leaves a pre-v2 database version untouched" };
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runSqliteImmediateTransactionSync(
       db,
@@ -342,13 +360,41 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     );
     const quarantineCleared = clearOpenClawDatabaseQuarantine(pathname, { env });
     clearOpenClawStateDatabaseOpenFailure(pathname);
+    // Only now, past the transaction and its canonical-shape and integrity
+    // checks, is it safe to drop an older recovery copy: a repair that rejects
+    // the database rolls back and never reaches this line, so the operator
+    // keeps the rollback set they arrived with.
+    const prunedPaths =
+      preMigrationBackup.status === "created" ? prunePreMigrationStateBackups(pathname) : [];
+    const preMigrationChanges =
+      preMigrationBackup.status === "created"
+        ? [
+            describePreMigrationSnapshot(preMigrationBackup),
+            // Deleting a recovery copy is worth saying out loud, so an operator
+            // looking for an older snapshot knows why it is not there.
+            ...(prunedPaths.length > 0
+              ? [
+                  `Pruned ${prunedPaths.length} older pre-migration backup(s), keeping the newest ${PRE_MIGRATION_BACKUP_RETENTION}`,
+                ]
+              : []),
+          ]
+        : [];
+    const preMigrationWarnings =
+      preMigrationBackup.status === "failed"
+        ? [
+            `Could not back up shared state database before migration at ${pathname}: ${preMigrationBackup.reason}`,
+          ]
+        : [];
     return {
-      changes,
-      warnings: quarantineCleared
-        ? []
-        : [
-            `Persisted quarantine record for ${pathname} could not be cleared; rerun openclaw doctor --fix so the repaired database is not refused again.`,
-          ],
+      changes: [...preMigrationChanges, ...changes],
+      warnings: [
+        ...preMigrationWarnings,
+        ...(quarantineCleared
+          ? []
+          : [
+              `Persisted quarantine record for ${pathname} could not be cleared; rerun openclaw doctor --fix so the repaired database is not refused again.`,
+            ]),
+      ],
     };
   } catch (err) {
     // Reaching this catch inside doctor means repair itself refused or failed,
@@ -406,9 +452,43 @@ export function repairOpenClawStateDatabaseSchemaIfNeeded(
   return needsRepair ? repairOpenClawStateDatabaseSchema(options) : { changes: [], warnings: [] };
 }
 
+/**
+ * The single pre-mutation boundary for in-place forward schema migrations.
+ *
+ * Both paths that raise the recorded version funnel through here: doctor repair
+ * and normal open. Repair deliberately leaves a pre-v2 database at its recorded
+ * version and defers the bump to normal open, so hooking only repair would leave
+ * that legacy upgrade with no rollback copy — the one upgrade most likely to need
+ * one. Reads the version itself so neither caller can pass a stale one.
+ *
+ * Must run outside a transaction: `VACUUM INTO` cannot execute inside one.
+ */
+function snapshotBeforeForwardMigration(
+  db: DatabaseSync,
+  pathname: string,
+): PreMigrationBackupResult {
+  return createPreMigrationStateBackup(
+    db,
+    pathname,
+    readSqliteUserVersion(db),
+    OPENCLAW_STATE_SCHEMA_VERSION,
+    Date.now(),
+  );
+}
+
 function ensureSchema(db: DatabaseSync, pathname: string): void {
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
+  // Normal open raises user_version in place below, including for a pre-v2
+  // database that repair deliberately left behind. Snapshot before the
+  // transaction opens; a database already at the current version is skipped, so
+  // this costs nothing on the ordinary open.
+  const preMigrationBackup = snapshotBeforeForwardMigration(db, pathname);
+  if (preMigrationBackup.status === "failed") {
+    stateDbLog.warn(
+      `Could not back up shared state database before migration at ${pathname}: ${preMigrationBackup.reason}`,
+    );
+  }
   // Rebuilding referenced tables requires disabling FK enforcement before BEGIN.
   db.exec("PRAGMA foreign_keys = OFF;");
   try {
@@ -479,6 +559,17 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
         operationLabel: "state.schema.ensure",
       },
     );
+    // Past the transaction, so a migration that threw leaves the operator's
+    // existing recovery copies alone.
+    if (preMigrationBackup.status === "created") {
+      const prunedPaths = prunePreMigrationStateBackups(pathname);
+      stateDbLog.info(
+        describePreMigrationSnapshot(preMigrationBackup) +
+          (prunedPaths.length > 0
+            ? `; pruned ${prunedPaths.length} older pre-migration backup(s), keeping the newest ${PRE_MIGRATION_BACKUP_RETENTION}`
+            : ""),
+      );
+    }
   } finally {
     db.exec("PRAGMA foreign_keys = ON;");
   }

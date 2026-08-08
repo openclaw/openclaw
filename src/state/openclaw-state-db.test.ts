@@ -54,6 +54,24 @@ type StateDbTestDatabase = Pick<
 const stateDbTempDirs: string[] = [];
 let canonicalStateDatabaseTemplatePath: string | undefined;
 
+/**
+ * Doctor reports the pre-migration snapshot it takes before bumping the schema
+ * version. Matched rather than compared literally because the path carries the
+ * temp state directory and the snapshot timestamp.
+ */
+const BACKED_UP_BEFORE_MIGRATION = expect.stringMatching(
+  /^Backed up shared state database before schema migration → .+pre-migration-backups.+\.sqlite$/,
+);
+
+/**
+ * Reported instead when an earlier attempt at this same migration already left a
+ * copy. A failed open snapshots before its transaction throws, so a repair that
+ * follows one reuses that copy rather than writing a second of identical state.
+ */
+const REUSED_BEFORE_MIGRATION = expect.stringMatching(
+  /^Reused the pre-migration backup an earlier attempt left → .+pre-migration-backups.+\.sqlite$/,
+);
+
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
 }
@@ -1311,6 +1329,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        BACKED_UP_BEFORE_MIGRATION,
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
@@ -1343,6 +1362,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        BACKED_UP_BEFORE_MIGRATION,
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
       ],
       warnings: [],
@@ -2182,8 +2202,11 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       pathname: databasePath,
     });
 
+    // The open above snapshotted before its transaction threw, so this repair
+    // reuses that copy: the database is byte-for-byte what it found.
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        REUSED_BEFORE_MIGRATION,
         "Migrated shared state audit event ledger → versioned message lifecycle schema",
         "Migrated shared state tables to SQLite STRICT typing (3)",
       ],
@@ -2449,6 +2472,40 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         .get(),
     ).toEqual({ name: "audit_events" });
     expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+  });
+
+  it("snapshots the pre-v2 upgrade that normal open performs, not repair", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("DROP TABLE audit_events");
+    legacy.close();
+    const backupDir = path.join(path.dirname(databasePath), "pre-migration-backups");
+
+    // Repair defers this database's version bump, so it must not copy it either:
+    // a snapshot here would be a duplicate reported as a migration that never ran.
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
+    expect(fs.existsSync(backupDir)).toBe(false);
+
+    // Normal open is where the forward migration actually happens, so that is
+    // where the rollback copy has to exist.
+    const opened = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    const snapshots = fs.readdirSync(backupDir).filter((name) => name.endsWith(".sqlite"));
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toContain(`v1-to-v${OPENCLAW_STATE_SCHEMA_VERSION}`);
+
+    // And it has to carry the pre-migration version, or it cannot roll anything back.
+    const snapshot = new DatabaseSync(path.join(backupDir, snapshots[0] as string), {
+      readOnly: true,
+    });
+    try {
+      expect(readSqliteNumberPragma(snapshot, "user_version")).toBe(1);
+    } finally {
+      snapshot.close();
+    }
   });
 
   it("refuses to rebuild a noncanonical audit table with unknown data columns", () => {
