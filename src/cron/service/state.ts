@@ -269,6 +269,8 @@ export type CronServiceState = {
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  /** Number of active timer-tick batches allowing cross-tick admission. */
+  activeTimerTicks: number;
   stopped: boolean;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
@@ -304,6 +306,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
     running: false,
+    activeTimerTicks: 0,
     stopped: false,
     schedulingPaused: false,
     schedulerStarted: false,
