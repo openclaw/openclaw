@@ -14,7 +14,11 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
-import { createDiscordDnsLookup } from "../network-config.js";
+import { createDiscordDnsLookup, createDiscordProviderDnsLookup } from "../network-config.js";
+import {
+  assertDiscordProviderGatewayUrl,
+  getDiscordProviderEndpointRuntime,
+} from "../provider-endpoint.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
@@ -32,6 +36,7 @@ const DISCORD_GATEWAY_POLICY_VIOLATION_CLOSE_CODE = 1008;
 const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";
 const DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS = 240;
 const discordDnsLookup = createDiscordDnsLookup();
+const discordProviderDnsLookup = createDiscordProviderDnsLookup();
 
 type DiscordGatewayWebSocketCtor = typeof ws.WebSocket;
 type DiscordGatewayWebSocketAgent = InstanceType<typeof HttpsAgent> | HttpAgent;
@@ -197,9 +202,12 @@ function createGatewayPlugin(params: {
     autoInteractions: boolean;
   };
   gatewayInfoTimeoutMs: number;
+  gatewayBotUrl?: string;
+  gatewayOrigin?: string;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
   wsAgent?: DiscordGatewayWebSocketAgent;
+  providerEndpointActive?: boolean;
   runtime?: RuntimeEnv;
   testing?: GatewayPluginTestingOptions;
 }): discordGateway.GatewayPlugin {
@@ -227,6 +235,7 @@ function createGatewayPlugin(params: {
       if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
         const resolved = await fetchDiscordGatewayInfoWithTimeout({
           token: client.options.token,
+          gatewayBotUrl: params.gatewayBotUrl,
           fetchImpl: params.fetchImpl,
           fetchInit: params.fetchInit,
           timeoutMs: params.gatewayInfoTimeoutMs,
@@ -235,9 +244,12 @@ function createGatewayPlugin(params: {
             info,
             usedFallback: false,
           }))
-          .catch((error: unknown) =>
-            resolveGatewayInfoWithFallback({ runtime: params.runtime, error }),
-          );
+          .catch((error: unknown) => {
+            if (params.providerEndpointActive) {
+              throw error;
+            }
+            return resolveGatewayInfoWithFallback({ runtime: params.runtime, error });
+          });
         this.gatewayInfo = resolved.info;
         this.gatewayInfoUsedFallback = resolved.usedFallback;
       }
@@ -257,6 +269,7 @@ function createGatewayPlugin(params: {
       if (!url) {
         throw new Error("Gateway URL is required");
       }
+      assertDiscordProviderGatewayUrl(url, params.gatewayOrigin);
       const wsFlowId = randomUUID();
       // Avoid Node's undici-backed global WebSocket here. We have seen late
       // close-path crashes during Discord gateway teardown; the ws transport is
@@ -356,6 +369,10 @@ function createDiscordGatewayMetadataFetch(
   debugCaptureEnabled: boolean,
   proxyUrl?: string,
 ): DiscordGatewayFetch {
+  const providerEndpoint = getDiscordProviderEndpointRuntime();
+  if (providerEndpoint) {
+    return (input, init) => providerEndpoint.fetch(input, init as RequestInit | undefined);
+  }
   return (input, init) =>
     fetchDiscordGatewayMetadataGuarded(input, init, {
       ...(debugCaptureEnabled
@@ -393,12 +410,16 @@ export function createDiscordGatewayPlugin(params: {
   const gatewayInfoTimeoutMs = resolveDiscordGatewayInfoTimeoutMs({
     env: process.env,
   });
+  const providerEndpoint = getDiscordProviderEndpointRuntime();
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
-  let wsAgent: DiscordGatewayWebSocketAgent = new HttpsAgent({
-    lookup: discordDnsLookup,
-  });
+  let wsAgent: DiscordGatewayWebSocketAgent | undefined =
+    providerEndpoint && new URL(providerEndpoint.descriptor.gatewayOrigin).protocol === "ws:"
+      ? undefined
+      : new HttpsAgent({
+          lookup: providerEndpoint ? discordProviderDnsLookup : discordDnsLookup,
+        });
 
-  if (proxy) {
+  if (proxy && !providerEndpoint) {
     try {
       validateDiscordProxyUrl(proxy);
       wsAgent =
@@ -421,7 +442,10 @@ export function createDiscordGatewayPlugin(params: {
       autoInteractions: false,
     },
     gatewayInfoTimeoutMs,
+    gatewayBotUrl: providerEndpoint?.descriptor.gatewayBotUrl,
+    gatewayOrigin: providerEndpoint?.descriptor.gatewayOrigin,
     fetchImpl,
+    providerEndpointActive: providerEndpoint !== undefined,
     runtime: params.runtime,
     testing: params.testing,
     ...(wsAgent ? { wsAgent } : {}),

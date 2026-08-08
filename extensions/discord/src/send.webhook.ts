@@ -18,6 +18,10 @@ import {
   readRetryAfter,
 } from "./internal/rest-errors.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import {
+  DISCORD_DEFAULT_REST_API_BASE_URL,
+  getDiscordProviderEndpointRuntime,
+} from "./provider-endpoint.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
 import {
@@ -43,13 +47,14 @@ type DiscordWebhookSendOpts = {
 };
 
 function resolveWebhookExecutionUrl(params: {
+  restApiBaseUrl?: string;
   webhookId: string;
   webhookToken: string;
   threadId?: string | number;
   wait?: boolean;
 }) {
   const baseUrl = new URL(
-    `https://discord.com/api/v10/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}`,
+    `${params.restApiBaseUrl ?? "https://discord.com/api/v10"}/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}`,
   );
   baseUrl.searchParams.set("wait", params.wait === false ? "false" : "true");
   if (params.threadId !== undefined && params.threadId !== null && params.threadId !== "") {
@@ -121,6 +126,7 @@ export async function sendWebhookMessageDiscord(
     cfg: opts.cfg,
     accountId: opts.accountId,
   });
+  const providerEndpoint = getDiscordProviderEndpointRuntime();
   const rewrittenText = rewriteDiscordKnownMentions(text, {
     accountId: account.accountId,
     mentionAliases: account.config.mentionAliases,
@@ -141,6 +147,8 @@ export async function sendWebhookMessageDiscord(
   }
 
   const url = resolveWebhookExecutionUrl({
+    restApiBaseUrl:
+      providerEndpoint?.descriptor.restApiBaseUrl ?? DISCORD_DEFAULT_REST_API_BASE_URL,
     webhookId,
     webhookToken,
     threadId: opts.threadId,
@@ -154,7 +162,7 @@ export async function sendWebhookMessageDiscord(
   try {
     const response = await request(
       async () => {
-        const attemptResponse = await (proxyFetch ?? fetch)(url, {
+        const attemptResponse = await (providerEndpoint?.fetch ?? proxyFetch ?? fetch)(url, {
           method: "POST",
           headers: {
             "content-type": "application/json",

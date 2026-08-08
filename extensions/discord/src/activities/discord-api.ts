@@ -1,14 +1,34 @@
+import { Routes } from "discord-api-types/v10";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { getDiscordProviderEndpointRuntime } from "../provider-endpoint.js";
 
 export const DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token";
 export const DISCORD_USER_URL = "https://discord.com/api/v10/users/@me";
 const DISCORD_HOST = "discord.com";
+const DISCORD_ACTIVITY_API_TIMEOUT_MS = 15_000;
 const JSON_MAX_BYTES = 64 * 1024;
 const INSTANCE_ID_MAX_LENGTH = 256;
 
 export { fetchWithSsrFGuard };
 export type FetchGuard = typeof fetchWithSsrFGuard;
+
+async function readDiscordJsonResult(
+  response: Response,
+  label: string,
+): Promise<{ ok: boolean; status: number; body?: Record<string, unknown> }> {
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    return { ok: false, status: response.status };
+  }
+  return {
+    ok: true,
+    status: response.status,
+    body: await readProviderJsonResponse<Record<string, unknown>>(response, label, {
+      maxBytes: JSON_MAX_BYTES,
+    }),
+  };
+}
 
 export function normalizeInstanceId(value: string | null): string | undefined {
   const instanceId = value?.trim();
@@ -39,24 +59,10 @@ export async function fetchDiscordJson(params: {
     init: params.init,
     policy: { allowedHostnames: [DISCORD_HOST] },
     auditContext: params.auditContext,
-    timeoutMs: 15_000,
+    timeoutMs: DISCORD_ACTIVITY_API_TIMEOUT_MS,
   });
   try {
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      return { ok: false, status: response.status };
-    }
-    return {
-      ok: true,
-      status: response.status,
-      body: await readProviderJsonResponse<Record<string, unknown>>(
-        response,
-        "Discord Activity OAuth",
-        {
-          maxBytes: JSON_MAX_BYTES,
-        },
-      ),
-    };
+    return await readDiscordJsonResult(response, "Discord Activity OAuth");
   } finally {
     await release();
   }
@@ -72,13 +78,34 @@ export async function resolveActivityInstanceChannel(params: {
 }): Promise<string | undefined> {
   let result: Awaited<ReturnType<typeof fetchDiscordJson>>;
   try {
-    result = await fetchDiscordJson({
-      fetchGuard: params.fetchGuard,
-      fetchImpl: params.proxyFetch,
-      url: `https://discord.com/api/v10/applications/${encodeURIComponent(params.applicationId)}/activity-instances/${encodeURIComponent(params.instanceId)}`,
-      init: { headers: { Authorization: `Bot ${params.botAuth}` } },
-      auditContext: "discord.activities.instance",
-    });
+    const route = Routes.applicationActivityInstance(
+      encodeURIComponent(params.applicationId),
+      encodeURIComponent(params.instanceId),
+    );
+    const providerEndpoint = getDiscordProviderEndpointRuntime();
+    const init = { headers: { Authorization: `Bot ${params.botAuth}` } };
+    if (providerEndpoint) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), DISCORD_ACTIVITY_API_TIMEOUT_MS);
+      timeout.unref?.();
+      try {
+        const response = await providerEndpoint.fetch(
+          `${providerEndpoint.descriptor.restApiBaseUrl}${route}`,
+          { ...init, signal: controller.signal },
+        );
+        result = await readDiscordJsonResult(response, "Discord Activity instance");
+      } finally {
+        clearTimeout(timeout);
+      }
+    } else {
+      result = await fetchDiscordJson({
+        fetchGuard: params.fetchGuard,
+        fetchImpl: params.proxyFetch,
+        url: `https://discord.com/api/v10${route}`,
+        init,
+        auditContext: "discord.activities.instance",
+      });
+    }
   } catch {
     return undefined;
   }

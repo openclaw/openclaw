@@ -414,4 +414,21 @@ describe("workspace .env blocklist completeness", () => {
       });
     });
   });
+
+  it("blocks the Discord provider endpoint from workspace .env and preserves inherited input", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        const key = "DISCORD_PROVIDER_ENDPOINT";
+        await writeEnvFile(path.join(cwdDir, ".env"), `${key}=workspace-descriptor\n`);
+
+        deleteTestEnvValue(key);
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+        expect(process.env[key]).toBeUndefined();
+
+        setTestEnvValue(key, "inherited-descriptor");
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+        expect(process.env[key]).toBe("inherited-descriptor");
+      });
+    });
+  });
 });

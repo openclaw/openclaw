@@ -1,6 +1,7 @@
 // Discord helper module supports network config behavior.
 import * as dns from "node:dns";
 import type { LookupFunction } from "node:net";
+import { resolvePinnedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DISCORD_DNS_HOSTS = ["discord.com", "discord.gg", "gateway.discord.gg"];
 
@@ -76,5 +77,18 @@ export function createDiscordDnsLookup(): LookupFunction {
       }
       callback(null, first.address, first.family);
     });
+  };
+}
+
+export function createDiscordProviderDnsLookup(): LookupFunction {
+  return (hostname, options, callback) => {
+    // Validate on every socket connect, then answer from the pinned lookup so DNS
+    // cannot change between the SSRF policy check and the outbound TCP connection.
+    void resolvePinnedHostname(hostname).then(
+      (pinned) => pinned.lookup(pinned.hostname, options, callback),
+      (error: unknown) => {
+        callback(error instanceof Error ? error : new Error(String(error)), "", 4);
+      },
+    );
   };
 }
