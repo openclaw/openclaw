@@ -3729,33 +3729,27 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("escalates a forced preflight past Codex's ownership deferral to a guarded native request", async () => {
-    // #119977 / #119971: a required preflight compaction must not accept Codex's
-    // "owns automatic compaction" deferral. It re-issues a guarded native request
-    // that compacts the live bound thread over its own OAuth, rather than falling
-    // to context-engine compaction (which fails an OAuth-only Codex session with
-    // "No API key found").
+  it("compacts a forced preflight with one guarded native request, never the context engine", async () => {
+    // #119977 / #119971: a required preflight compaction on a live bound thread
+    // compacts natively over its own OAuth in a single guarded request. It must
+    // not fall back to context-engine compaction (which fails an OAuth-only Codex
+    // session with "No API key found"); no ownership-deferral escalation is
+    // needed because the native request itself drives compaction.
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
     } as never);
-    maybeCompactAgentHarnessSessionMock
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: false,
-        reason: "codex app-server owns automatic compaction",
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "native-guarded",
-          firstKeptEntryId: "entry-1",
-          tokensBefore: 333,
-          tokensAfter: 40,
-        },
-      });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "native-guarded",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 333,
+        tokensAfter: 40,
+      },
+    });
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
@@ -3773,16 +3767,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.result?.summary).toBe("native-guarded");
-    // The deferral escalated to a guarded native request, not the context engine.
+    // The native request compacted the live thread; no context-engine fallback.
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(2);
-    expect(maybeCompactAgentHarnessSessionMock.mock.calls[1]?.[1]).toEqual({
-      nativeCompactionRequest: "after_context_engine",
-    });
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
   });
 
-  it("falls a forced preflight back to the context engine when the guarded native thread is dead", async () => {
-    // #119977: when the guarded native escalation finds the bound thread gone it
+  it("falls a forced preflight back to the context engine when the native thread is dead", async () => {
+    // #119977: when the guarded native request finds the bound thread gone it
     // surfaces a recoverable stale binding; only then does the forced preflight
     // fall back to context-engine compaction to repair/rebind for the next turn.
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
@@ -3790,18 +3781,12 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
     } as never);
-    maybeCompactAgentHarnessSessionMock
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: false,
-        reason: "codex app-server owns automatic compaction",
-      })
-      .mockResolvedValueOnce({
-        ok: false,
-        compacted: false,
-        reason: "thread not found: thread-1",
-        failure: { reason: "stale_thread_binding" },
-      });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "thread not found: thread-1",
+      failure: { reason: "stale_thread_binding" },
+    });
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
@@ -3819,17 +3804,16 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.result?.summary).toBe("engine-summary");
-    // The guarded native request ran first; only the dead thread reached the engine.
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(2);
-    expect(maybeCompactAgentHarnessSessionMock.mock.calls[1]?.[1]).toEqual({
-      nativeCompactionRequest: "after_context_engine",
-    });
+    // The native request ran first; only the dead thread reached the engine.
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
 
-  it("defers an ordinary budget trigger to Codex without escalating to the context engine", async () => {
-    // Ordinary (non-forced) budget compaction still defers to codex-rs inline
-    // compaction while the binding is present; only forced/preflight escalates.
+  it("returns Codex's ownership deferral without falling back to the context engine", async () => {
+    // #119977: when native execution is blocked (sandbox/exec host) the plugin
+    // returns the "owns automatic compaction" no-op so codex-rs handles inline
+    // compaction. The queued layer surfaces that deferral as-is; it must not fall
+    // back to context-engine compaction, which would fight Codex's ownership.
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
@@ -3937,22 +3921,17 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
-  it("escalates a model-locked forced preflight to a guarded native request, never the engine", async () => {
+  it("compacts a model-locked forced preflight with one guarded native request, never the engine", async () => {
     // #119977: a model lock forbids a context-engine fallback, so a locked forced
-    // preflight escalates the ownership deferral to a guarded native request on the
-    // locked thread rather than dropping the turn on the deferral.
+    // preflight compacts the locked thread with a single guarded native request
+    // rather than dropping the turn; the ownership no-op never appears for a live
+    // thread.
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
-    maybeCompactAgentHarnessSessionMock
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: false,
-        reason: "codex app-server owns automatic compaction",
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "native-locked", firstKeptEntryId: "entry-1", tokensBefore: 333 },
-      });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "native-locked", firstKeptEntryId: "entry-1", tokensBefore: 333 },
+    });
 
     const result = await compactEmbeddedAgentSession(
       wrappedCompactionArgs({
@@ -3971,10 +3950,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(result.result?.summary).toBe("native-locked");
-    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(2);
-    expect(maybeCompactAgentHarnessSessionMock.mock.calls[1]?.[1]).toEqual({
-      nativeCompactionRequest: "after_context_engine",
-    });
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 

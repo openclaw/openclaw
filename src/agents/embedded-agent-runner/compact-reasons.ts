@@ -20,9 +20,13 @@ export const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON =
 
 /**
  * Returns whether a result is Codex's intentional automatic-compaction ownership
- * no-op. The deferral is only safe while the bound thread is live, so forced and
- * preflight callers must escalate rather than accept it; it is intentionally kept
- * out of isBenignCompactionSkipResult so those callers gate on it explicitly.
+ * no-op. The plugin now emits it only when native execution is blocked
+ * (sandbox/exec host) so codex-rs handles inline compaction for the bound thread;
+ * a present-but-dead thread instead surfaces a recoverable stale binding. Callers
+ * accept this deferral and must not fall back to context-engine compaction, which
+ * would fight Codex's ownership and fail an OAuth-only session with "No API key
+ * found"; it is kept out of isBenignCompactionSkipResult so callers recognize it
+ * explicitly rather than folding it into a generic benign skip.
  */
 export function isCodexOwnedAutomaticCompactionSkip(result: {
   ok: boolean;

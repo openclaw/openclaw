@@ -56,7 +56,6 @@ type CodexAppServerCompactOptions = {
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
   clientFactory?: CodexAppServerClientFactory;
-  allowNonManualNativeRequest?: boolean;
   nativeCompletionTimeoutMs?: number;
   nativeInterruptGraceMs?: number;
 };
@@ -453,53 +452,58 @@ async function compactCodexNativeThread(
     config: params.config,
   });
   const initialBinding = await options.bindingStore.read(bindingIdentity);
-  // Read the binding before deciding to defer, and keep its two failure modes
+  // Read the binding before issuing any request, keeping its failure modes
   // distinct:
-  //   - Missing binding (no threadId): every trigger — automatic, manual, and
-  //     guarded (allowNonManual) — returns missing_thread_binding here. Automatic
-  //     triggers would otherwise hand context pressure to codex-rs's inline
-  //     compaction, which is only safe while a bound thread exists; a missing
+  //   - Missing binding (no threadId): every trigger returns missing_thread_binding
+  //     here. Automatic triggers would otherwise hand context pressure to codex-rs's
+  //     inline compaction, which is only safe while a bound thread exists; a missing
   //     binding must surface for recovery, not be swallowed as a benign no-op that
   //     trusts a thread that no longer exists (#119977).
-  //   - Dead thread (binding present, thread already retired): the binding clears
-  //     this gate, so manual and guarded requests reach the native request below,
-  //     where thread/compact/start surfaces "thread not found" (stale_thread_binding)
-  //     for the recovery path.
+  //   - Dead thread (binding present, thread already retired): every trigger reaches
+  //     the native request below, where thread/compact/start surfaces "thread not
+  //     found" (stale_thread_binding) for the recovery path. Compacting the bound
+  //     thread natively is the ownership-cooperation itself — codex compacts its own
+  //     transcript over its own OAuth — so an automatic trigger no longer blindly
+  //     defers to a thread that may be gone (#119977).
   if (!initialBinding?.threadId) {
     return failedCodexThreadBindingCompactionResult(params, {
       reason: "no codex app-server thread binding",
       recovery: "missing_thread_binding",
     });
   }
-  if (params.trigger !== "manual" && !options.allowNonManualNativeRequest) {
-    embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      trigger: params.trigger,
-    });
-    return codexNativeCompactionResult(params, {
-      compacted: false,
-      // Cross-boundary contract: core compaction callers match this exact reason
-      // (see CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON in compact-reasons.ts).
-      reason: "codex app-server owns automatic compaction",
-      details: {
-        backend: "codex-app-server",
-        skipped: true,
-        reason: "non_manual_trigger",
-        trigger: params.trigger ?? "unknown",
-      },
-    });
-  }
+  // Non-manual (automatic/preflight) triggers take the guarded native request that
+  // rereads the binding under lease and clears the projection marker before
+  // compacting; manual triggers issue the request directly.
+  const guardedNativeRequest = params.trigger !== "manual";
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: params.config,
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,
     sessionId: params.sessionId,
     surface: "native compaction",
   });
-  // Binding presence is verified first (above): a missing binding has no live
-  // thread to run in the sandbox, so it surfaces as recoverable before this gate.
-  // The sandbox block still applies to real native requests that have a binding.
   if (nativeExecutionBlock) {
+    if (guardedNativeRequest) {
+      // Native execution is unavailable (OpenClaw sandbox/exec host), so OpenClaw
+      // cannot drive a native request — but codex-rs still owns inline automatic
+      // compaction for the bound thread, so defer instead of failing the turn.
+      // Cross-boundary contract: core compaction callers match this exact reason
+      // (see CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON in compact-reasons.ts).
+      embeddedAgentLog.info("deferring codex app-server compaction; native execution blocked", {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        trigger: params.trigger,
+      });
+      return codexNativeCompactionResult(params, {
+        compacted: false,
+        reason: "codex app-server owns automatic compaction",
+        details: {
+          backend: "codex-app-server",
+          skipped: true,
+          reason: "native_execution_unavailable",
+          trigger: params.trigger ?? "unknown",
+        },
+      });
+    }
     return { ok: false, compacted: false, reason: nativeExecutionBlock };
   }
   let binding = initialBinding;
@@ -668,7 +672,7 @@ async function compactCodexNativeThread(
           }
         };
         try {
-          if (options.allowNonManualNativeRequest) {
+          if (guardedNativeRequest) {
             const guardedResult = await options.bindingStore.withLease(
               bindingIdentity,
               async () => {
@@ -820,7 +824,7 @@ async function compactCodexNativeThread(
           signal: "thread/compact/start",
           pending: false,
           completed: true,
-          ...(options.allowNonManualNativeRequest
+          ...(guardedNativeRequest
             ? {
                 request: "after_context_engine",
                 trigger: params.trigger ?? "unknown",
@@ -832,7 +836,7 @@ async function compactCodexNativeThread(
     );
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      if (options.allowNonManualNativeRequest) {
+      if (guardedNativeRequest) {
         return skippedCodexNativeCompactionResult(params, {
           reason: "codex app-server compaction aborted before native compaction",
           code: "aborted_before_native_compaction",

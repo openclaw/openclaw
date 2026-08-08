@@ -8,11 +8,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Cross-boundary contract: the automatic-compaction ownership no-op this plugin
-// produces must stay byte-identical to the core constant that core compaction
-// callers match on. A test-only reach into core (bundled-plugin tests are exempt
-// from the production plugin-SDK import boundary) keeps both sides pinned so a
-// change to either string turns this red instead of silently dropping the
-// forced-preflight escalation (#119977).
+// produces when native execution is blocked must stay byte-identical to the core
+// constant that core compaction callers match on. A test-only reach into core
+// (bundled-plugin tests are exempt from the production plugin-SDK import boundary)
+// keeps both sides pinned so a change to either string turns this red instead of
+// silently mishandling codex's automatic-ownership defer (#119977).
 import {
   CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
   isCodexOwnedAutomaticCompactionSkip,
@@ -452,7 +452,10 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
   });
 
-  it("skips native app-server compaction for automatic budget triggers", async () => {
+  it("compacts a live bound thread on automatic budget triggers", async () => {
+    // #119977: an automatic budget trigger with a present, live binding compacts
+    // natively over the bound thread instead of blindly deferring. codex compacts
+    // its own transcript, so this is the ownership cooperation, not a fight with it.
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
@@ -465,6 +468,45 @@ describe("maybeCompactCodexAppServerSession", () => {
         workspaceDir: tempDir,
         trigger: "budget",
         currentTokenCount: 456,
+      }),
+    );
+
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { timeoutMs: 60_000 },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(result.result?.tokensBefore).toBe(456);
+    expect(compactDetails(result)).toMatchObject({
+      backend: "codex-app-server",
+      threadId: "thread-1",
+      signal: "thread/compact/start",
+      pending: false,
+      completed: true,
+      request: "after_context_engine",
+      trigger: "budget",
+    });
+  });
+
+  it("defers automatic compaction to codex-rs when native execution is blocked", async () => {
+    // #119977: when OpenClaw sandboxing/exec-host blocks a native request, OpenClaw
+    // cannot compact the thread itself, so an automatic trigger defers to codex-rs's
+    // inline compaction (the ownership no-op) rather than failing the turn.
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
       }),
     );
 
@@ -472,36 +514,38 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(false);
     expect(result.reason).toBe("codex app-server owns automatic compaction");
+    expect(isCodexOwnedAutomaticCompactionSkip(result)).toBe(true);
     expect(result.result?.tokensBefore).toBe(456);
     expect(compactDetails(result)).toMatchObject({
       backend: "codex-app-server",
       skipped: true,
-      reason: "non_manual_trigger",
+      reason: "native_execution_unavailable",
       trigger: "budget",
     });
   });
 
-  it("emits the ownership no-op reason core matches on for forced-preflight escalation", async () => {
-    // #119977: pin the produced deferral reason to the core constant and its
-    // recognizer. If either string drifts, core stops escalating forced preflight
-    // past the deferral and silently drops the turn — so this must stay red.
-    const fake = createFakeCodexClient();
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding();
-
-    const result = requireCompactResult(
-      await maybeCompactCodexAppServerSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile,
-        workspaceDir: tempDir,
-        trigger: "budget",
-        currentTokenCount: 456,
-      }),
+  it("pins the automatic-compaction ownership reason to the core constant and recognizer", () => {
+    // #119977: the deferral reason the plugin emits when native execution is blocked
+    // must stay byte-identical to the core constant, and the core recognizer must
+    // accept exactly that ok/!compacted shape. If either drifts, core mishandles
+    // codex's automatic-ownership defer. Behavior-free pin — no compaction call.
+    expect(CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON).toBe(
+      "codex app-server owns automatic compaction",
     );
-
-    expect(result.reason).toBe(CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON);
-    expect(isCodexOwnedAutomaticCompactionSkip(result)).toBe(true);
+    expect(
+      isCodexOwnedAutomaticCompactionSkip({
+        ok: true,
+        compacted: false,
+        reason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
+      }),
+    ).toBe(true);
+    expect(
+      isCodexOwnedAutomaticCompactionSkip({
+        ok: true,
+        compacted: true,
+        reason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
+      }),
+    ).toBe(false);
   });
 
   it("reports a missing binding on automatic triggers instead of deferring to codex-rs", async () => {
@@ -549,17 +593,14 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
 
     const result = requireCompactResult(
-      await maybeCompactCodexAppServerSession(
-        {
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          sessionFile,
-          workspaceDir: tempDir,
-          trigger: "budget",
-          currentTokenCount: 456,
-        },
-        { allowNonManualNativeRequest: true },
-      ),
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+      }),
     );
 
     expect(fake.request).toHaveBeenCalledWith(
@@ -618,18 +659,15 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
 
     const result = requireCompactResult(
-      await maybeCompactCodexAppServerSession(
-        {
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          sessionFile,
-          workspaceDir: tempDir,
-          trigger: "budget",
-          currentTokenCount: 456,
-          abortSignal: abortController.signal,
-        },
-        { allowNonManualNativeRequest: true },
-      ),
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+        abortSignal: abortController.signal,
+      }),
     );
 
     expect(fake.request).not.toHaveBeenCalled();
@@ -707,7 +745,7 @@ describe("maybeCompactCodexAppServerSession", () => {
           trigger: "budget",
           currentTokenCount: 456,
         },
-        { allowNonManualNativeRequest: true, bindingStore },
+        { bindingStore },
       ),
     );
 
@@ -790,17 +828,14 @@ describe("maybeCompactCodexAppServerSession", () => {
     })();
 
     const result = requireCompactResult(
-      await maybeCompactCodexAppServerSession(
-        {
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          sessionFile,
-          workspaceDir: tempDir,
-          trigger: "budget",
-          currentTokenCount: 456,
-        },
-        { allowNonManualNativeRequest: true },
-      ),
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+      }),
     );
 
     await externalWrite;
@@ -865,17 +900,14 @@ describe("maybeCompactCodexAppServerSession", () => {
     })();
 
     const result = requireCompactResult(
-      await maybeCompactCodexAppServerSession(
-        {
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          sessionFile,
-          workspaceDir: tempDir,
-          trigger: "budget",
-          currentTokenCount: 456,
-        },
-        { allowNonManualNativeRequest: true },
-      ),
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+      }),
     );
 
     await externalClear;
@@ -889,7 +921,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
-  it("skips native app-server compaction when trigger is omitted", async () => {
+  it("compacts a live bound thread when the trigger is omitted", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
@@ -904,15 +936,19 @@ describe("maybeCompactCodexAppServerSession", () => {
       }),
     );
 
-    expect(fake.request).not.toHaveBeenCalled();
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { timeoutMs: 60_000 },
+    );
     expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(false);
-    expect(result.reason).toBe("codex app-server owns automatic compaction");
+    expect(result.compacted).toBe(true);
     expect(result.result?.tokensBefore).toBe(789);
     expect(compactDetails(result)).toMatchObject({
       backend: "codex-app-server",
-      skipped: true,
-      reason: "non_manual_trigger",
+      threadId: "thread-1",
+      signal: "thread/compact/start",
+      request: "after_context_engine",
       trigger: "unknown",
     });
   });
@@ -1631,8 +1667,8 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.closeAndWait).not.toHaveBeenCalled();
   });
 
-  it("surfaces a dead thread as a recoverable stale binding on guarded native requests", async () => {
-    // #119977: a guarded (allowNonManual) escalation for a retired thread must
+  it("surfaces a dead thread as a recoverable stale binding on automatic budget triggers", async () => {
+    // #119977: an automatic (non-manual) budget trigger for a retired thread must
     // reach stale_thread_binding so the recovery path can rebind, not a benign
     // no-op. The RPC rejection travels the guarded withLease route to recovery.
     const fake = createFakeCodexClient();
@@ -1646,17 +1682,14 @@ describe("maybeCompactCodexAppServerSession", () => {
     const sessionFile = await writeTestBinding();
 
     const result = requireCompactResult(
-      await maybeCompactCodexAppServerSession(
-        {
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          sessionFile,
-          workspaceDir: tempDir,
-          trigger: "budget",
-          currentTokenCount: 456,
-        },
-        { allowNonManualNativeRequest: true },
-      ),
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "budget",
+        currentTokenCount: 456,
+      }),
     );
 
     expect(fake.request).toHaveBeenCalledWith(
@@ -1669,6 +1702,10 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.reason).toBe("thread not found: thread-1");
     expect(result.failure?.reason).toBe("stale_thread_binding");
     expect(result.result).toBeUndefined();
+    // The ownership no-op must not be produced for a present-but-dead binding.
+    expect(isCodexOwnedAutomaticCompactionSkip({ ...result, reason: result.reason ?? "" })).toBe(
+      false,
+    );
     // The stale binding is preserved for the recovery path to clear/rebind.
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({ threadId: "thread-1" });
   });
@@ -1728,7 +1765,6 @@ describe("maybeCompactCodexAppServerSession", () => {
           trigger: "budget",
         },
         {
-          allowNonManualNativeRequest: true,
           clientFactory: async () => fake.client,
           pluginConfig: {
             appServer: { transport: "websocket", url: "ws://127.0.0.1:45001" },
