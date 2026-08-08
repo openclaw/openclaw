@@ -137,6 +137,27 @@ const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
 export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
   hasExplicitPluginConfigShared(plugins);
 
+/**
+ * True when a raw `plugins.entries.<id>` record carries material operator configuration. Auto-enable
+ * treats such an entry as an explicit operator selection and refuses to supersede it, so every
+ * policy that asks "did the operator choose this plugin?" must read this one definition. Normalized
+ * entries drop `apiKey`/`env`, so callers pass the raw entry.
+ */
+export function hasMaterialPluginEntryConfig(entry: unknown): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  return (
+    entry.enabled === true ||
+    isRecord(entry.config) ||
+    isRecord(entry.hooks) ||
+    isRecord(entry.subagent) ||
+    isRecord(entry.llm) ||
+    entry.apiKey !== undefined ||
+    entry.env !== undefined
+  );
+}
+
 export function applyTestPluginDefaults(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

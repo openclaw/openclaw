@@ -21,7 +21,7 @@ import {
 } from "../channels/plugins/configured-state.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { hasMaterialPluginEntryConfig, normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
@@ -921,21 +921,6 @@ function registerPluginEntry(
       },
     },
   };
-}
-
-function hasMaterialPluginEntryConfig(entry: unknown): boolean {
-  if (!isRecord(entry)) {
-    return false;
-  }
-  return (
-    entry.enabled === true ||
-    isRecord(entry.config) ||
-    isRecord(entry.hooks) ||
-    isRecord(entry.subagent) ||
-    isRecord(entry.llm) ||
-    entry.apiKey !== undefined ||
-    entry.env !== undefined
-  );
 }
 
 function isKnownPluginId(pluginId: string, manifestRegistry: PluginManifestRegistry): boolean {

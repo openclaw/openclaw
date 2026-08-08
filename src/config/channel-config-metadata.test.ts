@@ -18,7 +18,11 @@ function createChannelPlugin(params: {
   return {
     id: params.id,
     channels: [channelId],
-    configSchema: { type: "object", additionalProperties: false },
+    configSchema: {
+      type: "object",
+      properties: { workspace: { type: "string" } },
+      additionalProperties: false,
+    },
     channelConfigs: {
       [channelId]: {
         ...(params.preferOver ? { preferOver: params.preferOver } : {}),
@@ -95,9 +99,21 @@ const TRAVERSAL_ORDERS = [
   ["replacement last", [REPLACED_SLACK, REPLACEMENT_SLACK]],
 ] as const;
 
-function pluginEnabledConfig(pluginId: string, enabled: boolean): OpenClawConfig {
-  return { plugins: { entries: { [pluginId]: { enabled } } } } as OpenClawConfig;
+function pluginEntryConfig(pluginId: string, entry: Record<string, unknown>): OpenClawConfig {
+  return { plugins: { entries: { [pluginId]: entry } } } as OpenClawConfig;
 }
+
+function pluginEnabledConfig(pluginId: string, enabled: boolean): OpenClawConfig {
+  return pluginEntryConfig(pluginId, { enabled });
+}
+
+// Every entry shape the shared material plugin-entry policy counts as an explicit operator
+// selection. `apiKey` is not a canonical `plugins.entries` key, so it proves the collector reads
+// that policy instead of re-deriving a `config`-only subset of it.
+const MATERIAL_PLUGIN_ENTRIES = [
+  ["config", { config: {} }],
+  ["apiKey", { apiKey: "op://slack/token" }],
+] as const;
 
 describe("collectChannelSchemaMetadataWithOwnership", () => {
   for (const [order, plugins] of TRAVERSAL_ORDERS) {
@@ -131,6 +147,17 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
           .schemaPluginId,
       ).toBe("openclaw-slack");
     });
+
+    // Auto-enable keeps a plugin the operator configured materially, so the replacement must not
+    // take the schema that validates that plugin's existing channel keys either.
+    for (const [entryKey, entry] of MATERIAL_PLUGIN_ENTRIES) {
+      it(`keeps a superseded plugin configured through entries.${entryKey} (${order})`, () => {
+        expect(
+          selectSlackSchemaOwner([...plugins], pluginEntryConfig("openclaw-slack", entry))
+            .schemaPluginId,
+        ).toBe("openclaw-slack");
+      });
+    }
   }
 
   for (const [order, plugins] of [
@@ -204,7 +231,7 @@ const CLOSER_ORIGIN_ACME = createChannelPlugin({
 function validateAcmeChatKeys(params: {
   plugins: PluginManifestRecord[];
   channel: Record<string, unknown>;
-  entries: Record<string, { enabled: boolean }>;
+  entries: Record<string, Record<string, unknown>>;
 }) {
   const result = validateConfigObjectWithPlugins(
     {
@@ -244,6 +271,18 @@ describe("config validate channel schema ownership", () => {
           plugins: [...plugins],
           channel: { legacyOption: {} },
           entries: { "openclaw-acmechat": { enabled: true } },
+        }),
+      ).toEqual([]);
+    });
+
+    it(`accepts a materially configured superseded plugin's channel keys (${order})`, () => {
+      expect(
+        validateAcmeChatKeys({
+          plugins: [...plugins],
+          channel: { legacyOption: {} },
+          // A material plugins.entries record is the explicit operator choice auto-enable
+          // preserves, so the replacement must not take the schema that accepts legacyOption.
+          entries: { "openclaw-acmechat": { config: { workspace: "T123" } } },
         }),
       ).toEqual([]);
     });

@@ -4,10 +4,11 @@
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { hasMaterialPluginEntryConfig, normalizePluginsConfig } from "../plugins/config-state.js";
 import { resolveManifestOwnerActivationState } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -194,6 +195,15 @@ function selectChannelSchemaOwners(
   // Without config every plugin counts as an equally eligible owner, which keeps registry-only
   // callers (docs baseline, contract tests) on pure manifest metadata.
   const normalizedPlugins = config ? normalizePluginsConfig(config.plugins) : undefined;
+  // The activation resolver marks only enabled entries, bundled channel enablement, slots, and
+  // allowlist entries explicit. Auto-enable also refuses to supersede a materially configured
+  // plugin, so the explicit tier reads that same policy or a replacement takes the schema that
+  // validates the configured plugin's existing channel keys.
+  const materiallySelectedPluginIds = new Set(
+    Object.entries(config?.plugins?.entries ?? {})
+      .filter(([, entry]) => hasMaterialPluginEntryConfig(entry))
+      .map(([pluginId]) => normalizePluginPolicyId(pluginId)),
+  );
   const claimsByChannelId = new Map<string, ChannelSchemaClaim[]>();
   const closestDeclaredRank = new Map<string, number>();
   const declareChannel = (channelId: string, originRank: number): void => {
@@ -219,13 +229,16 @@ function selectChannelSchemaOwners(
           rootConfig: config,
         })
       : { activated: true, explicitlyEnabled: false };
+    const explicitlyEnabled =
+      activation.explicitlyEnabled ||
+      materiallySelectedPluginIds.has(normalizePluginPolicyId(record.id));
     for (const [channelId, channelConfig] of channelConfigs) {
       const claim: ChannelSchemaClaim = {
         record,
         preferOver: channelConfig.preferOver,
         originRank,
         activated: activation.activated,
-        explicitlyEnabled: activation.explicitlyEnabled,
+        explicitlyEnabled,
         // A closer-origin plugin that declared this channel id first keeps the incumbent owner,
         // so a farther-origin claim behind it cannot take a schema that closer metadata shadows.
         behindCloserDeclaration: (closestDeclaredRank.get(channelId) ?? originRank) < originRank,
