@@ -35,8 +35,8 @@ export function normalizeChangedPath(inputPath) {
 /**
  * Returns shared path facts without imposing a caller's lane-selection policy.
  */
-export function getChangedPathFacts(inputPath) {
-  const path = String(inputPath ?? "").trim();
+export function getChangedPathFacts(inputPath, options = {}) {
+  const path = options.preserveRawPath ? String(inputPath ?? "") : String(inputPath ?? "").trim();
   let surface = /** @type {ChangedPathSurface} */ ("unknown");
 
   if (DOCS_PATH_RE.test(path)) {

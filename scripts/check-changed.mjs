@@ -1124,6 +1124,7 @@ async function main() {
         base: args.base,
         head: args.head,
         staged: args.staged,
+        pathsAreRawGitTokens: args.paths.length === 0,
       });
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {

@@ -105,7 +105,10 @@ export function isChangedLaneTestPath(changedPath) {
  * @internal Shared repository-script contract.
  */
 export function detectChangedLanes(changedPaths, options = {}) {
-  const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
+  const pathNormalizer = options.pathsAreRawGitTokens
+    ? (changedPath) => String(changedPath ?? "")
+    : normalizeChangedPath;
+  const paths = [...new Set(changedPaths.map(pathNormalizer).filter(Boolean))]
     .toSorted((left, right) => left.localeCompare(right))
     .filter((changedPath) => changedPath !== "--");
   const lanes = createEmptyChangedLanes();
@@ -137,7 +140,9 @@ export function detectChangedLanes(changedPaths, options = {}) {
   }
 
   for (const changedPath of paths) {
-    const facts = getChangedPathFacts(changedPath);
+    const facts = getChangedPathFacts(changedPath, {
+      preserveRawPath: options.pathsAreRawGitTokens === true,
+    });
     if (BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)) {
       lanes.bundledChannelConfigMetadata = true;
       reasons.push(`${changedPath}: bundled channel config metadata input`);
@@ -285,7 +290,10 @@ export function detectChangedLanesForPaths(params) {
         staged: params.staged,
       })
     : null;
-  return detectChangedLanes(params.paths, { packageJsonChangeKind });
+  return detectChangedLanes(params.paths, {
+    packageJsonChangeKind,
+    pathsAreRawGitTokens: params.pathsAreRawGitTokens === true,
+  });
 }
 
 /**
@@ -341,13 +349,13 @@ export function listChangedPathsFromGit(params) {
 }
 
 function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
-  const output = execFileSync("git", ["diff", "--name-only", ...extraArgs], {
+  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return output.split("\0").map(normalizeChangedPath).filter(Boolean);
 }
 
 function isGitNoMergeBaseError(error) {
@@ -362,26 +370,30 @@ function isGitNoMergeBaseError(error) {
 }
 
 function runGitLsFiles(extraArgs, cwd = process.cwd()) {
-  const output = execFileSync("git", ["ls-files", ...extraArgs], {
+  const output = execFileSync("git", ["ls-files", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return output.split("\0").map(normalizeChangedPath).filter(Boolean);
 }
 
 /**
  * Lists staged changed paths for pre-commit checks.
  */
 export function listStagedChangedPaths(cwd = process.cwd()) {
-  const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
-  });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  const output = execFileSync(
+    "git",
+    ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRD"],
+    {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+    },
+  );
+  return output.split("\0").map(normalizeChangedPath).filter(Boolean);
 }
 
 /**
@@ -647,6 +659,7 @@ if (isDirectRun()) {
     head: args.head,
     staged: args.staged,
     mergeHeadFirstParent: args.mergeHeadFirstParent,
+    pathsAreRawGitTokens: args.paths.length === 0,
   });
   if (args.githubOutput) {
     writeChangedLaneGitHubOutput(result);

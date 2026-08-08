@@ -417,6 +417,43 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { tooling: true });
   });
 
+  it("preserves Git-quoted paths across changed-file sources", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-quoted-paths-");
+    const quotedPath = "scripts/中文.ts";
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "README.md", "initial\n");
+    commitAll(dir, "initial");
+
+    writeRepoFile(dir, quotedPath, "export const value = 1;\n");
+    expect(listChangedPathsFromGit({ base: "HEAD", cwd: dir })).toEqual([quotedPath]);
+    git(dir, ["add", quotedPath]);
+    expect(listStagedChangedPaths(dir)).toEqual([quotedPath]);
+    commitAll(dir, "add quoted path");
+
+    writeRepoFile(dir, quotedPath, "export const value = 2;\n");
+    commitAll(dir, "modify quoted path");
+    expect(
+      listChangedPathsFromGit({ base: "HEAD^", head: "HEAD", cwd: dir, includeWorktree: false }),
+    ).toEqual([quotedPath]);
+  });
+
+  it("keeps raw Git path tokens separate from explicit path normalization", () => {
+    const rawPaths = [
+      " scripts/generated.ts",
+      String.raw`scripts\generated.ts`,
+      "scripts/trailing.ts ",
+    ];
+
+    expect(detectChangedLanes(rawPaths, { pathsAreRawGitTokens: true })).toMatchObject({
+      paths: [...rawPaths].toSorted((left, right) => left.localeCompare(right)),
+      lanes: { all: true },
+    });
+    expect(detectChangedLanes(rawPaths).paths).toEqual([
+      "scripts/generated.ts",
+      "scripts/trailing.ts",
+    ]);
+  });
+
   it("falls back to a two-dot diff when a delegated checkout has no merge base", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-no-merge-base-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
