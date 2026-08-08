@@ -640,6 +640,35 @@ describe("handleSlackAction", () => {
 
   it.each([
     {
+      name: "sendMessage",
+      params: {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "original image",
+        mediaUrl: "/tmp/original.png",
+        forceDocument: true,
+      },
+    },
+    {
+      name: "uploadFile",
+      params: {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/original.png",
+        initialComment: "original image",
+        forceDocument: true,
+      },
+    },
+  ] as const)("forwards forced-document intent for $name", async ({ params }) => {
+    await handleSlackAction(params, slackConfig());
+
+    expectSlackSendCall(0, "channel:C123", "original image", {
+      forceDocument: true,
+    });
+  });
+
+  it.each([
+    {
       action: "sendMessage",
       params: {
         action: "sendMessage",

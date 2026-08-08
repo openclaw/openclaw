@@ -583,6 +583,7 @@ export async function handleSlackAction(
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         const textIsSlackMrkdwn = readBooleanParam(params, "textIsSlackMrkdwn");
         const textIsSlackPlainText = readBooleanParam(params, "textIsSlackPlainText");
+        const forceDocument = readBooleanParam(params, "forceDocument") === true;
         const preparedMessages = context?.preparedMessages;
         const authoredTextPlacement = readStringParam(params, "authoredTextPlacement") as
           | "none"
@@ -622,6 +623,7 @@ export async function handleSlackAction(
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
+          ...(forceDocument ? { forceDocument: true } : {}),
         };
         const sendOpts = {
           ...baseSendOpts,
@@ -715,6 +717,7 @@ export async function handleSlackAction(
         });
         const filename = readStringParam(params, "filename");
         const title = readStringParam(params, "title");
+        const forceDocument = readBooleanParam(params, "forceDocument") === true;
         const replyBroadcast = readBooleanParam(params, "replyBroadcast");
         if (replyBroadcast) {
           throw new Error(
@@ -736,6 +739,7 @@ export async function handleSlackAction(
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
+          ...(forceDocument ? { forceDocument: true } : {}),
           ...(filename ? { uploadFileName: filename } : {}),
           ...(title ? { uploadTitle: title } : {}),
         });

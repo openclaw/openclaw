@@ -671,6 +671,29 @@ describe("handleSlackMessageAction", () => {
     expectNoForwardedToolContext(invoke);
   });
 
+  it("maps asDocument to forced-document intent for Slack media sends", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: slackConfig(),
+        params: {
+          to: "channel:C1",
+          media: "/tmp/original.png",
+          asDocument: true,
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(firstAction(invoke)).toMatchObject({
+      action: "sendMessage",
+      forceDocument: true,
+    });
+  });
+
   it("passes topLevel through so same-channel Slack sends can suppress thread inheritance", async () => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();
@@ -741,6 +764,7 @@ describe("handleSlackMessageAction", () => {
           filename: "build.png",
           title: "Build Screenshot",
           threadId: "111.222",
+          forceDocument: true,
         },
       } as never,
       invoke: invoke as never,
@@ -754,6 +778,7 @@ describe("handleSlackMessageAction", () => {
     expect(action.filename).toBe("build.png");
     expect(action.title).toBe("Build Screenshot");
     expect(action.threadTs).toBe("111.222");
+    expect(action.forceDocument).toBe(true);
     expectForwardedCfg(invoke, cfg);
     expectNoForwardedToolContext(invoke);
   });
