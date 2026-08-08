@@ -64,13 +64,18 @@ import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-s
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import { getOrCreateManagedCacheEntry, resolveSingletonManagedCache } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
-import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import {
+  MemoryManagerEmbeddingOps,
+  resolveEmbeddingTimeoutMs,
+  runEmbeddingOperationWithTimeout,
+} from "./manager-embedding-ops.js";
 import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
   createDegradedMemoryProviderLifecycle,
   createPendingMemoryProviderLifecycle,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
+  shouldAttemptPrimaryProviderRecovery,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
@@ -127,6 +132,18 @@ type MemoryEmbeddingProviderRequirement = {
   configuredProvider?: string;
 };
 type MemoryEmbeddingBootstrapDebug = NonNullable<MemorySearchRuntimeDebug["embeddingBootstrap"]>;
+
+type PrimaryProviderRecoveryFallbackState = {
+  provider: EmbeddingProvider;
+  providerRuntime?: EmbeddingProviderRuntime;
+  providerKey: string;
+  fallbackFrom?: EmbeddingProviderId;
+  fallbackReason?: string;
+  providerUnavailableReason?: string;
+  providerLifecycle: MemoryProviderLifecycleState;
+  providerInitialized: boolean;
+  embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
+};
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
@@ -441,8 +458,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private closing = false;
   private activeManagerOperations = 0;
   private managerIdleWaiters = new Set<() => void>();
+  private managerExclusivePromise: Promise<void> | null = null;
+  private primaryProviderRecoveryFallbackState: PrimaryProviderRecoveryFallbackState | null = null;
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
+  // Throttles primary-provider recovery attempts so a latched fallback does
+  // not bring the network path back online every search call. Without this,
+  // a transient remote outage permanently downgrades the in-gateway tool even
+  // after the primary is reachable again (only a full process restart clears
+  // the latch).
+  private lastPrimaryRecoveryAttemptMs = 0;
+  private primaryProviderRecoveryPromise: Promise<boolean> | null = null;
+  private primaryProviderRecoveryBackgroundPromise: Promise<void> | null = null;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
   protected override providerRuntime?: EmbeddingProviderRuntime;
@@ -509,12 +536,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     agentId: string;
     settings: ResolvedMemorySearchConfig;
     acquireLocalService?: MemoryCoreAcquireLocalService;
+    disableFallback?: boolean;
   }): Promise<EmbeddingProviderResult> {
+    const providerRequest = resolveMemoryPrimaryProviderRequest({ settings: params.settings });
     return await createEmbeddingProvider({
       config: params.cfg,
       agentDir: resolveAgentDir(params.cfg, params.agentId),
       ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
-      ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
+      ...providerRequest,
+      fallback: params.disableFallback ? "none" : providerRequest.fallback,
     });
   }
 
@@ -917,6 +947,180 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
   }
 
+  /**
+   * Attempts to restore the configured primary embedding provider after a
+   * fallback was activated. Returns true when the primary is reachable again
+   * and the manager has switched back.
+   *
+   * Without this, a single transient outage permanently latches the in-gateway
+   * memory tool onto the fallback provider. The index is keyed by the original
+   * model identity, so subsequent searches fail identity validation until the
+   * gateway process fully restarts. In-process restarts and config soft-reloads
+   * reuse the singleton manager instance and must recover explicitly.
+   */
+  private async attemptPrimaryProviderRecovery(params: {
+    force?: boolean;
+    signal?: AbortSignal;
+    admitted?: boolean;
+    transactional?: boolean;
+  }): Promise<boolean> {
+    if (params.signal?.aborted) {
+      throw params.signal.reason instanceof Error
+        ? params.signal.reason
+        : new Error("search aborted");
+    }
+    const pending = this.primaryProviderRecoveryPromise;
+    if (pending) {
+      return await this.waitForPrimaryProviderRecovery(pending, params.signal);
+    }
+    const nowMs = Date.now();
+    if (
+      !shouldAttemptPrimaryProviderRecovery({
+        fallbackFrom: this.fallbackFrom,
+        lastAttemptMs: this.lastPrimaryRecoveryAttemptMs,
+        nowMs,
+        throttleMs: EMBEDDING_PROBE_CACHE_TTL_MS,
+        force: params.force,
+      })
+    ) {
+      return false;
+    }
+    this.lastPrimaryRecoveryAttemptMs = nowMs;
+    const recovery = params.admitted
+      ? this.attemptPrimaryProviderRecoveryOnce({ transactional: params.transactional })
+      : this.withManagerOperation(
+          async () =>
+            await this.attemptPrimaryProviderRecoveryOnce({
+              transactional: params.transactional,
+            }),
+        );
+    this.primaryProviderRecoveryPromise = recovery;
+    void recovery.then(
+      () => {
+        if (this.primaryProviderRecoveryPromise === recovery) {
+          this.primaryProviderRecoveryPromise = null;
+        }
+      },
+      () => {
+        if (this.primaryProviderRecoveryPromise === recovery) {
+          this.primaryProviderRecoveryPromise = null;
+        }
+      },
+    );
+    return await this.waitForPrimaryProviderRecovery(recovery, params.signal);
+  }
+
+  private async waitForPrimaryProviderRecovery(
+    recovery: Promise<boolean>,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (!signal) {
+      return await recovery;
+    }
+    if (signal.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("search aborted");
+    }
+    return await Promise.race([
+      recovery,
+      new Promise<boolean>((_resolve, reject) => {
+        const abort = () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error("search aborted"));
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        void recovery.then(
+          () => signal.removeEventListener("abort", abort),
+          () => signal.removeEventListener("abort", abort),
+        );
+      }),
+    ]);
+  }
+
+  private async attemptPrimaryProviderRecoveryOnce(params?: {
+    transactional?: boolean;
+  }): Promise<boolean> {
+    let pendingProvider: EmbeddingProvider | null = null;
+    const discardPending = (label: string): void => {
+      const provider = pendingProvider;
+      pendingProvider = null;
+      if (provider && provider !== this.provider) {
+        void this.retireProvider(provider).catch((err: unknown) => {
+          log.debug(`memory embeddings: failed to close ${label}: ${String(err)}`);
+        });
+      }
+    };
+    try {
+      const primaryResult = await MemoryIndexManager.loadProviderResult({
+        cfg: this.cfg,
+        agentId: this.agentId,
+        settings: this.settings,
+        acquireLocalService: this.acquireLocalService,
+        disableFallback: true,
+      });
+      if (!primaryResult.provider || primaryResult.fallbackFrom) {
+        pendingProvider = primaryResult.provider;
+        discardPending("discarded recovery probe");
+        return false;
+      }
+      pendingProvider = primaryResult.provider;
+      const pingProvider = primaryResult.provider;
+      const pingRuntime = primaryResult.runtime;
+      const pingTimeoutMs = resolveEmbeddingTimeoutMs({
+        kind: "query",
+        providerId: pingProvider.id,
+        providerRuntime: pingRuntime
+          ? {
+              inlineQueryTimeoutMs: pingRuntime.inlineQueryTimeoutMs,
+              inlineBatchTimeoutMs: pingRuntime.inlineBatchTimeoutMs,
+            }
+          : undefined,
+      });
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs: pingTimeoutMs,
+        message: `memory embeddings recovery ping timed out after ${Math.round(pingTimeoutMs / 1000)}s`,
+        run: async (signal) => await pingProvider.embedQuery("ping", { signal }),
+      });
+      const previousProvider = this.provider;
+      const previousFallbackState =
+        previousProvider && params?.transactional
+          ? {
+              provider: previousProvider,
+              providerKey: this.providerKey,
+              ...(this.providerRuntime ? { providerRuntime: this.providerRuntime } : {}),
+              ...(this.fallbackFrom ? { fallbackFrom: this.fallbackFrom } : {}),
+              ...(this.fallbackReason ? { fallbackReason: this.fallbackReason } : {}),
+              ...(this.providerUnavailableReason
+                ? { providerUnavailableReason: this.providerUnavailableReason }
+                : {}),
+              providerLifecycle: this.providerLifecycle,
+              providerInitialized: this.providerInitialized,
+              ...(this.embeddingBootstrapFailure
+                ? { embeddingBootstrapFailure: this.embeddingBootstrapFailure }
+                : {}),
+            }
+          : null;
+      this.applyProviderResult(primaryResult);
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
+      pendingProvider = null;
+      if (previousFallbackState) {
+        this.primaryProviderRecoveryFallbackState = previousFallbackState;
+      } else if (previousProvider && previousProvider !== this.provider) {
+        void this.retireProvider(previousProvider);
+      }
+      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+      log.info(
+        `memory embeddings: recovered primary provider (${primaryResult.provider.id}) from fallback`,
+      );
+      return true;
+    } catch (err) {
+      discardPending("failed recovery probe");
+      log.debug(
+        `memory embeddings: primary recovery attempted but failed: ${formatErrorMessage(err)}`,
+      );
+      return false;
+    }
+  }
+
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
     if (this.provider?.id !== "local") {
       return;
@@ -952,8 +1156,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (provider) {
       this.provider = null;
       this.providerRuntime = undefined;
-      this.providersPendingRetirement.add(provider);
+      return this.retireProvider(provider);
     }
+    return this.drainProviderRetirementQueue();
+  }
+
+  private retireProvider(provider: EmbeddingProvider): Promise<void> {
+    this.providersPendingRetirement.add(provider);
+    return this.drainProviderRetirementQueue();
+  }
+
+  private drainProviderRetirementQueue(): Promise<void> {
     if (this.providersPendingRetirement.size === 0) {
       return this.providerRetirementPromise;
     }
@@ -1071,6 +1284,121 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
+  private async reindexAfterPrimaryProviderRecovery(
+    recoveredProvider: EmbeddingProvider | null,
+  ): Promise<MemoryIndexIdentityState> {
+    let indexIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    // A forced sync may join a fallback-owned generation that was already active
+    // when recovery completed. Recheck after that join and admit one fresh primary
+    // generation so recovery cannot clear fallback state with a stale index.
+    for (let attempt = 0; indexIdentity.status !== "valid" && attempt < 2; attempt += 1) {
+      try {
+        await this.syncAdmitted(
+          { reason: "search", force: true },
+          { suppressFallbackActivation: true },
+        );
+      } catch (err) {
+        log.warn(`memory sync failed (primary-recovery-reindex): ${formatErrorMessage(err)}`);
+      }
+      indexIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    }
+    if (indexIdentity.status === "valid" && this.provider !== recoveredProvider) {
+      return {
+        status: "mismatched",
+        reason: "primary recovery reindex completed with a different active provider",
+      };
+    }
+    return indexIdentity;
+  }
+
+  private commitPrimaryProviderRecovery(): void {
+    const previous = this.primaryProviderRecoveryFallbackState;
+    this.primaryProviderRecoveryFallbackState = null;
+    this.lastPrimaryRecoveryAttemptMs = 0;
+    if (previous && previous.provider !== this.provider) {
+      void this.retireProvider(previous.provider).catch((err: unknown) => {
+        log.debug(`memory embeddings: failed to retire recovered fallback: ${String(err)}`);
+      });
+    }
+  }
+
+  private async rollbackPrimaryProviderRecovery(): Promise<void> {
+    const previous = this.primaryProviderRecoveryFallbackState;
+    if (!previous) {
+      return;
+    }
+    const failedPrimary = this.provider;
+    this.provider = previous.provider;
+    this.providerRuntime = previous.providerRuntime;
+    this.providerKey = previous.providerKey;
+    this.fallbackFrom = previous.fallbackFrom;
+    this.fallbackReason = previous.fallbackReason;
+    this.providerUnavailableReason = previous.providerUnavailableReason;
+    this.providerLifecycle = previous.providerLifecycle;
+    this.providerInitialized = previous.providerInitialized;
+    this.embeddingBootstrapFailure = previous.embeddingBootstrapFailure;
+    this.batch = this.resolveBatchConfig();
+    this.primaryProviderRecoveryFallbackState = null;
+    this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    if (failedPrimary && failedPrimary !== previous.provider) {
+      await this.retireProvider(failedPrimary).catch((err: unknown) => {
+        log.debug(`memory embeddings: failed to retire failed primary recovery: ${String(err)}`);
+      });
+    }
+  }
+
+  private async runPrimaryProviderRecoveryTransaction(): Promise<void> {
+    await this.withManagerExclusiveOperation(async () => {
+      const recovered = await this.attemptPrimaryProviderRecovery({
+        admitted: true,
+        transactional: true,
+      });
+      if (!recovered) {
+        return;
+      }
+      const recoveredProvider = this.provider;
+      try {
+        const identity = await this.reindexAfterPrimaryProviderRecovery(recoveredProvider);
+        if (identity.status === "valid") {
+          this.commitPrimaryProviderRecovery();
+        } else {
+          await this.rollbackPrimaryProviderRecovery();
+        }
+      } catch (err) {
+        await this.rollbackPrimaryProviderRecovery();
+        throw err;
+      }
+    });
+  }
+
+  private schedulePrimaryProviderRecovery(): void {
+    if (
+      !this.fallbackFrom ||
+      this.closing ||
+      this.closed ||
+      this.primaryProviderRecoveryBackgroundPromise
+    ) {
+      return;
+    }
+    // A stalled primary probe must not block a healthy fallback result or the
+    // caller's deadline; reindex only after the manager has recovered primary.
+    const recovery = (async () => {
+      if (!this.closing && !this.closed) {
+        await this.runPrimaryProviderRecoveryTransaction();
+      }
+    })();
+    this.primaryProviderRecoveryBackgroundPromise = recovery;
+    void recovery
+      .catch((err: unknown) => {
+        log.warn(`memory background primary recovery failed: ${formatErrorMessage(err)}`);
+      })
+      .finally(() => {
+        if (this.primaryProviderRecoveryBackgroundPromise === recovery) {
+          this.primaryProviderRecoveryBackgroundPromise = null;
+        }
+      });
+  }
+
   private refreshKeywordFallbackIndexIdentity() {
     const meta = this.readMeta();
     const state = this.resolveCurrentIndexIdentityState({
@@ -1087,6 +1415,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
+    while (this.managerExclusivePromise) {
+      const exclusive = this.managerExclusivePromise;
+      await exclusive;
+    }
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
     }
@@ -1112,6 +1444,46 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     await new Promise<void>((resolve) => {
       this.managerIdleWaiters.add(resolve);
     });
+  }
+
+  private async withManagerExclusiveOperation<T>(run: () => Promise<T>): Promise<T> {
+    if (this.closing || this.closed) {
+      throw new Error("Memory index manager is closed");
+    }
+    const previous = this.managerExclusivePromise;
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous ? previous.then(() => current) : current;
+    this.managerExclusivePromise = queued;
+    if (previous) {
+      await previous;
+    }
+    try {
+      await this.awaitManagerIdle();
+      if (this.closing || this.closed) {
+        throw new Error("Memory index manager is closed");
+      }
+      this.activeManagerOperations += 1;
+      try {
+        return await run();
+      } finally {
+        this.activeManagerOperations -= 1;
+        if (this.activeManagerOperations === 0) {
+          const waiters = Array.from(this.managerIdleWaiters);
+          this.managerIdleWaiters.clear();
+          for (const resolve of waiters) {
+            resolve();
+          }
+        }
+      }
+    } finally {
+      release();
+      if (this.managerExclusivePromise === queued) {
+        this.managerExclusivePromise = null;
+      }
+    }
   }
 
   async search(query: string, opts?: MemoryIndexSearchOptions): Promise<MemorySearchResult[]> {
@@ -1141,7 +1513,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     normalizedQuery: string,
     opts?: MemoryIndexSearchOptions,
   ): Promise<MemorySearchResult[]> {
-    return await this.withManagerOperation(async () => {
+    let shouldRecoverPrimaryInBackground = false;
+    const results = await this.withManagerOperation(async () => {
+      const enteredDuringFallbackInitialization =
+        this.getPendingFallbackProviderInitialization() !== null;
       opts?.onDebug?.({ backend: "builtin" });
       if (this.providerRequirement.mode === "required") {
         await this.ensureProviderInitialized();
@@ -1247,6 +1622,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         : this.refreshIndexIdentityDirty({
             providerKeyKnown: this.providerInitialized,
           });
+      if (
+        !embeddingBootstrapKeywordOnly &&
+        !opts?.lexicalOnly &&
+        !enteredDuringFallbackInitialization &&
+        this.fallbackFrom &&
+        !opts?.signal?.aborted
+      ) {
+        shouldRecoverPrimaryInBackground = true;
+      }
       if (indexIdentity.status !== "valid") {
         return [];
       }
@@ -1481,6 +1865,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         relaxedMinScore,
       );
     });
+    if (shouldRecoverPrimaryInBackground) {
+      this.schedulePrimaryProviderRecovery();
+    }
+    return results;
   }
 
   private selectScoredResults<T extends MemorySearchResult & { score: number }>(
@@ -1916,6 +2304,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     options?: {
       allowEmbeddingBootstrapFallback?: boolean;
       queuedSessionOwner?: boolean;
+      suppressFallbackActivation?: boolean;
     },
   ): Promise<void> {
     if (this.syncing) {
@@ -1980,9 +2369,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
       const runGeneration = async (keywordOnly: boolean) => {
         this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
+        const previousSuppressFallbackActivation = this.suppressSyncFallbackActivation;
+        if (options?.suppressFallbackActivation) {
+          this.suppressSyncFallbackActivation = true;
+        }
         try {
           await this.runSyncWithReadonlyRecovery(params);
         } finally {
+          this.suppressSyncFallbackActivation = previousSuppressFallbackActivation;
           this.endSyncProviderGeneration();
         }
       };
@@ -2356,6 +2750,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.queuedForce = false;
     this.queuedProgressCallbacks.clear();
     await this.awaitManagerIdle();
+    const pendingBackgroundRecovery = this.primaryProviderRecoveryBackgroundPromise;
+    if (pendingBackgroundRecovery) {
+      await pendingBackgroundRecovery.catch((err: unknown) => {
+        log.warn(`memory close: background primary recovery failed: ${formatErrorMessage(err)}`);
+      });
+    }
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
     const pendingFallbackInit = this.getPendingFallbackProviderInitialization();
