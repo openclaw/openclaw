@@ -16,6 +16,7 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./app-server/auth-bridge.js";
+import { redactCodexAppServerDiagnostic } from "./app-server/client.js";
 import {
   assertCodexAppServerConnectionSecurity,
   codexAppServerStartOptionsKey,
@@ -1062,7 +1063,13 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             if (error instanceof CodexSupervisionPolicyError) {
               throw error;
             }
-            health.push({ endpointId: endpoint.id, ok: false });
+            health.push({
+              endpointId: endpoint.id,
+              ok: false,
+              detail: redactCodexAppServerDiagnostic(
+                error instanceof Error ? error.message : String(error),
+              ),
+            });
           }
         }
         requireCurrentEndpointSet(options, endpoints);
@@ -1071,7 +1078,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
           endpoints: endpoints.map((endpoint) =>
             endpointResult(endpoint, pluginConfig, options.env ?? process.env),
           ),
-          health,
+          health: redactCodexSupervisionValue(health),
         });
       },
     },
