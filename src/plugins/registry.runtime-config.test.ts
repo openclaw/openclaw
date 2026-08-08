@@ -824,4 +824,229 @@ describe("plugin registry runtime config scope", () => {
       otherApi.runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
     ).resolves.toEqual({ ok: true });
   });
+
+  it("carries incognito scope into embedded agent session identity checks", async () => {
+    const sessionKey = "agent:researcher:dashboard:incognito-ownership-check";
+    const entry = {
+      sessionId: "incognito-session",
+      updatedAt: 1,
+      agentHarnessId: "test-harness",
+      modelSelectionLocked: true as const,
+    };
+    const runtime = createPluginRuntime();
+    runtime.agent.session.getSessionEntry = vi.fn((params) => {
+      expect(params).toEqual(
+        params.agentId === undefined
+          ? { sessionKey, readConsistency: "latest" }
+          : { agentId: "main", sessionKey, readConsistency: "latest" },
+      );
+      return params.sessionKey === sessionKey ? entry : undefined;
+    });
+    runtime.agent.session.listSessionEntries = vi.fn((params) => {
+      expect(params).toEqual({
+        agentId: "researcher",
+        readOnly: true,
+        storePath: expect.stringContaining("researcher"),
+      });
+      return [{ sessionKey, entry }];
+    });
+    const runEmbeddedAgent = vi.fn(async () => ({
+      ok: true,
+    })) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
+    Object.defineProperty(runtime.agent, "runEmbeddedAgent", {
+      configurable: true,
+      value: runEmbeddedAgent,
+    });
+    const pluginRegistry = createTestRegistry(runtime);
+    const ownerRecord = createPluginRecord({
+      id: "harness-owner",
+      source: "/plugins/harness-owner/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const otherRecord = createPluginRecord({
+      id: "other-plugin",
+      source: "/plugins/other-plugin/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
+    const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
+    ownerApi.registerAgentHarness({
+      id: "test-harness",
+      label: "Test Harness",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    });
+    const runParams = {
+      sessionId: entry.sessionId,
+      sessionKey,
+      workspaceDir: "/tmp",
+      prompt: "continue",
+      timeoutMs: 1,
+      runId: "run-1",
+    } as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0];
+
+    await expect(ownerApi.runtime.agent.runEmbeddedAgent(runParams)).resolves.toEqual({ ok: true });
+    expect(runtime.agent.session.listSessionEntries).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    await expect(
+      ownerApi.runtime.agent.runEmbeddedAgent({ ...runParams, agentId: "main" }),
+    ).rejects.toThrow('does not match session key agent "researcher"');
+    expect(runtime.agent.session.listSessionEntries).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    await expect(otherApi.runtime.agent.runEmbeddedAgent(runParams)).rejects.toThrow(
+      'owned by plugin "harness-owner"',
+    );
+    expect(runtime.agent.session.listSessionEntries).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a locked session identity in another agent via the shared session path", async () => {
+    const runtime = createPluginRuntime();
+    const session = runtime.agent.session;
+    const otherAgentReservedKey = "agent:assistant:harness:codex:thread-1";
+    const otherAgentReservedEntry = {
+      sessionId: "assistant-reserved-session",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true as const,
+    };
+    const mainOrdinaryKey = "agent:main:ordinary";
+    const mainOrdinaryEntry = { sessionId: "main-ordinary-session", updatedAt: 1 };
+    const entries = {
+      [otherAgentReservedKey]: otherAgentReservedEntry,
+      [mainOrdinaryKey]: mainOrdinaryEntry,
+    } as unknown as Record<string, SessionEntry>;
+    session.getSessionEntry = vi.fn(
+      (params) => entries[params.sessionKey],
+    ) as typeof session.getSessionEntry;
+    // The shared ownership check lists persisted entries to locate claimed ids.
+    // It must not narrow that listing to the first parseable key's agent; that
+    // would drop the locked foreign-agent identity below and skip its rejection.
+    session.listSessionEntries = vi.fn(() =>
+      Object.entries(entries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    ) as typeof session.listSessionEntries;
+    const gatewayRequest = vi.fn(async () => ({ ok: true }));
+    runtime.gateway = {
+      isAvailable: vi.fn(async () => true),
+      request: gatewayRequest as unknown as PluginRuntime["gateway"]["request"],
+    };
+
+    const pluginRegistry = createTestRegistry(runtime);
+    const ownerRecord = createPluginRecord({
+      id: "codex-owner",
+      source: "/plugins/codex-owner/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const otherRecord = createPluginRecord({
+      id: "other-plugin",
+      source: "/plugins/other-plugin/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
+    const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
+    ownerApi.registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    } as never);
+
+    // A gateway request names the locked identity by session id while also
+    // carrying the plugin's own main-agent session key. The ownership check must
+    // still reject the foreign locked identity instead of scoping the listing to
+    // the main-agent key and silently skipping it.
+    await expect(
+      otherApi.runtime.gateway.request("sessions.abort", {
+        sessionId: otherAgentReservedEntry.sessionId,
+        sessionKey: mainOrdinaryKey,
+      }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+  });
+
+  it("rejects a foreign locked session ID via embedded run with own key (#120580 P1)", async () => {
+    const runtime = createPluginRuntime();
+    const session = runtime.agent.session;
+    const pluginOwnKey = "agent:main:ordinary";
+    const pluginOwnEntry = { sessionId: "own-session", updatedAt: 1 };
+    const foreignLockedKey = "agent:assistant:harness:codex:thread-1";
+    const foreignLockedEntry = {
+      sessionId: "foreign-locked-session",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true as const,
+    };
+    const entries = {
+      [pluginOwnKey]: pluginOwnEntry,
+      [foreignLockedKey]: foreignLockedEntry,
+    } as unknown as Record<string, SessionEntry>;
+    session.getSessionEntry = vi.fn(
+      (params) => entries[params.sessionKey],
+    ) as typeof session.getSessionEntry;
+    // The list must return all entries so the unscoped scan can find the foreign
+    // locked entry. When the session ID doesn't match the keyed entry, the scope
+    // must NOT be narrowed.
+    session.listSessionEntries = vi.fn(() =>
+      Object.entries(entries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    ) as typeof session.listSessionEntries;
+    const runEmbeddedAgent = vi.fn(async () => ({
+      ok: true,
+    })) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
+    Object.defineProperties(runtime.agent, {
+      runEmbeddedAgent: { configurable: true, value: runEmbeddedAgent },
+      runEmbeddedPiAgent: { configurable: true, value: runEmbeddedAgent },
+    });
+
+    const pluginRegistry = createTestRegistry(runtime);
+    const ownerRecord = createPluginRecord({
+      id: "codex-owner",
+      source: "/plugins/codex-owner/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const otherRecord = createPluginRecord({
+      id: "other-plugin",
+      source: "/plugins/other-plugin/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
+    const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
+    ownerApi.registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    } as never);
+
+    // Plugin passes its own key + a foreign locked session ID. The embedded run
+    // must reject this because the foreign locked entry is owned by another plugin.
+    // The scope must NOT be narrowed to the plugin's own key's agent/store.
+    await expect(
+      otherApi.runtime.agent.runEmbeddedAgent({
+        sessionId: foreignLockedEntry.sessionId,
+        sessionKey: pluginOwnKey,
+        workspaceDir: "/tmp",
+        prompt: "continue",
+        timeoutMs: 1,
+        runId: "run-foreign-check",
+      } as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0]),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
 });

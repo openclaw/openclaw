@@ -6,6 +6,7 @@ import {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesTarget,
 } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createPluginBlobStore,
@@ -24,6 +25,7 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
@@ -451,13 +453,47 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         return ownerPluginId;
       }
+      // Embedded runs are key-driven and reach here with an exact one session
+      // key but no agentId. Derive the agent scope from the key so the ownership
+      // listing stays pinned to the agent that owns the target session, and
+      // resolve the store path through the key to preserve the incognito
+      // sentinel store for incognito sessions (key shape wins over any supplied
+      // durable store path).
+      //
+      // However, when a supplied session ID does not match the keyed entry
+      // (plugin owns the key but targets a foreign locked session), the scope
+      // must NOT be narrowed: the foreign ID must be observable by the full
+      // store scan so the ownership checker rejects it. Only narrow the scope
+      // when the session ID matches the keyed entry or is absent.
+      const soleSessionKey = normalizeOptionalString(sessionKey);
+      const sessionKeyAgentId = soleSessionKey
+        ? parseAgentSessionKey(soleSessionKey)?.agentId
+        : undefined;
+      const explicitScanAgentId = soleSessionKey && agentId ? normalizeAgentId(agentId) : agentId;
+      if (sessionKeyAgentId && explicitScanAgentId && explicitScanAgentId !== sessionKeyAgentId) {
+        throw new Error(
+          `Plugin session ownership agent "${explicitScanAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
+        );
+      }
+      const scanAgentId = sessionKeyAgentId ?? explicitScanAgentId;
+      const resolvedSessionId = normalizeOptionalString(target?.sessionId ?? params.sessionId);
+      const sessionIdMatchesKeyedEntry =
+        !resolvedSessionId || (entry && resolvedSessionId === entry.sessionId);
+      const scanStorePath =
+        soleSessionKey && sessionKeyAgentId && sessionIdMatchesKeyedEntry
+          ? resolveSessionStorePathForScope({
+              agentId: scanAgentId,
+              sessionKey: soleSessionKey,
+              ...(storePath ? { storePath } : {}),
+            })
+          : storePath;
       assertSessionIdentitiesOwned({
         action: "run",
-        agentId: target?.agentId ?? params.agentId,
+        agentId: sessionIdMatchesKeyedEntry ? scanAgentId : agentId,
         sessionFiles: [params.sessionFile],
-        sessionIds: [target?.sessionId ?? params.sessionId],
+        sessionIds: [resolvedSessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
-        storePath: target?.storePath,
+        storePath: scanStorePath,
       });
       return undefined;
     };
