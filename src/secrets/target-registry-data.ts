@@ -106,6 +106,7 @@ function listSourceBundledPluginConfigContractRecords(): Array<
 
 function listChannelSecretTargetRegistryEntries(
   channelPlugins: readonly PluginManifestRecord[],
+  params?: { sourceTree?: boolean },
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
 
@@ -115,7 +116,7 @@ function listChannelSecretTargetRegistryEntries(
       continue;
     }
     try {
-      const contractApi = loadChannelSecretContractApiForRecord(record);
+      const contractApi = loadChannelSecretContractApiForRecord(record, params);
       entries.push(...(contractApi?.secretTargetRegistryEntries ?? []));
     } catch {
       // Ignore channels that do not expose a usable secret contract artifact.
@@ -465,6 +466,7 @@ let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
 function loadSecretTargetRegistryFromPluginMetadata(params: {
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
+  sourceTree?: boolean;
 }): SecretTargetRegistryEntry[] {
   const plugins = resolvePluginMetadataSnapshot({
     env: params.env,
@@ -485,7 +487,9 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
       ...plugins,
       ...listSourceBundledPluginConfigContractRecords(),
     ]),
-    ...listChannelSecretTargetRegistryEntries(channelPlugins),
+    ...listChannelSecretTargetRegistryEntries(channelPlugins, {
+      sourceTree: params.sourceTree,
+    }),
   ];
 }
 
@@ -508,6 +512,7 @@ export function getSecretTargetRegistry(params?: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
       },
       preferPersisted: false,
+      sourceTree: true,
     });
   }
   if (cachedSecretTargetRegistry) {

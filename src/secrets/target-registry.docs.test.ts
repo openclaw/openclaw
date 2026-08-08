@@ -7,6 +7,7 @@ import {
   renderSecretRefCredentialSurface,
 } from "./credential-matrix-docs.js";
 import { buildSecretRefCredentialMatrix } from "./credential-matrix.js";
+import { getSecretTargetRegistry } from "./target-registry-data.js";
 
 const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
@@ -40,6 +41,12 @@ describe("secret target registry docs", () => {
     const raw = fs.readFileSync(pathname, "utf8");
     const expected = renderSecretRefCredentialMatrixJson(buildSecretRefCredentialMatrix());
     matrixDocsCase = { raw, expected };
+  });
+
+  it("loads source channel contracts through the canonical registry", () => {
+    const ids = new Set(getSecretTargetRegistry({ sourceTree: true }).map((entry) => entry.id));
+    expect(ids).toContain("channels.googlechat.serviceAccount");
+    expect(ids).toContain("channels.googlechat.accounts.*.serviceAccount");
   });
 
   it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {

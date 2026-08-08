@@ -220,8 +220,9 @@ export function loadChannelSecretContractApi(params: {
 /** Loads a channel secret contract directly from a manifest record. */
 export function loadChannelSecretContractApiForRecord(
   record: PluginManifestRecord,
+  params?: { sourceTree?: boolean },
 ): BundledChannelSecretContractApi | undefined {
-  if (record.origin === "bundled") {
+  if (record.origin === "bundled" && !params?.sourceTree) {
     return loadBundledChannelSecretContractApi(record.id);
   }
   return loadExternalChannelSecretContractFromRecord(record);

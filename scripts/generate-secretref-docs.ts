@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
   renderSecretRefCredentialMatrixJson,
   renderSecretRefCredentialSurface,
 } from "../src/secrets/credential-matrix-docs.js";
 import { buildSecretRefCredentialMatrix } from "../src/secrets/credential-matrix.js";
 import { getSecretTargetRegistry } from "../src/secrets/target-registry-data.js";
-import type { SecretTargetRegistryEntry } from "../src/secrets/target-registry-types.js";
 
 const args = new Set(process.argv.slice(2));
 const check = args.has("--check");
@@ -19,32 +18,6 @@ if (check === write || args.size !== 1) {
 }
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const extensionsRoot = path.join(repoRoot, "extensions");
-
-async function loadSourceChannelContractEntries(): Promise<SecretTargetRegistryEntry[]> {
-  const entries: SecretTargetRegistryEntry[] = [];
-  const extensionNames = fs
-    .readdirSync(extensionsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .toSorted();
-  for (const extensionName of extensionNames) {
-    const contractPath = path.join(extensionsRoot, extensionName, "secret-contract-api.ts");
-    if (!fs.existsSync(contractPath)) {
-      continue;
-    }
-    const contract = (await import(pathToFileURL(contractPath).href)) as {
-      secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
-    };
-    if (!Array.isArray(contract.secretTargetRegistryEntries)) {
-      throw new Error(
-        `Missing secretTargetRegistryEntries export in ${path.relative(repoRoot, contractPath)}`,
-      );
-    }
-    entries.push(...contract.secretTargetRegistryEntries);
-  }
-  return entries;
-}
 
 const matrixPath = path.join(
   repoRoot,
@@ -52,10 +25,7 @@ const matrixPath = path.join(
 );
 const surfacePath = path.join(repoRoot, "docs/reference/secretref-credential-surface.md");
 const currentSurface = fs.readFileSync(surfacePath, "utf8");
-const registry = [
-  ...getSecretTargetRegistry({ sourceTree: true }),
-  ...(await loadSourceChannelContractEntries()),
-];
+const registry = getSecretTargetRegistry({ sourceTree: true });
 const matrix = buildSecretRefCredentialMatrix(registry);
 const artifacts = [
   {
