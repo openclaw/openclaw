@@ -1,18 +1,18 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { verifyChainSegment, type AuditEntry } from "../protocol/index.js";
 import {
-  verifyChain,
-  verifyChainSegment,
-  type AuditEntry,
-  type ReviewRequest,
-  type SignedReceipt,
-} from "../protocol/index.js";
+  handleOversizedLegacyFile,
+  readLegacyReefAudit,
+  readLegacyReefDelivered,
+  readLegacyReefReplay,
+  readLegacyReefReviews,
+  type ReefAuditMigrationRecord,
+} from "./doctor-legacy-readers.js";
 import {
   legacyReefFileExists,
   REEF_DURABLE_LEGACY_FILENAMES,
@@ -55,20 +55,6 @@ import {
 
 const REEF_RUNTIME_LEGACY_FILENAMES = ["replay.jsonl", "reviews.json", "delivered.json"];
 
-type ReefAuditMigrationRecord = { pending: true; expectedEntries?: number };
-
-async function readLegacyReefAudit(filePath: string): Promise<AuditEntry[]> {
-  const raw = await fs.readFile(filePath, "utf8");
-  const entries = raw
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as AuditEntry);
-  if (!verifyChain(entries)) {
-    throw new Error("invalid Reef audit chain");
-  }
-  return entries;
-}
-
 async function readStoredReefAudit(
   store: PluginStateKeyedStore<ReefAuditStateRecord>,
   headStore: PluginStateKeyedStore<ReefAuditHeadRecord>,
@@ -108,148 +94,6 @@ async function readStoredReefAudit(
     throw new Error("invalid Reef audit chain state");
   }
   return entries;
-}
-
-type LegacyReefReplayLogRecord =
-  | { op: "claim"; peer: string; id: string; envelopeHash: string }
-  | { op: "complete"; peer: string; id: string; receipt: SignedReceipt; body?: { enc: string } }
-  | { op: "consume" | "release"; peer: string; id: string };
-
-function requireLegacyReplayString(record: Record<string, unknown>, field: string): string {
-  const value = record[field];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`invalid Reef replay ${field}`);
-  }
-  return value;
-}
-
-function parseLegacyReefReplayLine(value: unknown): LegacyReefReplayLogRecord {
-  if (!isRecord(value)) {
-    throw new Error("invalid Reef replay record");
-  }
-  const peer = requireLegacyReplayString(value, "peer");
-  const id = requireLegacyReplayString(value, "id");
-  if (value.op === "claim") {
-    return {
-      op: "claim",
-      peer,
-      id,
-      envelopeHash: requireLegacyReplayString(value, "envelopeHash"),
-    };
-  }
-  if (value.op === "consume" || value.op === "release") {
-    return { op: value.op, peer, id };
-  }
-  if (value.op !== "complete" || !isRecord(value.receipt)) {
-    throw new Error("invalid Reef replay operation");
-  }
-  const receipt = value.receipt as unknown as SignedReceipt;
-  if (receipt.id !== id || !["accepted", "rejected"].includes(receipt.status)) {
-    throw new Error("invalid Reef replay receipt");
-  }
-  const body = value.body;
-  if (
-    (receipt.status === "accepted" && (!isRecord(body) || typeof body.enc !== "string")) ||
-    (receipt.status === "rejected" && body !== undefined)
-  ) {
-    throw new Error("invalid Reef replay completion");
-  }
-  return {
-    op: "complete",
-    peer,
-    id,
-    receipt,
-    ...(isRecord(body) && typeof body.enc === "string" ? { body: { enc: body.enc } } : {}),
-  };
-}
-
-async function readLegacyReefReplay(filePath: string): Promise<ReefReplayRecord[]> {
-  const raw = await fs.readFile(filePath, "utf8");
-  const lines = raw.split("\n").filter((line) => line.length > 0);
-  const records = new Map<string, ReefReplayRecord>();
-  for (const [index, line] of lines.entries()) {
-    let log: LegacyReefReplayLogRecord;
-    try {
-      log = parseLegacyReefReplayLine(JSON.parse(line) as unknown);
-    } catch (error) {
-      // The old append-only store tolerated only a torn final write.
-      if (index === lines.length - 1 && !raw.endsWith("\n")) {
-        break;
-      }
-      throw error;
-    }
-    const key = reefReplayStoreKey(log.peer, log.id);
-    const existing = records.get(key);
-    let next: ReefReplayRecord;
-    if (log.op === "claim") {
-      if (existing && existing.envelopeHash !== log.envelopeHash) {
-        throw new Error("conflicting Reef replay binding");
-      }
-      next = {
-        peer: log.peer,
-        id: log.id,
-        envelopeHash: log.envelopeHash,
-        state: "available",
-      };
-    } else {
-      if (!existing) {
-        throw new Error(`Reef replay ${log.op} lacks claim`);
-      }
-      if (log.op === "complete") {
-        next = {
-          ...existing,
-          state: "completed",
-          receipt: log.receipt,
-          ...(log.body ? { body: log.body } : {}),
-        };
-      } else if (log.op === "consume") {
-        next = {
-          peer: existing.peer,
-          id: existing.id,
-          envelopeHash: existing.envelopeHash,
-          state: "consumed",
-        };
-      } else {
-        next = { ...existing, state: "available" };
-      }
-    }
-    records.delete(key);
-    records.set(key, next);
-  }
-  return [...records.values()];
-}
-
-async function readLegacyReefReviews(filePath: string): Promise<Map<string, ReefReviewRecord>> {
-  const value = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-  if (!isRecord(value)) {
-    throw new Error("invalid Reef reviews file");
-  }
-  const records = new Map<string, ReefReviewRecord>();
-  for (const [digest, raw] of Object.entries(value)) {
-    if (!isRecord(raw) || !isRecord(raw.review)) {
-      throw new Error(`invalid Reef review ${digest}`);
-    }
-    const review = raw.review as unknown as ReviewRequest;
-    if (
-      review.approvalDigest !== digest ||
-      (raw.approved !== undefined && typeof raw.approved !== "boolean")
-    ) {
-      throw new Error(`invalid Reef review ${digest}`);
-    }
-    records.set(digest, {
-      review,
-      ...(typeof raw.approved === "boolean" ? { approved: raw.approved } : {}),
-    });
-  }
-  return records;
-}
-
-async function readLegacyReefDelivered(filePath: string): Promise<string[]> {
-  const value = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-  if (!Array.isArray(value) || value.some((id) => typeof id !== "string" || id.length === 0)) {
-    throw new Error("invalid Reef delivered file");
-  }
-  return [...new Set(value)];
 }
 
 export const reefAuditStateMigration: PluginDoctorStateMigration = {
@@ -335,6 +179,10 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       legacy = await readLegacyReefAudit(filePath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { changes, warnings };
+      }
+      if (await handleOversizedLegacyFile(error, filePath, "Reef audit trail", changes, warnings)) {
+        await migrationStore.delete(REEF_AUDIT_MIGRATION_KEY);
         return { changes, warnings };
       }
       warnings.push(`Failed importing Reef audit trail: ${String(error)}; left source in place`);
@@ -534,7 +382,15 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        warnings.push(`Failed importing Reef replay state: ${String(error)}; left source in place`);
+        if (
+          await handleOversizedLegacyFile(error, replayPath, "Reef replay state", changes, warnings)
+        ) {
+          // oversized source handled; continue to remaining sources
+        } else {
+          warnings.push(
+            `Failed importing Reef replay state: ${String(error)}; left source in place`,
+          );
+        }
       }
     }
 
@@ -578,7 +434,13 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        warnings.push(`Failed importing Reef reviews: ${String(error)}; left source in place`);
+        if (
+          await handleOversizedLegacyFile(error, reviewsPath, "Reef reviews", changes, warnings)
+        ) {
+          // oversized source handled; continue to remaining sources
+        } else {
+          warnings.push(`Failed importing Reef reviews: ${String(error)}; left source in place`);
+        }
       }
     }
 
@@ -627,9 +489,21 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
           warnings,
         });
       } catch (error) {
-        warnings.push(
-          `Failed importing Reef delivered markers: ${String(error)}; left source in place`,
-        );
+        if (
+          await handleOversizedLegacyFile(
+            error,
+            deliveredPath,
+            "Reef delivered markers",
+            changes,
+            warnings,
+          )
+        ) {
+          // oversized source handled; continue to remaining sources
+        } else {
+          warnings.push(
+            `Failed importing Reef delivered markers: ${String(error)}; left source in place`,
+          );
+        }
       }
     }
     const remainingSources = (
