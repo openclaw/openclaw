@@ -742,6 +742,58 @@ ${command}
     }
   });
 
+  it("infers prerelease dist-tags per fixture package", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-dist-tags-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "plugin.tgz");
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/codex",
+        "2026.8.1-beta.1",
+        tarballPath,
+        "@openclaw/discord",
+        "2026.8.1-beta.1",
+        tarballPath,
+        "@openclaw/brave",
+        "2026.8.1",
+        tarballPath,
+      ],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
+    );
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const [codex, discord, brave] = await Promise.all(
+        ["codex", "discord", "brave"].map(async (name) =>
+          JSON.parse((await requestFixtureRegistry(port, `/@openclaw%2F${name}`)).body),
+        ),
+      );
+
+      expect(codex["dist-tags"]).toEqual({
+        latest: "2026.8.1-beta.1",
+        beta: "2026.8.1-beta.1",
+      });
+      expect(discord["dist-tags"]).toEqual({
+        latest: "2026.8.1-beta.1",
+        beta: "2026.8.1-beta.1",
+      });
+      expect(brave["dist-tags"]).toEqual({ latest: "2026.8.1" });
+      expect(brave["dist-tags"]).not.toHaveProperty("beta");
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+    }
+  });
+
   it("serves tarball dependencies using the request-visible registry origin", async () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-package-");
     const packageDir = path.join(root, "package");
@@ -777,7 +829,7 @@ ${command}
         cwd: process.cwd(),
         env: {
           ...process.env,
-          OPENCLAW_NPM_REGISTRY_DIST_TAGS: "latest=0.0.0,beta=2026.7.1-beta.3",
+          OPENCLAW_NPM_REGISTRY_DIST_TAGS: "latest=0.0.0,beta=2026.7.1-beta.2",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -793,7 +845,7 @@ ${command}
       expect(response.statusCode).toBe(200);
       expect(metadata["dist-tags"]).toEqual({
         latest: "0.0.0",
-        beta: "2026.7.1-beta.3",
+        beta: "2026.7.1-beta.2",
       });
       expect(metadata.versions["2026.7.1-beta.3"].dependencies).toEqual({
         "@openclaw/ai": "2026.7.1-beta.3",

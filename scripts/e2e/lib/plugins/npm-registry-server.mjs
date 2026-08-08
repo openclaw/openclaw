@@ -60,6 +60,11 @@ if (!portFile || packageArgs.length === 0 || packageArgs.length % 3 !== 0) {
 
 const packages = new Map();
 
+function inferPrereleaseDistTags(version) {
+  const match = /^\d+\.\d+\.\d+-(alpha|beta)(?:\.|$)/u.exec(version);
+  return match ? { [match[1]]: version } : {};
+}
+
 function readPackageManifest(tarballPath, packageName) {
   try {
     const packageJson = JSON.parse(
@@ -105,6 +110,7 @@ const metadataFor = (entry, baseUrl) => ({
   name: entry.packageName,
   "dist-tags": {
     latest: entry.latestVersion,
+    ...inferPrereleaseDistTags(entry.latestVersion),
     ...Object.fromEntries(distTagOverrides),
   },
   versions: Object.fromEntries(
