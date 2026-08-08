@@ -682,6 +682,34 @@ describe("slackPlugin status", () => {
     });
   });
 
+  it("matches the workspace-qualified session identity produced by Enterprise ingress", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+
+    const channelRoute = await resolveRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      target: "team:T123:channel:C456",
+    });
+    const dmRoute = await resolveRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      accountId: "default",
+      target: "team:T123:user:U456",
+    });
+
+    expectRecordFields(channelRoute, "Enterprise Slack channel route", {
+      baseSessionKey: "agent:main:slack:channel:team:t123:channel:c456",
+      to: "team:T123:channel:C456",
+    });
+    expectRecordFields(dmRoute, "Enterprise Slack DM route", {
+      baseSessionKey: "agent:main:main:account:default:team:t123",
+      to: "team:T123:user:U456",
+    });
+  });
+
   it("routes a folded bare W user id as a direct session", async () => {
     const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
     if (!resolveRoute) {
@@ -1007,6 +1035,62 @@ describe("slackPlugin outbound", () => {
       }),
     ).rejects.toThrow("unsupported_enterprise_slack_delivery");
     expect(sendSlack).not.toHaveBeenCalled();
+  });
+
+  it("sends Enterprise messages when the existing target carries the workspace", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-enterprise" });
+    const sendText = requireSlackSendText();
+
+    const result = await sendText({
+      cfg: { channels: { slack: { enterpriseOrgInstall: true } } },
+      to: "team:T123:channel:C456",
+      text: "hello",
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("team:T123:channel:C456");
+    expect(result).toEqual({ channel: "slack", messageId: "m-enterprise" });
+  });
+
+  it("rejects workspace-qualified targets for ordinary Slack installations", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "should-not-send" });
+
+    await expect(
+      requireSlackSendText()({
+        cfg,
+        to: "team:T123:channel:C456",
+        text: "hello",
+        accountId: "default",
+        deps: { sendSlack },
+      }),
+    ).rejects.toThrow("unexpected_enterprise_slack_workspace");
+    expect(sendSlack).not.toHaveBeenCalled();
+  });
+
+  it("admits deferred Enterprise messages only when their target carries the workspace", () => {
+    const admit = slackPlugin.message?.durableFinal?.admitDeferredDelivery;
+    if (!admit) {
+      throw new Error("slack deferred-delivery admission unavailable");
+    }
+    const enterpriseCfg = {
+      channels: { slack: { enterpriseOrgInstall: true } },
+    } as OpenClawConfig;
+    const base = {
+      cfg: enterpriseCfg,
+      accountId: "default",
+      kind: "text" as const,
+      queueId: "q1",
+      payloads: [{ text: "hello" }],
+    };
+
+    expect(admit({ ...base, to: "team:T123:channel:C456" } as never)).toEqual({
+      status: "allowed",
+    });
+    expect(admit({ ...base, to: "channel:C456" } as never)).toEqual({
+      status: "permanent_rejection",
+      reason: "unsupported_enterprise_slack_delivery",
+    });
   });
 
   it("forwards agent identity through the registered text sender", async () => {

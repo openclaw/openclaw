@@ -75,10 +75,12 @@ type SlackRecipient =
   | {
       kind: "user";
       id: string;
+      teamId?: string;
     }
   | {
       kind: "channel";
       id: string;
+      teamId?: string;
     };
 
 export type SlackSendIdentity = {
@@ -365,6 +367,7 @@ function parseRecipient(raw: string): SlackRecipient {
   return {
     kind: target.kind,
     id: canonicalizeSlackApiTargetId(target.kind, target.id, raw),
+    ...(target.teamId ? { teamId: target.teamId } : {}),
   };
 }
 
@@ -382,7 +385,6 @@ function resolveEnterpriseEventScope(params: {
 }): SlackEnterpriseEventScope | undefined {
   const scope = params.opts.enterpriseEventScope;
   if (!scope) {
-    assertSlackDirectSendAllowed(params.account);
     return undefined;
   }
   if (params.account.config.enterpriseOrgInstall !== true) {
@@ -885,6 +887,16 @@ export async function reconcileSlackUnknownSend(
       retryable: false,
     };
   }
+  const recipient = parseRecipient(ctx.to);
+  try {
+    assertSlackDirectSendAllowed(account, recipient.teamId);
+  } catch (error) {
+    return {
+      status: "unresolved",
+      error: error instanceof Error ? error.message : String(error),
+      retryable: false,
+    };
+  }
   const readToken = resolveSlackOperationToken(account, "read");
   if (!readToken) {
     return {
@@ -893,7 +905,6 @@ export async function reconcileSlackUnknownSend(
       retryable: false,
     };
   }
-  const recipient = parseRecipient(ctx.to);
   const userRecipient = isSlackUserRecipient(recipient);
   const writeToken = resolveSlackOperationToken(account, "write");
   if (userRecipient && !writeToken) {
@@ -903,8 +914,19 @@ export async function reconcileSlackUnknownSend(
       retryable: false,
     };
   }
-  const readClient = opts?.client ?? createSlackReadClient(readToken);
-  const writeClient = opts?.client ?? (writeToken ? getSlackWriteClient(writeToken) : undefined);
+  const suppliedClient = recipient.teamId ? undefined : opts?.client;
+  const readClient =
+    suppliedClient ??
+    (recipient.teamId
+      ? createSlackReadClient(readToken, { teamId: recipient.teamId })
+      : createSlackReadClient(readToken));
+  const writeClient =
+    suppliedClient ??
+    (writeToken
+      ? recipient.teamId
+        ? getSlackWriteClient(writeToken, { teamId: recipient.teamId })
+        : getSlackWriteClient(writeToken)
+      : undefined);
   const payloadReplyToId = ctx.payloads[0]?.replyToId;
   const effectiveReplyToId = Object.hasOwn(ctx, "effectiveReplyToId")
     ? normalizeOptionalString(ctx.effectiveReplyToId)
@@ -935,8 +957,8 @@ export async function reconcileSlackUnknownSend(
       accountId: account.accountId,
       token: channelToken,
     });
-    const lookupClients = opts?.client
-      ? [opts.client]
+    const lookupClients = suppliedClient
+      ? [suppliedClient]
       : [readClient, ...(writeClient && writeToken !== readToken ? [writeClient] : [])];
     let lookupError: unknown;
     let bestUnresolvedScan: SlackConversationDeliveryScan | undefined;
@@ -1003,6 +1025,10 @@ export async function sendMessageSlack(
           : {}),
       })
     : undefined;
+  const recipient = enterpriseDelivery ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
+  if (!enterpriseDelivery) {
+    assertSlackDirectSendAllowed(account, recipient.teamId);
+  }
   if (isSilentReplyText(normalizedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return {
@@ -1024,13 +1050,13 @@ export async function sendMessageSlack(
         fallbackSource:
           account.identity === "user" ? account.userTokenSource : account.botTokenSource,
       });
-  const recipient = enterpriseDelivery ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
+  const deliveryTeamId = enterpriseDelivery?.teamId ?? recipient.teamId;
   const queueKey = createSlackSendQueueKey({
     accountId: account.accountId,
     token,
     recipient,
     threadTs: opts.threadTs,
-    ...(enterpriseDelivery ? { teamId: enterpriseDelivery.teamId } : {}),
+    ...(deliveryTeamId ? { teamId: deliveryTeamId } : {}),
   });
   const queuedOpts = enterpriseDelivery
     ? Object.freeze({ ...opts, client: enterpriseDelivery.client })
@@ -1049,13 +1075,9 @@ export async function sendMessageSlack(
   );
   const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(queuedOpts.threadTs);
   if (threadTs && result.channelId && account.accountId) {
-    if (enterpriseDelivery) {
-      recordSlackThreadParticipation(account.accountId, result.channelId, threadTs, {
-        teamId: enterpriseDelivery.teamId,
-      });
-    } else {
-      recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
-    }
+    recordSlackThreadParticipation(account.accountId, result.channelId, threadTs, {
+      ...(deliveryTeamId ? { teamId: deliveryTeamId } : {}),
+    });
   }
   return result;
 }
@@ -1089,7 +1111,11 @@ async function sendMessageSlackQueuedInner(params: {
 }): Promise<SlackSendResult> {
   const { opts, cfg, account, token, recipient, blocks, trimmedMessage, enterpriseDelivery } =
     params;
-  const client = enterpriseDelivery?.client ?? opts.client ?? getSlackWriteClient(token);
+  const client =
+    enterpriseDelivery?.client ??
+    (recipient.teamId
+      ? getSlackWriteClient(token, { teamId: recipient.teamId })
+      : (opts.client ?? getSlackWriteClient(token)));
   const identity = enterpriseDelivery
     ? normalizeSlackSendIdentity(opts.identity)
     : resolveSlackSendIdentity({
@@ -1099,12 +1125,13 @@ async function sendMessageSlackQueuedInner(params: {
   if (opts.replyBroadcast && opts.mediaUrl) {
     throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
   }
-  const unfurl = enterpriseDelivery
-    ? { unfurlMedia: account.config.unfurlMedia }
-    : {
-        unfurlLinks: account.config.unfurlLinks,
-        unfurlMedia: account.config.unfurlMedia,
-      };
+  const unfurl =
+    account.config.enterpriseOrgInstall === true
+      ? { unfurlMedia: account.config.unfurlMedia }
+      : {
+          unfurlLinks: account.config.unfurlLinks,
+          unfurlMedia: account.config.unfurlMedia,
+        };
   // Durable signatures bind the concrete provider channel, so user-targeted
   // sends must resolve U... to the resulting D... conversation first.
   const directUserPostChannelId = opts.deliveryQueueId

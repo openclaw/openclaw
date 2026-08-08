@@ -445,14 +445,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.From).toBe("slack:U123");
   });
 
-  it("uses the validated event workspace as the standardized conversation space", async () => {
+  it("carries the validated event workspace through reusable DM routing", async () => {
     const ctx = createDefaultSlackCtx();
     ctx.teamId = "";
     const eventScope = {
       apiAppId: "A1",
       enterpriseId: "E1",
       isEnterpriseInstall: true,
-      teamId: "T_ENTERPRISE",
+      teamId: "T123ENTERPRISE",
       client: {} as SlackEventScope["client"],
     } satisfies SlackEventScope;
 
@@ -464,7 +464,52 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
 
     assertPrepared(prepared, "org-wide Slack DM");
-    expect(prepared.ctxPayload.GroupSpace).toBe("T_ENTERPRISE");
+    expect(prepared.ctxPayload.GroupSpace).toBe("T123ENTERPRISE");
+    expect(prepared.ctxPayload.To).toBe("team:T123ENTERPRISE:user:U123");
+    expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:user:U123");
+    expect(prepared.ctxPayload.NativeChannelId).toBe("D999");
+    expect(prepared.replyTarget).toBe("channel:D999");
+    expect(prepared.turn.record.updateLastRoute).toMatchObject({
+      channel: "slack",
+      to: "team:T123ENTERPRISE:user:U123",
+    });
+  });
+
+  it("carries the validated event workspace through reusable channel routing", async () => {
+    const ctx = createReplyToAllSlackCtx({
+      groupPolicy: "open",
+      defaultRequireMention: false,
+      asChannel: true,
+    });
+    const eventScope = {
+      apiAppId: "A1",
+      enterpriseId: "E1",
+      isEnterpriseInstall: true,
+      teamId: "T123ENTERPRISE",
+      client: {} as SlackEventScope["client"],
+    } satisfies SlackEventScope;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({ groupPolicy: "open" }),
+      message: createSlackMessage({
+        channel: "C123CHANNEL",
+        channel_type: "channel",
+        user: "U123",
+        text: "hello",
+      }),
+      opts: { source: "message", eventScope },
+    });
+
+    assertPrepared(prepared, "org-wide Slack channel message");
+    expect(prepared.ctxPayload.To).toBe("team:T123ENTERPRISE:channel:C123CHANNEL");
+    expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:channel:C123CHANNEL");
+    expect(prepared.ctxPayload.NativeChannelId).toBe("C123CHANNEL");
+    expect(prepared.replyTarget).toBe("channel:C123CHANNEL");
+    expect(prepared.turn.record.updateLastRoute).toMatchObject({
+      channel: "slack",
+      to: "team:T123ENTERPRISE:channel:C123CHANNEL",
+    });
   });
 
   it("routes a self-threaded Agent View root before capability detection completes", async () => {

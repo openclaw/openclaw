@@ -109,6 +109,37 @@ describe("reconcileSlackUnknownSend", () => {
     slackClientMocks.getSlackWriteClient.mockReset();
   });
 
+  it("uses workspace-scoped clients for an Enterprise reconciliation", async () => {
+    const readClient = createSlackReconcileTestClient();
+    const writeClient = createSlackReconcileTestClient();
+    slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
+    slackClientMocks.getSlackWriteClient.mockReturnValue(writeClient);
+
+    await reconcileSlackUnknownSend(
+      createUnknownSendContext({
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "xoxb-org",
+              enterpriseOrgInstall: true,
+            },
+          },
+        } as OpenClawConfig,
+        to: "team:T123:channel:C123",
+      }),
+    );
+
+    expect(slackClientMocks.createSlackReadClient).toHaveBeenCalledWith("xoxb-org", {
+      teamId: "T123",
+    });
+    expect(slackClientMocks.getSlackWriteClient).toHaveBeenCalledWith("xoxb-org", {
+      teamId: "T123",
+    });
+    expect(readClient.conversations.history).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "C123" }),
+    );
+  });
+
   it("attaches an opaque durable id and reconciles the exact posted message", async () => {
     const client = createSlackReconcileTestClient();
     const metadata = await postWithDeliveryMetadata({ client });

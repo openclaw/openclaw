@@ -15,6 +15,7 @@ const loadOutboundMediaFromUrl = vi.hoisted(() =>
   })),
 );
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
+const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   withTrustedEnvProxyGuardedFetchMode: (value: unknown) => value,
@@ -23,6 +24,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard }));
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return { ...actual, loadOutboundMediaFromUrl };
+});
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return { ...actual, getSlackWriteClient: getSlackWriteClientMock };
 });
 
 const { sendMessageSlack } = await import("./send.js");
@@ -111,6 +116,7 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     clearSlackThreadParticipationCache();
     loadOutboundMediaFromUrl.mockClear();
     fetchWithSsrFGuard.mockReset();
+    getSlackWriteClientMock.mockReset();
   });
 
   afterEach(() => {
@@ -130,6 +136,26 @@ describe("sendMessageSlack Enterprise listener scope", () => {
       ).rejects.toThrow("unsupported_enterprise_slack_delivery");
     }
     expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("creates a workspace-scoped client for a qualified detached send", async () => {
+    const scopedClient = createEnterpriseClient();
+    const injectedClient = createEnterpriseClient();
+    getSlackWriteClientMock.mockReturnValue(scopedClient);
+
+    await sendMessageSlack("team:T123:channel:C08GQH53EJM", "hello", {
+      cfg: ENTERPRISE_CFG,
+      token: "xoxb-enterprise",
+      client: injectedClient,
+    });
+
+    expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-enterprise", {
+      teamId: "T123",
+    });
+    expect(scopedClient.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "C08GQH53EJM", text: "hello" }),
+    );
+    expect(injectedClient.chat.postMessage).not.toHaveBeenCalled();
   });
 
   it("requires the exact validated listener client and an Enterprise account", async () => {
