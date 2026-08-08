@@ -147,6 +147,102 @@ describe("handleSlackAction", () => {
     expect(getSlackMemberInfo).not.toHaveBeenCalled();
   });
 
+  it("scopes every Enterprise Grid message and pin write to the trusted current workspace", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    const context = {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    };
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "created" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        content: "updated",
+      },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "deleteMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "pinMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "unpinMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+
+    expectSlackSendCall(0, "team:T123:channel:C123", "created", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "updated", {
+      cfg,
+      teamId: "T123",
+      blocks: undefined,
+    });
+    expect(deleteSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(pinSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(unpinSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it.each([
+    {
+      name: "send",
+      params: { action: "sendMessage", to: "channel:C123", content: "created" },
+    },
+    {
+      name: "edit",
+      params: {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        content: "updated",
+      },
+    },
+    {
+      name: "delete",
+      params: { action: "deleteMessage", channelId: "C123", messageId: "123.456" },
+    },
+    {
+      name: "pin",
+      params: { action: "pinMessage", channelId: "C123", messageId: "123.456" },
+    },
+    {
+      name: "unpin",
+      params: { action: "unpinMessage", channelId: "C123", messageId: "123.456" },
+    },
+  ])("rejects a bare Enterprise Grid $name without trusted current context", async ({ params }) => {
+    await expect(
+      handleSlackAction(params, slackConfig({ enterpriseOrgInstall: true })),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+  });
+
   function createReplyToFirstContext(hasRepliedRef: { value: boolean }) {
     return {
       currentChannelId: "C123",

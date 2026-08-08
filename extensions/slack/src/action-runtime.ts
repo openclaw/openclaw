@@ -44,7 +44,16 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
-const enterpriseGridActionTools = new Set(["memberInfo", "react", "uploadFile"]);
+const enterpriseGridActionTools = new Set([
+  "deleteMessage",
+  "editMessage",
+  "memberInfo",
+  "pinMessage",
+  "react",
+  "sendMessage",
+  "unpinMessage",
+  "uploadFile",
+]);
 const SLACK_REACTION_USER_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
@@ -677,6 +686,8 @@ export async function handleSlackAction(
     switch (action) {
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
+        const target = resolveSlackActionTarget(account, to, context);
+        const destination = target.routingTarget;
         const content = readStringParam(params, "content", {
           allowEmpty: true,
         });
@@ -712,7 +723,7 @@ export async function handleSlackAction(
         }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
-          to,
+          destination,
           context,
           {
             suppressImplicitThread: params.topLevel === true || params.threadTs === null,
@@ -740,13 +751,13 @@ export async function handleSlackAction(
             // Reuse the resolved thread for both sends. Invoking the action twice
             // could consume replyToMode=first and move the full text off-thread.
             const { replyBroadcast: _replyBroadcast, ...blockSendOpts } = sendOpts;
-            await slackActionRuntime.sendSlackMessage(to, "", {
+            await slackActionRuntime.sendSlackMessage(destination, "", {
               ...blockSendOpts,
               blocks,
             });
-            return await slackActionRuntime.sendSlackMessage(to, content, sendOpts);
+            return await slackActionRuntime.sendSlackMessage(destination, content, sendOpts);
           }
-          return await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+          return await slackActionRuntime.sendSlackMessage(destination, content ?? "", {
             ...sendOpts,
             blocks,
           });
@@ -757,13 +768,13 @@ export async function handleSlackAction(
                 | Awaited<ReturnType<typeof slackActionRuntime.sendSlackMessage>>
                 | undefined;
               if (mediaUrl) {
-                lastResult = await slackActionRuntime.sendSlackMessage(to, "", {
+                lastResult = await slackActionRuntime.sendSlackMessage(destination, "", {
                   ...baseSendOpts,
                   mediaUrl,
                 });
               }
               for (const [index, message] of preparedMessages.entries()) {
-                lastResult = await slackActionRuntime.sendSlackMessage(to, message.text, {
+                lastResult = await slackActionRuntime.sendSlackMessage(destination, message.text, {
                   ...baseSendOpts,
                   ...(index === 0 && replyBroadcast ? { replyBroadcast: true } : {}),
                   ...(message.blocks ? { blocks: message.blocks } : {}),
@@ -784,14 +795,14 @@ export async function handleSlackAction(
           : blocks
             ? await (async () => {
                 if (mediaUrl) {
-                  await slackActionRuntime.sendSlackMessage(to, "", {
+                  await slackActionRuntime.sendSlackMessage(destination, "", {
                     ...sendOpts,
                     mediaUrl,
                   });
                 }
                 return await sendContentAndBlocks();
               })()
-            : await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+            : await slackActionRuntime.sendSlackMessage(destination, content ?? "", {
                 ...sendOpts,
                 mediaUrl: mediaUrl ?? undefined,
                 blocks,
@@ -800,7 +811,7 @@ export async function handleSlackAction(
         // Keep "first" mode consistent even when the agent explicitly provided
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
-        if (context?.hasRepliedRef && slackContextTargetsMatch(to, context)) {
+        if (context?.hasRepliedRef && slackContextTargetsMatch(destination, context)) {
           context.hasRepliedRef.value = true;
         }
 
@@ -855,7 +866,8 @@ export async function handleSlackAction(
         return jsonResult({ ok: true, result });
       }
       case "editMessage": {
-        const channelId = resolveChannelId();
+        const target = resolveChannelTarget();
+        const { channelId } = target;
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
@@ -866,10 +878,11 @@ export async function handleSlackAction(
         if (!content && !blocks) {
           throw new Error("Slack editMessage requires content or blocks.");
         }
-        await assertReadTargetAllowed(channelId);
-        if (writeOpts) {
+        await assertReadTargetAllowed(target);
+        const scopedWriteOpts = target.teamId ? { ...writeOpts, teamId: target.teamId } : writeOpts;
+        if (scopedWriteOpts) {
           await slackActionRuntime.editSlackMessage(channelId, messageId, content ?? "", {
-            ...writeOpts,
+            ...scopedWriteOpts,
             blocks,
           });
         } else {
@@ -880,13 +893,15 @@ export async function handleSlackAction(
         return jsonResult({ ok: true });
       }
       case "deleteMessage": {
-        const channelId = resolveChannelId();
+        const target = resolveChannelTarget();
+        const { channelId } = target;
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
-        await assertReadTargetAllowed(channelId);
-        if (writeOpts) {
-          await slackActionRuntime.deleteSlackMessage(channelId, messageId, writeOpts);
+        await assertReadTargetAllowed(target);
+        const scopedWriteOpts = target.teamId ? { ...writeOpts, teamId: target.teamId } : writeOpts;
+        if (scopedWriteOpts) {
+          await slackActionRuntime.deleteSlackMessage(channelId, messageId, scopedWriteOpts);
         } else {
           await slackActionRuntime.deleteSlackMessage(channelId, messageId);
         }
@@ -990,14 +1005,17 @@ export async function handleSlackAction(
     if (!isActionEnabled("pins")) {
       throw new Error("Slack pins are disabled.");
     }
-    const channelId = resolveChannelId();
+    const target = resolveChannelTarget();
+    const { channelId } = target;
+    const scopedReadOpts = target.teamId ? { ...readOpts, teamId: target.teamId } : readOpts;
+    const scopedWriteOpts = target.teamId ? { ...writeOpts, teamId: target.teamId } : writeOpts;
     if (action === "pinMessage") {
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      await assertReadTargetAllowed(channelId);
-      if (writeOpts) {
-        await slackActionRuntime.pinSlackMessage(channelId, messageId, writeOpts);
+      await assertReadTargetAllowed(target);
+      if (scopedWriteOpts) {
+        await slackActionRuntime.pinSlackMessage(channelId, messageId, scopedWriteOpts);
       } else {
         await slackActionRuntime.pinSlackMessage(channelId, messageId);
       }
@@ -1007,17 +1025,17 @@ export async function handleSlackAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      await assertReadTargetAllowed(channelId);
-      if (writeOpts) {
-        await slackActionRuntime.unpinSlackMessage(channelId, messageId, writeOpts);
+      await assertReadTargetAllowed(target);
+      if (scopedWriteOpts) {
+        await slackActionRuntime.unpinSlackMessage(channelId, messageId, scopedWriteOpts);
       } else {
         await slackActionRuntime.unpinSlackMessage(channelId, messageId);
       }
       return jsonResult({ ok: true });
     }
-    await assertReadTargetAllowed(channelId);
-    const pins = writeOpts
-      ? await slackActionRuntime.listSlackPins(channelId, readOpts)
+    await assertReadTargetAllowed(target);
+    const pins = scopedReadOpts
+      ? await slackActionRuntime.listSlackPins(channelId, scopedReadOpts)
       : await slackActionRuntime.listSlackPins(channelId);
     const normalizedPins = pins.map((pin) => {
       const message = pin.message
