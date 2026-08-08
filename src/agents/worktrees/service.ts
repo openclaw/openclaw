@@ -42,7 +42,6 @@ import {
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
   listRegistryWorktrees,
-  recordLiveRegistryWorktreeRunEndCleanup,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
@@ -1075,10 +1074,12 @@ export class ManagedWorktreeService {
         }
         // A live run lease or a competing remover holds the worktree; a lossless
         // auto-cleanup must not race it.
-        recordLiveRegistryWorktreeRunEndCleanup(this.env, id, {
-          outcome: "retained-busy",
-          at: this.now(),
-        });
+        updateRegistryWorktree(
+          this.env,
+          id,
+          { runEndCleanup: { outcome: "retained-busy", at: this.now() } },
+          { onlyIfLive: true },
+        );
         return false;
       }
       try {
