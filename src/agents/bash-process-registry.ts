@@ -6,6 +6,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { SystemEventReceipt } from "../infra/system-event-receipts.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import { readEnvInt } from "./bash-tools.shared.js";
@@ -113,6 +114,7 @@ interface FinishedSession {
 
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
+const finishedCompletionReceipts = new WeakMap<FinishedSession, SystemEventReceipt>();
 const activeBackgroundExecSessionIds = new Set<string>();
 let finishedSessionOutputChars = 0;
 
@@ -143,6 +145,26 @@ export function getSession(id: string) {
 /** Returns a retained finished background session by id. */
 export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
+}
+
+export function retainFinishedCompletionReceipt(sessionId: string, receipt: SystemEventReceipt) {
+  const finished = finishedSessions.get(sessionId);
+  if (!finished) {
+    receipt.remove();
+    return () => false;
+  }
+  finishedCompletionReceipts.set(finished, receipt);
+  return () => finishedCompletionReceipts.has(finished);
+}
+
+export function takeFinishedCompletionReceipt(sessionId: string): SystemEventReceipt | undefined {
+  const finished = finishedSessions.get(sessionId);
+  if (!finished) {
+    return undefined;
+  }
+  const receipt = finishedCompletionReceipts.get(finished);
+  finishedCompletionReceipts.delete(finished);
+  return receipt;
 }
 
 function deleteFinishedSession(id: string): boolean {

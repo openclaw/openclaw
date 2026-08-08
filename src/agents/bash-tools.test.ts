@@ -406,17 +406,6 @@ function useCapturedEnv(keys: string[], afterCapture?: () => void) {
   });
 }
 
-async function waitForCompletion(sessionId: string) {
-  let status = PROCESS_STATUS_RUNNING;
-  await expect
-    .poll(async () => {
-      status = (await pollProcessSession({ tool: processTool, sessionId })).status;
-      return status;
-    }, BACKGROUND_POLL_OPTIONS)
-    .not.toBe(PROCESS_STATUS_RUNNING);
-  return status;
-}
-
 function requireSessionId(details: { sessionId?: string }): string {
   if (!details.sessionId) {
     throw new Error("expected sessionId in exec result details");
@@ -476,12 +465,6 @@ async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
     isMainSession: false,
     isNewSession: false,
   });
-}
-
-async function runBackgroundCommandToCompletion(tool: ExecToolInstance, command: string) {
-  const sessionId = await startBackgroundCommand(tool, command);
-  const status = await waitForCompletion(sessionId);
-  return { sessionId, status };
 }
 
 type ProcessLogWindow = { offset?: number; limit?: number };
@@ -694,8 +677,10 @@ const runLongLogExpectationCase = async ({
 const runNotifyNoopCase = async ({ label, defaults, expectNotification }: NotifyNoopCase) => {
   const tool = createNotifyOnExitExecTool(defaults);
 
-  const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
-  expect(status).toBe(PROCESS_STATUS_COMPLETED);
+  const sessionId = await startBackgroundCommand(tool, COMMAND_NOOP);
+  await expect
+    .poll(() => getFinishedSession(sessionId)?.status, BACKGROUND_POLL_OPTIONS)
+    .toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, expectNotification, sessionId, label);
 };
@@ -837,7 +822,7 @@ describe("exec notifyOnExit", () => {
 
   afterEach(drainPendingHeartbeatWakes);
 
-  it("enqueues a system event when a backgrounded exec exits", async () => {
+  it("keeps a background completion queued until terminal poll acknowledges it", async () => {
     const tool = createNotifyOnExitExecTool();
 
     const sessionId = await startBackgroundCommand(tool, shellEcho("notify"));
@@ -853,7 +838,15 @@ describe("exec notifyOnExit", () => {
     expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
     expect(queuedEvent).toBeDefined();
+    expect(queuedEvent?.contextKey).toBe(`exec:${sessionId}`);
     expect(formatted).toBeUndefined();
+    expect((await pollProcessSession({ tool: processTool, sessionId })).status).toBe(
+      PROCESS_STATUS_COMPLETED,
+    );
+    expect(peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY)).toEqual([]);
+    expect((await pollProcessSession({ tool: processTool, sessionId })).status).toBe(
+      PROCESS_STATUS_COMPLETED,
+    );
   });
 
   it("preserves the origin delivery context on background exec completion events", async () => {
@@ -873,6 +866,7 @@ describe("exec notifyOnExit", () => {
     );
 
     expect(queuedEvent).toBeDefined();
+    expect(queuedEvent?.contextKey).toBe(`exec:${sessionId}`);
     expect(queuedEvent?.deliveryContext?.channel).toBe("telegram");
     expect(queuedEvent?.deliveryContext?.to).toBe("telegram:-1003774691294:topic:47");
     expect(queuedEvent?.deliveryContext?.threadId).toBe("47");

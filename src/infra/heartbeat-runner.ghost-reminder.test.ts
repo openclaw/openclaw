@@ -1,10 +1,13 @@
 // Covers heartbeat handling of queued reminder system events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
+import { startDeferredNotifyRun } from "../agents/bash-tools.notify-on-exit-ack.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -22,6 +25,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetProcessRegistryForTests();
   resetSystemEventsForTest();
   vi.restoreAllMocks();
 });
@@ -171,7 +175,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
   const runCronReminderCase = async (
     tmpPrefix: string,
-    enqueue: (sessionKey: string) => void,
+    enqueue: (sessionKey: string) => void | Promise<void>,
   ): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
@@ -189,7 +193,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     tmpPrefix: string;
     replyText: string;
     reason: string;
-    enqueue: (sessionKey: string) => void;
+    enqueue: (sessionKey: string) => void | Promise<void>;
     target?: "telegram" | "none";
     isolatedSession?: boolean;
     source?: "cron";
@@ -223,7 +227,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           isolatedSession: params.isolatedSession,
           activeHours: params.activeHours,
         });
-        params.enqueue(sessionKey);
+        await params.enqueue(sessionKey);
         const owningCronJobMarker = params.owningCronJobId
           ? markCronJobActive(params.owningCronJobId)
           : undefined;
@@ -735,6 +739,29 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Provider).toBe("exec-event");
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("relays an actual unpolled background completion", async () => {
+    const { result, sendTelegram, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-produced-relay-",
+      replyText: "Background command completed",
+      reason: "exec-event",
+      enqueue: async (queueKey) => {
+        const process = await startDeferredNotifyRun({
+          spawn: vi.spyOn(getProcessSupervisor(), "spawn"),
+          sessionKey: queueKey,
+        });
+        await process.finish();
+      },
+    });
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.Body).toContain("producer output");
+    expectTelegramSend(sendTelegram, {
+      to: "-100155462274",
+      text: "Background command completed",
+    });
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
   });
 
   it("consumes exec completion entries without dropping later generic events", async () => {

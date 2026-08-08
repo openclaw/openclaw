@@ -16,7 +16,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-event-receipts.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -43,6 +43,7 @@ import {
   appendOutput,
   createSessionSlug,
   markExited,
+  retainFinishedCompletionReceipt,
   tail,
 } from "./bash-process-registry.js";
 import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
@@ -310,13 +311,13 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
+function queueNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
-    return;
+    return undefined;
   }
   const sessionKey = session.sessionKey?.trim();
   if (!sessionKey) {
-    return;
+    return undefined;
   }
   session.exitNotified = true;
   const exitLabel = session.exitSignal
@@ -326,10 +327,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
   if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
-    return;
+    return undefined;
   }
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
-    return;
+    return undefined;
   }
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
@@ -339,26 +340,33 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     mainKey: session.mainKey,
     sessionScope: session.sessionScope,
   };
-  enqueueSystemEvent(eventText, {
+  const receipt = enqueueSystemEventWithReceipt(eventText, {
     sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
+    contextKey: `exec:${session.id}`,
     deliveryContext: session.notifyDeliveryContext,
   });
+  if (!receipt) {
+    return undefined;
+  }
+  const isPending = retainFinishedCompletionReceipt(session.id, receipt);
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
-  if (!isSubagentSessionKey(sessionKey)) {
-    requestHeartbeat(
-      scopedHeartbeatWakeOptionsForPolicy(
-        sessionKey,
-        {
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-        },
-        eventRouting,
-      ),
-    );
-  }
+  return () => {
+    if (isPending() && !isSubagentSessionKey(sessionKey)) {
+      requestHeartbeat(
+        scopedHeartbeatWakeOptionsForPolicy(
+          sessionKey,
+          {
+            source: "exec-event",
+            intent: "event",
+            reason: "exec-event",
+            coalesceMs: 0,
+          },
+          eventRouting,
+        ),
+      );
+    }
+  };
 }
 
 /** Creates the short approval id shown in `/approve` prompts. */
@@ -768,8 +776,10 @@ export async function runExecProcess(opts: {
       // Finalization can release remote process/session resources. Keep the
       // background-work blocker until that owner transition has settled.
       session.finalizing = false;
-      const shouldNotify = !session.exited;
-      if (shouldNotify) {
+      const shouldSettle = !session.exited;
+      let requestExitWake: (() => void) | undefined;
+      if (shouldSettle) {
+        // Publish before the callback can poll; wake only while its receipt remains pending.
         markExited(
           session,
           finalOutcome.exitCode,
@@ -778,11 +788,10 @@ export async function runExecProcess(opts: {
           finalOutcome.exitReason,
           finalOutcome.noOutputTimedOut,
         );
+        requestExitWake = queueNotifyOnExit(session, finalOutcome.status);
       }
       opts.onSettledBeforeNotify?.(finalOutcome);
-      if (shouldNotify) {
-        maybeNotifyOnExit(session, finalOutcome.status);
-      }
+      requestExitWake?.();
     }
     return finalOutcome;
   };
@@ -931,7 +940,7 @@ export async function runExecProcess(opts: {
         });
       } catch (retryErr) {
         markExited(session, null, null, "failed");
-        maybeNotifyOnExit(session, "failed");
+        queueNotifyOnExit(session, "failed")?.();
         await finalizeSandboxExec({
           status: "failed",
           exitCode: null,
@@ -954,7 +963,7 @@ export async function runExecProcess(opts: {
       }
     } else {
       markExited(session, null, null, "failed");
-      maybeNotifyOnExit(session, "failed");
+      queueNotifyOnExit(session, "failed")?.();
       await finalizeSandboxExec({
         status: "failed",
         exitCode: null,
