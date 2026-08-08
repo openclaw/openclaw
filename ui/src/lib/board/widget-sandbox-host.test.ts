@@ -118,7 +118,7 @@ describe("BoardWidgetSandboxHost", () => {
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
     expect(fetchMock).toHaveBeenCalledWith(
       "https://gateway.example/__openclaw__/board/weather?bt=ticket",
-      { cache: "no-store" },
+      { cache: "no-store", signal: expect.any(AbortSignal) },
     );
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -857,5 +857,164 @@ describe("BoardWidgetSandboxHost", () => {
     host.dispose();
     await vi.advanceTimersByTimeAsync(20_000);
     expect(onReadyTimeout).toHaveBeenCalledTimes(2);
+  });
+
+  it("times out stalled widget content fetch through onLoadFailed", async () => {
+    vi.useFakeTimers();
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation timed out.", "TimeoutError"));
+          });
+        });
+      }),
+    );
+
+    const onLoadFailed = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client: { request: vi.fn(async () => ({ ok: true })) },
+      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed,
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: {
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: SANDBOX_URL },
+        },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onLoadFailed).toHaveBeenCalledWith(widget());
+    expect(onLoadFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out stalled widget content body reads through onLoadFailed", async () => {
+    vi.useFakeTimers();
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("<html>"));
+              init.signal?.addEventListener("abort", () => {
+                controller.error(new DOMException("The operation timed out.", "TimeoutError"));
+              });
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/html" } },
+        );
+      }),
+    );
+
+    const onLoadFailed = vi.fn();
+    const onLoaded = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client: { request: vi.fn(async () => ({ ok: true })) },
+      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed,
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded,
+      onError: vi.fn(),
+    });
+
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: {
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: SANDBOX_URL },
+        },
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onLoadFailed).toHaveBeenCalledWith(widget());
+    expect(onLoadFailed).toHaveBeenCalledTimes(1);
+    expect(onLoaded).not.toHaveBeenCalled();
+  });
+
+  it("aborts in-flight content fetch on reset without triggering onLoadFailed", async () => {
+    vi.useFakeTimers();
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation timed out.", "TimeoutError"));
+          });
+        });
+      }),
+    );
+
+    const onLoadFailed = vi.fn();
+    const host = new BoardWidgetSandboxHost({
+      frame,
+      widget: widget(),
+      sandboxOrigin: "https://sandbox.example",
+      sandboxUrl: SANDBOX_URL,
+      sourceOrigin: "https://gateway.example",
+      client: { request: vi.fn(async () => ({ ok: true })) },
+      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
+      confirmPrompt: () => true,
+      onFrameUrl: vi.fn(),
+      onLoadFailed,
+      onUnauthorized: vi.fn(),
+      onReadyTimeout: vi.fn(),
+      onLoaded: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    host.handleMessage(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: {
+          method: "ui/notifications/sandbox-proxy-ready",
+          params: { sandboxUrl: SANDBOX_URL },
+        },
+      }),
+    );
+
+    await Promise.resolve();
+    host.reset();
+    await Promise.resolve();
+    expect(onLoadFailed).not.toHaveBeenCalled();
   });
 });
