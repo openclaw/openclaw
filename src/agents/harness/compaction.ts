@@ -559,7 +559,12 @@ export async function maybeCompactAgentHarnessSession(
       : handoffCompactParams;
   if (shouldCompactAfterContextEngine) {
     if (internalHarness.compactAfterContextEngine) {
-      return internalHarness.compactAfterContextEngine(resolvedCompactParams);
+      return internalHarness.compactAfterContextEngine({
+        ...resolvedCompactParams,
+        ...(options.nativeCompactionRequest
+          ? { nativeCompactionRequest: options.nativeCompactionRequest }
+          : {}),
+      });
     }
     if (!harness.compact) {
       return undefined;

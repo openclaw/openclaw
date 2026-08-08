@@ -2639,14 +2639,16 @@ describe("selectAgentHarness", () => {
       compacted: true,
     }));
     const compactAfterContextEngine = vi.fn(
-      async (_params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult> => ({
+      async (params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult> => ({
         ok: true,
         compacted: false,
         result: {
           summary: "codex owns automatic compaction",
           firstKeptEntryId: "entry-1",
           tokensBefore: 10,
-          details: { request: "required_preflight" },
+          details: {
+            request: (params as { nativeCompactionRequest?: string }).nativeCompactionRequest,
+          },
         },
       }),
     );
@@ -2691,6 +2693,12 @@ describe("selectAgentHarness", () => {
     });
     expect(compact).not.toHaveBeenCalled();
     expect(compactAfterContextEngine).toHaveBeenCalledTimes(1);
+    expect(compactAfterContextEngine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nativeCompactionRequest: "required_preflight",
+        preflightRequired: true,
+      }),
+    );
   });
 
   it("falls back to the regular compact hook when required-preflight capability is absent", async () => {

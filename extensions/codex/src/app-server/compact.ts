@@ -57,6 +57,7 @@ type CodexAppServerCompactOptions = {
   pluginConfig?: unknown;
   clientFactory?: CodexAppServerClientFactory;
   allowNonManualNativeRequest?: boolean;
+  nativeCompactionRequest?: "required_preflight" | "after_context_engine";
   nativeCompletionTimeoutMs?: number;
   nativeInterruptGraceMs?: number;
 };
@@ -664,6 +665,7 @@ async function compactCodexNativeThread(
                       code: "aborted_before_native_compaction",
                       expectedThreadId: binding.threadId,
                       currentThreadId: currentBinding?.threadId,
+                      request: options.nativeCompactionRequest ?? "after_context_engine",
                     }),
                   };
                 }
@@ -809,7 +811,7 @@ async function compactCodexNativeThread(
           completed: true,
           ...(options.allowNonManualNativeRequest
             ? {
-                request: "after_context_engine",
+                request: options.nativeCompactionRequest ?? "after_context_engine",
                 trigger: params.trigger ?? "unknown",
               }
             : {}),
@@ -825,6 +827,7 @@ async function compactCodexNativeThread(
           code: "aborted_before_native_compaction",
           expectedThreadId: initialBinding.threadId,
           currentThreadId: binding.threadId,
+          request: options.nativeCompactionRequest ?? "after_context_engine",
         });
       }
       return {
@@ -861,6 +864,7 @@ function skippedCodexNativeCompactionResult(
     code: string;
     expectedThreadId?: string;
     currentThreadId?: string;
+    request?: "required_preflight" | "after_context_engine";
   },
 ): EmbeddedAgentCompactResult {
   return codexNativeCompactionResult(params, {
@@ -870,7 +874,7 @@ function skippedCodexNativeCompactionResult(
       backend: "codex-app-server",
       skipped: true,
       reason: skipped.code,
-      request: "after_context_engine",
+      request: skipped.request ?? "after_context_engine",
       trigger: params.trigger ?? "unknown",
       ...(skipped.expectedThreadId ? { expectedThreadId: skipped.expectedThreadId } : {}),
       ...(skipped.currentThreadId ? { currentThreadId: skipped.currentThreadId } : {}),
