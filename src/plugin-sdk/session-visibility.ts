@@ -1,24 +1,21 @@
+import type { Result } from "@openclaw/normalization-core/result";
 // Session visibility helpers decide which plugin sessions appear in user-facing lists.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
+import {
+  listSpawnedSessionKeysWithResult,
+  logSessionOwnershipLookupFailure,
+  lookupFailedDenialMessage,
+  type SessionOwnershipLookupFailure,
+} from "./session-visibility-internal.js";
 
-type GatewayCaller = typeof defaultCallGateway;
-
-let callGatewayForListSpawned: GatewayCaller = defaultCallGateway;
-
-/** Test hook: must stay aligned with `sessions-resolution` `testing.setDepsForTest`. */
-export const sessionVisibilityGatewayTesting = {
-  setCallGatewayForListSpawned(overrides?: GatewayCaller) {
-    callGatewayForListSpawned = overrides ?? defaultCallGateway;
-  },
-};
+// Keep the shipped test hook on its public SDK subpath; richer results stay core-private.
+export { sessionVisibilityGatewayTesting } from "./session-visibility-internal.js";
 
 /** Configured visibility mode for session tools and session-related commands. */
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
@@ -83,31 +80,20 @@ export type SessionVisibilityRow = {
   parentSessionKey?: string;
 };
 
-/** List sessions spawned by the requester through the gateway session list method. */
+/** Public compatibility wrapper; direct guards use the richer private result. */
 export async function listSpawnedSessionKeys(params: {
   requesterSessionKey: string;
   limit?: number;
 }): Promise<Set<string>> {
-  const limit =
-    typeof params.limit === "number" && Number.isFinite(params.limit)
-      ? Math.max(1, Math.floor(params.limit))
-      : undefined;
-  try {
-    const list = await callGatewayForListSpawned<{ sessions: Array<{ key?: unknown }> }>({
-      method: "sessions.list",
-      params: {
-        includeGlobal: false,
-        includeUnknown: false,
-        ...(limit !== undefined ? { limit } : {}),
-        spawnedBy: params.requesterSessionKey,
-      },
+  const result = await listSpawnedSessionKeysWithResult(params);
+  if (!result.ok) {
+    logSessionOwnershipLookupFailure({
+      requesterSessionKey: params.requesterSessionKey,
+      failure: result.error,
     });
-    const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = normalizeTrimmedStringList(sessions.map((entry) => entry?.key));
-    return new Set(keys);
-  } catch {
     return new Set();
   }
+  return result.value;
 }
 
 /** Resolve configured session-tool visibility, defaulting invalid or missing values to tree. */
@@ -310,17 +296,22 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
   return `${actionPrefix(action)} visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).`;
 }
 
-/** Create a direct session-key visibility checker for one requester/action pair. */
-function createSessionVisibilityCheckerImpl(params: {
+type SessionVisibilityCheckerParams = {
   action: SessionAccessAction;
   defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
-  spawnedKeys: Set<string> | null;
-}): { check: (targetSessionKey: string) => SessionAccessResult } {
+};
+
+function createSessionVisibilityCheckerWithResult(
+  params: SessionVisibilityCheckerParams & {
+    spawnedKeys: Result<Set<string>, SessionOwnershipLookupFailure> | null;
+  },
+): { check: (targetSessionKey: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
+  let lookupFailureLogged = false;
   const rowChecker = createSessionVisibilityRowChecker({
     action: params.action,
     defaultAgentId: params.defaultAgentId,
@@ -341,14 +332,63 @@ function createSessionVisibilityCheckerImpl(params: {
         return { allowed: true, expectedSessionId: scoped.expectedSessionId };
       }
     }
-    const isSpawnedSession = spawnedKeys?.has(targetSessionKey) === true;
-    return rowChecker.check({
+    const spawnedKeySet = spawnedKeys?.ok ? spawnedKeys.value : undefined;
+    const isSpawnedSession = spawnedKeySet?.has(targetSessionKey) === true;
+    const result = rowChecker.check({
       key: targetSessionKey,
       spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
     });
+    if (!result.allowed) {
+      // Valid targets may still be requester-owned; malformed targets keep the row checker's
+      // deterministic ownership error instead of being relabeled as a lookup failure.
+      const lookupFailed =
+        spawnedKeys !== null &&
+        !spawnedKeys.ok &&
+        targetSessionKey !== params.requesterSessionKey &&
+        targetSessionKey !== "current" &&
+        hasResolvableTargetAgent(targetSessionKey, params.defaultAgentId);
+      if (lookupFailed) {
+        if (!lookupFailureLogged) {
+          lookupFailureLogged = true;
+          logSessionOwnershipLookupFailure({
+            requesterSessionKey: params.requesterSessionKey,
+            failure: spawnedKeys.error,
+          });
+        }
+        return {
+          allowed: false,
+          status: "forbidden",
+          error: lookupFailedDenialMessage(params.action, spawnedKeys.error.kind),
+        };
+      }
+    }
+    return result;
   };
 
   return { check };
+}
+
+function hasResolvableTargetAgent(
+  targetSessionKey: string,
+  defaultAgentId: string | undefined,
+): boolean {
+  try {
+    resolveAgentIdFromSessionKey(targetSessionKey, defaultAgentId);
+    return true;
+  } catch {
+    // The row checker already owns the deterministic target-ownership denial.
+    return false;
+  }
+}
+
+/** Create a direct session-key visibility checker for one requester/action pair. */
+function createSessionVisibilityCheckerImpl(
+  params: SessionVisibilityCheckerParams & { spawnedKeys: Set<string> | null },
+): { check: (targetSessionKey: string) => SessionAccessResult } {
+  return createSessionVisibilityCheckerWithResult({
+    ...params,
+    spawnedKeys: params.spawnedKeys ? { ok: true, value: params.spawnedKeys } : null,
+  });
 }
 
 /** Direct-key visibility checker plus registration for narrow host-owned grants. */
@@ -485,9 +525,9 @@ export async function createSessionVisibilityGuard(params: {
   // this lookup until every caller can pass a normalized session row.
   const spawnedKeys =
     params.action !== "list" && (params.visibility === "tree" || params.visibility === "all")
-      ? await listSpawnedSessionKeys({ requesterSessionKey: params.requesterSessionKey })
+      ? await listSpawnedSessionKeysWithResult({ requesterSessionKey: params.requesterSessionKey })
       : null;
-  return createSessionVisibilityChecker({
+  return createSessionVisibilityCheckerWithResult({
     action: params.action,
     defaultAgentId: params.defaultAgentId,
     requesterAgentId: params.requesterAgentId,
