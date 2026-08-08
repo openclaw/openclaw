@@ -824,4 +824,124 @@ describe("plugin registry runtime config scope", () => {
       otherApi.runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
     ).resolves.toEqual({ ok: true });
   });
+
+  it("derives the session ownership listing agent from the embedded run session key (#120178)", async () => {
+    const runtime = createPluginRuntime();
+    const session = runtime.agent.session;
+    Object.defineProperties(runtime.agent, {
+      runEmbeddedAgent: {
+        configurable: true,
+        value: (async () => ({
+          ok: true,
+        })) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"],
+      },
+    });
+    const listedAgentIds: Array<string | undefined> = [];
+    // The real SQLite accessor throws when it cannot resolve an agent scope.
+    // Emulate that so the test proves the ownership listing is scoped to the
+    // agent derived from the session key when the caller omits agentId.
+    session.listSessionEntries = vi.fn((params) => {
+      listedAgentIds.push(params.agentId);
+      if (!params.agentId) {
+        throw new Error("Cannot resolve SQLite session scope without an agent id");
+      }
+      return [];
+    }) as typeof session.listSessionEntries;
+    session.getSessionEntry = vi.fn(() => ({
+      sessionId: "incognito-session",
+      updatedAt: 1,
+    })) as typeof session.getSessionEntry;
+
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "memory-plugin",
+      source: "/plugins/memory-plugin/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    await expect(
+      api.runtime.agent.runEmbeddedAgent({
+        sessionId: "incognito-session",
+        sessionKey:
+          "agent:main:skill-workshop-review:incognito-00000000-0000-4000-8000-000000000001",
+        workspaceDir: "/tmp",
+        prompt: "extract",
+        timeoutMs: 1,
+        runId: "run-incognito",
+      } as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0]),
+    ).resolves.toEqual({ ok: true });
+    expect(listedAgentIds).toContain("main");
+  });
+
+  it("rejects a locked session identity in another agent via the shared session path (#120227)", async () => {
+    const runtime = createPluginRuntime();
+    const session = runtime.agent.session;
+    const otherAgentReservedKey = `agent:assistant:harness:codex:thread-1`;
+    const otherAgentReservedEntry = {
+      sessionId: "assistant-reserved-session",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true as const,
+    };
+    const mainOrdinaryKey = "agent:main:ordinary";
+    const mainOrdinaryEntry = { sessionId: "main-ordinary-session", updatedAt: 1 };
+    const entries = {
+      [otherAgentReservedKey]: otherAgentReservedEntry,
+      [mainOrdinaryKey]: mainOrdinaryEntry,
+    } as unknown as Record<string, SessionEntry>;
+    session.getSessionEntry = vi.fn(
+      (params) => entries[params.sessionKey],
+    ) as typeof session.getSessionEntry;
+    // The shared ownership check lists persisted entries to locate claimed ids.
+    // It must not narrow that listing to the first parseable key's agent; that
+    // would drop the locked foreign-agent identity below and skip its rejection.
+    session.listSessionEntries = vi.fn(() =>
+      Object.entries(entries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    ) as typeof session.listSessionEntries;
+    const gatewayRequest = vi.fn(async () => ({ ok: true }));
+    runtime.gateway = {
+      isAvailable: vi.fn(async () => true),
+      request: gatewayRequest as unknown as PluginRuntime["gateway"]["request"],
+    };
+
+    const pluginRegistry = createTestRegistry(runtime);
+    const ownerRecord = createPluginRecord({
+      id: "codex-owner",
+      source: "/plugins/codex-owner/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const otherRecord = createPluginRecord({
+      id: "other-plugin",
+      source: "/plugins/other-plugin/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
+    const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
+    ownerApi.registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    } as never);
+
+    // A gateway request names the locked identity by session id while also
+    // carrying the plugin's own main-agent session key. The ownership check must
+    // still reject the foreign locked identity instead of scoping the listing to
+    // the main-agent key and silently skipping it.
+    await expect(
+      otherApi.runtime.gateway.request("sessions.abort", {
+        sessionId: otherAgentReservedEntry.sessionId,
+        sessionKey: mainOrdinaryKey,
+      }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+  });
 });

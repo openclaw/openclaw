@@ -24,6 +24,7 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
@@ -453,7 +454,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
       assertSessionIdentitiesOwned({
         action: "run",
-        agentId: target?.agentId ?? params.agentId,
+        // Embedded runs are key-driven and reach here with an exact one session
+        // key; scope the ownership listing to that key's agent so the persisted
+        // id/file check stays pinned to the agent that owns the target session
+        // instead of relying on the caller to name it.
+        agentId: agentId ?? (sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined),
         sessionFiles: [params.sessionFile],
         sessionIds: [target?.sessionId ?? params.sessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
