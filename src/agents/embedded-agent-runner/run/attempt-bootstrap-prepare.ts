@@ -1,10 +1,11 @@
+import { performance } from "node:perf_hooks";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import {
   buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
-  resolveBootstrapFilesForRun,
+  resolveBootstrapFilesForRunWithTiming,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
@@ -18,6 +19,7 @@ import {
   type WorkspaceBootstrapFile,
 } from "../../workspace.js";
 import { log } from "../logger.js";
+import { measureBootstrapSubstage } from "./attempt-stage-timing.js";
 import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
 import { resolveAttemptBootstrapContext } from "./attempt.context-engine-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -46,24 +48,40 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
     return completedBootstrapTurn;
   };
-  const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
-    resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending,
-      bootstrapFiles,
-      bootstrapContextRunKind: attempt.bootstrapContextRunKind,
-      trigger: attempt.trigger,
-      sessionKey: attempt.sessionKey,
-      isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
-      isCanonicalWorkspace: attempt.isCanonicalWorkspace,
-      effectiveWorkspace: params.effectiveWorkspace,
-      resolvedWorkspace: params.resolvedWorkspace,
-      hasBootstrapFileAccess: params.hasReadTool,
+  // Bootstrap-context can stall the event loop; record per-substage timings so a
+  // slow run reports where it spent time instead of a single opaque total.
+  const bootstrapContextStartedAt = performance.now();
+  const bootstrapContextSubstageTimings: Array<{ name: string; durationMs: number }> = [];
+  const recordBootstrapContextSubstage = (name: string, durationMs: number) => {
+    bootstrapContextSubstageTimings.push({
+      name,
+      durationMs: Math.max(0, durationMs),
     });
-  const shouldProbeContinuationSkip =
+  };
+  const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
+    measureBootstrapSubstage(recordBootstrapContextSubstage, "bootstrap-routing", () =>
+      resolveWorkspaceBootstrapRouting({
+        isWorkspaceBootstrapPending,
+        bootstrapFiles,
+        bootstrapContextRunKind: attempt.bootstrapContextRunKind,
+        trigger: attempt.trigger,
+        sessionKey: attempt.sessionKey,
+        isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
+        isCanonicalWorkspace: attempt.isCanonicalWorkspace,
+        effectiveWorkspace: params.effectiveWorkspace,
+        resolvedWorkspace: params.resolvedWorkspace,
+        hasBootstrapFileAccess: params.hasReadTool,
+      }),
+    );
+  const shouldProbeContinuation =
     !suppressAmbientContext &&
     contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
-    (await hasCompletedBootstrapTurnForAttempt());
+    !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind);
+  const shouldProbeContinuationSkip = shouldProbeContinuation
+    ? await measureBootstrapSubstage(recordBootstrapContextSubstage, "continuation-scan", () =>
+        hasCompletedBootstrapTurnForAttempt(),
+      )
+    : false;
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
     shouldProbeContinuationSkip || suppressAmbientContext || contextInjectionMode === "never"
@@ -74,7 +92,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     contextInjectionMode !== "never" &&
     (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
   ) {
-    preloadedBootstrapFiles = await resolveBootstrapFilesForRun({
+    preloadedBootstrapFiles = await resolveBootstrapFilesForRunWithTiming({
       workspaceDir: params.resolvedWorkspace,
       config: attempt.config,
       sessionKey: attempt.sessionKey,
@@ -84,6 +102,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       warn: bootstrapWarn,
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
+      onBootstrapSubstageTiming: recordBootstrapContextSubstage,
     });
     bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
   }
@@ -104,7 +123,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =
         preloadedBootstrapFiles ??
-        (await resolveBootstrapFilesForRun({
+        (await resolveBootstrapFilesForRunWithTiming({
           workspaceDir: params.resolvedWorkspace,
           config: attempt.config,
           sessionKey: attempt.sessionKey,
@@ -114,17 +133,33 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
           warn: bootstrapWarn,
           contextMode: attempt.bootstrapContextMode,
           runKind: attempt.bootstrapContextRunKind,
+          onBootstrapSubstageTiming: recordBootstrapContextSubstage,
         }));
+      const contextBuildStartedAt = performance.now();
+      const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, {
+        config: attempt.config,
+        agentId: params.sessionAgentId,
+        warn: bootstrapWarn,
+      });
+      recordBootstrapContextSubstage("context-build", performance.now() - contextBuildStartedAt);
       return {
         bootstrapFiles,
-        contextFiles: buildBootstrapContextForFiles(bootstrapFiles, {
-          config: attempt.config,
-          agentId: params.sessionAgentId,
-          warn: bootstrapWarn,
-        }),
+        contextFiles,
       };
     },
   });
+  const bootstrapContextTotalMs = performance.now() - bootstrapContextStartedAt;
+  if (bootstrapContextTotalMs > 2_000) {
+    const substages =
+      bootstrapContextSubstageTimings.length > 0
+        ? bootstrapContextSubstageTimings
+            .map((stage) => `${stage.name}:${stage.durationMs.toFixed(1)}ms`)
+            .join(",")
+        : "none";
+    log.debug(
+      `[trace:embedded-run] bootstrap-context substages: runId=${attempt.runId} sessionId=${attempt.sessionId} totalMs=${bootstrapContextTotalMs.toFixed(1)} substages=${substages}`,
+    );
+  }
   params.markStage("bootstrap-context");
   const remappedContextFiles = remapInjectedContextFilesToWorkspace({
     files: resolvedContextFiles,
