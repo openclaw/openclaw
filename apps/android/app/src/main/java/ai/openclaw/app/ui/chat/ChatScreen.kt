@@ -79,9 +79,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -152,6 +154,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -2635,7 +2638,7 @@ private fun ChatContextMeter(
 }
 
 @Composable
-private fun ChatInputPill(
+internal fun ChatInputPill(
   value: String,
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
@@ -2661,73 +2664,127 @@ private fun ChatInputPill(
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-      Surface(onClick = onPickImages, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Attach image"), modifier = Modifier.size(20.dp))
+    ResponsiveChatComposerLayout(
+      attachments = {
+        Surface(onClick = onPickImages, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Attach image"), modifier = Modifier.size(20.dp))
+          }
         }
-      }
-      Surface(onClick = onPickAudioOrDocument, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.AttachFile, contentDescription = nativeString("Attachment"), modifier = Modifier.size(20.dp))
+        Surface(onClick = onPickAudioOrDocument, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(imageVector = Icons.Default.AttachFile, contentDescription = nativeString("Attachment"), modifier = Modifier.size(20.dp))
+          }
         }
-      }
-      Surface(onClick = onPickVideo, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Videocam, contentDescription = nativeString("Attach video"), modifier = Modifier.size(20.dp))
+        Surface(onClick = onPickVideo, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(imageVector = Icons.Default.Videocam, contentDescription = nativeString("Attach video"), modifier = Modifier.size(20.dp))
+          }
         }
-      }
-      Box(modifier = Modifier.weight(1f)) {
-        ChatTextFieldValueAdapter(
-          value = value,
-          onValueChange = onValueChange,
-          keyHandler = hardwareEnterHandler,
-        ) { textFieldValue, updateTextFieldValue ->
-          BasicTextField(
-            value = textFieldValue,
-            onValueChange = updateTextFieldValue,
-            textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
-            cursorBrush = SolidColor(ClawTheme.colors.primary),
-            minLines = 1,
-            maxLines = 4,
-            modifier =
-              Modifier
-                .fillMaxWidth()
-                .onPreInterceptKeyBeforeSoftKeyboard { event ->
-                  hardwareEnterHandler.handle(
-                    event = event,
-                    sendEnabled = sendEnabled,
-                    textEmpty = textFieldValue.text.isEmpty(),
-                    compositionActive = textFieldValue.composition != null,
-                    onSend = onSend,
-                  )
-                },
-            decorationBox = { innerTextField ->
-              Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-                if (value.isEmpty()) {
-                  Text(text = nativeString("Message OpenClaw"), style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+      },
+      editor = {
+        Box(modifier = Modifier.weight(1f)) {
+          ChatTextFieldValueAdapter(
+            value = value,
+            onValueChange = onValueChange,
+            keyHandler = hardwareEnterHandler,
+          ) { textFieldValue, updateTextFieldValue ->
+            BasicTextField(
+              value = textFieldValue,
+              onValueChange = updateTextFieldValue,
+              textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
+              cursorBrush = SolidColor(ClawTheme.colors.primary),
+              minLines = 1,
+              maxLines = 4,
+              modifier =
+                Modifier
+                  .fillMaxWidth()
+                  .testTag("chat-composer-editor")
+                  .onPreInterceptKeyBeforeSoftKeyboard { event ->
+                    hardwareEnterHandler.handle(
+                      event = event,
+                      sendEnabled = sendEnabled,
+                      textEmpty = textFieldValue.text.isEmpty(),
+                      compositionActive = textFieldValue.composition != null,
+                      onSend = onSend,
+                    )
+                  },
+              decorationBox = { innerTextField ->
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                  if (value.isEmpty()) {
+                    Text(text = nativeString("Message OpenClaw"), style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+                  }
+                  innerTextField()
                 }
-                innerTextField()
-              }
-            },
-          )
+              },
+            )
+          }
+        }
+      },
+      voice = {
+        ChatComposerMicButton(
+          dictationActive = dictationActive,
+          dictationEnabled = dictationEnabled,
+          voiceNoteEnabled = recordVoiceNoteEnabled,
+          onToggleDictation = onToggleDictation,
+          onStartVoiceNote = onStartVoiceNote,
+          modifier = Modifier.testTag("chat-composer-voice-action"),
+        )
+      },
+      trailing = {
+        when (resolveChatComposerTrailingAction(talkActive = talkActive, sendEnabled = sendEnabled)) {
+          ChatComposerTrailingAction.Send -> SendButton(enabled = true, onClick = onSend)
+          ChatComposerTrailingAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
+          ChatComposerTrailingAction.StopTalk -> LiveTalkButton(active = true, onClick = onToggleTalk)
+        }
+      },
+    )
+  }
+}
+
+// 18dp padding + five 48dp actions + five 7dp gaps + a 240dp editor need 533dp.
+private val ChatComposerWideMinWidth = 533.dp
+
+@Composable
+private fun ResponsiveChatComposerLayout(
+  attachments: @Composable () -> Unit,
+  editor: @Composable RowScope.() -> Unit,
+  voice: @Composable () -> Unit,
+  trailing: @Composable () -> Unit,
+) {
+  BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+    if (maxWidth < ChatComposerWideMinWidth) {
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+          editor()
+          trailing()
+        }
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+          attachments()
+          voice()
         }
       }
-      ChatComposerMicButton(
-        dictationActive = dictationActive,
-        dictationEnabled = dictationEnabled,
-        voiceNoteEnabled = recordVoiceNoteEnabled,
-        onToggleDictation = onToggleDictation,
-        onStartVoiceNote = onStartVoiceNote,
-      )
-      when (resolveChatComposerTrailingAction(talkActive = talkActive, sendEnabled = sendEnabled)) {
-        ChatComposerTrailingAction.Send -> SendButton(enabled = true, onClick = onSend)
-        ChatComposerTrailingAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
-        ChatComposerTrailingAction.StopTalk -> LiveTalkButton(active = true, onClick = onToggleTalk)
+    } else {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+      ) {
+        attachments()
+        editor()
+        voice()
+        trailing()
       }
     }
   }
