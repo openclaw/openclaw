@@ -287,7 +287,12 @@ function resolveImageDescribeInput(filePath: string): string {
   return /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
 }
 
-function addImageGenerationOptions(command: Command): Command {
+function addImageGenerationOptions(command: Command, options?: { requireFile?: boolean }): Command {
+  if (options?.requireFile) {
+    command.requiredOption("--file <path>", "Input file", collectOption);
+  } else {
+    command.option("--file <path>", "Input file", collectOption, []);
+  }
   return command
     .option("--model <provider/model>", "Model override")
     .option("--count <n>", "Number of images")
@@ -334,9 +339,11 @@ export function registerImageCapabilityCommands(capability: Command): void {
       .requiredOption("--prompt <text>", "Prompt text"),
   ).action(async (opts) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
+      const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];
       const result = await runImageGenerate({
         capability: "image.generate",
         prompt: String(opts.prompt),
+        file: files,
         ...resolveImageGenerationOptions(opts),
       });
       emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -347,8 +354,8 @@ export function registerImageCapabilityCommands(capability: Command): void {
     image
       .command("edit")
       .description("Edit images with one or more input files")
-      .requiredOption("--file <path>", "Input file", collectOption, [])
       .requiredOption("--prompt <text>", "Prompt text"),
+    { requireFile: true },
   ).action(async (opts) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];

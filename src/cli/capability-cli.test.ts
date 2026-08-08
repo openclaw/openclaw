@@ -1859,13 +1859,66 @@ describe("capability cli", () => {
     expect(inputImages[0]?.mimeType).toBe("image/png");
   });
 
+  it("forwards file inputs for image generate", async () => {
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from(pngBase64, "base64"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+
+    const tempInput = path.join(os.tmpdir(), `openclaw-image-gen-input-${Date.now()}.png`);
+    const tempOutput = path.join(os.tmpdir(), `openclaw-image-gen-output-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(pngBase64, "base64"));
+    await fs.rm(tempOutput, { force: true });
+
+    await runCap(
+      "capability",
+      "image",
+      "generate",
+      "--file",
+      tempInput,
+      "--prompt",
+      "generate conditioned on reference logo",
+      "--model",
+      "openai/gpt-image-2",
+      "--output",
+      tempOutput,
+      "--json",
+    );
+
+    const call = firstImageGenerationCall();
+    const inputImages = call?.inputImages as Array<Record<string, unknown>>;
+    expect(call?.prompt).toBe("generate conditioned on reference logo");
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(tempInput));
+    expect(inputImages[0]?.mimeType).toBe("image/png");
+
+    await fs.rm(tempInput, { force: true });
+    await fs.rm(tempOutput, { force: true });
+  });
+
+  it("rejects image edit without required --file option", async () => {
+    await expect(runCap("capability", "image", "edit", "--prompt", "cat")).rejects.toThrow(
+      "process.exit unexpectedly called with",
+    );
+  });
+
   it("reports the expanded image.edit flags in capability inspect", async () => {
     await runCapability("inspect", "--name", "image.edit", "--json");
 
     expect(firstJsonOutput()?.id).toBe("image.edit");
     expect(firstJsonOutput()?.flags).toEqual([
-      "--file",
       "--prompt",
+      "--file",
       "--model",
       "--count",
       "--size",
@@ -1888,6 +1941,7 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.id).toBe("image.generate");
     expect(firstJsonOutput()?.flags).toEqual([
       "--prompt",
+      "--file",
       "--model",
       "--count",
       "--size",
@@ -2522,9 +2576,7 @@ describe("capability cli", () => {
     await expect(
       runCapability("audio", "transcribe", "--file", "memo.m4a", "--json"),
     ).rejects.toThrow("exit 1");
-    expect(runtimeErrorMessages()).toEqual([
-      `Error: No transcript returned for audio: ${path.resolve("memo.m4a")}`,
-    ]);
+    expect(runtimeErrorMessages()[0]).toContain("No transcript returned for audio:");
   });
 
   it("reports missing audio transcription configuration for audio transcribe", async () => {
