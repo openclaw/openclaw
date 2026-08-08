@@ -829,6 +829,7 @@ describe("memory search config", () => {
           provider: "openai",
           inputType: "passage",
           queryInputType: "query",
+          queryInstructionTemplate: true,
         },
       },
 
@@ -851,6 +852,7 @@ describe("memory search config", () => {
     expect(resolved?.inputType).toBe("passage");
     expect(resolved?.queryInputType).toBe("query");
     expect(resolved?.documentInputType).toBe("document");
+    expect(resolved?.queryInstructionTemplate).toBe(true);
   });
 
   it("defaults session delta thresholds", () => {

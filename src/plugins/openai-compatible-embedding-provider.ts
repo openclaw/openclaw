@@ -26,7 +26,17 @@ const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-resp
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
-
+const QUERY_INSTRUCTION_TEMPLATES = [
+  {
+    prefix: "qwen3-embedding",
+    template:
+      "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:{query}",
+  },
+  {
+    prefix: "mxbai-embed-large",
+    template: "Represent this sentence for searching relevant passages: {query}",
+  },
+] as const;
 /** Normalized OpenAI-compatible embedding client configuration. */
 type OpenAICompatibleEmbeddingClient = {
   providerId: string;
@@ -40,6 +50,7 @@ type OpenAICompatibleEmbeddingClient = {
   documentInputType?: string;
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
+  queryInstructionTemplate?: boolean;
 };
 
 type OpenAICompatibleEmbeddingResponse = {
@@ -61,6 +72,10 @@ type ResolvedConfiguredEmbeddingProvider = {
 
 type LocalServiceAwareEmbeddingOptions = EmbeddingProviderCreateOptions & {
   acquireLocalService?: AcquireConfiguredProviderLocalService;
+};
+
+type QueryInstructionTemplateOptions = EmbeddingProviderCreateOptions & {
+  queryInstructionTemplate?: boolean;
 };
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -115,6 +130,29 @@ function normalizeOptionalInputType(value: string | undefined): string | undefin
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
+}
+
+function normalizeTemplateMatchModel(model: string): string {
+  const normalizedModel = model.trim().toLowerCase();
+  const segments = normalizedModel.split("/").filter(Boolean);
+  return segments.at(-1) ?? normalizedModel;
+}
+
+function matchesTemplateModelAlias(model: string, prefix: string): boolean {
+  return (
+    model === prefix ||
+    model.startsWith(`${prefix}-`) ||
+    model.startsWith(`${prefix}:`) ||
+    model.includes(`-${prefix}`)
+  );
+}
+
+function applyQueryInstructionTemplate(model: string, queryText: string): string {
+  const normalizedModel = normalizeTemplateMatchModel(model);
+  const match = QUERY_INSTRUCTION_TEMPLATES.find(({ prefix }) =>
+    matchesTemplateModelAlias(normalizedModel, prefix),
+  );
+  return match ? match.template.replace("{query}", () => queryText) : queryText;
 }
 
 function chooseSecretInputOverride<T>(
@@ -326,9 +364,13 @@ async function postEmbeddingRequest(params: {
 }): Promise<number[][]> {
   const { client, input } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
+  const requestInput =
+    client.queryInstructionTemplate && params.inputType === "query"
+      ? input.map((text) => applyQueryInstructionTemplate(client.model, text))
+      : input;
   const body = {
     model: client.model,
-    input,
+    input: requestInput,
     ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
     ...(inputType ? { input_type: inputType } : {}),
   };
@@ -364,10 +406,10 @@ async function postEmbeddingRequest(params: {
   }
 }
 
-/** Creates a normalized OpenAI-compatible embedding client from runtime config. */
 async function createOpenAICompatibleEmbeddingClient(
   options: EmbeddingProviderCreateOptions,
 ): Promise<OpenAICompatibleEmbeddingClient> {
+  const queryTemplateOptions = options as QueryInstructionTemplateOptions;
   const resolvedProvider = resolveConfiguredProvider(options);
   const configuredProvider = resolvedProvider?.config;
   const providerId =
@@ -413,10 +455,12 @@ async function createOpenAICompatibleEmbeddingClient(
     ...(inputType ? { inputType } : {}),
     ...(queryInputType ? { queryInputType } : {}),
     ...(documentInputType ? { documentInputType } : {}),
+    ...(queryTemplateOptions.queryInstructionTemplate === true
+      ? { queryInstructionTemplate: true }
+      : {}),
   };
 }
 
-/** Creates an OpenAI-compatible embedding provider and its backing client. */
 async function createOpenAICompatibleEmbeddingProvider(
   options: EmbeddingProviderCreateOptions,
 ): Promise<{
@@ -453,7 +497,6 @@ async function createOpenAICompatibleEmbeddingProvider(
   };
 }
 
-/** Embedding provider adapter for OpenAI-compatible remote embedding APIs. */
 export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   transport: "remote",
