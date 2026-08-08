@@ -76,8 +76,9 @@ openclaw models auth paste-api-key --provider openrouter
 `paste-api-key` stores a portable API-key profile in the targeted agent's store
 only. Credentials stay agent-scoped; pasting into `--agent <non-default>` does
 not copy or overwrite the default agent's key. When the default agent has a
-global `auth.profiles` entry but no local secret, unlocked resolution falls
-through to provider env/config credentials.
+global `auth.profiles` entry but no local secret, unlocked resolution continues
+normal automatic credential selection (another automatic stored profile when
+one is available, otherwise provider env/config credentials).
 
 OpenClaw reads auth profiles from each agent's `openclaw-agent.sqlite`. Endpoint details (`baseUrl`, `api`, model ids, headers, timeouts) belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in auth profiles.
 

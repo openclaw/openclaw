@@ -84,8 +84,9 @@ When a secondary agent has no local auth profile, OpenClaw uses read-through
 inheritance from the default/main agent store; it does not clone the main
 agent's store on read. Portable `api_key` pastes stay in the targeted agent
 store; they do not write back into the default agent. If the default agent has
-profile metadata but no local secret, unlocked resolution falls through to
-provider env/config credentials. OAuth refresh tokens are especially sensitive:
+profile metadata but no local secret, unlocked resolution continues normal
+automatic credential selection (another automatic stored profile when one is
+available, otherwise provider env/config credentials). OAuth refresh tokens are especially sensitive:
 normal copy flows skip them by default because some providers rotate or
 invalidate refresh tokens after use. Configure a separate OAuth login for an
 agent when it needs an independent account.
