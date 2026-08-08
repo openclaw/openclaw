@@ -148,7 +148,6 @@ export function createBlockReplyDeliveryHandler(params: {
       silentToken: SILENT_REPLY_TOKEN,
       trimLeadingWhitespace: true,
       parseMode: "auto",
-      extractMediaDirectives: false,
     });
 
     const mediaNormalizedPayload = params.normalizeMediaPaths
