@@ -2,10 +2,8 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createOutboundPayloadPlan,
-  warnFencedMediaSkipsForAcceptedOutboundDelivery,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { createOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
+import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {

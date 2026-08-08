@@ -2,10 +2,8 @@
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  createOutboundPayloadPlan,
-  warnFencedMediaSkipsForAcceptedOutboundDelivery,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { createOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
+import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {

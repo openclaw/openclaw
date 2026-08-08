@@ -4,8 +4,8 @@ import type { Message } from "grammy/types";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
-  warnFencedMediaSkipsForAcceptedOutboundDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildCanonicalSentMessageHookContext,

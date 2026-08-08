@@ -60,8 +60,11 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
+vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime")
+    >();
   return {
     ...actual,
     warnFencedMediaSkipsForAcceptedOutboundDelivery: (
