@@ -211,6 +211,76 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result.warning).toContain("gateway.auth.token");
     expect(result.warning).toContain("unresolved");
   });
+
+  it("resolves a remote token SecretRef alongside an environment password", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          token: envSecretRef("REMOTE_GATEWAY_TOKEN"),
+        },
+      }),
+      mode: "remote",
+      env: {
+        REMOTE_GATEWAY_TOKEN: "resolved-remote-token",
+        OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toEqual({
+      auth: {
+        token: "resolved-remote-token",
+        password: "env-password", // pragma: allowlist secret
+      },
+    });
+  });
+
+  it("does not resolve a local password SecretRef for a remote probe", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        mode: "remote",
+        auth: {
+          mode: "password",
+          password: envSecretRef("LOCAL_GATEWAY_PASSWORD"),
+        },
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      }),
+      mode: "remote",
+      env: {
+        LOCAL_GATEWAY_PASSWORD: "local-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toEqual({
+      auth: {
+        token: "remote-token",
+        password: undefined,
+      },
+    });
+  });
+
+  it("does not use ambient credentials for a CLI URL override", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://configured.example" },
+        },
+      } as OpenClawConfig,
+      mode: "remote",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: "ambient-password", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+      urlOverride: "wss://override.example",
+      urlOverrideSource: "cli",
+    });
+
+    expect(result).toEqual({ auth: {} });
+  });
 });
 
 describe("resolveGatewayProbeAuthWithSecretInputs", () => {

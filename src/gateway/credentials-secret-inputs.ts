@@ -34,6 +34,7 @@ type GatewayCredentialSecretInputOptions = {
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
+  remoteCredentialTypesIndependent?: boolean;
 };
 
 /** Internal options after explicit auth has been trimmed to real credential values. */
@@ -175,6 +176,11 @@ function canGatewaySecretInputPathWin(params: {
         options: params.options,
       }),
     );
+    if (mode === "remote" && params.options.remoteCredentialTypesIndependent) {
+      // A remote target's auth mode is unknown, so probe callers must materialize
+      // token and password slots independently instead of letting either hide the other.
+      return resolved.token === sentinel || resolved.password === sentinel;
+    }
     const authMode = params.config.gateway?.auth?.mode;
     const tokenCanWin =
       resolved.token === sentinel &&

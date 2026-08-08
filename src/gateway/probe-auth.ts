@@ -19,6 +19,8 @@ function buildGatewayProbeCredentialPolicy(params: {
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
 }) {
   const cfg = resolveGatewayProbeCredentialConfig(params);
   return {
@@ -26,6 +28,8 @@ function buildGatewayProbeCredentialPolicy(params: {
     cfg,
     env: params.env,
     explicitAuth: params.explicitAuth,
+    urlOverride: params.urlOverride,
+    urlOverrideSource: params.urlOverrideSource,
     modeOverride: params.mode,
     mode: params.mode,
     remoteTokenFallback: "remote-only" as const,
@@ -36,25 +40,24 @@ export function resolveGatewayProbeCredentialConfig(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
 }): OpenClawConfig {
-  if (params.mode !== "local") {
+  const gateway = params.cfg.gateway;
+  const credentials = params.mode === "local" ? gateway?.remote : gateway?.auth;
+  if (!credentials || (credentials.token === undefined && credentials.password === undefined)) {
     return params.cfg;
   }
 
-  const remote = params.cfg.gateway?.remote;
-  if (!remote || (remote.token === undefined && remote.password === undefined)) {
-    return params.cfg;
-  }
-
-  // Strip remote auth only for local probes; otherwise remote credentials can
-  // mask a missing local token and make the wrong gateway look healthy.
-  const remoteWithoutAuth = { ...remote };
-  delete remoteWithoutAuth.token;
-  delete remoteWithoutAuth.password;
+  // A probe may only use credentials owned by its target surface. Otherwise a
+  // healthy result can both target the wrong Gateway and disclose its peer's secret.
+  const credentialsWithoutAuth = { ...credentials };
+  delete credentialsWithoutAuth.token;
+  delete credentialsWithoutAuth.password;
   return {
     ...params.cfg,
     gateway: {
-      ...params.cfg.gateway,
-      remote: remoteWithoutAuth,
+      ...gateway,
+      ...(params.mode === "local"
+        ? { remote: credentialsWithoutAuth }
+        : { auth: credentialsWithoutAuth }),
     },
   };
 }
@@ -88,6 +91,8 @@ export function resolveGatewayProbeAuth(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
 }): { token?: string; password?: string } {
   const policy = buildGatewayProbeCredentialPolicy(params);
   return resolveGatewayProbeCredentialsFromConfig(policy);
@@ -99,14 +104,19 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
 }): Promise<{ token?: string; password?: string }> {
   const policy = buildGatewayProbeCredentialPolicy(params);
   return await resolveGatewayCredentialsWithSecretInputs({
     config: policy.config,
     env: policy.env,
     explicitAuth: policy.explicitAuth,
+    urlOverride: policy.urlOverride,
+    urlOverrideSource: policy.urlOverrideSource,
     modeOverride: policy.modeOverride,
     remoteTokenFallback: policy.remoteTokenFallback,
+    remoteCredentialTypesIndependent: true,
   });
 }
 
@@ -116,6 +126,8 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
 }): Promise<{
   auth: { token?: string; password?: string };
   warning?: string;
@@ -144,6 +156,8 @@ export function resolveGatewayProbeAuthSafe(params: {
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
+  urlOverride?: string;
+  urlOverrideSource?: "cli" | "env";
 }): {
   auth: { token?: string; password?: string };
   warning?: string;

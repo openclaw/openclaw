@@ -476,6 +476,39 @@ describe("runConfigureWizard", () => {
     expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
+  it("resolves a remote token ref while the environment password wins", async () => {
+    const configuredPassword = "configured-password"; // pragma: allowlist secret
+    const envPassword = "env-password"; // pragma: allowlist secret
+    setupBaseWizardState({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example.test",
+          token: { source: "env", provider: "default", id: "REMOTE_SECRET_TOKEN" },
+          password: configuredPassword,
+        },
+      },
+      secrets: { providers: { default: { source: "env" } } },
+    });
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", envPassword);
+    vi.stubEnv("REMOTE_SECRET_TOKEN", "resolved-remote-token");
+
+    try {
+      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    const remoteProbe = mocks.probeGatewayReachable.mock.calls
+      .map(([request]) => requireRecord(request, "probe request"))
+      .find((request) => request.url === "wss://gateway.example.test");
+    expect(remoteProbe).toMatchObject({
+      token: "resolved-remote-token",
+      password: envPassword,
+      timeoutMs: 300,
+    });
+  });
+
   it("ignores blank gateway env credentials when probing the local gateway", async () => {
     setupBaseWizardState({
       gateway: {
