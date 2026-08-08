@@ -26,6 +26,7 @@ import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { resolveAllowedExecTargets } from "./bash-tools.schemas.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
@@ -211,19 +212,18 @@ export function isRequestedExecTargetAllowed(params: {
   requestedTarget: ExecTarget;
   sandboxAvailable?: boolean;
 }) {
-  if (params.requestedTarget === params.configuredTarget) {
+  // Preserve the runtime-owned unavailable-sandbox error after authority validation.
+  if (
+    !params.sandboxAvailable &&
+    params.requestedTarget === "sandbox" &&
+    (params.configuredTarget === "auto" || params.configuredTarget === "sandbox")
+  ) {
     return true;
   }
-  if (params.configuredTarget === "auto") {
-    if (
-      params.sandboxAvailable &&
-      (params.requestedTarget === "gateway" || params.requestedTarget === "node")
-    ) {
-      return false;
-    }
-    return true;
-  }
-  return false;
+  return resolveAllowedExecTargets({
+    configuredTarget: params.configuredTarget,
+    sandboxAvailable: params.sandboxAvailable === true,
+  }).includes(params.requestedTarget);
 }
 
 /** Resolves configured/requested/elevated exec target into an effective host. */

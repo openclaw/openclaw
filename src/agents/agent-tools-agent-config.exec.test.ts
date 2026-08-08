@@ -12,7 +12,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+  resolveToolSearchConfig,
+  ToolSearchRuntime,
+} from "./tool-search.js";
 
 function createExecHostDefaultsConfig(
   agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
@@ -270,12 +277,64 @@ describe("Agent-specific exec tool defaults", () => {
       ...createTempAgentDirs("test-main-fail-closed"),
     });
     const execTool = requireExecTool(tools);
+    expect(
+      (execTool.parameters as { properties?: { host?: { enum?: string[] } } }).properties?.host
+        ?.enum,
+    ).toEqual(["auto", "gateway", "node"]);
     await expect(
       execTool.execute("call-fail-closed", {
         command: "echo done",
         host: "sandbox",
       }),
     ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it("omits pinned sandbox exec from direct and searchable tools without a sandbox", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            host: "sandbox",
+          },
+        },
+      },
+      sessionKey: "agent:main:main",
+      ...createTempAgentDirs("test-main-pinned-sandbox-unavailable"),
+    });
+    expect(tools.some((tool) => tool.name === "exec")).toBe(false);
+
+    const toolSearchCatalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef: toolSearchCatalogRef, tools });
+    const toolSearchRuntime = new ToolSearchRuntime(
+      { catalogRef: toolSearchCatalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: true } } as never),
+    );
+    await expect(toolSearchRuntime.describe("exec")).rejects.toThrow(/Unknown tool/);
+
+    const codeModeCatalogRef = createToolSearchCatalogRef();
+    const codeModeConfig = { tools: { codeMode: true } } as never;
+    const codeModeTools = createCodeModeTools({
+      config: codeModeConfig,
+      runtimeConfig: codeModeConfig,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef: codeModeCatalogRef,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ...tools],
+      config: codeModeConfig,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef: codeModeCatalogRef,
+    });
+    expect(codeModeCatalogRef.current?.entries.some((entry) => entry.name === "exec")).toBe(false);
+    const codeModeRuntime = new ToolSearchRuntime(
+      { catalogRef: codeModeCatalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: true } } as never),
+    );
+    await expect(codeModeRuntime.describe("exec")).rejects.toThrow(/Unknown tool/);
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {

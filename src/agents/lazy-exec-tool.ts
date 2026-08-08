@@ -6,7 +6,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { execSchema } from "./bash-tools.schemas.js";
+import { createModelExecSchema } from "./bash-tools.schemas.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -47,7 +47,7 @@ export function createLazyExecTool(
         })
       );
     },
-    parameters: presentation?.parameters ?? execSchema,
+    parameters: presentation?.parameters ?? createModelExecSchema(defaults),
     prepareBeforeToolCallParams: async (...args) =>
       (await loadTool()).prepareBeforeToolCallParams?.(...args) ?? args[0],
     finalizeBeforeToolCallParams: (params, preparedParams) =>

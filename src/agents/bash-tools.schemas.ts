@@ -5,6 +5,8 @@
  * descriptions that match runtime validation.
  */
 import { Type } from "typebox";
+import type { ExecTarget } from "../infra/exec-approvals.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
@@ -59,6 +61,34 @@ export const execSchema = Type.Object({
     }),
   ),
 });
+
+/** Returns normal targets this prepared exec authority can execute. */
+export function resolveAllowedExecTargets(params: {
+  configuredTarget?: ExecTarget;
+  sandboxAvailable: boolean;
+}): readonly ExecTarget[] {
+  const configuredTarget = params.configuredTarget ?? "auto";
+  if (configuredTarget === "auto") {
+    return params.sandboxAvailable ? ["auto", "sandbox"] : ["auto", "gateway", "node"];
+  }
+  return configuredTarget === "sandbox" && !params.sandboxAvailable ? [] : [configuredTarget];
+}
+
+export function createModelExecSchema(defaults?: Pick<ExecToolDefaults, "host" | "sandbox">) {
+  const targets = resolveAllowedExecTargets({
+    configuredTarget: defaults?.host,
+    sandboxAvailable: Boolean(defaults?.sandbox),
+  });
+  if (targets.length === 0) {
+    throw new Error('tools.exec.host="sandbox" requires an active sandbox runtime');
+  }
+  return Type.Object({
+    ...execSchema.properties,
+    host: optionalStringEnum(targets, {
+      description: `Exec host/target (${targets.join("|")}).`,
+    }),
+  });
+}
 
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({
