@@ -304,4 +304,16 @@ describe("gateway concurrency benchmark script", () => {
       "[bench-gateway-concurrency] FAILED (exit 1)",
     );
   });
+
+  it("does not split a UTF-16 surrogate pair in probe error messages", () => {
+    // 499 ASCII chars + U+1F600 (surrogate pair) = 501 UTF-16 code units.
+    // `message.slice(0, 500)` would keep a dangling high surrogate at the end.
+    const message = `${"x".repeat(499)}😀`;
+    const described = testing.describeProbeError(new Error(message));
+    expect(described.length).toBeLessThanOrEqual(500);
+    // No dangling surrogate (high 0xd800-0xdbff or low 0xdc00-0xdfff) at either edge.
+    expect(described.charCodeAt(0)).toBeLessThan(0xd800);
+    expect(described.charCodeAt(described.length - 1)).toBeLessThan(0xd800);
+    expect(described).toBe("x".repeat(499));
+  });
 });

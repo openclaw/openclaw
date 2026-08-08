@@ -8,6 +8,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort } from "./lib/gateway-bench-probes.ts";
@@ -305,7 +306,7 @@ function numberOrNull(value: unknown): number | null {
 
 function describeProbeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, 500);
+  return sliceUtf16Safe(message, 0, 500);
 }
 
 function formatProbeResult(name: string, probe: TimedProbe & { status?: number }): string {
@@ -871,6 +872,7 @@ async function main(): Promise<void> {
 
 export const testing = {
   parseOptions,
+  describeProbeError,
   formatProbeFailure,
   formatRunFailure,
   requestHttp,
