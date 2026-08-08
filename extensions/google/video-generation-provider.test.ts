@@ -429,6 +429,133 @@ describe("google video generation provider", () => {
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
   });
 
+  it.each([
+    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
+    { name: "problem JSON", contentType: "application/problem+json", body: '{"title":"denied"}' },
+    { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
+    { name: "empty video", contentType: "video/mp4", body: "" },
+  ])("rejects a successful $name response as generated video", async ({ contentType, body }) => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            statusText: "OK",
+            headers: { "content-type": contentType },
+          }),
+      ),
+    );
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google generated video download: malformed video response");
+  });
+
+  it("rejects a captured malformed video download without waiting for its cloned stream", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const capturedResponses: Response[] = [];
+    const canceledBodies: ReadableStream<Uint8Array>[] = [];
+    let releaseCancel!: () => void;
+    const cancelGate = new Promise<void>((resolve) => {
+      releaseCancel = resolve;
+    });
+    const fetchMock = vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1]));
+        },
+      });
+      const response = new Response(body, {
+        status: 200,
+        statusText: "OK",
+        headers: { "content-type": "application/json" },
+      });
+      capturedResponses.push(response.clone());
+      const responseBody = response.body;
+      if (!responseBody) {
+        throw new Error("expected a streaming malformed video download response");
+      }
+      // A capture clone keeps the response tee open, so cancellation stays
+      // pending; the malformed-body rejection must surface without awaiting it.
+      vi.spyOn(responseBody, "cancel").mockImplementation(() => {
+        canceledBodies.push(responseBody);
+        return cancelGate as unknown as Promise<undefined>;
+      });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generation = buildGoogleVideoGenerationProvider().generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+    const outcome = await Promise.race([
+      generation.then(
+        () => "resolved",
+        (error: unknown) => `rejected:${error instanceof Error ? error.message : String(error)}`,
+      ),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("pending"), 100);
+      }),
+    ]);
+    releaseCancel();
+    expect(outcome).toBe("rejected:Google generated video download: malformed video response");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(canceledBodies).toHaveLength(1);
+    // The captured clone's tee branch stays open (that is the bug we prove the
+    // provider must not wait on), so release it without awaiting.
+    for (const response of capturedResponses) {
+      void response.body?.cancel().catch(() => undefined);
+    }
+  });
+
   it("cancels each captured failed video download without waiting for its cloned stream", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",

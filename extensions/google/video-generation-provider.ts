@@ -2,6 +2,7 @@
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
   resolveProviderOperationTimeoutMs,
@@ -245,6 +246,14 @@ async function downloadGeneratedVideoFromUri(params: {
             `Failed to download Google generated video: ${response.status} ${response.statusText}`,
           );
         }
+        try {
+          assertProviderBinaryResponseContent(response, "Google generated video download", "video");
+        } catch (error) {
+          // A debug-capture clone can keep the tee open, so waiting for cancel
+          // would hang before the malformed-body error can be thrown.
+          void response.body?.cancel().catch(() => undefined);
+          throw error;
+        }
         const buffer = await readResponseWithLimit(response, params.maxBytes, {
           chunkTimeoutMs: params.timeoutMs,
           onOverflow: ({ maxBytes }) =>
@@ -252,6 +261,10 @@ async function downloadGeneratedVideoFromUri(params: {
           onIdleTimeout: ({ chunkTimeoutMs }) =>
             new Error(`Google generated video download stalled after ${chunkTimeoutMs}ms`),
         });
+        if (buffer.byteLength === 0) {
+          await response.body?.cancel().catch(() => undefined);
+          throw new Error("Google generated video download: malformed video response");
+        }
         return {
           buffer,
           mimeType:
