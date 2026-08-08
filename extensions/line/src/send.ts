@@ -6,6 +6,10 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -35,6 +39,7 @@ const userProfileCache = new Map<
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
 const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
+const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
 function cacheUserProfile(
   userId: string,
@@ -187,19 +192,23 @@ async function sendLineProviderMessages(
   );
 
   if (!response.ok) {
+    const body = await readResponseTextLimited(response, LINE_PROVIDER_RESPONSE_MAX_BYTES).catch(
+      () => "",
+    );
     throw new HTTPFetchError(`${response.status} - ${response.statusText}`, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
-      body: await response.text(),
+      body,
     });
   }
 
   try {
-    const text = await response.text();
-    return (text ? JSON.parse(text) : null) as
-      | messagingApi.PushMessageResponse
-      | messagingApi.ReplyMessageResponse;
+    return await readProviderJsonResponse<
+      messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse
+    >(response, `LINE ${operation} response`, {
+      maxBytes: LINE_PROVIDER_RESPONSE_MAX_BYTES,
+    });
   } catch (error) {
     // LINE accepted this exact request before its receipt became unreadable; retrying duplicates it.
     throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
