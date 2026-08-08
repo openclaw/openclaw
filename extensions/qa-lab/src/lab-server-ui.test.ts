@@ -43,7 +43,7 @@ describe("qa-lab server ui helpers", () => {
     );
 
     const version1 = resolveUiAssetVersion(uiDistDir);
-    expect(version1).toMatch(/^[0-9a-f]{12}$/);
+    expect(version1).toBe("f65aa1cab13f");
 
     await writeFile(
       path.join(uiDistDir, "index.html"),
