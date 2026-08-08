@@ -3,7 +3,7 @@ import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
-  isSameOpenClawAgentDatabasePath,
+  createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -56,8 +56,11 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       unsuffixedOwnerAgentId?: string;
     }>
   >();
+  // Alias targets can change between calls. Reuse prepared identities only for this
+  // synchronous dedupe invocation so collision ownership never relies on stale paths.
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
   const resolvePhysicalGroupKey = <T>(groups: ReadonlyMap<string, T>, pathname: string) =>
-    [...groups.keys()].find((candidate) => isSameOpenClawAgentDatabasePath(candidate, pathname)) ??
+    [...groups.keys()].find((candidate) => isSameDatabasePath(candidate, pathname)) ??
     path.resolve(pathname);
   for (const target of targets) {
     const resolvedUnsuffixedPath = path.resolve(
@@ -125,7 +128,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     const registeredOwners = [
       ...new Set(
         registeredDatabases
-          .filter((entry) => isSameOpenClawAgentDatabasePath(entry.path, sqlitePath))
+          .filter((entry) => isSameDatabasePath(entry.path, sqlitePath))
           .map((entry) => normalizeAgentId(entry.agentId)),
       ),
     ];
