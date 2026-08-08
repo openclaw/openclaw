@@ -230,6 +230,11 @@ final class AppState {
             forKey: voiceWakeAdditionalLocalesKey) } }
     }
 
+    /// Empty string means System Default: keep today's language-only on-device TTS fallback.
+    var talkSystemVoiceID: String {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.talkSystemVoiceID, forKey: talkSystemVoiceIDKey) } }
+    }
+
     var voicePushToTalkEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(
             self.voicePushToTalkEnabled,
@@ -477,6 +482,7 @@ final class AppState {
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeMicName = UserDefaults.standard.string(forKey: voiceWakeMicNameKey) ?? ""
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
+        self.talkSystemVoiceID = UserDefaults.standard.string(forKey: talkSystemVoiceIDKey) ?? ""
         self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
         self.voicePushToTalkEnabled = UserDefaults.standard
@@ -1534,6 +1540,7 @@ extension AppState {
         state.voiceWakeMicID = "BuiltInMic"
         state.voiceWakeMicName = "Built-in Microphone"
         state.voiceWakeLocaleID = Locale.current.identifier
+        state.talkSystemVoiceID = ""
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false

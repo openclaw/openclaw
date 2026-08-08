@@ -1131,6 +1131,19 @@ extension SettingsProTab {
             })
     }
 
+    /// Reads through `resolvedOverride` so a voice deleted in system settings since the last
+    /// write shows as System Default immediately, instead of a stale identifier the picker's
+    /// option list no longer contains.
+    var talkSystemVoiceSelectionBinding: Binding<String> {
+        Binding(
+            get: { TalkSystemVoiceSelection.resolvedOverride(self.talkSystemVoiceSelectionRaw) ?? "" },
+            set: { newValue in
+                let voice = TalkSystemVoiceSelection.resolvedOverride(newValue) ?? ""
+                self.talkSystemVoiceSelectionRaw = voice
+                self.appModel.setTalkSystemVoiceSelection(voice)
+            })
+    }
+
     var talkSpeakerphoneBinding: Binding<Bool> {
         Binding(
             get: { self.talkSpeakerphoneEnabled },

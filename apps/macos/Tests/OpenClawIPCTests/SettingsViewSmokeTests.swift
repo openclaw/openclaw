@@ -319,6 +319,13 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `voice wake settings builds body with system voice selected`() {
+        let state = AppState(preview: true)
+        state.talkSystemVoiceID = ""
+        let view = VoiceWakeSettings(state: state, isActive: false)
+        _ = view.body
+    }
+
     @Test func `skills settings builds body`() {
         let view = SkillsSettings(state: .preview)
         _ = view.body
