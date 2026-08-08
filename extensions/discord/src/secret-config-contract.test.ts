@@ -85,4 +85,58 @@ describe("Discord secret config contract", () => {
     ]);
     expect(context.warnings).toStrictEqual([]);
   });
+
+  it("skips API keys for explicitly unselected realtime providers", () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          voice: {
+            realtime: {
+              provider: "codex",
+              providers: {
+                codex: {
+                  apiKey: { source: "env", provider: "default", id: "ROOT_CODEX" },
+                },
+                openai: {
+                  apiKey: { source: "env", provider: "default", id: "ROOT_OPENAI" },
+                },
+              },
+            },
+          },
+          accounts: {
+            inherited: { enabled: true },
+            work: {
+              enabled: true,
+              voice: {
+                realtime: {
+                  provider: "openai",
+                  providers: {
+                    codex: {
+                      apiKey: { source: "env", provider: "default", id: "WORK_CODEX" },
+                    },
+                    openai: {
+                      apiKey: { source: "env", provider: "default", id: "WORK_OPENAI" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig, env: {} });
+
+    collectRuntimeConfigAssignments({
+      config: structuredClone(sourceConfig),
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments.map(({ path }) => path)).toEqual([
+      "channels.discord.voice.realtime.providers.codex.apiKey",
+      "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
+    ]);
+    expect(context.warnings).toStrictEqual([]);
+  });
 });

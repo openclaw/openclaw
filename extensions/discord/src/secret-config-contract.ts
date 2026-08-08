@@ -120,8 +120,10 @@ function collectRealtimeProviderApiKeyAssignments(params: {
   if (!isRecord(params.realtime) || !isRecord(params.realtime.providers)) {
     return;
   }
+  const selectedProvider =
+    typeof params.realtime.provider === "string" ? params.realtime.provider.trim() : "";
   for (const [providerId, providerConfig] of Object.entries(params.realtime.providers)) {
-    if (!isRecord(providerConfig)) {
+    if ((selectedProvider && providerId !== selectedProvider) || !isRecord(providerConfig)) {
       continue;
     }
     collectSecretInputAssignment({
