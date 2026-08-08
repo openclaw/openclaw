@@ -211,6 +211,13 @@ export function shouldCompact(
   if (!settings.enabled) {
     return false;
   }
+  // Defensive guard for non-setup callers: a nonpositive contextWindow collapses
+  // the threshold and would falsely trigger compaction. The canonical repair
+  // normalizes such a window to the resolved positive budget in setup.ts
+  // (resolveEffectiveRuntimeModel); this guard backstops paths that bypass it.
+  if (contextWindow <= 0) {
+    return false;
+  }
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
