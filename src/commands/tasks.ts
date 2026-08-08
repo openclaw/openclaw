@@ -60,6 +60,7 @@ const RUN_PAD = 10;
 const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const info = theme.info;
+const warn = theme.warn;
 
 function formatTaskLookupMiss(lookup: string): string {
   return formatLookupMiss({
@@ -136,6 +137,7 @@ type SessionRegistryMaintenanceSummary = {
   retentionMs: number;
   runningCronJobs: number;
   pruned: number;
+  cronStateError: boolean;
   stores: SessionRegistryMaintenanceStoreSummary[];
 };
 
@@ -144,7 +146,11 @@ function resolveExplicitCronSessionSegment(sessionKey: string | undefined): stri
   return match?.[1]?.toLowerCase();
 }
 
-function readRunningCronJobIds(): { ids: Set<string>; count: number } {
+function readRunningCronJobIds(): {
+  ids: Set<string>;
+  count: number;
+  readError: unknown;
+} {
   try {
     const cronStorePath = resolveCronJobsStorePath();
     const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
@@ -166,9 +172,14 @@ function readRunningCronJobIds(): { ids: Set<string>; count: number } {
         ]),
       ),
       count: runningJobs.length,
+      readError: null,
     };
-  } catch {
-    return { ids: new Set(), count: 0 };
+  } catch (error) {
+    // The cron-state read failed (e.g. SQLITE_IOERR). Do NOT fall back to an
+    // empty running-job set: pruning decisions depend on knowing which cron
+    // jobs are running, so a failed read must be surfaced to the caller rather
+    // than silently letting aged cron-run sessions be pruned. (#110935)
+    return { ids: new Set(), count: 0, readError: error };
   }
 }
 
@@ -178,6 +189,20 @@ async function runSessionRegistryMaintenance(params: {
   const cfg = getRuntimeConfig();
   const runningCronJobs = readRunningCronJobIds();
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
+  if (runningCronJobs.readError) {
+    // The cron-state read failed (e.g. SQLITE_IOERR). Pruning decisions depend
+    // on knowing which cron jobs are running, so a failed read must NOT be
+    // treated as "nothing is running". Leave the session registry unchanged
+    // and report the failure instead of silently pruning aged cron-run
+    // sessions. (#110935)
+    return {
+      retentionMs: SESSION_REGISTRY_RETENTION_MS,
+      runningCronJobs: 0,
+      pruned: 0,
+      cronStateError: true,
+      stores,
+    };
+  }
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     const result = await runSessionRegistryMaintenanceForStore({
       apply: params.apply,
@@ -198,6 +223,7 @@ async function runSessionRegistryMaintenance(params: {
     retentionMs: SESSION_REGISTRY_RETENTION_MS,
     runningCronJobs: runningCronJobs.count,
     pruned: stores.reduce((total, store) => total + store.pruned, 0),
+    cronStateError: false,
     stores,
   };
 }
@@ -707,6 +733,13 @@ export async function tasksMaintenanceCommand(
       `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running automations`,
     ),
   );
+  if (sessionMaintenance.cronStateError) {
+    runtime.log(
+      warn(
+        "Session registry: cron-state read failed; skipping session pruning to avoid removing live cron-run sessions. Fix the cron store before re-running maintenance.",
+      ),
+    );
+  }
   runtime.log(
     info(
       `${opts.apply ? "Tasks health after apply" : "Tasks health"}: ${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${auditAfter.errors + flowAuditAfter.errors} audit errors · ${auditAfter.warnings + flowAuditAfter.warnings} audit warnings`,
