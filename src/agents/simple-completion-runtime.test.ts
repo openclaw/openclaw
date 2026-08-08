@@ -260,6 +260,34 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
+  it("locks explicit @profile pins even when bindAuthOwner is off", async () => {
+    // Model suffix `@profile` must remain fail-closed when the selected
+    // profile is missing, even if an ambient provider env key exists. The
+    // unlocked missing-profile fallback is only for automatic candidates.
+    hoisted.getApiKeyForModelMock.mockRejectedValueOnce(
+      new Error('No credentials found for profile "anthropic:missing".'),
+    );
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: {},
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentDir: "/tmp/openclaw-agent",
+      profileId: "anthropic:missing",
+    });
+
+    expect(result).toEqual({
+      error: expect.stringContaining('No credentials found for profile "anthropic:missing"'),
+    });
+    expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "anthropic:missing",
+        lockedProfile: true,
+      }),
+    );
+    expect(hoisted.getApiKeyForModelMock.mock.calls[0]?.[0]).not.toHaveProperty("store");
+  });
+
   it("returns error when model resolution fails", async () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       error: "Unknown model: anthropic/missing-model",

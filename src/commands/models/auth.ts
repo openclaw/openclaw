@@ -760,13 +760,14 @@ export async function modelsAuthPasteApiKeyCommand(
     },
   });
 
+  const credential = {
+    type: "api_key" as const,
+    provider,
+    key,
+  };
   await upsertAuthProfileWithLockOrThrow({
     profileId,
-    credential: {
-      type: "api_key",
-      provider,
-      key,
-    },
+    credential,
     agentDir,
   });
 

@@ -111,6 +111,9 @@ async function prepareResolvedImageRuntime(
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
+    // Explicit image-profile selections are operator-locked; missing secrets
+    // must fail closed instead of falling through to ambient env/config keys.
+    ...(params.profile ? { lockedProfile: true as const } : {}),
     store: params.authStore,
     secretSentinels: true,
   });

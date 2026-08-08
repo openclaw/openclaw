@@ -140,6 +140,19 @@ export async function resolveApiKeyForProvider(params: {
       forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
+      // Unlocked automatic candidates can be present in config/`auth.profiles`
+      // without a secret in this agent's store (for example after
+      // `models auth paste-api-key --agent <non-default>`). Fall through to
+      // env/config discovery instead of failing closed before env is tried.
+      if (!params.lockedProfile) {
+        return resolveApiKeyForProvider({
+          ...params,
+          store,
+          profileId: undefined,
+          preferredProfile: profileId,
+          lockedProfile: true,
+        });
+      }
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const resolvedProfileId = resolved.profileId ?? profileId;

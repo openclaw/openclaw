@@ -77,6 +77,7 @@ type ResolveModelWithRegistryTestParams = {
 type AuthRequestCall = {
   profileId?: string;
   preferredProfile?: string;
+  lockedProfile?: boolean;
   store?: unknown;
 };
 
@@ -330,6 +331,7 @@ describe("describeImageWithModel", () => {
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.profileId).toBe("google:default");
     expect(authRequest?.preferredProfile).toBe("google:preferred");
+    expect(authRequest?.lockedProfile).toBe(true);
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "test-token");
   });
 
@@ -893,5 +895,37 @@ describe("describeImageWithModel", () => {
     for (const call of resolveModelAsyncMock.mock.calls) {
       expect(call[4]).toEqual(expect.objectContaining({ preparedModelRuntime }));
     }
+  });
+  it("locks explicit image profiles so missing selections fail closed", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: () => ({
+        provider: "openai",
+        id: "gpt-5.5",
+        input: ["text", "image"],
+      }),
+    });
+    getApiKeyForModelMock.mockRejectedValueOnce(
+      new Error('No credentials found for profile "openai:missing"'),
+    );
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "openai",
+        model: "gpt-5.5",
+        profile: "openai:missing",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(/No credentials found for profile "openai:missing"/);
+
+    const authRequest = getApiKeyForModelCall();
+    expect(authRequest?.profileId).toBe("openai:missing");
+    expect(authRequest?.lockedProfile).toBe(true);
+    expect(completeMock).not.toHaveBeenCalled();
   });
 });
