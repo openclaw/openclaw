@@ -43,6 +43,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     runAbortController,
     sandbox,
     options,
+    nativeHookRelay: guardedNativeHookRelay,
     nativeHookRelayEvents,
   } = connection;
   const { toolBridge } = attemptTools;
@@ -194,7 +195,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   ) => {
     state.nativeHookRelay?.unregister();
     state.nativeHookRelay = createCodexNativeHookRelay({
-      options: options.nativeHookRelay,
+      options: guardedNativeHookRelay,
       generation:
         decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
       generationMismatchGraceMs:
@@ -238,10 +239,10 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         ? buildCodexNativeHookRelayConfig({
             relay: state.nativeHookRelay,
             events: nativeHookRelayEvents,
-            hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+            hookTimeoutSec: guardedNativeHookRelay?.hookTimeoutSec,
             loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           })
-        : options.nativeHookRelay?.enabled === false
+        : guardedNativeHookRelay?.enabled === false
           ? buildCodexNativeHookRelayDisabledConfig()
           : undefined,
       nativeHookRelayGeneration: state.nativeHookRelay?.generation,

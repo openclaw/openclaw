@@ -269,6 +269,28 @@
             "type": "boolean",
             "default": true
           },
+          "nativeHookRelay": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pre_tool_use",
+                    "post_tool_use",
+                    "permission_request",
+                    "before_agent_finalize"
+                  ]
+                }
+              }
+            }
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -594,6 +616,21 @@
     "appServer.loopDetectionPreToolUseRelay": {
       "label": "Loop Detection Pre-tool Relay",
       "help": "Install the Codex PreToolUse subprocess used only for OpenClaw loop detection and its no-policy marker. Disable to reduce per-tool process fan-out; before-tool and trusted policy relays remain enforced.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay": {
+      "label": "Native Hook Relay",
+      "help": "Control the OpenClaw native hook relay installed into Codex app-server threads. Omit for the historical always-on default. Guarded against the effective approval policy; approvals ride the app-server approval bridge and are not disabled by this key.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay.enabled": {
+      "label": "Native Hook Relay Enabled",
+      "help": "Set to false to disable native hooks for Codex attempts and side questions (features.hooks off, hook arrays cleared). This applies when the effective approval policy for the thread is \"never\", which includes stock yolo deployments with no explicit approvalPolicy key. When the effective policy prompts \u2014 including a configured \"never\" the runtime forced to prompting \u2014 the opt-out narrows to the required before-tool policy relay (pre_tool_use) with a logged warning.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay.events": {
+      "label": "Native Hook Relay Events",
+      "help": "Restrict relayed hook events to this list, honored verbatim under every approval policy: nothing is added, removed, or reordered. Empty or unset keeps the default event selection, which excludes permission_request while approvals are active.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

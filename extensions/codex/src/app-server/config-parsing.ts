@@ -1,3 +1,4 @@
+import type { NativeHookRelayEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
@@ -5,6 +6,7 @@ import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
   type CodexAppServerCommandSource,
+  type CodexNativeHookRelayOptions,
   type CodexPluginConfig,
   type CodexPluginDestructiveApprovalMode,
   type CodexPluginDestructivePolicy,
@@ -37,6 +39,24 @@ const codexAppServerApprovalPolicySchema = z.preprocess(
   z.enum(["never", "on-request", "untrusted"]),
 );
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
+// Mirrors NATIVE_HOOK_RELAY_EVENTS in src/agents/harness/native-hook-relay-types.ts (the
+// const list is not exported through the plugin SDK). The satisfies-clause catches
+// typos; the AssertAllRelayEventsCovered assert additionally fails to compile if core
+// adds a new NativeHookRelayEvent that this enum does not list yet.
+const codexNativeHookRelayEventList = [
+  "pre_tool_use",
+  "post_tool_use",
+  "permission_request",
+  "before_agent_finalize",
+] as const satisfies readonly NativeHookRelayEvent[];
+type AssertAllRelayEventsCovered = [NativeHookRelayEvent] extends [
+  (typeof codexNativeHookRelayEventList)[number],
+]
+  ? true
+  : never;
+const assertAllRelayEventsCovered: AssertAllRelayEventsCovered = true;
+void assertAllRelayEventsCovered;
+const codexNativeHookRelayEventSchema = z.enum(codexNativeHookRelayEventList);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
 const codexComputerUseHealthIntervalSchema = z.union([
@@ -179,6 +199,13 @@ const codexPluginConfigSchema = z
         remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         loopDetectionPreToolUseRelay: z.boolean().optional(),
+        nativeHookRelay: z
+          .object({
+            enabled: z.boolean().optional(),
+            events: z.array(codexNativeHookRelayEventSchema).optional(),
+          })
+          .strict()
+          .optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
         turnAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
@@ -211,6 +238,29 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
 
 export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean {
   return readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true;
+}
+
+/**
+ * Reads the native hook relay options for Codex app-server attempts and side
+ * questions. Schema-level only: approval-policy guarding lives in
+ * `resolveCodexNativeHookRelayForApprovalPolicy`, which the run paths apply once
+ * the effective policy is known. Always returns an object: run-attempt and
+ * side-question paths gate on the presence of `nativeHookRelay` before checking
+ * `enabled`, so `undefined` would silently disable the relay instead of
+ * expressing the default. Without config (or with `events: []`) this is
+ * byte-identical to the historical `{ enabled: true }` literal.
+ */
+export function resolveCodexAppServerNativeHookRelay(
+  pluginConfig: unknown,
+): CodexNativeHookRelayOptions {
+  const relay = readCodexPluginConfig(pluginConfig).appServer?.nativeHookRelay;
+  // An empty list carries no scope; keep the authored list otherwise, including
+  // alongside `enabled: false`, because the guard reports what was requested.
+  const events = relay?.events?.length ? relay.events : undefined;
+  return {
+    enabled: relay?.enabled !== false,
+    ...(events ? { events } : {}),
+  };
 }
 
 export function assertCodexAppServerCommandHasNoInlineArgs(params: {
