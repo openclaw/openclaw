@@ -566,6 +566,15 @@ function applyConfigForOpenClawTarget(
     provider: "default",
     id: resolvedEnvId,
   });
+  if (entry.id.includes(".voice.realtime.providers.*.apiKey")) {
+    const providerPath = toConcretePathSegments(entry.pathPattern, wildcardToken);
+    const providersIndex = providerPath.lastIndexOf("providers");
+    setPathCreateStrict(
+      config,
+      [...providerPath.slice(0, providersIndex), "provider"],
+      wildcardToken,
+    );
+  }
   if (entry.id.startsWith("models.providers.")) {
     setPathCreateStrict(
       config,
