@@ -10,6 +10,7 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 let resolveCurrentSessionClientAlias: typeof import("./sessions-resolution.js").resolveCurrentSessionClientAlias;
 let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
+let resolveExistingSessionKey: typeof import("./sessions-resolution.js").resolveExistingSessionKey;
 let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
 let resolveMainSessionAlias: typeof import("./sessions-resolution.js").resolveMainSessionAlias;
 let resolveSessionReference: typeof import("./sessions-resolution.js").resolveSessionReference;
@@ -20,6 +21,7 @@ beforeAll(async () => {
   ({
     resolveCurrentSessionClientAlias,
     resolveDisplaySessionKey,
+    resolveExistingSessionKey,
     resolveInternalSessionKey,
     resolveMainSessionAlias,
     resolveSessionReference,
@@ -457,5 +459,35 @@ describe("resolveSessionReference", () => {
       resolvedViaSessionId: false,
     });
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveExistingSessionKey", () => {
+  it("canonicalizes an existing key through the gateway", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:main" });
+
+    const result = await resolveExistingSessionKey({
+      sessionKey: "agent:ops:main",
+      requesterInternalKey: "agent:main:main",
+      restrictToSpawned: false,
+    });
+
+    expect(result).toBe("agent:ops:main");
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.resolve",
+      params: { key: "agent:ops:main", spawnedBy: undefined },
+    });
+  });
+
+  it("returns a structured error for a missing key", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("No session found: agent:ops:missing"));
+
+    await expect(
+      resolveExistingSessionKey({
+        sessionKey: "agent:ops:missing",
+        requesterInternalKey: "agent:main:main",
+        restrictToSpawned: false,
+      }),
+    ).rejects.toThrow("No session found: agent:ops:missing");
   });
 });

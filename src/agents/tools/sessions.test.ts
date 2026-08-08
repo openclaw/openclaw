@@ -65,7 +65,7 @@ type SessionsToolTestConfig = {
   agents?: OpenClawConfig["agents"];
   bindings?: OpenClawConfig["bindings"];
   session: {
-    scope: "per-sender";
+    scope: "per-sender" | "global";
     mainKey: string;
     dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
     agentToAgent?: { maxPingPongTurns: number };
@@ -320,7 +320,10 @@ async function executeFireAndForgetA2AFrom(
     },
   });
   callGatewayMock.mockImplementation(async (opts: unknown) => {
-    const request = opts as { method?: string };
+    const request = opts as { method?: string; params?: Record<string, unknown> };
+    if (request.method === "sessions.resolve" && typeof request.params?.key === "string") {
+      return { key: request.params.key };
+    }
     if (request.method === "sessions.list") {
       return {
         path: "/tmp/sessions.json",
@@ -821,6 +824,102 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 
+  it("rejects a missing explicit key before dispatching an agent run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const missingKey = "agent:main:telegram:direct:missing-peer";
+    callGatewayMock.mockClear();
+    callGatewayMock.mockRejectedValueOnce(new Error(`No session found: ${missingKey}`));
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-missing-explicit-key", {
+      sessionKey: missingKey,
+      message: "hello",
+      timeoutSeconds: 0,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: "error",
+      error: `No session found: ${missingKey}`,
+      sessionKey: missingKey,
+    });
+    const resolveRequests = callGatewayMock.mock.calls
+      .map((call) => requireRecord(call[0], "gateway request"))
+      .filter((request) => request.method === "sessions.resolve");
+    expect(resolveRequests).toEqual([
+      expect.objectContaining({ params: { key: missingKey, spawnedBy: undefined } }),
+    ]);
+    const methods = callGatewayMock.mock.calls.map(
+      (call) => requireRecord(call[0], "gateway request").method,
+    );
+    expect(methods).not.toContain("agent");
+    expect(methods).not.toContain("sessions.create");
+  });
+
+  it.each([
+    {
+      name: "the calling session",
+      canonicalKey: MAIN_AGENT_SESSION_KEY,
+      timeoutSeconds: 1,
+      expectedStatus: "error",
+      expectedError: "sessions_send cannot target the calling session",
+    },
+    {
+      name: "a thread session",
+      canonicalKey: "agent:main:discord:channel:ops:thread:reply",
+      timeoutSeconds: 0,
+      expectedStatus: "error",
+      expectedError: "sessions_send cannot target a thread session",
+    },
+    {
+      name: "a different agent owner",
+      canonicalKey: "agent:other:discord:channel:ops",
+      timeoutSeconds: 0,
+      expectedStatus: "forbidden",
+      expectedError: "Agent-to-agent messaging is disabled",
+    },
+  ])("rechecks $name after strict canonicalization", async (testCase) => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const requestedKey = "agent:main:discord:channel:unresolved-alias";
+    callGatewayMock.mockClear();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.resolve") {
+        return { key: testCase.canonicalKey };
+      }
+      return {};
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-canonical-target-gate", {
+      sessionKey: requestedKey,
+      message: "hello",
+      timeoutSeconds: testCase.timeoutSeconds,
+    });
+
+    expect(requireDetails(result)).toMatchObject({
+      status: testCase.expectedStatus,
+      error: expect.stringContaining(testCase.expectedError),
+      sessionKey: requestedKey,
+    });
+    const methods = callGatewayMock.mock.calls.map(
+      (call) => requireRecord(call[0], "gateway request").method,
+    );
+    expect(methods).not.toContain("agent");
+    expect(methods).not.toContain("sessions.create");
+  });
+
   it("prefers sessionKey over a redundant label", async () => {
     const tool = createMainSessionsSendTool();
 
@@ -1098,6 +1197,9 @@ describe("sessions_send gating", () => {
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve" && typeof request.params?.key === "string") {
+        return { key: request.params.key };
+      }
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
@@ -1494,7 +1596,14 @@ describe("sessions_send gating", () => {
     const waitTimeouts: unknown[] = [];
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; timeoutMs?: unknown };
+      const request = opts as {
+        method?: string;
+        params?: Record<string, unknown>;
+        timeoutMs?: unknown;
+      };
+      if (request.method === "sessions.resolve" && typeof request.params?.key === "string") {
+        return { key: request.params.key };
+      }
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
@@ -1526,21 +1635,84 @@ describe("sessions_send gating", () => {
 });
 
 describe("sessions_send agent-main materialization provenance", () => {
-  it("uses the trusted in-process creation stamp in the production assembly (no injected caller)", async () => {
+  it.each([
+    {
+      name: "the exact default-agent main key",
+      requestedKey: "agent:main:main",
+      expectedKey: "agent:main:main",
+      expectedAgentId: "main",
+      config: {
+        session: { scope: "per-sender" as const, mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" as const },
+        },
+      },
+    },
+    {
+      name: "the raw main alias",
+      requestedKey: "main",
+      expectedKey: "agent:main:main",
+      expectedAgentId: "main",
+      config: {
+        session: { scope: "per-sender" as const, mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" as const },
+        },
+      },
+    },
+    {
+      name: "a custom main-key alias",
+      requestedKey: "work",
+      expectedKey: "agent:main:work",
+      expectedAgentId: "main",
+      config: {
+        session: { scope: "per-sender" as const, mainKey: "work" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" as const },
+        },
+      },
+    },
+    {
+      name: "a configured nondefault-agent legacy main alias",
+      requestedKey: "agent:ops:main",
+      expectedKey: "agent:ops:work",
+      expectedAgentId: "ops",
+      config: {
+        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        session: { scope: "per-sender" as const, mainKey: "work" },
+        tools: {
+          agentToAgent: { enabled: true },
+          sessions: { visibility: "all" as const },
+        },
+      },
+    },
+    {
+      name: "a nondefault agent in global scope",
+      requestedKey: "agent:work:main",
+      expectedKey: "agent:work:main",
+      expectedAgentId: "work",
+      config: {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global" as const, mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: true },
+          sessions: { visibility: "all" as const },
+        },
+      },
+    },
+  ])("uses trusted in-process creation for $name", async (testCase) => {
     inProcessGatewayContextAvailable = true;
     inProcessCreationMock.mockClear();
-    loadConfigMock.mockReturnValue({
-      session: { scope: "per-sender", mainKey: "main" },
-      tools: {
-        agentToAgent: { enabled: false },
-        sessions: { visibility: "all" },
-      },
-    });
+    callGatewayMock.mockClear();
+    loadConfigMock.mockReturnValue(testCase.config);
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.resolve") {
-        // Unmaterialized agent main: the probe fails, forcing creation.
-        throw new Error("unknown session: agent:main:main");
+        // Unmaterialized configured main: the probe fails, forcing creation.
+        throw new Error(`unknown session: ${testCase.expectedKey}`);
       }
       if (request.method === "sessions.create") {
         throw new Error("plain sessions.create must not be used for trusted materialization");
@@ -1562,7 +1734,7 @@ describe("sessions_send agent-main materialization provenance", () => {
 
     try {
       const result = await tool.execute("call-ensure-main-provenance", {
-        sessionKey: "agent:main:main",
+        sessionKey: testCase.requestedKey,
         message: "wake up",
         timeoutSeconds: 0,
       });
@@ -1571,16 +1743,73 @@ describe("sessions_send agent-main materialization provenance", () => {
       expect(inProcessCreationMock).toHaveBeenCalledTimes(1);
       expect(inProcessCreationMock).toHaveBeenCalledWith(
         "sessions.create",
-        { key: "agent:main:main", agentId: "main" },
+        { key: testCase.expectedKey, agentId: testCase.expectedAgentId },
         {
           via: "internal",
           actor: { type: "agent", id: "agent:main:dashboard:req-provenance" },
         },
       );
+      expect(callGatewayMock.mock.calls).toContainEqual([
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({ sessionKey: testCase.expectedKey }),
+        }),
+      ]);
     } finally {
       inProcessGatewayContextAvailable = false;
       inProcessCreationMock.mockClear();
     }
   });
+
+  it.each(["main", "global"])(
+    "preserves global main bootstrap for the %s alias",
+    async (requestedKey) => {
+      inProcessGatewayContextAvailable = true;
+      inProcessCreationMock.mockClear();
+      callGatewayMock.mockClear();
+      loadConfigMock.mockReturnValue({
+        session: { scope: "global", mainKey: "main" },
+        tools: {
+          agentToAgent: { enabled: false },
+          sessions: { visibility: "all" },
+        },
+      });
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string };
+        if (request.method === "sessions.resolve") {
+          throw new Error("unknown session: global");
+        }
+        if (request.method === "agent") {
+          return { runId: "run-global-main", acceptedAt: 1 };
+        }
+        return {};
+      });
+      const tool = createMainSessionsSendTool();
+
+      try {
+        const result = await tool.execute("call-global-main", {
+          sessionKey: requestedKey,
+          message: "wake up",
+          timeoutSeconds: 0,
+        });
+
+        expect(requireDetails(result).status).toBe("accepted");
+        expect(inProcessCreationMock).toHaveBeenCalledWith(
+          "sessions.create",
+          { key: "global", agentId: "main" },
+          expect.any(Object),
+        );
+        expect(callGatewayMock.mock.calls).toContainEqual([
+          expect.objectContaining({
+            method: "agent",
+            params: expect.objectContaining({ sessionKey: "global" }),
+          }),
+        ]);
+      } finally {
+        inProcessGatewayContextAvailable = false;
+        inProcessCreationMock.mockClear();
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

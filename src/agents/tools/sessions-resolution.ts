@@ -211,9 +211,10 @@ function buildSessionIdResolveParams(params: {
 
 async function callGatewayResolveSession(
   params: Record<string, unknown> & { allowMissing?: boolean },
+  gatewayCall: GatewayCaller = sessionsResolutionDeps.callGateway,
 ) {
   try {
-    return await sessionsResolutionDeps.callGateway({
+    return await gatewayCall({
       method: "sessions.resolve",
       params,
     });
@@ -231,11 +232,31 @@ async function callGatewayResolveSession(
     // Retry without it for mixed-version correctness; remove at the next protocol break.
     const legacyParams: Record<string, unknown> = { ...params };
     delete legacyParams.allowMissing;
-    return await sessionsResolutionDeps.callGateway({
+    return await gatewayCall({
       method: "sessions.resolve",
       params: legacyParams,
     });
   }
+}
+
+export async function resolveExistingSessionKey(params: {
+  sessionKey: string;
+  requesterInternalKey?: string;
+  restrictToSpawned: boolean;
+  callGateway?: GatewayCaller;
+}): Promise<string> {
+  const result = await callGatewayResolveSession(
+    {
+      key: params.sessionKey,
+      spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
+    },
+    params.callGateway,
+  );
+  const key = normalizeOptionalString(result?.key) ?? "";
+  if (!key) {
+    throw new Error(`No session found: ${params.sessionKey}`);
+  }
+  return key;
 }
 
 async function callGatewayResolveSessionId(params: {

@@ -9,6 +9,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRouteBinding } from "../../config/types.agents.js";
@@ -76,6 +77,7 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
+import { resolveExistingSessionKey } from "./sessions-resolution.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
@@ -190,27 +192,64 @@ function resolveConfiguredAgentMainSessionKey(params: {
 function isConfiguredAgentMainSessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  mainKey: string;
 }): boolean {
-  const agentId = resolveAgentIdFromSessionKey(
-    params.sessionKey,
-    resolveDefaultAgentId(params.cfg),
-  );
   return (
-    params.sessionKey ===
-    resolveConfiguredAgentMainSessionKey({
+    resolveConfiguredAgentMainTarget({
       cfg: params.cfg,
-      agentId,
-      mainKey: params.mainKey,
-    })
+      requestedSessionKey: params.sessionKey,
+    }) === params.sessionKey
   );
+}
+
+function resolveConfiguredAgentMainTarget(params: {
+  cfg: OpenClawConfig;
+  requestedSessionKey: string;
+}): string | undefined {
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const rawSessionKey = params.requestedSessionKey.trim();
+  const parsedAgentId = parseAgentSessionKey(rawSessionKey)?.agentId;
+  if (
+    parsedAgentId &&
+    rawSessionKey === params.cfg.session?.mainKey?.trim() &&
+    listAgentIds(params.cfg).includes(normalizeAgentId(parsedAgentId))
+  ) {
+    // A few internal callers already carry a canonical agent key as mainKey.
+    // Keep that exact identity instead of nesting it as another request-key token.
+    return rawSessionKey;
+  }
+  const targetAgentId =
+    parsedAgentId && listAgentIds(params.cfg).includes(normalizeAgentId(parsedAgentId))
+      ? parsedAgentId
+      : defaultAgentId;
+  const canonicalMainKey = canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId: targetAgentId,
+    sessionKey: "main",
+  });
+  const canonicalRequestedKey = canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId: targetAgentId,
+    sessionKey: rawSessionKey,
+  });
+  if (canonicalRequestedKey !== canonicalMainKey) {
+    return undefined;
+  }
+  if (params.cfg.session?.scope === "global" && parsedAgentId) {
+    // The Gateway stores global scope under one key, but the agent-prefixed
+    // request preserves which configured agent should run that global session.
+    return resolveConfiguredAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId: targetAgentId,
+      mainKey: params.cfg.session?.mainKey ?? "main",
+    });
+  }
+  return canonicalMainKey;
 }
 
 async function ensureConfiguredAgentMainSession(params: {
   cfg: OpenClawConfig;
   callGateway: GatewayCaller;
   sessionKey: string;
-  mainKey: string;
   requesterSessionKey?: string;
   useTrustedInProcessCreation: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -218,7 +257,6 @@ async function ensureConfiguredAgentMainSession(params: {
     !isConfiguredAgentMainSessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
-      mainKey: params.mainKey,
     })
   ) {
     return { ok: true };
@@ -336,6 +374,20 @@ function shouldFallbackCronRunScopedActiveDelivery(
   );
 }
 
+function resolveSessionSendTargetError(params: {
+  requesterSessionKey?: string;
+  targetSessionKey: string;
+  timeoutSeconds: number;
+}): string | undefined {
+  if (params.timeoutSeconds !== 0 && params.requesterSessionKey === params.targetSessionKey) {
+    return "sessions_send cannot target the calling session; use your own reply instead";
+  }
+  if (parseSessionThreadInfo(params.targetSessionKey).threadId) {
+    return "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.";
+  }
+  return undefined;
+}
+
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
   runId: string;
@@ -343,6 +395,7 @@ async function startAgentRun(params: {
   sessionKey: string;
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
+  resolveExistingSessionKey: (sessionKey: string) => Promise<string>;
 }): Promise<
   | {
       ok: true;
@@ -392,11 +445,15 @@ async function startAgentRun(params: {
       }
       const fallbackSessionKey = resolveCronRunScopedFallbackSessionKey(params.sessionKey);
       if (fallbackSessionKey && shouldFallbackCronRunScopedActiveDelivery(queueOutcome)) {
+        // The active run proves only the run-scoped key. Resolve its durable parent
+        // before dispatch so a stale run cannot create a new fallback session.
+        const resolvedFallbackSessionKey =
+          await params.resolveExistingSessionKey(fallbackSessionKey);
         const response = await params.callGateway<{ runId: string }>({
           method: "agent",
           params: {
             ...params.sendParams,
-            sessionKey: fallbackSessionKey,
+            sessionKey: resolvedFallbackSessionKey,
             idempotencyKey: crypto.randomUUID(),
           },
           timeoutMs: 10_000,
@@ -405,8 +462,8 @@ async function startAgentRun(params: {
           ok: true,
           runId:
             typeof response?.runId === "string" && response.runId ? response.runId : params.runId,
-          a2aSessionKey: fallbackSessionKey,
-          a2aDisplayKey: fallbackSessionKey,
+          a2aSessionKey: resolvedFallbackSessionKey,
+          a2aDisplayKey: resolvedFallbackSessionKey,
         };
       }
       const queueSummary =
@@ -574,8 +631,12 @@ export function createSessionsSendTool(opts?: {
           error: "Either sessionKey or label is required",
         });
       }
+      const configuredAgentMainKey = resolveConfiguredAgentMainTarget({
+        cfg,
+        requestedSessionKey: sessionKey,
+      });
       const resolvedSession = await resolveSessionReference({
-        sessionKey,
+        sessionKey: configuredAgentMainKey ?? sessionKey,
         alias,
         mainKey,
         requesterInternalKey: effectiveRequesterKey,
@@ -605,8 +666,14 @@ export function createSessionsSendTool(opts?: {
         });
       }
       // Normalize sessionKey/sessionId input into a canonical session key.
-      const resolvedKey = visibleSession.key;
-      const displayKey = visibleSession.displayKey;
+      let resolvedKey = visibleSession.key;
+      const displayKey =
+        configuredAgentMainKey &&
+        (sessionKey.trim() === "main" ||
+          sessionKey.trim() === alias ||
+          sessionKey.trim() === mainKey)
+          ? "main"
+          : visibleSession.displayKey;
       const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
       const requesterRouteBindings = cfg.bindings?.filter(
@@ -711,20 +778,16 @@ export function createSessionsSendTool(opts?: {
       let runId: string = idempotencyKey;
       // Fire-and-forget self-send remains a channel-delivery path. A synchronous
       // self-send would wait behind its own active session lane until timeout.
-      if (timeoutSeconds !== 0 && requesterSessionKey === resolvedKey) {
+      const targetError = resolveSessionSendTargetError({
+        requesterSessionKey,
+        targetSessionKey: resolvedKey,
+        timeoutSeconds,
+      });
+      if (targetError) {
         return jsonResult({
           runId,
           status: "error",
-          error: "sessions_send cannot target the calling session; use your own reply instead",
-          sessionKey: unresolvedDisplayKey,
-        });
-      }
-      if (parseSessionThreadInfo(resolvedKey).threadId) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error:
-            "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
+          error: targetError,
           sessionKey: unresolvedDisplayKey,
         });
       }
@@ -735,7 +798,7 @@ export function createSessionsSendTool(opts?: {
         visibility: sessionVisibility,
         a2aPolicy,
       });
-      const access = visibilityGuard.check(resolvedKey);
+      let access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -743,6 +806,52 @@ export function createSessionsSendTool(opts?: {
           error: access.error,
           sessionKey: unresolvedDisplayKey,
         });
+      }
+
+      const resolveExistingKey = async (targetSessionKey: string) => {
+        return await resolveExistingSessionKey({
+          sessionKey: targetSessionKey,
+          requesterInternalKey: effectiveRequesterKey,
+          restrictToSpawned,
+          callGateway: gatewayCall,
+        });
+      };
+
+      if (sessionKeyParam && !resolvedSession.resolvedViaSessionId && !configuredAgentMainKey) {
+        try {
+          resolvedKey = await resolveExistingKey(resolvedKey);
+        } catch (err) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: restrictToSpawned ? "forbidden" : "error",
+            error: formatErrorMessage(err),
+            sessionKey: unresolvedDisplayKey,
+          });
+        }
+        // Gateway resolution may canonicalize an alias to a different owner or
+        // thread. Reapply target-shape gates before the canonical key can run.
+        const canonicalTargetError = resolveSessionSendTargetError({
+          requesterSessionKey,
+          targetSessionKey: resolvedKey,
+          timeoutSeconds,
+        });
+        if (canonicalTargetError) {
+          return jsonResult({
+            runId,
+            status: "error",
+            error: canonicalTargetError,
+            sessionKey: unresolvedDisplayKey,
+          });
+        }
+        access = visibilityGuard.check(resolvedKey);
+        if (!access.allowed) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: access.status,
+            error: access.error,
+            sessionKey: unresolvedDisplayKey,
+          });
+        }
       }
 
       return await runWithScopedSessionAccess({
@@ -754,7 +863,6 @@ export function createSessionsSendTool(opts?: {
             cfg,
             callGateway: gatewayCall,
             sessionKey: resolvedKey,
-            mainKey,
             requesterSessionKey,
             useTrustedInProcessCreation: opts?.callGateway === undefined,
           });
@@ -942,6 +1050,7 @@ export function createSessionsSendTool(opts?: {
               sessionKey: displayKey,
               deliveryTimeoutMs: announceTimeoutMs,
               allowActiveRunQueueDelivery: true,
+              resolveExistingSessionKey: resolveExistingKey,
             });
             if (!start.ok) {
               return start.result;
@@ -966,6 +1075,7 @@ export function createSessionsSendTool(opts?: {
             sendParams,
             sessionKey: displayKey,
             deliveryTimeoutMs: announceTimeoutMs,
+            resolveExistingSessionKey: resolveExistingKey,
           });
           if (!start.ok) {
             return start.result;

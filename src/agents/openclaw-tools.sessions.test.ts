@@ -1324,6 +1324,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
@@ -1445,6 +1448,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         const params = request.params as { sessionKey?: string } | undefined;
         if (params?.sessionKey === targetKey) {
@@ -1593,6 +1599,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         return { runId: "fallback-run", status: "accepted", acceptedAt: 2000 };
       }
@@ -1648,6 +1657,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         return { runId: "fallback-run", status: "accepted", acceptedAt: 2000 };
       }
@@ -1744,6 +1756,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "chat.history") {
         const params = request.params as { sessionKey?: string } | undefined;
         const text =
@@ -1790,6 +1805,14 @@ describe("sessions tools", () => {
     expect(agentCalls).toHaveLength(1);
     const params = agentParams(agentCalls[0] ?? {});
     expect(params.sessionKey).toBe(durableCronCallerKey);
+    const durableResolveIndex = calls.findIndex(
+      (call) =>
+        call.method === "sessions.resolve" &&
+        (call.params as { key?: string } | undefined)?.key === durableCronCallerKey,
+    );
+    const agentIndex = calls.findIndex((call) => call.method === "agent");
+    expect(durableResolveIndex).toBeGreaterThanOrEqual(0);
+    expect(durableResolveIndex).toBeLessThan(agentIndex);
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
     await waitForCalls(
@@ -1813,6 +1836,65 @@ describe("sessions tools", () => {
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
   });
 
+  it("sessions_send fails closed when the cron durable parent is missing", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const runScopedKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
+    const durableKey = "agent:leasing-ops:cron:monthly-utility";
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "caller-active-session",
+      {
+        queueMessage,
+        isStreaming: () => false,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        abort: () => {},
+      },
+      runScopedKey,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "sessions.resolve") {
+        const key = (request.params as { key?: string } | undefined)?.key;
+        if (key === runScopedKey) {
+          return { key };
+        }
+        if (key === durableKey) {
+          throw new Error(`No session found: ${durableKey}`);
+        }
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "agent") {
+        throw new Error("agent dispatch must not run for a missing durable parent");
+      }
+      return {};
+    });
+    const tool = getSessionTool("sessions_send", {
+      agentSessionKey: "agent:main:cron:source-job:run:source-run",
+      agentChannel: "telegram",
+      config: cloneTestConfig(),
+    });
+
+    const result = await tool.execute("call-missing-cron-parent", {
+      sessionKey: runScopedKey,
+      message: "status",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details).toMatchObject({
+      status: "error",
+      sessionKey: runScopedKey,
+      error: `No session found: ${durableKey}`,
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.method === "agent")).toBe(false);
+  });
+
   it("sessions_send rejects non-cron run-looking keys without durable-session fallback", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     const runScopedCallerKey = "agent:leasing-ops:slack:channel:c-room:run:run-fast";
@@ -1832,6 +1914,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         return { runId: "durable-fallback-run", status: "accepted", acceptedAt: 2000 };
       }
@@ -1859,7 +1944,7 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send preserves active delivery when transcript commit wait is unsupported", async () => {
-    const calls: Array<{ method?: string }> = [];
+    const calls: Array<{ method?: string; params?: unknown }> = [];
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
@@ -1874,8 +1959,11 @@ describe("sessions tools", () => {
       runScopedCallerKey,
     );
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
+      const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         throw new Error("fallback agent should not start");
       }
@@ -1925,6 +2013,9 @@ describe("sessions tools", () => {
     );
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         throw new Error("gateway request timeout for agent");
       }
@@ -1961,6 +2052,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
       }
@@ -2003,7 +2097,10 @@ describe("sessions tools", () => {
   it("sessions_send preserves delivery evidence for post-start agent errors", async () => {
     const targetKey = "agent:director1:main";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         return { runId: "run-error", status: "accepted", acceptedAt: 2000 };
       }
@@ -2054,6 +2151,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
       }
@@ -2125,6 +2225,9 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "sessions.resolve") {
+        return { key: (request.params as { key?: string } | undefined)?.key };
+      }
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
