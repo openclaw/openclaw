@@ -3711,7 +3711,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       source: "app_mention",
       mentionType: "explicit",
       bindingOwner: "none",
-      enterpriseTeamId: "T_ENTERPRISE",
+      enterpriseTeamId: "T123ENTERPRISE",
       expectFollowUpMentioned: true,
     },
     {
