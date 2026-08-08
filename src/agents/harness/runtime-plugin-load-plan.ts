@@ -5,6 +5,7 @@ import { resolveManifestActivationPlan } from "../../plugins/activation-planner.
 import {
   isTestDefaultMemorySlotDisabled,
   resolveEffectivePluginActivationState,
+  resolveSelectedContextEnginePluginId,
 } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import {
@@ -74,6 +75,16 @@ function resolveSelectedMemoryPluginIds(params: {
   }).activated
     ? [plugin.pluginId]
     : [];
+}
+
+function resolveSelectedContextEnginePluginIds(params: {
+  config: OpenClawConfig | undefined;
+  workspaceDir: string;
+}): string[] {
+  const registry = loadPluginRegistrySnapshot(params);
+  const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const pluginId = resolveSelectedContextEnginePluginId(plugins);
+  return pluginId ? [pluginId] : [];
 }
 
 /** Resolve manifest owners required by one selected non-core harness runtime. */
@@ -173,7 +184,7 @@ export function requiresAgentHarnessPluginSelection(
   );
 }
 
-/** Folds selected harness and memory owners into one deterministic plugin load plan. */
+/** Folds selected harness, memory, and context-engine owners into one plugin load plan. */
 export function resolveAgentRuntimePluginLoadPlan(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
@@ -185,11 +196,15 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+  const contextEnginePluginIds = resolveSelectedContextEnginePluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
   const basePluginIds = (params.basePluginIds ?? []).filter(
     (pluginId) => !restrictiveAllowlistOmitsPlugin(params.config, pluginId),
   );
-  const pluginIds = [...basePluginIds, ...memoryPluginIds];
-  const forceActivatedPluginIds = [...memoryPluginIds];
+  const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
+  const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
   for (const selection of params.selections) {
     const runtime = resolveSelectedAgentHarnessRuntime(selection, config);
     if (!requiresAgentHarnessPluginSelection(selection, config)) {

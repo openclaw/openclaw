@@ -257,6 +257,7 @@ export function loadRuntimePluginCandidate(params: {
     shouldLoadModules: context.shouldLoadModules,
     validateOnly: params.validateOnly,
     shouldActivate: context.shouldActivate,
+    shouldRegisterRuntimeCapabilities: context.shouldRegisterRuntimeCapabilities,
     manifestRecord,
     cfg: context.cfg,
     env: context.env,
@@ -523,6 +524,7 @@ export function loadRuntimePluginCandidate(params: {
     pluginConfig: validatedConfig.value,
     hookPolicy: entry?.hooks,
     registrationMode: registrationPlan.mode,
+    registerRuntimeCapableCapabilities: registrationPlan.registerRuntimeCapableCapabilities,
   });
   const beforeRegister = performance.now();
   let registerFailed = false;

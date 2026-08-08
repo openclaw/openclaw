@@ -3,12 +3,22 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
+import {
+  registerContextEngineForOwner,
+  resolveContextEngine,
+} from "../../context-engine/registry.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "../../context-engine/registry.test-support.js";
+import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { enqueueCommandInLane, markGatewayDraining } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { createDeferred } from "../../shared/deferred.js";
 import { createQueuedTaskRun as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
@@ -52,6 +62,80 @@ let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js"
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
+const NO_MAINTENANCE_CHANGES = {
+  changed: false,
+  bytesFreed: 0,
+  rewrittenEntries: 0,
+} as const;
+
+type ContextEngineMaintainParams = Parameters<NonNullable<ContextEngine["maintain"]>>[0];
+
+function createBackgroundContextEngine(
+  maintain: NonNullable<ContextEngine["maintain"]>,
+  info: Partial<ContextEngine["info"]> = {},
+): ContextEngine {
+  return {
+    info: {
+      id: info.id ?? "test",
+      name: info.name ?? "Test Engine",
+      ...info,
+      turnMaintenanceMode: "background",
+    },
+    ingest: async () => ({ ingested: true }),
+    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+    compact: async () => ({ ok: true, compacted: false }),
+    maintain,
+  };
+}
+
+function createControlledMaintenance(options?: {
+  onStart?: (params: ContextEngineMaintainParams) => void;
+  onRelease?: (params: ContextEngineMaintainParams) => Promise<void> | void;
+}) {
+  const started = createDeferred<ContextEngineMaintainParams>();
+  const release = createDeferred();
+  const maintain = vi.fn(async (params: ContextEngineMaintainParams) => {
+    started.resolve(params);
+    options?.onStart?.(params);
+    await release.promise;
+    await options?.onRelease?.(params);
+    return NO_MAINTENANCE_CHANGES;
+  });
+  return {
+    maintain,
+    started: started.promise,
+    release: () => release.resolve(),
+  };
+}
+
+async function scheduleDeferredMaintenance(
+  params: Omit<Parameters<typeof runContextEngineMaintenance>[0], "onDeferredMaintenance">,
+) {
+  let completion: Promise<void> | undefined;
+  let settled = false;
+  await runContextEngineMaintenance({
+    ...params,
+    onDeferredMaintenance: (promise) => {
+      completion = promise;
+      void promise.then(() => {
+        settled = true;
+      });
+    },
+  });
+  if (!completion) {
+    throw new Error("Expected deferred maintenance to be scheduled");
+  }
+  return {
+    completion,
+    isSettled: () => settled,
+  };
+}
+
+function resetDeferredMaintenanceHarnessState(): void {
+  resetCommandQueueStateForTest();
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
+}
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
@@ -592,7 +676,6 @@ describe("runContextEngineMaintenance", () => {
           compact: async () => ({ ok: true, compacted: false }),
           maintain,
         } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
-
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
           sessionId: "session-2",
@@ -1030,7 +1113,6 @@ describe("runContextEngineMaintenance", () => {
           compact: async () => ({ ok: true, compacted: false }),
           maintain,
         } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
-
         await runContextEngineMaintenance({
           contextEngine: backgroundEngine,
           sessionId: "session-legacy",
@@ -1209,44 +1291,33 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("waits at the same-session read checkpoint before deferred maintenance rewrites", async () => {
+  it("preempts deferred maintenance at the same-session read checkpoint", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();
       try {
-        resetCommandQueueStateForTest();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
+        resetDeferredMaintenanceHarnessState();
 
         const sessionKey = "agent:main:session-rewrite-priority";
         const sessionLane = resolveSessionLane(sessionKey);
         const events: string[] = [];
-        let allowRewrite: (() => void) | undefined;
-        const maintain = vi.fn(async (params?: unknown) => {
-          events.push("maintenance-start");
-          await new Promise<void>((resolve) => {
-            allowRewrite = resolve;
-          });
-          events.push("maintenance-before-rewrite");
-          await (
-            params as { runtimeContext?: ContextEngineRuntimeContext }
-          ).runtimeContext?.rewriteTranscriptEntries?.({
-            replacements: [
-              {
-                entryId: "entry-1",
-                message: castAgentMessage({
-                  role: "assistant",
-                  content: [{ type: "text", text: "done" }],
-                  timestamp: 2,
-                }),
-              },
-            ],
-          });
-          events.push("maintenance-after-rewrite");
-          return {
-            changed: false,
-            bytesFreed: 0,
-            rewrittenEntries: 0,
-          };
+        const controlled = createControlledMaintenance({
+          onStart: () => events.push("maintenance-start"),
+          onRelease: async (params) => {
+            events.push("maintenance-before-rewrite");
+            await params.runtimeContext?.rewriteTranscriptEntries?.({
+              replacements: [
+                {
+                  entryId: "entry-1",
+                  message: castAgentMessage({
+                    role: "assistant",
+                    content: [{ type: "text", text: "done" }],
+                    timestamp: 2,
+                  }),
+                },
+              ],
+            });
+            events.push("maintenance-after-rewrite");
+          },
         });
 
         rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
@@ -1258,30 +1329,15 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        const backgroundEngine = {
-          info: {
-            id: "test",
-            name: "Test Engine",
-            turnMaintenanceMode: "background" as const,
-          },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }: { messages: unknown[] }) => ({
-            messages,
-            estimatedTokens: 0,
-          }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
-
         await runContextEngineMaintenance({
-          contextEngine: backgroundEngine,
+          contextEngine: createBackgroundContextEngine(controlled.maintain),
           sessionId: "session-rewrite-priority",
           sessionKey,
           sessionFile: "/tmp/session-rewrite-priority.jsonl",
           reason: "turn",
         });
 
-        await waitForAssertion(() => expect(events).toContain("maintenance-start"));
+        await controlled.started;
 
         const foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
           events.push("foreground-before-read-checkpoint");
@@ -1289,25 +1345,208 @@ describe("runContextEngineMaintenance", () => {
           events.push("foreground-read");
         });
 
-        if (!allowRewrite) {
-          throw new Error("Expected maintenance rewrite release callback to be initialized");
-        }
-        allowRewrite();
+        controlled.release();
 
         await waitForAssertion(() =>
           expect(events).toEqual([
             "maintenance-start",
             "foreground-before-read-checkpoint",
             "maintenance-before-rewrite",
-            "rewrite",
-            "maintenance-after-rewrite",
             "foreground-read",
           ]),
         );
 
-        expect(maintain).toHaveBeenCalledTimes(1);
+        expect(controlled.maintain).toHaveBeenCalledTimes(1);
+        expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
         await foregroundTurn;
       } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("fails a waiting turn without overlapping an unquarantinable maintenance run", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetDeferredMaintenanceHarnessState();
+        resetSystemEventsForTest();
+
+        const sessionKey = "agent:main:session-preempt-blocked";
+        const controlled = createControlledMaintenance();
+        const backgroundEngine = createBackgroundContextEngine(controlled.maintain, {
+          id: "unquarantinable-test",
+          name: "Unquarantinable Test Engine",
+        });
+        const scheduled = await scheduleDeferredMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-preempt-blocked",
+          sessionKey,
+          sessionFile: "/tmp/session-preempt-blocked.jsonl",
+          reason: "turn",
+        });
+        const maintenanceParams = await controlled.started;
+
+        const foregroundWait = expect(
+          waitForDeferredTurnMaintenanceForSession(sessionKey),
+        ).rejects.toThrow("this turn was stopped to avoid overlapping engine operations");
+        await flushAsyncWork();
+        expect(maintenanceParams.abortSignal?.aborted).toBe(true);
+        if (!maintenanceParams.runtimeContext?.rewriteTranscriptEntries) {
+          throw new Error("Expected maintenance runtime rewrite helper");
+        }
+        await expect(
+          maintenanceParams.runtimeContext.rewriteTranscriptEntries({ replacements: [] }),
+        ).rejects.toThrow("waiting foreground turn");
+        await vi.advanceTimersByTimeAsync(1_001);
+        await foregroundWait;
+        expect(scheduled.isSettled()).toBe(false);
+        const task = listTasksForOwnerKey(sessionKey).find(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(task?.status).toBe("timed_out");
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(peekSystemEvents(sessionKey).join("\n")).not.toContain(
+          "Deferred maintenance is still running.",
+        );
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-preempt-blocked",
+          sessionKey,
+          sessionFile: "/tmp/session-preempt-blocked.jsonl",
+          reason: "turn",
+        });
+        expect(controlled.maintain).toHaveBeenCalledOnce();
+        expect(scheduled.isSettled()).toBe(false);
+
+        controlled.release();
+        await scheduled.completion;
+        expect(scheduled.isSettled()).toBe(true);
+        expect(task && getTaskById(task.taskId)?.status).toBe("timed_out");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("keeps fallback serialized behind a quarantined maintenance run", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      const restoreRegistry = captureContextEngineRegistryStateForTests();
+      try {
+        resetDeferredMaintenanceHarnessState();
+        resetContextEngineRuntimeQuarantineForTests();
+        registerLegacyContextEngine();
+
+        const sessionKey = "agent:main:session-preempt-fallback";
+        const engineId = "preempt-fallback-engine";
+        let releaseRewriteRead: (() => void) | undefined;
+        const rewriteStarted = createDeferred();
+        resolveRuntimeTranscriptReadTargetMock.mockImplementationOnce(
+          async (scope: Record<string, unknown>) => {
+            rewriteStarted.resolve();
+            await new Promise<void>((resolve) => {
+              releaseRewriteRead = resolve;
+            });
+            return {
+              agentId: scope.agentId ?? "main",
+              sessionId: scope.sessionId,
+              sessionKey: scope.sessionKey,
+              storePath: scope.storePath ?? "/tmp/default-openclaw.sqlite",
+            };
+          },
+        );
+        const controlled = createControlledMaintenance({
+          onStart: (params) => {
+            void params.runtimeContext
+              ?.rewriteTranscriptEntries?.({ replacements: [] })
+              .catch(() => undefined);
+          },
+        });
+        registerContextEngineForOwner(
+          engineId,
+          () =>
+            createBackgroundContextEngine(controlled.maintain, {
+              id: engineId,
+              name: "Preempt Fallback Engine",
+              acceptedHostParams: ["sessionKey", "runtimeContext", "abortSignal"],
+            }),
+          `test:${engineId}`,
+        );
+        const contextEngine = await resolveContextEngine({
+          plugins: { slots: { contextEngine: engineId } },
+        });
+        const scheduled = await scheduleDeferredMaintenance({
+          contextEngine,
+          sessionId: "session-preempt-fallback",
+          sessionKey,
+          sessionFile: "/tmp/session-preempt-fallback.jsonl",
+          reason: "turn",
+        });
+        await rewriteStarted.promise;
+
+        const foregroundMaintenance = runContextEngineMaintenance({
+          contextEngine,
+          sessionId: "session-preempt-fallback",
+          sessionKey,
+          sessionFile: "/tmp/session-preempt-fallback.jsonl",
+          reason: "compaction",
+        });
+        const foregroundFailure = expect(foregroundMaintenance).rejects.toThrow(
+          "this turn was stopped to avoid overlapping engine operations",
+        );
+        await vi.advanceTimersByTimeAsync(1_001);
+        expect(contextEngine.info.id).toBe("legacy");
+        expect(controlled.maintain).toHaveBeenCalledOnce();
+        await foregroundFailure;
+        expect(scheduled.isSettled()).toBe(false);
+
+        if (!releaseRewriteRead) {
+          throw new Error("Expected transcript read release callback to be initialized");
+        }
+        releaseRewriteRead();
+        await flushAsyncWork();
+        expect(scheduled.isSettled()).toBe(false);
+
+        await expect(
+          runContextEngineMaintenance({
+            contextEngine,
+            sessionId: "session-preempt-fallback",
+            sessionKey,
+            sessionFile: "/tmp/session-preempt-fallback.jsonl",
+            reason: "compaction",
+          }),
+        ).rejects.toThrow("this turn was stopped to avoid overlapping engine operations");
+        expect(controlled.maintain).toHaveBeenCalledOnce();
+        expect(scheduled.isSettled()).toBe(false);
+
+        controlled.release();
+        await scheduled.completion;
+        expect(scheduled.isSettled()).toBe(true);
+
+        await expect(
+          runContextEngineMaintenance({
+            contextEngine,
+            sessionId: "session-preempt-fallback",
+            sessionKey,
+            sessionFile: "/tmp/session-preempt-fallback.jsonl",
+            reason: "compaction",
+          }),
+        ).resolves.toEqual({
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+          reason: "context engine downgraded to legacy",
+        });
+        expect(controlled.maintain).toHaveBeenCalledOnce();
+        const task = listTasksForOwnerKey(sessionKey).find(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(task?.status).toBe("timed_out");
+      } finally {
+        resetDeferredTurnMaintenanceStateForTest();
+        restoreRegistry();
         vi.useRealTimers();
       }
     });

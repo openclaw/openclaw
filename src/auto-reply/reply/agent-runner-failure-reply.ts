@@ -8,6 +8,7 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { resolveDeferredContextEngineMaintenanceBlockedMessage } from "../../agents/context-engine-maintenance-error.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
@@ -390,6 +391,11 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const deferredMaintenanceBlockedMessage =
+    resolveDeferredContextEngineMaintenanceBlockedMessage(error);
+  if (deferredMaintenanceBlockedMessage) {
+    return { text: deferredMaintenanceBlockedMessage, isGenericRunnerFailure: false };
+  }
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {

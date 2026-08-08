@@ -86,6 +86,23 @@ export const normalizePluginsConfig = (
   return normalizePluginsConfigWithResolver(config, createScopedPluginIdNormalizer());
 };
 
+/** Returns the configured non-default context-engine owner when policy permits activation. */
+export function resolveSelectedContextEnginePluginId(
+  plugins: NormalizedPluginsConfig,
+  selectedId = plugins.slots.contextEngine,
+): string | undefined {
+  if (
+    !plugins.enabled ||
+    typeof selectedId !== "string" ||
+    selectedId === defaultSlotIdForKey("contextEngine") ||
+    plugins.deny.includes(selectedId) ||
+    plugins.entries[selectedId]?.enabled === false
+  ) {
+    return undefined;
+  }
+  return selectedId;
+}
+
 /** Canonicalizes one plugin entry and its policy-list ids before a targeted mutation. */
 export function normalizePluginTargetConfig(
   config: OpenClawConfig,

@@ -22,6 +22,7 @@ function registerProbeEngine(params: {
   assembleCalls: Array<Record<string, unknown>>;
   compactCalls: Array<Record<string, unknown>>;
   commitTurnCalls?: Array<Record<string, unknown>>;
+  maintainCalls?: Array<Record<string, unknown>>;
   rejectAssemble?: boolean;
 }): string {
   const engineId = `host-param-probe-${++engineCounter}`;
@@ -52,6 +53,10 @@ function registerProbeEngine(params: {
           params.commitTurnCalls?.push({ ...callParams });
           return { status: "committed" };
         },
+        async maintain(callParams) {
+          params.maintainCalls?.push({ ...callParams });
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        },
       }) satisfies ContextEngine,
     `test:${engineId}`,
   );
@@ -59,6 +64,7 @@ function registerProbeEngine(params: {
 }
 
 async function invokeHostParamMethods(engine: ContextEngine) {
+  const abortController = new AbortController();
   await engine.assemble({
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
@@ -72,6 +78,11 @@ async function invokeHostParamMethods(engine: ContextEngine) {
     sessionTarget: { agentId: "main", sessionId: "session-1" },
     runtimeSettings,
     runtimeContext: { tokenBudget: 1000 },
+  });
+  await engine.maintain?.({
+    sessionId: "session-1",
+    sessionFile: "/tmp/session-1.jsonl",
+    abortSignal: abortController.signal,
   });
 }
 
@@ -99,6 +110,7 @@ describe("context-engine host parameter projection", () => {
   it("passes declared current host parameters", async () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
+    const maintainCalls: Array<Record<string, unknown>> = [];
     const engineId = registerProbeEngine({
       acceptedHostParams: [
         "sessionKey",
@@ -106,9 +118,11 @@ describe("context-engine host parameter projection", () => {
         "runtimeSettings",
         "sessionTarget",
         "runtimeContext",
+        "abortSignal",
       ],
       assembleCalls,
       compactCalls,
+      maintainCalls,
     });
 
     await invokeHostParamMethods(
@@ -126,6 +140,7 @@ describe("context-engine host parameter projection", () => {
       runtimeSettings,
       runtimeContext: { tokenBudget: 1000 },
     });
+    expect(maintainCalls[0]?.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
   it("uses the legacy parameter set for undeclared engines during the window", async () => {
@@ -133,19 +148,21 @@ describe("context-engine host parameter projection", () => {
     vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({ assembleCalls, compactCalls });
+    const maintainCalls: Array<Record<string, unknown>> = [];
+    const engineId = registerProbeEngine({ assembleCalls, compactCalls, maintainCalls });
 
     await invokeHostParamMethods(
       await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } }),
     );
 
-    for (const call of [...assembleCalls, ...compactCalls]) {
+    for (const call of [...assembleCalls, ...compactCalls, ...maintainCalls]) {
       expect(call).not.toHaveProperty("sessionKey");
       expect(call).not.toHaveProperty("runtimeSettings");
     }
     expect(assembleCalls[0]).not.toHaveProperty("prompt");
     expect(compactCalls[0]).not.toHaveProperty("sessionTarget");
     expect(compactCalls[0]).not.toHaveProperty("runtimeContext");
+    expect(maintainCalls[0]).not.toHaveProperty("abortSignal");
     expect(compactCalls[0]).toHaveProperty("sessionId", "session-1");
   });
 
@@ -271,7 +288,8 @@ describe("context-engine host parameter projection", () => {
     vi.setSystemTime(new Date("2026-07-29T12:00:00Z"));
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
-    const engineId = registerProbeEngine({ assembleCalls, compactCalls });
+    const maintainCalls: Array<Record<string, unknown>> = [];
+    const engineId = registerProbeEngine({ assembleCalls, compactCalls, maintainCalls });
     const engine = await resolveContextEngine({ plugins: { slots: { contextEngine: engineId } } });
 
     vi.setSystemTime(new Date("2026-08-13T00:00:00Z"));
@@ -290,6 +308,7 @@ describe("context-engine host parameter projection", () => {
       runtimeSettings,
       runtimeContext: { tokenBudget: 1000 },
     });
+    expect(maintainCalls[0]?.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
   it("does not retry validator-shaped engine failures", async () => {

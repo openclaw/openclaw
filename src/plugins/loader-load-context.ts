@@ -21,6 +21,7 @@ import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import type {
   ChannelPluginLoadIntent,
+  PluginHandleRegistrationMode,
   PluginLoadOptions,
   PluginRuntimeSubagentMode,
 } from "./loader-types.js";
@@ -197,6 +198,7 @@ function buildCacheKey(params: {
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
   activate?: boolean;
+  handleRegistrationMode: PluginHandleRegistrationMode;
 }): string {
   const discoveryContext = resolvePluginDiscoveryContext({
     workspaceDir: params.workspaceDir,
@@ -235,6 +237,7 @@ function buildCacheKey(params: {
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const activationMode = params.activate === false ? "snapshot" : "active";
+  const handleRegistrationMode = params.handleRegistrationMode;
   const cacheIdentity = `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
     {
       bundledPackage,
@@ -245,7 +248,7 @@ function buildCacheKey(params: {
       loadPaths,
       activationMetadataKey: params.activationMetadataKey ?? "",
     },
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}::${handleRegistrationMode}`;
   return createHash("sha256").update(cacheIdentity).digest("hex");
 }
 
@@ -333,6 +336,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const channelPluginLoadIntent = options.channelPluginLoadIntent ?? "full";
+  const handleRegistrationMode = options.handleRegistrationMode ?? "discovery";
   const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
@@ -395,6 +399,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     activate: options.activate,
+    handleRegistrationMode,
   });
   return {
     env,
@@ -411,6 +416,8 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     channelPluginLoadIntent,
     preferBuiltPluginArtifacts,
     shouldActivate: options.activate !== false,
+    shouldRegisterRuntimeCapabilities:
+      options.activate !== false || handleRegistrationMode === "runtime",
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
     installRecords,
