@@ -58,16 +58,74 @@ function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRu
     .join("|");
 }
 
+/**
+ * Processes observed before `schtasks /Run` that any launch-evidence path could match:
+ * managed-port gateway owners, plus wrappers already running the task script.
+ *
+ * Anything already in this set was not started by the run we are about to trigger,
+ * so it cannot serve as evidence that Task Scheduler owns a gateway process.
+ */
+async function readPreLaunchTaskPids(
+  env: GatewayServiceEnv,
+  scriptPath: string,
+): Promise<ReadonlySet<number>> {
+  const pids = new Set<number>();
+  try {
+    const scriptPathNeedle = normalizeLowercaseStringOrEmpty(scriptPath.replaceAll("/", "\\"));
+    if (scriptPathNeedle) {
+      for (const entry of readWindowsProcessSnapshot() ?? []) {
+        const pid = entry.ProcessId;
+        if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
+          continue;
+        }
+        if (
+          normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
+            .replaceAll("/", "\\")
+            .includes(scriptPathNeedle)
+        ) {
+          pids.add(pid);
+        }
+      }
+    }
+    if (shouldManageGatewayListenerPort(env)) {
+      const command = await readScheduledTaskCommand(env).catch(() => null);
+      const port = resolveScheduledTaskCommandPort(env, command);
+      if (port) {
+        const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
+        for (const pid of await resolveScheduledTaskOwnedGatewayPids(
+          env,
+          { port, probeHosts },
+          command,
+        )) {
+          pids.add(pid);
+        }
+      }
+    }
+  } catch {
+    // This runs before `schtasks /Run`; a probe failure must never block the launch.
+    // A partial baseline only means evidence is judged as it was before.
+  }
+  return pids;
+}
+
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
+  preLaunchGatewayPids: ReadonlySet<number>;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
     state: "running" | "not-yet-run" | "stopped-success" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
-    if (runtime?.status === "running") {
+    // `readScheduledTaskRuntime` reports `running` with the owning pid when raw Task
+    // Scheduler state is not running but a gateway owns the managed port. That pid is
+    // launch progress only when it appeared after `/Run`; a pre-existing foreground
+    // gateway must fall through to the raw last-run-result classification below.
+    if (
+      runtime?.status === "running" &&
+      !(runtime.pid !== undefined && params.preLaunchGatewayPids.has(runtime.pid))
+    ) {
       return { state: "running", signature: runtimeSignature(runtime) };
     }
     const normalizedResult = normalizeTaskResultCode(runtime?.lastRunResult);
@@ -91,7 +149,8 @@ async function shouldFallbackScheduledTaskLaunch(params: {
         { port: taskPort, probeHosts },
         command,
       );
-      if (ownedPids.length > 0) {
+      // Only a process that appeared after `/Run` proves Task Scheduler started one.
+      if (ownedPids.some((pid) => !params.preLaunchGatewayPids.has(pid))) {
         return true;
       }
     }
@@ -107,11 +166,16 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       return false;
     }
     if (
-      entries.some((entry) =>
-        normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
+      entries.some((entry) => {
+        const pid = entry.ProcessId;
+        // A wrapper already running the task script before `/Run` is not this run's product.
+        if (typeof pid === "number" && params.preLaunchGatewayPids.has(pid)) {
+          return false;
+        }
+        return normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
           .replaceAll("/", "\\")
-          .includes(scriptPathNeedle),
-      )
+          .includes(scriptPathNeedle);
+      })
     ) {
       return true;
     }
@@ -121,16 +185,17 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     if (!installedArguments?.length) {
       return false;
     }
-    return (
-      findInstalledProcessPid(
-        entries,
-        taskPort,
-        installedArguments,
-        manageGatewayPort
-          ? (argv) => isGatewayArgv(argv, { allowGatewayBinary: true })
-          : isNodeHostArgv,
-      ) != null
+    const installedPid = findInstalledProcessPid(
+      entries,
+      taskPort,
+      installedArguments,
+      manageGatewayPort
+        ? (argv) => isGatewayArgv(argv, { allowGatewayBinary: true })
+        : isNodeHostArgv,
     );
+    // Same rule as the managed-port check above: a process that already matched the
+    // persisted argv before `/Run` is the caller's own gateway, not this run's product.
+    return installedPid != null && !params.preLaunchGatewayPids.has(installedPid);
   };
 
   let previous = await readLaunchObservation();
@@ -169,13 +234,18 @@ export async function runScheduledTaskOrThrow(params: {
   scriptPath: string;
   onMutation?: () => void;
 }): Promise<ScheduledTaskActivation> {
+  const preLaunchGatewayPids = await readPreLaunchTaskPids(params.env, params.scriptPath);
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
   params.onMutation?.();
   if (
-    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
+    !(await shouldFallbackScheduledTaskLaunch({
+      env: params.env,
+      scriptPath: params.scriptPath,
+      preLaunchGatewayPids,
+    }))
   ) {
     return "scheduled-task";
   }

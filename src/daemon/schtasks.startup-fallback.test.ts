@@ -789,11 +789,16 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      let portInspections = 0;
       inspectPortUsage.mockImplementation(async (port) => {
-        schtasksResponses.length = 0;
-        schtasksResponses.push({ code: 1, stdout: "", stderr: "restart denied" });
-        return portInspections++ === 0
+        // It is the restart that gets denied, so only arm the denial once the initial
+        // activation has issued its `/Run`.
+        if (schtasksCalls.some((call) => call[0] === "/Run")) {
+          schtasksResponses.length = 0;
+          schtasksResponses.push({ code: 1, stdout: "", stderr: "restart denied" });
+        }
+        // The verified fallback keeps the port until it is terminated, so key the
+        // transition on the termination itself rather than on a probe count.
+        return killProcessTree.mock.calls.length === 0
           ? {
               port,
               status: "busy",
@@ -874,7 +879,9 @@ describe("Windows startup fallback", () => {
           args.includes(NODE_PROCESS_QUERY)
         ) {
           processQueries += 1;
-          if (processQueries > 5) {
+          // Two activations run here, and each one baselines the managed-port owners
+          // before `schtasks /Run`, so this flow inspects twice more than the launch path alone.
+          if (processQueries > 9) {
             return makeSpawnSyncResult({ status: 1 });
           }
           return makeSpawnSyncResult({
@@ -912,7 +919,7 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env, new PassThrough(), "19433");
 
-      expect(processQueries).toBe(5);
+      expect(processQueries).toBe(9);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
@@ -1385,7 +1392,7 @@ describe("Windows startup fallback", () => {
 
   it("falls back to a Startup-folder launcher when schtasks create returns localized access denied", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      addStartupFallbackMissingResponses([{ code: 1, stdout: "", stderr: "错误: 拒绝访问。" }]);
+      addStartupFallbackMissingResponses([{ code: 1, stdout: "", stderr: "??: ?????" }]);
 
       await installGatewayScheduledTask(env);
 
@@ -1495,6 +1502,120 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("does not treat a pre-existing gateway listener as Scheduled Task launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      // A foreground `openclaw gateway` already owns the managed port before `schtasks /Run`.
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [
+          {
+            pid: 4242,
+            command: "node.exe",
+            commandLine: "node gateway.js --port 18789",
+          },
+        ],
+        hints: [],
+      });
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("does not treat a pre-existing task-script wrapper as Scheduled Task launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const taskScriptPath = resolveTaskScriptPath(env);
+      fastForwardTaskStartWait();
+      // A wrapper left over from an earlier run already holds the task script before
+      // `/Run`, so it cannot be evidence that this run started anything.
+      spawnSync.mockImplementation((command, args) =>
+        command === getWindowsPowerShellExePath() &&
+        Array.isArray(args) &&
+        args.includes(NODE_PROCESS_QUERY)
+          ? makeSpawnSyncResult({
+              stdout: JSON.stringify([
+                { ProcessId: 4242, CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"` },
+                { ProcessId: 9999, CommandLine: "powershell.exe" },
+              ]),
+            })
+          : makeSpawnSyncResult(),
+      );
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("does not treat a pre-existing Windows gateway process as Scheduled Task launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      fastForwardTaskStartWait();
+      const installedGatewayCommandLine =
+        '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789';
+      // A foreground gateway started from the same install already owns the port before
+      // `schtasks /Run`, so it matches the persisted task argv for the whole launch window.
+      spawnSync.mockImplementation((command, args) =>
+        command === getWindowsPowerShellExePath() &&
+        Array.isArray(args) &&
+        args.includes(NODE_PROCESS_QUERY)
+          ? makeSpawnSyncResult({
+              stdout: JSON.stringify([
+                { ProcessId: 4242, CommandLine: installedGatewayCommandLine },
+                { ProcessId: 9999, CommandLine: "powershell.exe" },
+              ]),
+            })
+          : makeSpawnSyncResult(),
+      );
+      addAcceptedRunNeverStartsResponses();
+
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+          "gateway",
+          "--port",
+          "18789",
+        ],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      expectStartupFallbackSpawn();
+    });
+  });
+
+  it("accepts a newly observed gateway process while a pre-existing listener keeps running", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      fastForwardTaskStartWait();
+      const listener = (pid: number) => ({
+        pid,
+        command: "node.exe",
+        commandLine: "node gateway.js --port 18789",
+      });
+      let portInspections = 0;
+      inspectPortUsage.mockImplementation(async (port: number) => ({
+        port,
+        status: "busy" as const,
+        // The task really starts and adds its own process next to the foreground gateway.
+        listeners: portInspections++ === 0 ? [listener(4242)] : [listener(4242), listener(5353)],
+        hints: [],
+      }));
+      addAcceptedRunNeverStartsResponses();
+
+      await installGatewayScheduledTask(env);
+
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("does not treat a gateway listener as node Scheduled Task launch evidence", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
@@ -1594,12 +1715,15 @@ describe("Windows startup fallback", () => {
           return {
             pid: 0,
             output: [null, "", ""],
-            stdout: JSON.stringify([
-              {
-                ProcessId: 4242,
-                CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
-              },
-            ]),
+            // The wrapper is this run's product, so it only exists once `/Run` was issued.
+            stdout: schtasksCalls.some((call) => call[0] === "/Run")
+              ? JSON.stringify([
+                  {
+                    ProcessId: 4242,
+                    CommandLine: `cmd.exe /d /s /c "${taskScriptPath}"`,
+                  },
+                ])
+              : JSON.stringify([{ ProcessId: 9999, CommandLine: "powershell.exe" }]),
             stderr: "",
             status: 0,
             signal: null,
