@@ -18,7 +18,7 @@ import {
   beginsIndependentMediaSource,
   cleanCandidate,
   FILE_URL_PREFIX_RE,
-  isAllowedRemoteMediaUrl,
+  hasTraversalOrUnsupportedHomeDirPrefix,
   isValidMedia,
   looksLikeLocalFilePath,
   normalizeMediaSource,

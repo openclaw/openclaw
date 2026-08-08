@@ -21,7 +21,7 @@ export function normalizeMediaSource(src: string): string {
   return src.replace(FILE_URL_PREFIX_RE, "");
 }
 
-export const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
+const TRAILING_SERIALIZED_JSON_AFTER_EXT_RE = /^(.*\.\w{1,10})\\?"(?=[\]},:]|$).*/s;
 
 export function cleanCandidate(raw: string) {
   const stripped = raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
@@ -29,15 +29,15 @@ export function cleanCandidate(raw: string) {
   return jsonSuffixMatch?.[1] ?? stripped;
 }
 
-export const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
-export const MEDIA_SOURCE_ROOT_RE = /^(?:[a-z]:[\\/]|[/~]|\.{1,2}[\\/]|\\\\)/i;
-export const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
-export const HAS_FILE_EXT = /\.\w{1,10}$/;
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+const MEDIA_SOURCE_ROOT_RE = /^(?:[a-z]:[\\/]|[/~]|\.{1,2}[\\/]|\\\\)/i;
+const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+const HAS_FILE_EXT = /\.\w{1,10}$/;
 
 // Matches ".." as a standalone path segment (start, middle, or end).
-export const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
+const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
 
-export function isSupportedHomeRelativePath(candidate: string): boolean {
+function isSupportedHomeRelativePath(candidate: string): boolean {
   return candidate.startsWith("~/") || candidate.startsWith("~\\");
 }
 
@@ -66,7 +66,7 @@ export function looksLikeLocalFilePath(candidate: string): boolean {
 
 // Recognize safe local file path patterns for media approval, rejecting
 // traversal and unsupported home-dir paths so they never reach downstream load/send logic.
-export function isLikelyLocalPath(candidate: string): boolean {
+function isLikelyLocalPath(candidate: string): boolean {
   if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
     return false;
   }
@@ -80,7 +80,7 @@ export function isLikelyLocalPath(candidate: string): boolean {
   );
 }
 
-export function normalizeRemoteMediaHostname(value: string): string {
+function normalizeRemoteMediaHostname(value: string): string {
   const normalized = value
     .trim()
     .toLowerCase()
@@ -92,7 +92,7 @@ export function normalizeRemoteMediaHostname(value: string): string {
   return normalized;
 }
 
-export function isBlockedRemoteMediaHostname(hostname: string): boolean {
+function isBlockedRemoteMediaHostname(hostname: string): boolean {
   const normalized = normalizeRemoteMediaHostname(hostname);
   if (!normalized) {
     return true;
