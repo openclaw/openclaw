@@ -1076,7 +1076,7 @@ export async function sendMessageSlack(
   const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(queuedOpts.threadTs);
   if (threadTs && result.channelId && account.accountId) {
     recordSlackThreadParticipation(account.accountId, result.channelId, threadTs, {
-      ...(deliveryTeamId ? { teamId: deliveryTeamId } : {}),
+      teamId: deliveryTeamId,
     });
   }
   return result;
