@@ -1,11 +1,16 @@
 // Covers system event queue routing, draining, and formatting.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { isCronSystemEvent } from "./heartbeat-events-filter.js";
+import {
+  resolveSystemEventOwnerAgentId,
+  selectAgentSystemEvents,
+  withSystemEventOwner,
+} from "./system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   consumeSystemEventEntries,
@@ -36,6 +41,7 @@ async function drainFormattedEvents(
 ) {
   return await drainFormattedSystemEvents({
     cfg,
+    agentId: "main",
     sessionKey,
     isMainSession: false,
     isNewSession: false,
@@ -46,6 +52,10 @@ async function drainFormattedEvents(
 describe("system events (session routing)", () => {
   beforeEach(() => {
     resetSystemEventsForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("does not leak session-scoped events into main", async () => {
@@ -494,6 +504,64 @@ describe("system events (session routing)", () => {
     expect(
       enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" }),
     ).toBe(true);
+  });
+
+  it("selects unowned and matching-owner events without consuming other owners", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-08T00:00:00Z"));
+    const key = "global";
+    const eventOptions = { sessionKey: key, contextKey: "hook:shared" };
+
+    expect(
+      enqueueSystemEvent("Hook finished", withSystemEventOwner({ ...eventOptions }, " Alpha ")),
+    ).toBe(true);
+    expect(
+      enqueueSystemEvent("Hook finished", withSystemEventOwner({ ...eventOptions }, "alpha")),
+    ).toBe(false);
+    expect(
+      enqueueSystemEvent("Hook finished", withSystemEventOwner({ ...eventOptions }, "beta")),
+    ).toBe(true);
+    expect(enqueueSystemEvent("Hook finished", eventOptions)).toBe(true);
+    expect(new Set(peekSystemEventEntries(key).map((event) => event.ts))).toEqual(
+      new Set([Date.now()]),
+    );
+
+    const selected = selectAgentSystemEvents(peekSystemEventEntries(key), "ALPHA");
+    expect(selected.map(resolveSystemEventOwnerAgentId)).toEqual(["alpha", null]);
+
+    vi.advanceTimersByTime(1);
+    enqueueSystemEvent("Later alpha event", withSystemEventOwner({ sessionKey: key }, "alpha"));
+    expect(
+      consumeSelectedSystemEventEntries(key, selected).map(resolveSystemEventOwnerAgentId),
+    ).toEqual(["alpha", null]);
+    expect(
+      peekSystemEventEntries(key).map((event) => [
+        event.text,
+        resolveSystemEventOwnerAgentId(event),
+      ]),
+    ).toEqual([
+      ["Hook finished", "beta"],
+      ["Later alpha event", "alpha"],
+    ]);
+  });
+
+  it("replaces only the matching owner slot", () => {
+    const key = "global";
+    const options = { sessionKey: key, contextKey: "hook:shared", replace: true };
+
+    enqueueSystemEvent("Alpha pending", withSystemEventOwner({ ...options }, "alpha"));
+    enqueueSystemEvent("Beta pending", withSystemEventOwner({ ...options }, "beta"));
+    enqueueSystemEvent("Alpha finished", withSystemEventOwner({ ...options }, "ALPHA"));
+
+    expect(
+      peekSystemEventEntries(key).map((event) => [
+        event.text,
+        resolveSystemEventOwnerAgentId(event),
+      ]),
+    ).toEqual([
+      ["Beta pending", "beta"],
+      ["Alpha finished", "alpha"],
+    ]);
   });
 });
 
