@@ -215,6 +215,8 @@ const APPROVAL_RUNTIME_METHODS = new Set<string>([
 ]);
 
 const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "exec.approval.request",
+  "plugin.approval.request",
   "wake",
   "cron.list",
   "cron.get",
@@ -366,10 +368,20 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     }
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
+  if (identity.signedAgentRuntimeIdentityToken) {
+    return identity.signedAgentRuntimeIdentityToken;
+  }
+  if (!identity.operationalRunInstance) {
+    if (optionalLocalIdentity && !params.required) {
+      return undefined;
+    }
+    throw new Error("trusted operational run instance required for this gateway call");
+  }
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     return await mintAgentRuntimeIdentityToken({
       ...identity,
+      operationalRunInstance: identity.operationalRunInstance,
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
     });
   } catch (error) {
@@ -436,6 +448,12 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
     // process owns the durable receipt and sends no source authority over RPC.
     return undefined;
   }
+  if (!identity.operationalRunInstance) {
+    if (terminalSourceReply) {
+      throw new Error("terminal source reply requires a trusted operational run instance");
+    }
+    return undefined;
+  }
   const resolvedMessageActionContext = terminalSourceReply
     ? {
         ...messageActionContext,
@@ -449,6 +467,7 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
       };
   return await mintAgentRuntimeIdentityToken({
     ...identity,
+    operationalRunInstance: identity.operationalRunInstance,
     messageActionContext: resolvedMessageActionContext,
   });
 }

@@ -31,6 +31,7 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
@@ -722,6 +723,8 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
     },
     assignment: {
       runId: RUN_ID,
+      operationalRunInstance: createOperationalRunInstanceRef(RUN_ID),
+      agentRuntimeIdentityToken: "test-agent-runtime-token",
       turnId: "worker-turn",
       prompt: "Complete the worker turn.",
       suppressPromptTranscript: false,

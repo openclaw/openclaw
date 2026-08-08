@@ -51,6 +51,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
@@ -554,6 +555,7 @@ export async function persistCliTurnTranscript(params: {
 }
 
 export function runAgentAttempt(params: {
+  preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;
   modelOverride: string;
   configuredAuthProfileId?: string;
@@ -971,8 +973,9 @@ export function runAgentAttempt(params: {
           agentId: params.sessionAgentId,
           runId: params.runId,
         },
-        () =>
-          runCliAgent({
+        async () => {
+          return await runCliAgent({
+            preparedRunAdmission: params.preparedRunAdmission,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
             sessionEntry: params.sessionEntry,
@@ -1136,7 +1139,8 @@ export function runAgentAttempt(params: {
                   },
                 }
               : {}),
-          }),
+          });
+        },
       );
     };
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
@@ -1178,6 +1182,7 @@ export function runAgentAttempt(params: {
   }
 
   const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
+    preparedRunAdmission: params.preparedRunAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     chatType: params.sessionEntry?.chatType,

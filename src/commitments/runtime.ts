@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -244,6 +245,12 @@ async function defaultExtractBatch(params: {
   const modelRef = await resolveDefaultModel({ cfg, agentId: first.agentId });
   const { runEmbeddedAgent } = await import("../agents/embedded-agent.js");
   const result = await runEmbeddedAgent({
+    preparedRunAdmission: prepareSystemAgentRunAdmission(
+      cfg,
+      runId,
+      first.agentId,
+      "commitments.extract",
+    ),
     sessionId: runId,
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,
     agentId: first.agentId,

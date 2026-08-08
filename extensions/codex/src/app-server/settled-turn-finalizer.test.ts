@@ -2,6 +2,7 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -25,6 +26,7 @@ const { runCodexSettledTurnFinalization } = await import("./settled-turn-finaliz
 
 function createAttempt(): EmbeddedRunAttemptParams {
   return {
+    hostCapabilities: createCodexTestHostCapabilities(),
     prompt: "Produce the final user-visible answer now.",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",

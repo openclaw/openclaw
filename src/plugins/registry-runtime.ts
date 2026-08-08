@@ -1,5 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import {
@@ -7,6 +12,7 @@ import {
   sqliteSessionFileMarkerMatchesTarget,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
@@ -826,7 +832,29 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               const ownerPluginId = resolveRunSessionExecutionOwner(params);
               return ownerPluginId
                 ? await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(params)
-                : await agent.runEmbeddedAgent(params);
+                : await (
+                    agent.runEmbeddedAgent as unknown as (
+                      params: RunEmbeddedAgentParams,
+                    ) => ReturnType<PluginRuntime["agent"]["runEmbeddedAgent"]>
+                  )({
+                    ...params,
+                    preparedRunAdmission: prepareAgentRunAdmission({
+                      cfg:
+                        params.config ??
+                        (registryParams.runtime.config.current() as unknown as OpenClawConfig),
+                      operationalRunInstance: createOperationalRunInstanceRef(params.runId),
+                      facts: {
+                        runId: params.runId,
+                        agentId: params.sessionTarget?.agentId ?? params.agentId ?? "main",
+                        ingress: {
+                          kind: "plugin",
+                          boundary: "plugin-runtime",
+                          rawSourceRef: pluginId,
+                          state: "present",
+                        },
+                      },
+                    }),
+                  });
             });
           const scopedAgent = Object.create(
             Object.getPrototypeOf(agent),

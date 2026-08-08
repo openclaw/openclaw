@@ -25,6 +25,8 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       },
     },
     assignment: {
+      operationalRunInstance: { instanceId: "instance-run-1", runId: "run-1" },
+      agentRuntimeIdentityToken: "signed-runtime-token",
       runId: "run-1",
       turnId: "turn-1",
       prompt: "Inspect the workspace.",
@@ -69,6 +71,13 @@ describe("worker launch descriptor", () => {
       {
         ...descriptor,
         assignment: { ...descriptor.assignment, unexpected: true },
+      },
+      {
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          operationalRunInstance: { instanceId: "instance-run-1", runId: "other-run" },
+        },
       },
       {
         ...descriptor,
@@ -144,6 +153,19 @@ describe("worker launch descriptor", () => {
 
     descriptor.assignment.toolAuthority.allowedToolNames = [];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+  });
+
+  it("rejects the legacy v2 assignment without admitted execution context", () => {
+    const descriptor = launchDescriptor();
+    const {
+      operationalRunInstance: _operationalRunInstance,
+      agentRuntimeIdentityToken: _agentRuntimeIdentityToken,
+      ...legacyAssignment
+    } = descriptor.assignment;
+
+    expect(() =>
+      parseWorkerLaunchDescriptor({ ...descriptor, assignment: legacyAssignment }),
+    ).toThrow("invalid worker launch descriptor");
   });
 
   it("rejects non-absolute paths, unattached sessions, and discontinuous event sequences", () => {

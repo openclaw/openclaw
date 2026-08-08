@@ -7,6 +7,7 @@ import type {
   WorkerInferenceModelRef,
   WorkerInferenceOptions,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
 import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.js";
@@ -21,6 +22,7 @@ import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
+import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
@@ -61,6 +63,8 @@ type WorkerEmbeddedLiveClient = {
 };
 
 type RunWorkerEmbeddedTurnParams = {
+  operationalRunInstance: OperationalRunInstanceRef;
+  agentRuntimeIdentityToken: string;
   cwd: string;
   stateDir: string;
   sessionId: string;
@@ -88,6 +92,9 @@ const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawCon
 export async function runWorkerEmbeddedTurn(
   params: RunWorkerEmbeddedTurnParams,
 ): Promise<RunWorkerEmbeddedTurnResult> {
+  if (params.operationalRunInstance.runId !== params.runId) {
+    throw new Error("worker operational run instance disagrees with the admitted turn");
+  }
   const model = createNativeModelOwnedRuntimeModel({
     provider: params.modelRef.provider,
     modelId: params.modelRef.model,
@@ -159,7 +166,7 @@ export async function runWorkerEmbeddedTurn(
     },
     processDefaults: { scopeKey: params.sessionKey },
   });
-  const localTools = finalizeAgentTools({
+  const unboundLocalTools = finalizeAgentTools({
     tools: coreTools,
     modelProvider: params.modelRef.provider,
     modelId: params.modelRef.model,
@@ -179,6 +186,14 @@ export async function runWorkerEmbeddedTurn(
     },
     agentId: DEFAULT_AGENT_ID,
   }).filter((tool) => localToolNameSet.has(tool.name));
+  const localTools = unboundLocalTools.map((tool) =>
+    wrapToolWithGatewayCallerIdentity(tool, {
+      agentId: DEFAULT_AGENT_ID,
+      sessionKey: params.sessionKey,
+      operationalRunInstance: params.operationalRunInstance,
+      signedAgentRuntimeIdentityToken: params.agentRuntimeIdentityToken,
+    }),
+  );
   const discoveredToolNames = new Set(localTools.map((tool) => tool.name));
   for (const toolName of WORKER_LOCAL_TOOL_NAMES) {
     if (!discoveredToolNames.has(toolName)) {

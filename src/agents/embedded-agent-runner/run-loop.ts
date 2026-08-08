@@ -66,7 +66,7 @@ import { createUsageAccumulator } from "./usage-accumulator.js";
 export async function runPreparedEmbeddedLoop(
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
-  const params = input.runParams;
+  let params = input.runParams;
   let { provider, modelId } = input;
   const {
     agentDir,
@@ -105,6 +105,11 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
+  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
+  // Admission is resolved once before the retry loop. Carry that exact object
+  // through every attempt/recovery owner; the original prepared input must not
+  // let downstream dispatch lose the admitted context.
+  const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
   const {
@@ -357,7 +362,7 @@ export async function runPreparedEmbeddedLoop(
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
       const dispatch = await prepareAndDispatchEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         contextEngine,
         sessionPromptState,
@@ -388,7 +393,7 @@ export async function runPreparedEmbeddedLoop(
         dispatchedAttempt.rawAttempt.latestMcpAppChannelView ?? latestMcpAppChannelView;
       dispatchedAttempt.rawAttempt.latestMcpAppChannelView = latestMcpAppChannelView;
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         dispatchedAttempt,
         sessionPromptState,
@@ -431,7 +436,7 @@ export async function runPreparedEmbeddedLoop(
         canRestartForLiveSwitch,
       } = normalizedAttempt;
       const recovery = await recoverEmbeddedRunAttempt({
-        runInput: input,
+        runInput: admittedRunInput,
         preparedRuntime,
         normalizedAttempt,
         runtimePlan,
