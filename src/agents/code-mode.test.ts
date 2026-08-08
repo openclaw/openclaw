@@ -155,7 +155,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const execTool = compacted.tools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
-    expect(execTool?.description).toContain("Use `return` to pass the final value back");
+    expect(execTool?.description).toContain("`return` sets final value");
   });
 
   it("hides normal tools when only the active agent enables code mode", () => {
@@ -206,38 +206,55 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(language).not.toHaveProperty("oneOf");
   });
 
-  it("describes code-mode runtime constraints in the model-visible exec schema", () => {
+  it("describes deterministic OpenClaw Code Mode composition in the exec schema", () => {
     const { tools } = createCodeModeHarness();
     const execTool = expectDefined(tools[0], "tools[0] test invariant");
     const parameters = execTool.parameters as {
       properties?: Record<string, Record<string, unknown>>;
     };
 
-    expect(execTool.description).toContain("Node.js modules");
-    expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("process them in the first exec");
-    expect(execTool.description).toContain("do not spend another exec inspecting");
-    expect(execTool.description).toContain("dependent reads, checks, and follow-up calls in order");
-    expect(execTool.description).toContain("normal tool policy and approvals");
+    expect(execTool.description).toContain("Run JavaScript or TypeScript in OpenClaw Code Mode");
+    expect(execTool.description).toContain(
+      "Declared fields support deterministic transforms and dependent calls in one cell",
+    );
+    expect(execTool.description).toContain("`tools.search` catalog lookup stays inline");
+    expect(execTool.description).toContain(
+      "Stable target IDs from the request, trusted prior context, or their owning tool",
+    );
+    expect(execTool.description).toContain(
+      "may feed a dependent mutation when intent is unambiguous",
+    );
+    expect(execTool.description).toContain("Singleton output alone is not intent");
+    expect(execTool.description).toContain("return evidence when target selection is ambiguous");
+    expect(execTool.description).not.toContain(
+      "Application target identity discovered from tool data returns candidates",
+    );
+    expect(execTool.description).not.toContain(
+      "Mutate application state inline only when the request or trusted prior context supplies",
+    );
+    expect(execTool.description).toContain(
+      "conflicting authority/permission/ownership evidence before mutation",
+    );
+    expect(execTool.description).toContain("Compose dependent calls in order");
+    expect(execTool.description).toContain("Nested calls enforce policy and approvals");
     expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
     expect(execTool.description).toContain("`tools.search(query: string, options?)`");
-    expect(execTool.description).toContain("enabled catalog tools allowed by policy");
     expect(execTool.description).toContain("`tools.describe(id: string)`");
     expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
     expect(execTool.description).toContain("`tools.call(id: string, args?)`");
-    expect(execTool.description).toContain("Never invent or transform a tool id");
-    expect(execTool.description).toContain("Quick-index arrows show trusted declared output hints");
-    expect(execTool.description).toContain("`-> ?` means never guess result field names");
-    expect(execTool.description).toContain("never guess result field names");
-    expect(execTool.description).toContain("return the raw tool value unchanged");
-    expect(execTool.description).toContain("final dependent call after declared-output calls");
-    expect(execTool.description).toContain("do not wrap it in the requested answer shape");
-    expect(execTool.description).toContain("filter or map it only in a later exec");
-    expect(execTool.description).toContain("returns its JSON value directly");
-    expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
+    expect(execTool.description).toContain("keep IDs unchanged");
+    expect(execTool.description).toContain("Quick-index arrows are trusted output hints");
+    expect(execTool.description).toContain("`-> ?` marks unknown output");
+    expect(execTool.description).toContain("stays raw for observation");
+    expect(execTool.description).toContain("transform it later");
+    expect(execTool.description).toContain("returns JSON");
+    expect(execTool.description).toContain(
+      "Use exact enabled catalog tools from JavaScript or TypeScript for shell, file, network, and external actions",
+    );
+    expect(execTool.description).toContain(
+      "raw shell commands and Node.js `require`/`import` are unavailable",
+    );
     expect(execTool.description).toContain('"javascript" or "typescript"');
-    expect(execTool.description).toContain("never a shell command");
-    expect(execTool.description).toContain("do not retry failed shell source");
     const nodesGuidance =
       "- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)";
     expect(execTool.description).toContain(nodesGuidance);
@@ -245,29 +262,63 @@ describe("Code Mode catalog and model-visible surface", () => {
       execTool.description.lastIndexOf(nodesGuidance),
     );
 
-    expect(parameters.properties?.code?.description).toContain("no Python, shell");
     expect(parameters.properties?.code?.description).toContain(
-      "a trailing expression is discarded and yields `null`",
+      "Run JavaScript or TypeScript in OpenClaw Code Mode",
     );
     expect(parameters.properties?.code?.description).toContain(
-      'tools.callValue("openclaw:core:read", { path: "notes.txt" })',
-    );
-    expect(parameters.properties?.code?.description).toContain("Use `callValue`, not `call`");
-    expect(parameters.properties?.code?.description).toContain("return file.content");
-    expect(parameters.properties?.code?.description).toContain(
-      "return it first, then parse it in a later exec",
+      "Declared fields enable deterministic transforms/dependent calls",
     );
     expect(parameters.properties?.code?.description).toContain(
-      "exact ids from `ALL_TOOLS` or `tools.search(query)`",
+      "`tools.search` resolves catalog IDs inline",
     );
-    expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
-    expect(parameters.properties?.code?.description).toContain("`require`, `import`");
+    expect(parameters.properties?.code?.description).toContain(
+      "Stable target IDs from request/trusted prior context or the owning tool",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "may feed a mutation when intent is unambiguous",
+    );
+    expect(parameters.properties?.code?.description).toContain("singleton alone is not intent");
+    expect(parameters.properties?.code?.description).toContain("Return ambiguous targets");
+    expect(parameters.properties?.code?.description).not.toContain(
+      "Application target identity discovered from tool data",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "Return authority/permission/ownership conflicts as evidence",
+    );
+    expect(parameters.properties?.code?.description).toContain("`-> ?`: return raw, inspect later");
+    expect(parameters.properties?.code?.description).toContain(
+      "Use exact enabled catalog tools for shell/file/network/external actions",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "raw shell commands and Node `require`/`import` are unavailable",
+    );
     expect(parameters.properties).not.toHaveProperty("restartSafe");
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
     expect(parameters).toMatchObject({ required: ["code"] });
     expect(parameters.properties).not.toHaveProperty("command");
+  });
+
+  it("rebuilds the model-visible exec guidance deterministically", () => {
+    const build = () => {
+      const { config, catalogRef, tools } = createCodeModeHarness();
+      const compacted = applyCodeModeCatalog({
+        tools: [...tools, pluginTool("fake_noop", "Noop")],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
+      const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
+      return {
+        description: execTool.description,
+        parameters: execTool.parameters,
+      };
+    };
+
+    expect(build()).toEqual(build());
   });
 
   it("keeps code-mode exec guidance compact without advertising unavailable namespaces", () => {
@@ -288,7 +339,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     const codeDescription = parameters.properties?.code?.description;
 
     expect(execTool.description.length).toBeLessThan(2_400);
-    expect(execTool.description).toContain("parallelize independent work only");
+    expect(execTool.description).toContain("parallelize independent work");
     expect(codeDescription).toEqual(expect.any(String));
     expect(String(codeDescription).length).toBeLessThan(620);
     expect(codeDescription).not.toContain("MCP namespace globals");
@@ -313,6 +364,25 @@ describe("Code Mode catalog and model-visible surface", () => {
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain("descriptions are intentionally deferred");
     expect(description).toContain("OUTPUT DECLARED RULE");
+    expect(description).toContain("deterministic transforms and dependent calls");
+    expect(description).toContain("`tools.search` catalog lookup stays inline");
+    expect(description).toContain(
+      "Stable IDs supplied by the request/trusted prior context or returned by their owning tool",
+    );
+    expect(description).toContain(
+      "may flow into a dependent mutation when the request identifies the target unambiguously",
+    );
+    expect(description).toContain("A singleton result alone does not establish intent");
+    expect(description).toContain(
+      "return candidates/evidence when target selection remains ambiguous",
+    );
+    expect(description).not.toContain(
+      "application target identity discovered from tool data returns candidates/evidence first",
+    );
+    expect(description).toContain(
+      "return conflicting authority/permission/ownership evidence before mutation",
+    );
+    expect(description).toContain("unknown output shape is schema ambiguity");
     expect(description).toContain(
       '- "openclaw:fake-code-mode:alpha_tool" { value?: string } -> Array<{ id: string; score: number }>',
     );

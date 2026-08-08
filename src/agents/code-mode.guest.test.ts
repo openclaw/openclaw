@@ -13,6 +13,10 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
+import {
+  createConversationsListTool,
+  createConversationsSendTool,
+} from "./tools/conversation-tools.js";
 
 const sourceValidationConfig = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
@@ -232,6 +236,191 @@ describe("Code Mode guest execution", () => {
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
     expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses exact conversation addresses for same-cell delivery and ambiguous evidence", async () => {
+    const buildRef = "conv_0123456789abcdef0123456789abcdef";
+    const duplicateBuildRef = "conv_abcdef0123456789abcdef0123456789";
+    const deployRef = "conv_11111111111111111111111111111111";
+    const threadedBuildRef = "conv_22222222222222222222222222222222";
+    const displayLabel = "Build bot";
+    const requestedAddress = {
+      channel: "discord",
+      accountId: "default",
+      kind: "direct",
+      target: "build-bot",
+      threadId: null,
+    } as const;
+    const runCase = async (includeDuplicate: boolean) => {
+      const conversations = [
+        {
+          conversationRef: deployRef,
+          channel: "discord",
+          accountId: "default",
+          kind: "direct" as const,
+          target: "deploy-bot",
+          label: displayLabel,
+          firstSeenAt: 1,
+          lastSeenAt: 2,
+        },
+        {
+          conversationRef: buildRef,
+          channel: "discord",
+          accountId: "default",
+          kind: "direct" as const,
+          target: "build-bot",
+          firstSeenAt: 1,
+          lastSeenAt: 2,
+        },
+        {
+          conversationRef: threadedBuildRef,
+          channel: "discord",
+          accountId: "default",
+          kind: "direct" as const,
+          target: "build-bot",
+          threadId: "thread-1",
+          label: displayLabel,
+          firstSeenAt: 1,
+          lastSeenAt: 2,
+        },
+        ...(includeDuplicate
+          ? [
+              {
+                conversationRef: duplicateBuildRef,
+                channel: "discord",
+                accountId: "default",
+                kind: "direct" as const,
+                target: "build-bot",
+                label: displayLabel,
+                firstSeenAt: 1,
+                lastSeenAt: 2,
+              },
+            ]
+          : []),
+      ];
+      const callGateway = vi.fn(async (request: { method: string; params: unknown }) => {
+        if (request.method === "conversations.list") {
+          return { conversations };
+        }
+        if (request.method === "conversations.send") {
+          const params = request.params as { conversationRef: string };
+          return {
+            status: "sent",
+            conversationRef: params.conversationRef,
+            channel: "discord",
+            messageId: "message-1",
+          };
+        }
+        throw new Error(`unexpected gateway method: ${request.method}`);
+      });
+      const list = createConversationsListTool(
+        { agentId: "main", senderIsOwner: true },
+        { callGateway: callGateway as never },
+      );
+      const send = createConversationsSendTool(
+        { agentId: "main", senderIsOwner: true },
+        { callGateway: callGateway as never },
+      );
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const compacted = applyCodeModeCatalog({
+        tools: [...codeModeTools, list, send],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: `run-code-mode-${includeDuplicate ? "ambiguous" : "exact"}`,
+        catalogRef,
+      });
+      const description = compacted.tools[0]?.description ?? "";
+      const listIndexLine = description
+        .split("\n")
+        .find((line) => line.includes('"openclaw:core:conversations_list"'));
+      const sendIndexLine = description
+        .split("\n")
+        .find((line) => line.includes('"openclaw:core:conversations_send"'));
+      const details = await runUntilCompleted({
+        execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+        waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+        code: `
+          const requestedAddress = ${JSON.stringify(requestedAddress)};
+          const listed = await tools.conversations_list({
+            channel: requestedAddress.channel,
+            query: requestedAddress.target,
+          });
+          const matches = listed.conversations.filter(
+            (item) =>
+              item.channel === requestedAddress.channel &&
+              item.accountId === requestedAddress.accountId &&
+              item.kind === requestedAddress.kind &&
+              item.target === requestedAddress.target &&
+              (item.threadId ?? null) === requestedAddress.threadId,
+          );
+          if (matches.length !== 1) {
+            return {
+              requestedAddress,
+              candidates: matches.map(
+                ({ conversationRef, channel, accountId, kind, target, threadId }) => ({
+                  conversationRef,
+                  channel,
+                  accountId,
+                  kind,
+                  target,
+                  threadId: threadId ?? null,
+                }),
+              ),
+            };
+          }
+          return await tools.conversations_send({
+            conversationRef: matches[0].conversationRef,
+            message: "Build finished.",
+          });
+        `,
+      });
+      return { callGateway, details, listIndexLine, sendIndexLine };
+    };
+
+    const exact = await runCase(false);
+    expect(exact.listIndexLine).toContain("-> { conversations:");
+    expect(exact.listIndexLine).not.toContain("-> ?");
+    expect(exact.sendIndexLine).toContain("-> { channel: string; conversationRef: string; status:");
+    expect(exact.sendIndexLine).not.toContain("-> ?");
+    expect(exact.details).toMatchObject({
+      status: "completed",
+      value: {
+        status: "sent",
+        conversationRef: buildRef,
+        channel: "discord",
+        messageId: "message-1",
+      },
+      telemetry: { callCount: 2 },
+    });
+    expect(exact.callGateway).toHaveBeenCalledTimes(2);
+    expect(exact.callGateway.mock.calls[1]?.[0]).toMatchObject({
+      method: "conversations.send",
+      params: {
+        conversationRef: buildRef,
+        message: "Build finished.",
+      },
+    });
+
+    const ambiguous = await runCase(true);
+    expect(ambiguous.details).toMatchObject({
+      status: "completed",
+      value: {
+        requestedAddress,
+        candidates: [
+          {
+            conversationRef: buildRef,
+            ...requestedAddress,
+          },
+          {
+            conversationRef: duplicateBuildRef,
+            ...requestedAddress,
+          },
+        ],
+      },
+      telemetry: { callCount: 1 },
+    });
+    expect(ambiguous.callGateway).toHaveBeenCalledTimes(1);
   });
 
   it("returns structured values from named tools while preserving the raw call envelope", async () => {
