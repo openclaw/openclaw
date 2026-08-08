@@ -532,6 +532,46 @@ suite.define(() => {
     });
   });
 
+  it("explains model filtering in replace mode", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }];
+      const gateway = await installMockGateway(page, {
+        models,
+        methodResponses: {
+          "chat.startup": {
+            agentsList: {
+              agents: [{ id: "main", name: "OpenClaw" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            messages: [],
+            metadata: {
+              catalogMode: "replace",
+              commands: [],
+              models,
+            },
+            sessionId: "control-ui-e2e-session",
+            thinkingLevel: null,
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      await composer.locator('[data-chat-model-select="true"]').click();
+      const hint = composer.locator(".chat-controls__catalog-hint");
+      await expect
+        .poll(async () => (await hint.textContent())?.replace(/\s+/g, " ").trim())
+        .toBe("Replace mode filters models according to your model settings. Manage models");
+      await expect
+        .poll(() => hint.getByRole("link", { name: "Manage models" }).getAttribute("href"))
+        .toBe("/settings/model-providers");
+    });
+  });
+
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

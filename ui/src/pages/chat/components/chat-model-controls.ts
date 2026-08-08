@@ -31,6 +31,8 @@ export type ChatModelControlsProps = {
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
   modelCatalogState?: ChatModelCatalogState;
+  catalogMode?: "replace";
+  modelSettingsHref?: string;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionRuntimeId?: string;
@@ -284,11 +286,13 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
+        catalogMode: props.catalogMode,
         defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.mutationDisabledReason,
         modelCatalogState: managedCatalog,
         modelSelectionLocked: props.modelSelectionLocked === true,
+        modelSettingsHref: props.modelSettingsHref,
         modelOptions,
         selectedModelValue: currentOverride,
         sessionKey: props.sessionKey,

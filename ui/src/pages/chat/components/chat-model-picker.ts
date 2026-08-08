@@ -46,11 +46,13 @@ function formatAgentRuntimeLabel(id: string): string {
 }
 
 type ChatModelPickerParams = {
+  catalogMode?: "replace";
   defaultModelLabel: string;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
+  modelSettingsHref?: string;
   modelOptions: ChatModelPickerOption[];
   selectedModelValue: string;
   sessionKey: string;
@@ -448,6 +450,18 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                   @keydown=${handleModelSearchKeydown}
                 />
               </div>
+              ${params.catalogMode === "replace"
+                ? html`
+                    <div class="chat-controls__catalog-hint" role="note">
+                      <span>${t("chat.selectors.replaceModeHint")}</span>
+                      ${params.modelSettingsHref
+                        ? html`<a href=${params.modelSettingsHref}
+                            >${t("chat.selectors.manageModels")}</a
+                          >`
+                        : nothing}
+                    </div>
+                  `
+                : nothing}
               ${renderCatalogState(params.modelCatalogState, params.modelOptions.length > 0)}
               ${params.modelOptions.length > 0
                 ? html`

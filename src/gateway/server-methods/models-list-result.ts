@@ -52,13 +52,10 @@ import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
+import { buildPublicModelProjection, type ModelsListEntry } from "./models-list-public-entry.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
-type ModelsListEntry = Pick<
-  ModelCatalogEntry,
-  "alias" | "contextWindow" | "id" | "input" | "name" | "provider" | "reasoning"
-> & { available?: boolean; supportsTools?: boolean };
 type ModelsListEntryWithCapabilities = ModelsListEntry & {
   agentRuntime?: GatewayAgentRuntime;
   apiKeySupported?: boolean;
@@ -69,35 +66,12 @@ type ApiKeyProviderCapabilities = {
 };
 type ModelsListAvailability = ModelAuthAvailability;
 type ModelsListEntryEvaluation = ModelAuthAvailabilityEvaluation;
-
 let loggedSlowModelsListCatalog = false;
-
 // Unknown views are rejected by protocol validation first; this helper keeps the
 // handler default explicit for older clients that omit the field.
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
   const view = params.view;
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
-}
-
-function resolvePositiveSafeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-// Project explicitly onto the public protocol shape. Concrete route, base URL,
-// auth, and cost facts stay private; runtime intent is attached separately.
-function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsListEntry {
-  const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
-  return {
-    id: entry.id,
-    name: entry.name,
-    provider: entry.provider,
-    ...(entry.alias ? { alias: entry.alias } : {}),
-    ...(contextWindow ? { contextWindow } : {}),
-    ...(typeof entry.reasoning === "boolean" ? { reasoning: entry.reasoning } : {}),
-    ...(typeof entry.compat?.supportsTools === "boolean"
-      ? { supportsTools: entry.compat.supportsTools }
-      : {}),
-  };
 }
 
 function resolveModelChoiceAgentRuntime(params: {
@@ -481,7 +455,7 @@ type BuildModelsListResultParams = {
 
 export async function buildModelsListResult(
   params: BuildModelsListResultParams,
-): Promise<{ models: ModelsListEntryWithCapabilities[] }> {
+): Promise<{ models: ModelsListEntryWithCapabilities[]; catalogMode?: "replace" }> {
   const initialConfig = params.context.getRuntimeConfig();
   const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
   const view = resolveModelsListView(params.params);
@@ -676,7 +650,15 @@ export async function buildModelsListResult(
       });
     },
   });
+  const sourceConfig = getRuntimeConfigSourceSnapshot() ?? cfg;
+  const catalogMode =
+    view === "configured" &&
+    sourceConfig.models?.mode === "replace" &&
+    buildProviderConfigModelCatalogForBrowse({ cfg: sourceConfig, workspaceDir }).length > 0
+      ? "replace"
+      : undefined;
   return {
+    ...(catalogMode ? { catalogMode } : {}),
     models: await buildPublicModelsListEntries({
       catalog: models,
       cfg,
