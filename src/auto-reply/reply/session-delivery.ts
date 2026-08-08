@@ -29,7 +29,13 @@ function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
   if (!parsed?.rest) {
     return undefined;
   }
-  const head = normalizeOptionalLowercaseString(parsed.rest.split(":")[0]);
+  const parts = parsed.rest.split(":").filter(Boolean);
+  // A one-segment agent-scoped key is that agent's main-ish session, even when
+  // the configured default agent id happens to match a channel name.
+  if (parts.length < 2) {
+    return undefined;
+  }
+  const head = normalizeOptionalLowercaseString(parts[0]);
   if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
     return undefined;
   }
