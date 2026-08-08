@@ -118,6 +118,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         input: 128_814,
         output: 3_000,
         cacheRead: 992_953,
+        cacheWrite: 0,
         totalTokens: 1_124_767,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
