@@ -5,8 +5,12 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexSupervisionTools } from "./supervision-tools.js";
-
-type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
+import {
+  createEndpointRequest,
+  createRequest,
+  createTools,
+  toolByName,
+} from "./supervision-tools.test-support.js";
 
 const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
 const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
@@ -18,55 +22,6 @@ const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 vi.mock("./app-server/request.js", () => ({
   requestCodexAppServerJson: requestCodexAppServerJsonMock,
 }));
-
-type RecordedRequest = { method: string; params?: unknown };
-type EndpointRequest = NonNullable<CodexSupervisionToolsOptions["request"]>;
-type EndpointRequestHandler = (...args: Parameters<EndpointRequest>) => unknown;
-
-function createEndpointRequest(handler: EndpointRequestHandler): EndpointRequest {
-  return async <T>(...args: Parameters<EndpointRequest>) => (await handler(...args)) as T;
-}
-
-function toolByName(tools: ReturnType<typeof createCodexSupervisionTools>, name: string) {
-  const tool = tools.find((entry) => entry.name === name);
-  if (!tool) {
-    throw new Error(`missing tool: ${name}`);
-  }
-  return tool;
-}
-
-function createRequest(thread: Record<string, unknown>) {
-  const calls: RecordedRequest[] = [];
-  const request = createEndpointRequest(async (_endpoint, method, params) => {
-    calls.push({ method, ...(params === undefined ? {} : { params }) });
-    if (method === "thread/read") {
-      return { thread };
-    }
-    if (method === "thread/loaded/list") {
-      return { data: [], nextCursor: null };
-    }
-    return {};
-  });
-  return { calls, request };
-}
-
-function createTools(
-  request: EndpointRequest,
-  overrides: Partial<CodexSupervisionToolsOptions> = {},
-) {
-  return createCodexSupervisionTools({
-    getPluginConfig: () => ({
-      supervision: {
-        enabled: true,
-        allowRawTranscripts: true,
-        allowWriteControls: true,
-      },
-    }),
-    senderIsOwner: true,
-    request,
-    ...overrides,
-  });
-}
 
 describe("Codex supervision compatibility tools", () => {
   beforeEach(() => {
@@ -1032,5 +987,87 @@ describe("Codex supervision compatibility tools", () => {
         text: "continue",
       }),
     ).resolves.toMatchObject({ details: { summary: "codex steer: turn-1" } });
+  });
+
+  it("redacts credential classes beyond the legacy 4-prefix set, fully masking legacy classes in ordinary fields", async () => {
+    const googleApiKey = "AIzaSyDaBcDeFgHiJkLmNoPqRsTuVwXyZ0123456";
+    const finegrainedPat = "github_pat_11ABCDEFGH0abcdefghijklmnopqrstuvwxyz1234567890ABCDEF";
+    const legacy = ["sk-abcdefghijkl0123", "ghp_abcdefghij0123", "abcdefghijklmnopqrst0123"];
+    const { request } = createRequest({
+      id: "thread-1",
+      description: `${googleApiKey} ${finegrainedPat} ${legacy[0]} ${legacy[1]} Authorization: Bearer ${legacy[2]}`,
+    });
+    const serialized = JSON.stringify(
+      await toolByName(createTools(request), "codex_session_read").execute("read", {
+        endpoint_id: "local",
+        thread_id: "thread-1",
+      }),
+    );
+    for (const secret of [googleApiKey, finegrainedPat, ...legacy]) {
+      expect(serialized).not.toContain(secret);
+    }
+    // maskToken's partial mask always keeps this prefix; its absence for the
+    // legacy classes proves they were fully replaced, not partially disclosed.
+    legacy.forEach((secret) => expect(serialized).not.toContain(secret.slice(0, 6)));
+  });
+
+  it("does not rewrite ordinary text that happens to match the legacy bearer placeholder literal", async () => {
+    const plainText =
+      "codexSupervisionLegacyBearerPlaceholder and codexSupervisionLegacyAuthBearerPlaceholder";
+    const { request } = createRequest({
+      id: "thread-1",
+      description: plainText,
+    });
+    const serialized = JSON.stringify(
+      await toolByName(createTools(request), "codex_session_read").execute("read", {
+        endpoint_id: "local",
+        thread_id: "thread-1",
+      }),
+    );
+    expect(serialized).toContain(plainText);
+    expect(serialized).not.toContain("Bearer [redacted]");
+  });
+
+  it("fully redacts values under recognized sensitive field names instead of partially masking them", async () => {
+    const apiKey = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
+    const { request } = createRequest({
+      id: "thread-1",
+      status: { type: "idle" },
+      token: apiKey,
+      apiKey,
+    });
+    const tools = createTools(request);
+
+    const result = await toolByName(tools, "codex_session_read").execute("read", {
+      endpoint_id: "local",
+      thread_id: "thread-1",
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(apiKey);
+    expect(serialized).not.toContain(apiKey.slice(0, 6));
+    expect(serialized).not.toContain(apiKey.slice(-4));
+    expect(serialized).toContain("[redacted]");
+  });
+
+  it("redacts an opaque value inside a sensitive-key array using the array's own key, not just scalar sensitive fields", async () => {
+    // Deliberately opaque: no recognized credential prefix/shape, so only the
+    // "tokens" parent key (not pattern matching) can trigger full redaction.
+    const opaqueSecret = "unshaped-credential-value-without-a-known-prefix";
+    const { request } = createRequest({
+      id: "thread-1",
+      status: { type: "idle" },
+      tokens: [opaqueSecret],
+    });
+    const tools = createTools(request);
+
+    const result = await toolByName(tools, "codex_session_read").execute("read", {
+      endpoint_id: "local",
+      thread_id: "thread-1",
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(opaqueSecret);
+    expect(serialized).toContain("[redacted]");
   });
 });
