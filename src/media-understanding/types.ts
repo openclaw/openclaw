@@ -256,6 +256,7 @@ export type MediaUnderstandingProviderAuthContext = {
   config?: OpenClawConfig;
   provider: string;
   providerConfig?: ModelProviderConfig;
+  effectiveBaseUrl?: string;
 };
 
 export type MediaUnderstandingProviderAuthResult =

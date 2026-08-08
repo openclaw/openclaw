@@ -1,9 +1,10 @@
 ---
-summary: "Use NVIDIA's OpenAI-compatible API in OpenClaw"
+summary: "Use NVIDIA models and Nemotron Speech HTTP APIs in OpenClaw"
 read_when:
   - You want to use open models in OpenClaw for free
   - You need NVIDIA_API_KEY setup
   - You want to use Nemotron 3 Ultra through NVIDIA
+  - You want Parakeet ASR or Magpie TTS
 title: "NVIDIA"
 ---
 
@@ -32,7 +33,18 @@ active reasoning model for long-context agentic work.
   </Step>
 </Steps>
 
-For non-interactive setup, pass the key directly:
+The same credential is reused for NVIDIA chat models, Parakeet speech-to-text,
+and Magpie text-to-speech. A key saved by onboarding is available through the
+shared NVIDIA auth profile, so you do not need to duplicate it in speech
+configuration.
+
+<Warning>
+If you pass `--nvidia-api-key` instead of the env var, the value lands in shell
+history and `ps` output. Prefer the `NVIDIA_API_KEY` environment variable when
+possible.
+</Warning>
+
+For non-interactive setup, you can also pass the key directly:
 
 ```bash
 openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
@@ -63,6 +75,124 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
   },
 }
 ```
+
+## Nemotron Speech over HTTP
+
+The NVIDIA plugin supports one-shot HTTP speech requests. It does not register
+a realtime or streaming speech provider.
+
+### Speech to text
+
+Inbound audio uses the hosted Parakeet CTC 1.1B HTTP endpoint by default.
+Provider-specific ASR options are passed through `providerOptions.nvidia`; word
+boosting accepts a JSON array or a comma-separated string. To use another ASR
+NIM such as Parakeet TDT, configure its OpenClaw model reference and an
+HTTP-capable base URL. The fixed-model NIM request uses `language`; it does not
+send the public catalog reference as NVIDIA's internal `model` field.
+
+NVIDIA accepts mono 16-bit PCM WAV and mono Ogg Opus directly. OpenClaw converts
+other inbound formats, including MP3, M4A, and stereo WAV, to mono Opus with a
+system-installed FFmpeg binary before upload.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "nvidia",
+          model: "nvidia/parakeet-ctc-1.1b-asr",
+          capabilities: ["audio"],
+          providerOptions: {
+            nvidia: {
+              boostedWords: '["OpenClaw", "Nemotron", "Parakeet"]',
+              boostedWordsScore: 10,
+              automaticPunctuation: true,
+              wordTimeOffsets: true,
+              customConfiguration: "key:value",
+            },
+          },
+        },
+      ],
+      audio: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+The supported aliases are converted to NVIDIA's HTTP form fields. Other
+primitive `providerOptions.nvidia` entries are converted to snake_case and
+forwarded as customization fields.
+
+### Text to speech
+
+Magpie Multilingual is the default TTS model and
+`Magpie-Multilingual.EN-US.Aria` is the default voice. Set `customDictionary`
+or `customConfiguration` to pass the corresponding Magpie customization
+fields.
+
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "nvidia",
+    providers: {
+      nvidia: {
+        model: "magpie-tts-multilingual",
+        voice: "Magpie-Multilingual.EN-US.Aria",
+        language: "en-US",
+        sampleRateHz: 44100,
+        customDictionary: "OpenClaw  pronunciation",
+        customConfiguration: "key:value",
+      },
+    },
+  },
+}
+```
+
+For separate keyless self-hosted ASR and TTS NIMs, configure each service at
+its owning surface. Do not use `models.providers.nvidia.baseUrl` for speech: it
+owns NVIDIA chat routing and cannot represent independent Parakeet and Magpie
+origins.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "nvidia",
+          model: "nvidia/parakeet-ctc-1.1b-asr",
+          capabilities: ["audio"],
+          baseUrl: "http://127.0.0.1:9000",
+        },
+      ],
+      audio: { enabled: true },
+    },
+  },
+  tts: {
+    auto: "always",
+    provider: "nvidia",
+    providers: {
+      nvidia: {
+        baseUrl: "http://127.0.0.1:9001",
+        model: "magpie-tts-multilingual",
+        voice: "Magpie-Multilingual.EN-US.Aria",
+        language: "en-US",
+      },
+    },
+  },
+}
+```
+
+Both NIM containers listen on HTTP port `9000` internally, so expose one on a
+different host port, such as `9001:9000`. OpenClaw then calls
+`http://127.0.0.1:9000/v1/audio/transcriptions` for ASR and
+`http://127.0.0.1:9001/v1/audio/synthesize` for TTS. Custom origins are keyless
+unless `tts.providers.nvidia.apiKey` is set explicitly; `NVIDIA_API_KEY` and
+saved NVIDIA profiles are only sent to NVIDIA-hosted speech endpoints.
 
 ## Featured catalog
 
