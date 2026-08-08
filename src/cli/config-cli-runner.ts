@@ -38,7 +38,7 @@ import {
   collectDryRunResolvabilityErrors,
   collectDryRunSchemaErrors,
   collectDryRunStaticErrorsForSkippedExecRefs,
-  collectPluginIntegrationProviderErrors,
+  collectExecProviderCommandPathErrors,
   dedupeDryRunErrors,
   formatDryRunFailureMessage,
   loadValidConfig,
@@ -217,7 +217,7 @@ function expandActualChangedPaths(
   return [...expanded];
 }
 
-export function configApplyHintForOperations(
+function configApplyHintForOperations(
   operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
   beforeConfig: OpenClawConfig,
   afterConfig: OpenClawConfig,
@@ -277,6 +277,8 @@ export async function runConfigOperations(params: {
   operations: ConfigSetOperation[];
   options: ConfigMutationOptions;
   successMode: "set" | "patch";
+  /** Reuse a caller's authoritative snapshot when it already checked path existence. */
+  snapshot?: Awaited<ReturnType<typeof loadValidConfig>>;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -290,7 +292,7 @@ export async function runConfigOperations(params: {
   if (autoManagedTargets.length > 0) {
     throw new Error(formatAutoManagedMetaError(autoManagedTargets));
   }
-  const snapshot = await loadValidConfig(runtime);
+  const snapshot = params.snapshot ?? (await loadValidConfig(runtime));
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(
@@ -334,9 +336,8 @@ export async function runConfigOperations(params: {
     "",
     { normalizeRoot: true },
   ).map((line) => line.trim());
-  const pluginIntegrationErrors = collectPluginIntegrationProviderErrors({
+  const execProviderCommandPathPreflight = await collectExecProviderCommandPathErrors({
     config: nextConfig,
-    operations,
   });
 
   if (options.dryRun) {
@@ -365,7 +366,7 @@ export async function runConfigOperations(params: {
     if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
       errors.push(...policyIssueLines.map((message) => ({ kind: "schema" as const, message })));
     }
-    errors.push(...pluginIntegrationErrors);
+    errors.push(...execProviderCommandPathPreflight.errors);
     if (requiresFullSchemaValidation) {
       errors.push(...collectDryRunSchemaErrors(nextConfig));
     }
@@ -391,7 +392,7 @@ export async function runConfigOperations(params: {
         schema:
           requiresFullSchemaValidation ||
           policyIssueLines.length > 0 ||
-          pluginIntegrationErrors.length > 0,
+          execProviderCommandPathPreflight.preflightRan,
         resolvability: checksRefs || modelRefCheck.refsTotal > 0,
         resolvabilityComplete:
           (checksRefs || modelRefCheck.refsTotal > 0) &&
@@ -442,11 +443,11 @@ export async function runConfigOperations(params: {
   if (policyIssueLines.length > 0) {
     throw new Error(formatPolicyFailure(policyIssueLines));
   }
-  if (pluginIntegrationErrors.length > 0) {
+  if (execProviderCommandPathPreflight.errors.length > 0) {
     throw new Error(
       [
-        "Config validation failed: plugin-managed SecretRef provider integration is invalid.",
-        ...pluginIntegrationErrors.map((error) => `- ${error.message}`),
+        "Config validation failed: exec SecretRef provider command path is unsafe.",
+        ...execProviderCommandPathPreflight.errors.map((error) => `- ${error.message}`),
       ].join("\n"),
     );
   }
@@ -482,7 +483,8 @@ export async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
+    const pathLabel = operation?.requestedPathLabel ?? toDotPath(operation?.requestedPath ?? []);
+    runtime.log(info(`${action} ${pathLabel}. ${hint}`));
   } else if (params.successMode === "set") {
     runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
   } else {

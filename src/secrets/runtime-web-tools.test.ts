@@ -270,6 +270,7 @@ async function runRuntimeWebTools(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   allowUnavailableSecretOwners?: boolean;
+  inspectSecretRef?: Parameters<typeof resolveRuntimeWebTools>[0]["inspectSecretRef"];
 }) {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
@@ -282,6 +283,7 @@ async function runRuntimeWebTools(params: {
     resolvedConfig,
     context,
     allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
+    ...(params.inspectSecretRef ? { inspectSecretRef: params.inspectSecretRef } : {}),
   });
   return { ...result, resolvedConfig, context };
 }
@@ -589,6 +591,101 @@ describe("runtime web tools resolution", () => {
     expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
       onlyPluginIds: ["firecrawl"],
     });
+  });
+
+  it("reports the selected web credential ref without resolving its provider", async () => {
+    const refs: unknown[] = [];
+    const resolveSpy = vi.spyOn(secretResolve, "resolveSecretRefValues");
+    restoreResolveSecretRefValuesSpy = () => resolveSpy.mockRestore();
+
+    const { metadata } = await runRuntimeWebTools({
+      config: createProviderSecretRefConfig("brave", "BRAVE_PROVIDER_REF"),
+      inspectSecretRef: (ref) => {
+        refs.push(ref);
+        return "preflight-placeholder";
+      },
+    });
+
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(refs).toEqual([{ source: "env", provider: "default", id: "BRAVE_PROVIDER_REF" }]);
+    expect(resolveSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke provider metadata hooks in inspection mode", async () => {
+    const throwingHook = vi.fn(() => {
+      throw new Error("metadata hook must not run in inspection mode");
+    });
+    const perplexityWithThrowingHook = {
+      ...createTestProvider({ provider: "perplexity", pluginId: "perplexity", order: 50 }),
+      resolveRuntimeMetadata: throwingHook,
+    };
+    resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock.mockReturnValueOnce([
+      perplexityWithThrowingHook,
+    ]);
+
+    const { metadata } = await runRuntimeWebTools({
+      config: createProviderSecretRefConfig("perplexity", "PERPLEXITY_PROVIDER_REF"),
+      inspectSecretRef: () => "preflight-placeholder",
+    });
+
+    expect(metadata.search.selectedProvider).toBe("perplexity");
+    expect(throwingHook).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke selected search credential setters in inspection mode", async () => {
+    const throwingSetter = vi.fn(() => {
+      throw new Error("search credential setter must not run in inspection mode");
+    });
+    const provider = {
+      ...createTestProvider({ provider: "brave", pluginId: "brave", order: 10 }),
+      setConfiguredCredentialValue: throwingSetter,
+    };
+    resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock.mockReturnValueOnce([provider]);
+    const config = createProviderSecretRefConfig("brave", "BRAVE_PROVIDER_REF");
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config,
+      inspectSecretRef: () => "preflight-placeholder",
+    });
+
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(throwingSetter).not.toHaveBeenCalled();
+    expect(readProviderKey(resolvedConfig, "brave")).toEqual(readProviderKey(config, "brave"));
+  });
+
+  it("does not invoke selected fetch credential setters in inspection mode", async () => {
+    const throwingSetter = vi.fn(() => {
+      throw new Error("fetch credential setter must not run in inspection mode");
+    });
+    const provider = {
+      ...buildTestWebFetchProviders()[0],
+      setCredentialValue: throwingSetter,
+      setConfiguredCredentialValue: undefined,
+    } as PluginWebFetchProviderEntry;
+    resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock.mockReturnValueOnce([provider]);
+    const config = asConfig({
+      tools: { web: { fetch: { provider: "firecrawl" } } },
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webFetch: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config,
+      inspectSecretRef: () => "preflight-placeholder",
+    });
+
+    expect(metadata.fetch.selectedProvider).toBe("firecrawl");
+    expect(throwingSetter).not.toHaveBeenCalled();
+    expect(resolvedConfig).toEqual(config);
   });
 
   it("selects the configured keyless Firecrawl fetch provider without an API key", async () => {

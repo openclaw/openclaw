@@ -15,6 +15,8 @@ export function collectConfigAssignments(params: {
   context: ResolverContext;
   /** Optional installed plugin roots for channel/plugin contract lookup. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  /** Defaults true. Config inspection keeps external channel modules out of the plan. */
+  loadExternalChannelContracts?: boolean;
 }): void {
   const defaults = params.context.sourceConfig.secrets?.defaults;
 
@@ -29,6 +31,7 @@ export function collectConfigAssignments(params: {
     defaults,
     context: params.context,
     loadablePluginOrigins: params.loadablePluginOrigins,
+    loadExternalContracts: params.loadExternalChannelContracts,
   });
 
   collectPluginConfigAssignments({

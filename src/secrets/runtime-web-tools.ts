@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -425,6 +425,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   contractDigest: string;
   providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey;
   restrictEnvRefsToEnvVars?: boolean;
+  inspectSecretRef?: (ref: SecretRef) => string;
 }): Promise<SecretResolutionResult<SecretResolutionSource>> {
   const { ref } = resolveSecretInputRef({
     value: params.value,
@@ -464,17 +465,50 @@ async function resolveSecretInputWithEnvFallback(params: {
     !params.envVars.includes(ref.id)
   ) {
     throw new Error(`${params.path} SecretRef is not allowed for this provider.`);
-  } else {
-    try {
-      const resolved = await resolveSecretRefValues([ref], {
+  }
+  if (params.inspectSecretRef) {
+    return {
+      value: params.inspectSecretRef(ref),
+      source: "secretRef",
+      secretRefConfigured: true,
+      secretRef: ref,
+      secretRefKey: secretRefKey(ref),
+    };
+  }
+  try {
+    const resolved = await resolveSecretRefValues([ref], {
+      config: params.sourceConfig,
+      env: params.context.env,
+      cache: params.context.cache,
+      manifestRegistry: params.context.manifestRegistry,
+    });
+    const resolvedValue = resolved.get(secretRefKey(ref));
+    if (!isExpectedResolvedSecretValue(resolvedValue, "string")) {
+      const error = new Error(`${params.path} resolved to a non-string or empty value.`);
+      associateWebProviderResolutionError({
+        kind: params.kind,
         config: params.sourceConfig,
-        env: params.context.env,
-        cache: params.context.cache,
-        manifestRegistry: params.context.manifestRegistry,
+        error,
+        unavailableProviders: [
+          {
+            providerId: params.providerId,
+            path: params.path,
+            ref,
+            refKey: secretRefKey(ref),
+            reason: "resolved secret value was invalid",
+            contractDigest: params.contractDigest,
+          },
+        ],
       });
-      const resolvedValue = resolved.get(secretRefKey(ref));
-      if (!isExpectedResolvedSecretValue(resolvedValue, "string")) {
-        const error = new Error(`${params.path} resolved to a non-string or empty value.`);
+      throw error;
+    }
+    resolvedFromRef = normalizeSecretInput(resolvedValue);
+  } catch (error) {
+    const reason = describeSecretResolutionError(error);
+    if (!reason || !isRetryableSecretDegradationReason(reason)) {
+      // Invalid provider config or resolved values are structural failures. They must fail
+      // activation before publishing an owner degradation that could imply retryability.
+      if (reason) {
         associateWebProviderResolutionError({
           kind: params.kind,
           config: params.sourceConfig,
@@ -485,45 +519,20 @@ async function resolveSecretInputWithEnvFallback(params: {
               path: params.path,
               ref,
               refKey: secretRefKey(ref),
-              reason: "resolved secret value was invalid",
+              reason,
               contractDigest: params.contractDigest,
             },
           ],
         });
-        throw error;
       }
-      resolvedFromRef = normalizeSecretInput(resolvedValue);
-    } catch (error) {
-      const reason = describeSecretResolutionError(error);
-      if (!reason || !isRetryableSecretDegradationReason(reason)) {
-        // Invalid provider config or resolved values are structural failures. They must fail
-        // activation before publishing an owner degradation that could imply retryability.
-        if (reason) {
-          associateWebProviderResolutionError({
-            kind: params.kind,
-            config: params.sourceConfig,
-            error,
-            unavailableProviders: [
-              {
-                providerId: params.providerId,
-                path: params.path,
-                ref,
-                refKey: secretRefKey(ref),
-                reason,
-                contractDigest: params.contractDigest,
-              },
-            ],
-          });
-        }
-        throw error;
-      }
-      unresolvedRefReason = reason;
-      if (isProviderScopedSecretResolutionError(error)) {
-        params.providerFailuresByRefKey.set(secretRefKey(ref), {
-          source: error.source,
-          provider: error.provider,
-        });
-      }
+      throw error;
+    }
+    unresolvedRefReason = reason;
+    if (isProviderScopedSecretResolutionError(error)) {
+      params.providerFailuresByRefKey.set(secretRefKey(ref), {
+        source: error.source,
+        provider: error.provider,
+      });
     }
   }
 
@@ -745,8 +754,11 @@ export async function resolveRuntimeWebTools(params: {
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
   allowUnavailableSecretOwners?: boolean;
+  /** Observe selected refs without resolving providers during config preflight. */
+  inspectSecretRef?: (ref: SecretRef) => string;
 }): Promise<ResolvedRuntimeWebTools> {
   const defaults = params.sourceConfig.secrets?.defaults;
+  const materializeResolvedCredentials = params.inspectSecretRef === undefined;
   const diagnostics: RuntimeWebDiagnostic[] = [];
   const degradedOwners: DegradedSecretOwner[] = [];
   const secretOwners: SecretOwnerRefState[] = [];
@@ -844,7 +856,11 @@ export async function resolveRuntimeWebTools(params: {
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
-          hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
+          // External SecretRef fields are already owned by manifest configContracts in the
+          // assignment plan. Inspection must stay on trusted bundled public artifacts so a
+          // config command cannot import or register external plugin runtime.
+          hasCustomWebSearchPluginRisk:
+            materializeResolvedCredentials && (await getHasCustomWebSearchRisk()),
         }),
       sortProviders: sortWebSearchProvidersForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
@@ -914,7 +930,9 @@ export async function resolveRuntimeWebTools(params: {
           envVars,
           contractDigest,
           providerFailuresByRefKey,
+          ...(params.inspectSecretRef ? { inspectSecretRef: params.inspectSecretRef } : {}),
         }),
+      materializeResolvedCredentials,
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
         setResolvedWebSearchApiKey({
           resolvedConfig,
@@ -925,6 +943,10 @@ export async function resolveRuntimeWebTools(params: {
       hasConfiguredSecretRef,
       mergeRuntimeMetadata: async ({ provider, metadata, toolConfig, selectedResolution }) => {
         if (!provider.resolveRuntimeMetadata) {
+          return;
+        }
+        // Synthetic inspection credentials must not reach plugin callbacks.
+        if (!materializeResolvedCredentials) {
           return;
         }
         Object.assign(
@@ -985,7 +1007,10 @@ export async function resolveRuntimeWebTools(params: {
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
-          hasCustomWebFetchPluginRisk: await getHasCustomWebFetchRisk(),
+          // Keep control-plane inspection manifest-backed; normal startup still discovers
+          // eligible external provider runtime when credentials are being materialized.
+          hasCustomWebFetchPluginRisk:
+            materializeResolvedCredentials && (await getHasCustomWebFetchRisk()),
         }),
       sortProviders: sortWebFetchProvidersForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
@@ -1053,7 +1078,9 @@ export async function resolveRuntimeWebTools(params: {
           contractDigest,
           providerFailuresByRefKey,
           restrictEnvRefsToEnvVars: true,
+          ...(params.inspectSecretRef ? { inspectSecretRef: params.inspectSecretRef } : {}),
         }),
+      materializeResolvedCredentials,
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
         setResolvedWebFetchApiKey({
           resolvedConfig,
@@ -1064,6 +1091,10 @@ export async function resolveRuntimeWebTools(params: {
       hasConfiguredSecretRef,
       mergeRuntimeMetadata: async ({ provider, metadata, toolConfig, selectedResolution }) => {
         if (!provider.resolveRuntimeMetadata) {
+          return;
+        }
+        // Synthetic inspection credentials must not reach plugin callbacks.
+        if (!materializeResolvedCredentials) {
           return;
         }
         Object.assign(

@@ -103,12 +103,35 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
 
-Validates the current config against the active schema without starting the gateway.
+Validates the current config against the active schema without starting the
+gateway. After schema validation passes, `config validate` also runs the same
+non-executing exec-provider command-path trust checks (absolute path, symlink,
+trusted-directory, permission, ownership, and Windows ACL) that gateway
+startup activation applies for SecretRefs it can inspect without loading
+external plugin code.
 
 ```bash
 openclaw config validate
 openclaw config validate --json
 ```
+
+<Note>
+Exec-provider command-path checks are host-local. These commands inspect the
+filesystem of the host where the CLI runs: `config validate`, `config set`,
+`config patch`, `config unset`, and the write commands' `--dry-run` modes. Run
+them on the gateway host itself, or on a host with matching command paths,
+ownership, permissions, and ACLs. This structural preflight does not execute
+the provider command and still runs when a dry-run skips exec-backed SecretRef
+resolvability.
+</Note>
+
+<Note>
+Third-party channel plugins can define channel-only SecretRef activation in an
+executable contract module. Config inspection does not load external plugin
+modules, so those channel-only refs receive their authoritative command-path
+check when the Gateway loads the plugin. SecretRefs in manifest-declared plugin
+config remain covered by the earlier config check.
+</Note>
 
 <Note>
 If validation is already failing, start with `openclaw configure` or `openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config guard.

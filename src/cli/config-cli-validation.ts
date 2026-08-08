@@ -5,25 +5,19 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  coerceSecretRef,
-  resolveSecretInputRef,
-  type PluginIntegrationSecretProviderConfig,
-  type SecretRef,
-} from "../config/types.secrets.js";
+import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
-import {
-  isPluginIntegrationSecretProviderConfig,
-  resolveSecretProviderIntegrationConfig,
-} from "../secrets/provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   secretRefKey,
 } from "../secrets/ref-contract.js";
-import { resolveSecretRefValue } from "../secrets/resolve.js";
+import {
+  preflightExecSecretProviderCommandPaths,
+  resolveSecretRefValue,
+} from "../secrets/resolve.js";
+import { buildActiveSecretsRuntimePreflightPlan } from "../secrets/runtime.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -232,68 +226,20 @@ export function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryR
   }));
 }
 
-function touchesSecretProviderCollection(path: readonly string[]): boolean {
-  return (
-    (path.length === 1 && path[0] === "secrets") ||
-    (path.length === 2 && path[0] === "secrets" && path[1] === "providers")
-  );
-}
-
-export function collectPluginIntegrationProviderErrors(params: {
+export async function collectExecProviderCommandPathErrors(params: {
   config: OpenClawConfig;
-  operations: ConfigSetOperation[];
-}): ConfigSetDryRunError[] {
-  const providers = params.config.secrets?.providers ?? {};
-  let validateAllProviders = false;
-  const touchedProviderAliases = new Set<string>();
-  for (const operation of params.operations) {
-    if (operation.touchedProviderAlias) {
-      touchedProviderAliases.add(operation.touchedProviderAlias);
-    }
-    if (operation.assignedRef) {
-      touchedProviderAliases.add(operation.assignedRef.provider);
-    }
-    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
-      touchedProviderAliases.add(ref.provider);
-    }
-    validateAllProviders ||= touchesSecretProviderCollection(operation.setPath);
-  }
-  if (!validateAllProviders && touchedProviderAliases.size === 0) {
-    return [];
-  }
-  const integrationProviders: Array<{
-    alias: string;
-    provider: PluginIntegrationSecretProviderConfig;
-  }> = [];
-  for (const [alias, provider] of Object.entries(providers)) {
-    if (
-      (validateAllProviders || touchedProviderAliases.has(alias)) &&
-      isPluginIntegrationSecretProviderConfig(provider)
-    ) {
-      integrationProviders.push({ alias, provider });
-    }
-  }
-  if (integrationProviders.length === 0) {
-    return [];
-  }
-  const manifestRegistry = loadPluginMetadataSnapshot({
+}): Promise<{ errors: ConfigSetDryRunError[]; preflightRan: boolean }> {
+  const plan = await buildActiveSecretsRuntimePreflightPlan({ config: params.config });
+  const preflightRan = plan.refs.some((ref) => ref.source === "exec");
+  const errors = await preflightExecSecretProviderCommandPaths({
+    refs: plan.refs,
     config: params.config,
-    env: process.env,
-  }).manifestRegistry;
-  const errors: ConfigSetDryRunError[] = [];
-  for (const { alias, provider } of integrationProviders) {
-    const resolved = resolveSecretProviderIntegrationConfig({
-      manifestRegistry,
-      providerAlias: alias,
-      providerConfig: provider,
-      config: params.config,
-      env: process.env,
-    });
-    if (!resolved.ok) {
-      errors.push({ kind: "schema", message: `secrets.providers.${alias}: ${resolved.reason}` });
-    }
-  }
-  return errors;
+    ...(plan.manifestRegistry ? { manifestRegistry: plan.manifestRegistry } : {}),
+  });
+  return {
+    errors: errors.map((message) => ({ kind: "schema", message })),
+    preflightRan,
+  };
 }
 
 export function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {

@@ -1,17 +1,12 @@
 /** Prepares secrets runtime snapshots from config, auth stores, plugins, and env. */
 import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles.js";
-import {
-  AuthProfileMigrationRequiredError,
-  clearAuthProfileMigrationDiagnostics,
-  markAuthProfileMigrationRequired,
-} from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
@@ -27,6 +22,10 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
+import {
+  buildSecretsRuntimeAssignmentPlan,
+  loadAuthStoresWithMigrationIsolation,
+} from "./runtime-assignment-plan.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 import {
@@ -62,14 +61,11 @@ import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
 export type { SecretResolverWarning } from "./runtime-shared.js";
 export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state.js";
+export { buildActiveSecretsRuntimePreflightPlan } from "./runtime-assignment-plan.js";
 
 registerSecretsRuntimeStateClearHook(clearRuntimeAuthProfileStoreSnapshots);
 registerSecretsRuntimeStateClearHook(clearAuthProfileMigrationDiagnostics);
 registerSecretsRuntimeStateClearHook(clearProviderAuthRuntimeSnapshotActivation);
-
-const loadRuntimeManifestHelpers = createLazyRuntimeModule(
-  () => import("./runtime-manifest.runtime.js"),
-);
 
 const loadRuntimePrepareHelpers = createLazyRuntimeModule(
   () => import("./runtime-prepare.runtime.js"),
@@ -78,102 +74,6 @@ const loadRuntimePrepareHelpers = createLazyRuntimeModule(
 const loadRuntimeOwnerAssignmentHelpers = createLazyRuntimeModule(
   () => import("./runtime-owner-assignments.js"),
 );
-
-async function resolveLoadablePluginOrigins(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): Promise<ReadonlyMap<string, PluginOrigin>> {
-  const workspaceDir = resolveAgentWorkspaceDir(
-    params.config,
-    resolveDefaultAgentId(params.config),
-    params.env,
-  );
-  const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
-    await loadRuntimeManifestHelpers();
-  const snapshot =
-    params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
-      config: params.config,
-      workspaceDir,
-      env: params.env,
-    });
-  return listPluginOriginsFromMetadataSnapshot(snapshot);
-}
-
-function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
-  const entries = config.plugins?.entries;
-  return (
-    Boolean(entries) &&
-    typeof entries === "object" &&
-    !Array.isArray(entries) &&
-    Object.keys(entries).length > 0
-  );
-}
-
-function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
-  const channels = config.channels;
-  return (
-    Boolean(channels) &&
-    typeof channels === "object" &&
-    !Array.isArray(channels) &&
-    Object.keys(channels).some((channelId) => channelId !== "defaults")
-  );
-}
-
-function hasConfiguredPluginIntegrationSecretProviders(config: OpenClawConfig): boolean {
-  const providers = config.secrets?.providers;
-  if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
-    return false;
-  }
-  return Object.values(providers).some(
-    (provider) =>
-      provider?.source === "exec" &&
-      "pluginIntegration" in provider &&
-      provider.pluginIntegration !== undefined,
-  );
-}
-
-function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
-  return (
-    hasConfiguredPluginEntries(config) ||
-    hasConfiguredChannelEntries(config) ||
-    hasConfiguredPluginIntegrationSecretProviders(config)
-  );
-}
-
-function loadAuthStoresWithMigrationIsolation(params: {
-  agentDirs: readonly string[];
-  loadAuthStore: (agentDir?: string) => AuthProfileStore;
-  allowUnavailable: boolean;
-}): {
-  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
-  degradedOwners: DegradedSecretOwner[];
-} {
-  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  const degradedOwners: DegradedSecretOwner[] = [];
-  for (const agentDir of params.agentDirs) {
-    try {
-      authStores.push({ agentDir, store: structuredClone(params.loadAuthStore(agentDir)) });
-    } catch (error) {
-      if (!(error instanceof AuthProfileMigrationRequiredError) || !params.allowUnavailable) {
-        throw error;
-      }
-      markAuthProfileMigrationRequired(agentDir, error);
-      authStores.push({ agentDir, store: { version: 1, profiles: {} } });
-      degradedOwners.push({
-        ownerKind: "route",
-        ownerId: error.ownerId,
-        state: "unavailable",
-        degradationState: "cold",
-        paths: error.sourceKinds.map((kind) => `auth-profile-legacy:${kind}`),
-        refKeys: [],
-        reason: "auth profile migration required",
-      });
-    }
-  }
-  return { authStores, degradedOwners };
-}
 
 /** Prepares a secrets runtime snapshot and records refresh context for later activation. */
 export async function prepareSecretsRuntimeSnapshot(params: {
@@ -245,60 +145,37 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     return snapshot;
   }
 
-  const {
-    collectAuthStoreAssignments,
-    collectConfigAssignments,
-    createResolverContext,
-    resolveRuntimeWebTools,
-  } = await loadRuntimePrepareHelpers();
+  const { resolveRuntimeWebTools } = await loadRuntimePrepareHelpers();
   const { listSecretAssignmentOwners, resolveAndApplySecretAssignments } =
     await loadRuntimeOwnerAssignmentHelpers();
-  const manifestRegistry =
-    params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  const loadablePluginOrigins =
-    params.loadablePluginOrigins ??
-    (shouldLoadPluginMetadataForSecrets(sourceConfig)
-      ? await resolveLoadablePluginOrigins({
-          config: sourceConfig,
-          env: runtimeEnv,
-          pluginMetadataSnapshot:
-            params.pluginMetadataSnapshot ??
-            (manifestRegistry ? { plugins: manifestRegistry.plugins } : undefined),
-        })
-      : new Map<string, PluginOrigin>());
-  const context = createResolverContext({
+  const plan = await buildSecretsRuntimeAssignmentPlan({
     sourceConfig,
-    env: runtimeEnv,
-    ...(manifestRegistry ? { manifestRegistry } : {}),
+    resolvedConfig,
+    runtimeEnv,
+    candidateDirs,
+    includeConfigRefs,
+    includeAuthStoreRefs,
+    ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
+    ...(params.loadAuthStore
+      ? {
+          preloadedAuthStores: authStores,
+          preloadedMigrationDegradedOwners: migrationDegradedOwners,
+        }
+      : {}),
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+    ...(params.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
+    ...(params.allowUnavailableSecretOwners !== undefined
+      ? { allowUnavailableSecretOwners: params.allowUnavailableSecretOwners }
+      : {}),
+    ...(params.loadablePluginOrigins
+      ? { loadablePluginOrigins: params.loadablePluginOrigins }
+      : {}),
   });
-
-  if (includeConfigRefs) {
-    collectConfigAssignments({
-      config: resolvedConfig,
-      context,
-      loadablePluginOrigins,
-    });
-  }
-
-  if (includeAuthStoreRefs) {
-    const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
-    if (!params.loadAuthStore) {
-      const loaded = loadAuthStoresWithMigrationIsolation({
-        agentDirs: candidateDirs,
-        loadAuthStore,
-        allowUnavailable: params.allowUnavailableSecretOwners === true,
-      });
-      authStores = loaded.authStores;
-      migrationDegradedOwners = loaded.degradedOwners;
-    }
-    for (const entry of authStores) {
-      collectAuthStoreAssignments({
-        store: entry.store,
-        context,
-        agentDir: entry.agentDir,
-      });
-    }
-  }
+  authStores = plan.authStores;
+  migrationDegradedOwners = plan.migrationDegradedOwners;
+  const { context, loadablePluginOrigins, manifestRegistry } = plan;
 
   const assignmentResolution =
     context.assignments.length > 0
