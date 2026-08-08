@@ -557,6 +557,35 @@ function createSummarizationOptions(
 }
 
 /** Runs one summarization completion and maps abort/error stops to CompactionError. */
+/**
+ * Upper bound on the reserve a summarization call may scale into its output cap.
+ *
+ * `reserveTokens` is an input-side budget - context held back so the summary prompt
+ * fits - so scaling it into an output cap lets a large reserve authorize far more
+ * output than the retained summary can ever keep. Bounding the reserve before each
+ * call applies its own fraction keeps every summarization path at its ordinary share,
+ * so a split turn - which summarizes history and turn prefix into one retained entry -
+ * never authorizes more in total than a default-reserve compaction already does.
+ *
+ * Anchored at the reserve the agent runtime actually runs with, so every shipped
+ * default resolves exactly as before and only a raised reserve clamps. Kept as a
+ * local constant because this package must not depend on the agent layer; it mirrors
+ * DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR in src/agents/agent-settings.ts.
+ */
+const MAX_SUMMARY_RESERVE_TOKENS = 20_000;
+
+/** Resolve a summarization output cap that an inflated input reserve cannot grow. */
+function resolveSummaryOutputTokens(
+  reserveTokens: number,
+  model: Model,
+  reserveFraction: number,
+): number {
+  return Math.min(
+    Math.floor(reserveFraction * Math.min(reserveTokens, MAX_SUMMARY_RESERVE_TOKENS)),
+    model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
+  );
+}
+
 async function runSummarizationCompletion(params: {
   promptText: string;
   model: Model;
@@ -627,10 +656,7 @@ export async function generateSummary(
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
 ): Promise<Result<string, CompactionError>> {
-  const maxTokens = Math.min(
-    Math.floor(0.8 * reserveTokens),
-    model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-  );
+  const maxTokens = resolveSummaryOutputTokens(reserveTokens, model, 0.8);
   let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
   if (customInstructions) {
     basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
@@ -921,10 +947,7 @@ async function generateTurnPrefixSummary(
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
 ): Promise<Result<string, CompactionError>> {
-  const maxTokens = Math.min(
-    Math.floor(0.5 * reserveTokens),
-    model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-  );
+  const maxTokens = resolveSummaryOutputTokens(reserveTokens, model, 0.5);
   const llmMessages = convertToLlm(messages);
   const conversationText = serializeConversation(llmMessages);
   const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
