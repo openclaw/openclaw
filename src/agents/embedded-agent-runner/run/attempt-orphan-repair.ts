@@ -13,12 +13,46 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type OrphanRepairSessionManager = {
   getLeafEntry: () => SessionManagerEntry | undefined;
   getEntry: (entryId: string) => SessionManagerEntry | undefined;
+  branch: (entryId: string) => void;
   appendThinkingLevelChange: (thinkingLevel: string) => string;
   appendModelChange: (provider: string, modelId: string) => string;
   appendCustomEntry: (customType: string, data?: unknown) => string;
   appendSessionInfo: (name: string) => string;
   appendLabelChange: (targetId: string, label?: string) => string;
 };
+
+function isReplayableAbortedAssistantLeaf(entry: SessionMessageEntry): boolean {
+  const message = entry.message;
+  if (message.role !== "assistant" || message.stopReason !== "aborted") {
+    return false;
+  }
+  return !message.content.some((block) => {
+    if (block.type === "toolCall") {
+      return true;
+    }
+    return block.type === "text" && block.text.trim().length > 0;
+  });
+}
+
+/** Drops a content-free aborted assistant leaf and returns its user parent for repair. */
+export function dropReplayableAbortedAssistantLeaf(
+  sessionManager: OrphanRepairSessionManager,
+  leafEntry: SessionManagerEntry | undefined = sessionManager.getLeafEntry(),
+): SessionMessageEntry | undefined {
+  if (
+    leafEntry?.type !== "message" ||
+    !isReplayableAbortedAssistantLeaf(leafEntry) ||
+    !leafEntry.parentId
+  ) {
+    return undefined;
+  }
+  const parentEntry = sessionManager.getEntry(leafEntry.parentId);
+  if (parentEntry?.type !== "message" || parentEntry.message.role !== "user") {
+    return undefined;
+  }
+  sessionManager.branch(parentEntry.id);
+  return parentEntry;
+}
 
 type OrphanRepairCandidate = {
   messageEntry: SessionMessageEntry;
@@ -27,10 +61,11 @@ type OrphanRepairCandidate = {
 
 function findTrailingMessageEntryForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
+  initialEntry?: SessionManagerEntry,
 ): OrphanRepairCandidate | undefined {
   const visited = new Set<string>();
   const trailingEntries: SessionManagerEntry[] = [];
-  let entry = sessionManager.getLeafEntry();
+  let entry = initialEntry ?? sessionManager.getLeafEntry();
   while (entry && isSessionContextMetadataEntry(entry)) {
     if (visited.has(entry.id)) {
       return undefined;
@@ -102,8 +137,12 @@ export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
+  initialEntry?: SessionManagerEntry;
 }): OrphanRepairPlan | undefined {
-  const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
+  const candidate = findTrailingMessageEntryForOrphanRepair(
+    params.sessionManager,
+    params.initialEntry,
+  );
   if (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) {
     return undefined;
   }

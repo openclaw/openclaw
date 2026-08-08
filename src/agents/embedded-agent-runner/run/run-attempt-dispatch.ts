@@ -107,6 +107,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
   bootstrapPromptWarningSignaturesSeen: string[];
+  sameTurnRetry?: boolean;
   suppressNextUserMessagePersistence: boolean;
   beforeAgentFinalizeRevisionAttempts: number;
   maxBeforeAgentFinalizeRevisions: number;
@@ -416,6 +417,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       input.bootstrapPromptWarningSignaturesSeen[
         input.bootstrapPromptWarningSignaturesSeen.length - 1
       ],
+    sameTurnRetry: input.sameTurnRetry === true,
     suppressNextUserMessagePersistence: input.suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts: input.beforeAgentFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: input.maxBeforeAgentFinalizeRevisions,
