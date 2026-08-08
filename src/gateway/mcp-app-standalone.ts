@@ -257,6 +257,7 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
+    operationTimeoutMs?: number;
   };
 
   const host = browser.document.getElementById("host");
@@ -320,28 +321,71 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     }
     return resolved;
   };
-  const request = async (method: string, params: unknown): Promise<unknown> => {
-    const response = await fetch(config.viewPath, {
-      method: "POST",
-      headers: {
-        Authorization: `MCP-App ${ticket}`,
-        "Content-Type": "application/json",
+  // Bound standalone host fetches so a hung gateway response cannot pin the
+  // MCP App UI indefinitely. The deadline spans both header arrival and JSON
+  // body consumption: fetch() resolves on headers, but a stalled body would
+  // still hang the UI if the timer were cleared earlier. Responses are
+  // same-origin and gateway-constructed, so no streaming byte cap is added;
+  // the gateway bounds request bodies via MCP_APP_OPERATION_MAX_BODY_BYTES.
+  // The initial view load uses a fixed 30s budget; operation fetches derive
+  // their deadline from the owning MCP server's requestTimeoutMs (carried in
+  // the view payload). The budget is doubled because a single browser
+  // operation request can span two server-side phases that each consume up
+  // to requestTimeoutMs: an invalidated catalog rebuild (getCatalog() in
+  // requireCallableTool or the runtime operation) followed by the upstream
+  // call itself (callTool / readResource with its own requestTimeoutMs). A
+  // single-budget deadline would abort a valid long-running call while the
+  // server continues it, inviting duplicate side effects on retry.
+  const MCP_APP_VIEW_LOAD_TIMEOUT_MS = 30_000;
+  const DEFAULT_OPERATION_TIMEOUT_MS = 60_000;
+  const OPERATION_TIMEOUT_PHASES = 2;
+  const OPERATION_TIMEOUT_GRACE_MS = 5_000;
+  const withFetchDeadline = async <T>(
+    input: string,
+    init: RequestInit,
+    consume: (response: Response) => Promise<T>,
+    timeoutMs: number,
+  ): Promise<T> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(input, { ...init, signal: controller.signal });
+      return await consume(response);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const request = (method: string, params: unknown): Promise<unknown> => {
+    const operationDeadlineMs =
+      OPERATION_TIMEOUT_PHASES * (payload?.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS) +
+      OPERATION_TIMEOUT_GRACE_MS;
+    return withFetchDeadline(
+      config.viewPath,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `MCP-App ${ticket}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ method, params }),
+        cache: "no-store",
+        credentials: "omit",
       },
-      body: JSON.stringify({ method, params }),
-      cache: "no-store",
-      credentials: "omit",
-    });
-    const body = (await response.json().catch(() => undefined)) as
-      | { ok?: boolean; result?: unknown; error?: string }
-      | undefined;
-    if (response.status === 401) {
-      fail("MCP App ticket was rejected");
-      throw new Error("MCP App ticket was rejected");
-    }
-    if (!response.ok || body?.ok !== true) {
-      throw new Error(body?.error || "MCP App operation was rejected");
-    }
-    return body.result;
+      async (response) => {
+        if (response.status === 401) {
+          fail("MCP App ticket was rejected");
+          throw new Error("MCP App ticket was rejected");
+        }
+        const body = (await response.json().catch(() => undefined)) as
+          | { ok?: boolean; result?: unknown; error?: string }
+          | undefined;
+        if (!response.ok || body?.ok !== true) {
+          throw new Error(body?.error || "MCP App operation was rejected");
+        }
+        return body.result;
+      },
+      operationDeadlineMs,
+    );
   };
   const operationHandlers = new Map<string, (params: unknown) => Promise<unknown>>();
   const installOperationHandlers = (view: ViewPayload) => {
@@ -488,12 +532,14 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
     fail("MCP App ticket is missing");
     return;
   }
-  void fetch(config.viewPath, {
-    headers: { Authorization: `MCP-App ${ticket}` },
-    cache: "no-store",
-    credentials: "omit",
-  })
-    .then(async (response) => {
+  void withFetchDeadline(
+    config.viewPath,
+    {
+      headers: { Authorization: `MCP-App ${ticket}` },
+      cache: "no-store",
+      credentials: "omit",
+    },
+    async (response) => {
       if (!response.ok) {
         throw new Error("MCP App ticket was rejected");
       }
@@ -507,8 +553,9 @@ function runStandaloneMcpAppHost(config: { protocolVersion: string; viewPath: st
       frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
       frame.src = sandboxUrl.href;
       host?.replaceChildren(frame);
-    })
-    .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+    },
+    MCP_APP_VIEW_LOAD_TIMEOUT_MS,
+  ).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
 }
 
 function standaloneHostHtml(): { html: string; scriptHash: string } {
@@ -656,6 +703,8 @@ export async function handleMcpAppStandaloneHttpRequest(
   try {
     return await withMcpAppActiveView(active, "read", () => {
       const { runtime, view } = active;
+      const operationTimeoutMs =
+        runtime.peekCatalog()?.servers[view.serverName]?.requestTimeoutMs ?? 60_000;
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(
@@ -673,6 +722,7 @@ export async function handleMcpAppStandaloneHttpRequest(
               toolResult: view.toolResult,
               serverTools: supportsStandaloneToolOperations(view),
               serverResources: runtime.readResource !== undefined,
+              operationTimeoutMs,
             }),
       );
       return true;
