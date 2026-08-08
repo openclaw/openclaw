@@ -115,6 +115,83 @@ describe("session tab registry", () => {
     });
   });
 
+  it("closes a volatile browser target once for 24 concurrent cleanup requests", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "concurrent-tab",
+      baseUrl: "http://127.0.0.1:9222",
+      profile: "openclaw",
+    });
+    let finishClose!: () => void;
+    const closeFinished = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    const closeTab = vi.fn(async () => {
+      await closeFinished;
+    });
+
+    const cleanups = Array.from({ length: 24 }, () =>
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab,
+      }),
+    );
+    expect(closeTab).toHaveBeenCalledTimes(1);
+
+    finishClose();
+    const results = await Promise.all(cleanups);
+
+    expect(closeTab).toHaveBeenCalledTimes(1);
+    expect(results.reduce((total, closed) => total + closed, 0)).toBe(1);
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab,
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("releases a failed volatile cleanup reservation so the next request can retry", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "retry-tab",
+      baseUrl: "http://127.0.0.1:9222",
+      profile: "openclaw",
+    });
+    let failClose!: () => void;
+    const closeFailed = new Promise<void>((_resolve, reject) => {
+      failClose = () => reject(new Error("network down"));
+    });
+    const closeTab = vi.fn(async () => {
+      await closeFailed;
+    });
+    const onWarn = vi.fn();
+    const first = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:main"],
+      closeTab,
+      onWarn,
+    });
+    const concurrent = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:main"],
+      closeTab,
+      onWarn,
+    });
+
+    expect(closeTab).toHaveBeenCalledTimes(1);
+    failClose();
+    await expect(Promise.all([first, concurrent])).resolves.toEqual([0, 0]);
+    expect(onWarn).toHaveBeenCalledOnce();
+
+    const retryClose = vi.fn(async () => {});
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:main"],
+        closeTab: retryClose,
+      }),
+    ).resolves.toBe(1);
+    expect(retryClose).toHaveBeenCalledTimes(1);
+  });
+
   it("touches and untracks a volatile tab through same-process aliases", async () => {
     trackSessionBrowserTab({
       sessionKey: "agent:main:main",

@@ -45,6 +45,7 @@ function clearProcessLocalTabState(): void {
   const state = globalThis as Record<symbol, unknown>;
   for (const name of [
     "openclaw.browser.session-tabs.volatile",
+    "openclaw.browser.session-tabs.volatile-cleanup",
     "openclaw.browser.session-tabs.active-durable-keys",
     "openclaw.browser.session-tabs.cold-native-activity",
     "openclaw.browser.session-tabs.interaction-storage-keys",
@@ -184,18 +185,26 @@ describe("durable session tab registry", () => {
     expect(openStore().entries()).toEqual([]);
 
     const duplicate = await freshRegistry("bridge-duplicate");
-    const closeTab = vi.fn<CloseTab>(async () => {});
-    await expect(
-      duplicate.closeTrackedBrowserTabsForSessions({
+    const closeTab = vi.fn<CloseTab>(async () => {
+      await Promise.resolve();
+    });
+    const cleanups = Array.from({ length: 24 }, (_value, index) =>
+      (index % 2 === 0 ? first : duplicate).closeTrackedBrowserTabsForSessions({
         sessionKeys: ["agent:main:main"],
         closeTab,
       }),
-    ).resolves.toBe(1);
+    );
+    expect(closeTab).toHaveBeenCalledOnce();
+    const results = await Promise.all(cleanups);
+
+    expect(closeTab).toHaveBeenCalledOnce();
+    expect(results.reduce((total, closed) => total + closed, 0)).toBe(1);
     expect(closeTab).toHaveBeenCalledWith({
       targetId: "bridge-tab",
       baseUrl: "http://127.0.0.1:9999",
       profile: "remote",
     });
+    expect(openStore().entries()).toEqual([]);
   });
 
   it("keeps browser-bridge aliases isolated from host-browser durable records", async () => {
