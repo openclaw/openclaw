@@ -1,0 +1,84 @@
+{
+  "source": "qa suite runtime-pair output (codex cell), .local/qa-evidence-parity6/flow/isolated",
+  "run_head": "beb5c3ccb2f3d18c2eec3e3ef40bd50a084e3c40",
+  "redaction": "suite workspace paths and loopback ports replaced with placeholders; no credentials",
+  "scenario": "QA channel final reply after a failed tool with a later terminal presentation",
+  "status": "pass",
+  "details": "known harness gap in openclaw runtime; paired runtime passed",
+  "cell": {
+    "runtime": "codex",
+    "toolCalls": [
+      {
+        "tool": "read",
+        "argsHash": "2a1a4106cb351f0d8a4ea10b17e9c8dd24d07f7969f255c5dbfb2d803d2a2615",
+        "resultHash": "9bc3a9ee788ce774b4de385f3347021b9375ee6fa2eb8056e6e60af3ad834883",
+        "errorClass": "tool-result-error"
+      },
+      {
+        "tool": "web_fetch",
+        "argsHash": "9a4dc4b518516917e5a28f4336c974f5d670c8e680b501f82e2595416a53ec3a",
+        "resultHash": "67387677d25b490083d2ed150432f7f4b003547e6a89ba31975d2c6c12e33652"
+      }
+    ],
+    "finalText": "QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "@openclaw Failed tool terminal recovery with presentation QA check: read the missing workspace file, then call web_fetch on http://127.0.0.1:<port>/debug/request-cursor, then respond with exact marker: `QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK`."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "name": "read",
+          "arguments": "{\"path\": \"qa-failed-terminal-missing-file.txt\"}"
+        }
+      ]
+    },
+    {
+      "role": "toolResult",
+      "content": [
+        {
+          "type": "toolResult",
+          "toolName": "read",
+          "isError": null,
+          "text": "ENOENT: no such file or directory, access '<suite-workspace>/workspace/qa-failed-terminal-missing-file.txt'"
+        }
+      ],
+      "isError": true
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "name": "web_fetch",
+          "arguments": "{\"url\": \"http://127.0.0.1:<port>/debug/request-cursor\"}"
+        }
+      ]
+    },
+    {
+      "role": "toolResult",
+      "content": [
+        {
+          "type": "toolResult",
+          "toolName": "web_fetch",
+          "isError": null,
+          "text": "{\n  \"url\": \"http://127.0.0.1:<port>/debug/request-cursor\",\n  \"finalUrl\": \"http://127.0.0.1:<port>/debug/request-cursor\",\n  \"status\": 200,\n  \"contentType\": \"application/json\",\n  \"extractMode\": \"markdown\",\n  \"extractor\": \"json\",\n  \"externalContent\": {\n    \"untrusted\": true,\n    \"source\": \"web_fetch\",\n    \"wrapped\": true\n  },\n  \"truncated\": false,\n  \"length\": 788,\n  \"rawLength\": 17,\n  \"fetchedAt\": \"2"
+        }
+      ],
+      "isError": false
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK"
+        }
+      ]
+    }
+  ]
+}

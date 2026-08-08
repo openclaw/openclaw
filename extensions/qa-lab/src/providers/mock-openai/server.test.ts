@@ -8200,6 +8200,75 @@ Update and merge these partial structured summaries.`,
       "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
     );
   });
+
+  it("scripts one failure-honest continuation with a later terminal presentation (#118489)", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Failed tool terminal recovery with presentation QA check: read the missing workspace file, " +
+      "then call web_fetch on web_fetch url: http://127.0.0.1:8123/health, then respond with exact marker: " +
+      "`QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK`.";
+
+    const toolPlan = await postStreamingResponses(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(prompt)],
+    });
+    const plannedResponse = await toolPlan.text();
+    expect(plannedResponse).toContain('"name":"read"');
+    expect(plannedResponse).toContain('"name":"web_fetch"');
+    expect(plannedResponse).toContain("qa-failed-terminal-missing-file.txt");
+    expect(plannedResponse).toContain("http://127.0.0.1:8123/health");
+
+    const failedToolOutput = makeToolOutputWithCallId(
+      "call-read-presentation",
+      JSON.stringify({ status: "failed", error: "ENOENT: qa-failed-terminal-missing-file.txt" }),
+    );
+    const webFetchOutput = makeToolOutputWithCallId(
+      "call-web-fetch-presentation",
+      JSON.stringify({
+        status: "completed",
+        details: { status: 200, finalUrl: "https://example.com" },
+        content: [{ type: "text", text: "ok" }],
+      }),
+    );
+    const dishonestFinalization = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        failedToolOutput,
+        webFetchOutput,
+      ],
+    });
+    expect(outputText(dishonestFinalization)).toBe("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
+
+    const recovered = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(
+          "The previous assistant turn completed its tool calls but did not produce a user-visible answer. " +
+            "If any tool failed, state that failure plainly and do not claim it succeeded.",
+        ),
+        failedToolOutput,
+        webFetchOutput,
+      ],
+    });
+    expect(outputText(recovered)).toBe(
+      "The requested file could not be read: ENOENT. QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK",
+    );
+
+    const replayed = await expectNonStreamingResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(prompt), failedToolOutput, webFetchOutput],
+    });
+    expect(outputText(replayed)).toBe("");
+  });
 });
 
 describe("qa mock openai server provider variant tagging", () => {

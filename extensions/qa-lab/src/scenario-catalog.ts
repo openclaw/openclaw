@@ -236,6 +236,13 @@ const qaFlowThrowActionSchema = z.object({
   ]),
 });
 
+const qaFlowSkipActionSchema = z.object({
+  skip: z.object({
+    expr: z.string().trim().min(1).optional(),
+    message: z.unknown().optional(),
+  }),
+});
+
 const qaFlowIfShapeBase: Record<string, z.ZodTypeAny> = {
   expr: z.string().trim().min(1),
   else: z.array(z.unknown()).optional(),
@@ -250,6 +257,7 @@ const qaFlowActionSchema: z.ZodType = z.lazy(() =>
     qaFlowSetActionSchema,
     qaFlowAssertActionSchema,
     qaFlowThrowActionSchema,
+    qaFlowSkipActionSchema,
     z.object({
       if: z
         .object(qaFlowIfShapeBase)

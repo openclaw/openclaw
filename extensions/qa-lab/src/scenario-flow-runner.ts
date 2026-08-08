@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements scenario flow runner behavior.
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { QaSuiteScenarioSkipError } from "./errors.js";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -281,6 +282,18 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
       throw new Error(message);
     }
     throw new Error("qa flow throw");
+  }
+  if (isPlainObject(action.skip)) {
+    const spec = action.skip as { expr?: string; message?: unknown };
+    const evaluated = spec.expr ? await evalExpr(spec.expr, api, vars) : undefined;
+    if (evaluated !== undefined && !evaluated) {
+      return;
+    }
+    const message =
+      spec.message === undefined ? undefined : await resolveValue(spec.message, api, vars);
+    throw new QaSuiteScenarioSkipError(
+      typeof message === "string" && message.trim() ? message : "qa flow skip",
+    );
   }
   if (isPlainObject(action.if)) {
     const ifAction = action.if as { expr: string; then: unknown[]; else?: unknown[] };

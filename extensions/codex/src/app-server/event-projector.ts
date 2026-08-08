@@ -447,14 +447,13 @@ export class CodexAppServerEventProjector {
       ...(this.completedCompactionCount > 0
         ? { compactionCount: this.completedCompactionCount }
         : {}),
-      replayMetadata: {
-        hadPotentialSideEffects,
-        replaySafe: !hadPotentialSideEffects,
-      },
+      replayMetadata: { hadPotentialSideEffects, replaySafe: !hadPotentialSideEffects },
       itemLifecycle: {
         startedCount: this.activeItemIds.size + this.completedItemIds.size,
         completedCount: this.completedItemIds.size,
         activeCount: this.activeItemIds.size,
+        // Producer-owned active-item identity for the shared finalizer.
+        activeItemIds: [...this.activeItemIds],
       },
       yieldDetected: options?.yieldDetected || false,
       didSendDeterministicApprovalPrompt:

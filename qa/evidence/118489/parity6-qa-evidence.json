@@ -1,0 +1,82 @@
+{
+  "kind": "openclaw.qa.evidence-summary",
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-04T10:54:06.673Z",
+  "evidenceMode": "full",
+  "entries": [
+    {
+      "test": {
+        "kind": "qa-scenario",
+        "id": "qa-channel-failed-tool-presentation-terminal-finalization",
+        "title": "QA channel final reply after a failed tool with a later terminal presentation",
+        "source": {
+          "path": "qa/scenarios/channels/qa-channel-failed-tool-presentation-terminal-finalization.yaml"
+        }
+      },
+      "coverage": [
+        {
+          "id": "agent-runtime.failure-recovery-empty-response-recovery",
+          "role": "primary"
+        },
+        {
+          "id": "agent-runtime.failure-recovery-retry-policy",
+          "role": "secondary"
+        },
+        {
+          "id": "channels.qa-channel-final-reply",
+          "role": "secondary"
+        }
+      ],
+      "refs": [
+        {
+          "kind": "code",
+          "path": "src/agents/embedded-agent-runner/run/incomplete-turn.ts"
+        },
+        {
+          "kind": "code",
+          "path": "extensions/qa-lab/src/providers/mock-openai/server.ts"
+        }
+      ],
+      "runtimePairLane": "core",
+      "execution": {
+        "runner": "host",
+        "environment": {
+          "ref": "013dc135d6bc7cbcdb74c2143a51cbe3c1a65804",
+          "os": "darwin",
+          "nodeVersion": "v22.22.3"
+        },
+        "provider": {
+          "id": "openai",
+          "live": false,
+          "model": {
+            "name": "gpt-5.6-luna",
+            "ref": "mock-openai/gpt-5.6-luna"
+          },
+          "fixture": "mock-openai"
+        },
+        "channel": {
+          "id": "qa-channel",
+          "live": false
+        },
+        "packageSource": {
+          "kind": "source-checkout"
+        },
+        "artifacts": [
+          {
+            "kind": "summary",
+            "path": ".local/qa-evidence-parity6/flow/isolated/qa-suite-summary.json",
+            "source": "qa-suite"
+          },
+          {
+            "kind": "report",
+            "path": ".local/qa-evidence-parity6/flow/isolated/qa-suite-report.md",
+            "source": "qa-suite"
+          }
+        ]
+      },
+      "result": {
+        "status": "pass"
+      }
+    }
+  ]
+}

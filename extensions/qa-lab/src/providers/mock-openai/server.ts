@@ -172,6 +172,7 @@ import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
   buildCustomToolCallEventsWithInput,
+  buildToolCallBatchEvents,
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
@@ -287,6 +288,10 @@ const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recover
 // Keep each real provider request active long enough for retries to span the
 // unchanged five-minute recovery bound while remaining below first-byte timeout.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
+const QA_FAILED_TOOL_PRESENTATION_RECOVERY_PROMPT_RE =
+  /failed tool terminal recovery with presentation qa check/i;
+const QA_FAILED_TOOL_PRESENTATION_FETCH_URL_RE =
+  /(?:web_fetch url:|call web_fetch on) (https?:\/\/[^\s`",]+)/i;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -936,6 +941,10 @@ async function buildResponsesPayload(
     QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
+  const isActiveFailedToolPresentationRecovery =
+    QA_FAILED_TOOL_PRESENTATION_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_FAILED_TOOL_PRESENTATION_RECOVERY_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
@@ -1270,6 +1279,32 @@ async function buildResponsesPayload(
         content: "side effect completed once\n",
       });
     }
+    return buildAssistantEvents("");
+  }
+  // #118489: the terminal presentation flag from a later successful tool must
+  // not suppress the failure-honest finalization for an exactly persisted
+  // failed batch. The failing read is planned first, the presentation-producing
+  // web_fetch second, so the tracked presentation belongs to the later outcome.
+  if (isActiveFailedToolPresentationRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
+        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
+      }
+      const marker =
+        exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-PRESENTATION-FINALIZED-OK";
+      return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
+    }
+    if (!hasCompletedToolOutput) {
+      const fetchUrl =
+        QA_FAILED_TOOL_PRESENTATION_FETCH_URL_RE.exec(prompt)?.[1] ?? "https://example.com";
+      return buildToolCallBatchEvents([
+        { name: "read", args: { path: "qa-failed-terminal-missing-file.txt" } },
+        { name: "web_fetch", args: { url: fetchUrl } },
+      ]);
+    }
+    // After the tools have output, end the turn with no assistant message so
+    // the runtime's terminal assistant stays the toolUse batch (the residual
+    // shape); a replay or plain text would mask the finalization decision.
     return buildAssistantEvents("");
   }
   if (isActiveFailedToolTerminalRecovery) {
