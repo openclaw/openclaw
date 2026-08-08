@@ -27,6 +27,7 @@ import type {
   JsonValue,
   NativeHookRelayDeferredApprovalOutcome,
   NativeHookRelayInvocation,
+  NativeHookRelayInvocationBinding,
   NativeHookRelayPermissionApprovalRequest,
   NativeHookRelayPermissionApprovalRequester,
   NativeHookRelayPermissionApprovalResult,
@@ -34,7 +35,6 @@ import type {
   NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
   NativeHookRelayProviderAdapter,
-  NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import { readOptionalString, truncateText } from "./native-hook-relay-utils.js";
 
@@ -169,29 +169,29 @@ async function resolveNativeHookRelayPreToolUseApproval(
 }
 
 export async function runNativeHookRelayPermissionRequest(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
   const request: NativeHookRelayPermissionApprovalRequest = {
-    provider: params.registration.provider,
-    ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-    sessionId: params.registration.sessionId,
-    ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-    runId: params.registration.runId,
+    provider: params.binding.provider,
+    ...(params.binding.agentId ? { agentId: params.binding.agentId } : {}),
+    sessionId: params.binding.sessionId,
+    ...(params.binding.sessionKey ? { sessionKey: params.binding.sessionKey } : {}),
+    runId: params.binding.runId,
     toolName: normalizeNativeHookToolName(params.invocation.toolName),
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
     ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
     ...(params.invocation.model ? { model: params.invocation.model } : {}),
     toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
-    ...(params.registration.signal ? { signal: params.registration.signal } : {}),
+    ...(params.binding.signal ? { signal: params.binding.signal } : {}),
   };
   const approvalKey = nativeHookRelayPermissionApprovalKey({
-    registration: params.registration,
+    binding: params.binding,
     request,
   });
   const allowAlwaysKey = nativeHookRelayPermissionAllowAlwaysKey({
-    registration: params.registration,
+    binding: params.binding,
     request,
   });
   if (hasNativeHookRelayPermissionAllowAlways(allowAlwaysKey)) {
@@ -201,7 +201,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
   try {
     const decision = await (pendingApproval ??
       startNativeHookRelayPermissionApprovalWithBudget({
-        registration: params.registration,
+        binding: params.binding,
         approvalKey,
         request,
       }));
@@ -226,13 +226,13 @@ export async function runNativeHookRelayPermissionRequest(params: {
 }
 
 async function startNativeHookRelayPermissionApprovalWithBudget(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   approvalKey: string;
   request: NativeHookRelayPermissionApprovalRequest;
 }): Promise<NativeHookRelayPermissionApprovalResult> {
-  if (!consumeNativeHookRelayPermissionBudget(params.registration.relayId)) {
+  if (!consumeNativeHookRelayPermissionBudget(params.binding.relayId)) {
     log.warn(
-      `native hook permission approval rate limit exceeded; deferring to provider approval path: relay=${params.registration.relayId} run=${params.registration.runId}`,
+      `native hook permission approval rate limit exceeded; deferring to provider approval path: relay=${params.binding.relayId} run=${params.binding.runId}`,
     );
     return "defer";
   }
@@ -247,12 +247,12 @@ async function startNativeHookRelayPermissionApprovalWithBudget(params: {
 }
 
 function nativeHookRelayPermissionApprovalKey(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   request: NativeHookRelayPermissionApprovalRequest;
 }): string {
   return [
-    params.registration.relayId,
-    params.registration.runId,
+    params.binding.relayId,
+    params.binding.runId,
     params.request.toolCallId
       ? `call:${params.request.toolCallId}`
       : permissionRequestFallbackKey(params.request),
@@ -261,13 +261,13 @@ function nativeHookRelayPermissionApprovalKey(params: {
 }
 
 function nativeHookRelayPermissionAllowAlwaysKey(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   request: NativeHookRelayPermissionApprovalRequest;
 }): string {
   const hash = createHash("sha256");
   hash.update("openclaw:native-hook-relay:permission-allow-always:v2");
   hash.update("\0");
-  hash.update(params.registration.relayId);
+  hash.update(params.binding.relayId);
   hash.update("\0");
   hash.update(params.request.provider);
   hash.update("\0");

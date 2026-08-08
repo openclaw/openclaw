@@ -12,7 +12,6 @@ import {
 } from "./attempt-client-cleanup.js";
 import { retainCodexAppServerLiveThread } from "./client-runtime.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
-import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -35,8 +34,7 @@ export async function cleanupCodexAttempt(
     releaseSandboxExecEnvironment,
   } = resources;
   const { connection } = prompt.context.runtime;
-  const { params, options, runAbortController, terminalState, bindingStore, bindingIdentity } =
-    connection;
+  const { params, runAbortController, terminalState, bindingStore, bindingIdentity } = connection;
   const { state, steeringQueueRef, userInputBridgeRef, turnWatches } = turnRuntime;
   const {
     maybeEmitFastModeAutoResetBestEffort,
@@ -154,15 +152,9 @@ export async function cleanupCodexAttempt(
   releaseCurrentRoute();
   await releaseSharedClientLeaseAndRetireOneShotClient();
   if (resourceState.nativeHookRelay) {
-    if (state.shouldDelayNativeHookRelayUnregister) {
-      // Native hook subprocesses can finish shortly after turn completion.
-      scheduleCodexNativeHookRelayUnregister({
-        relay: resourceState.nativeHookRelay,
-        hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-      });
-    } else {
-      resourceState.nativeHookRelay.unregister();
-    }
+    resourceState.nativeHookRelay.releaseParent({
+      delay: state.shouldDelayNativeHookRelayUnregister,
+    });
   }
   await releaseSandboxExecEnvironment();
   await runAgentCleanupStep({

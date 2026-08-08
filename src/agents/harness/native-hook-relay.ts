@@ -50,8 +50,10 @@ import type {
   ActiveNativeHookRelayRegistration,
   ActiveNativeHookRelayRegistrationHandle,
   InvokeNativeHookRelayParams,
+  NativeHookRelayAttemptBinding,
   NativeHookRelayEvent,
   NativeHookRelayInvocation,
+  NativeHookRelayInvocationBinding,
   NativeHookRelayPermissionApprovalRequest,
   NativeHookRelayPermissionApprovalRequester,
   NativeHookRelayProcessResponse,
@@ -93,8 +95,6 @@ export function registerNativeHookRelay(
   pruneNativeHookRelayPermissionAllowAlways();
   const relayId = normalizeRelayId(params.relayId) ?? randomUUID();
   const generation = normalizeRelayGeneration(params.generation) ?? randomUUID();
-  const generationMismatchGraceMs = normalizePositiveInteger(params.generationMismatchGraceMs, 0);
-  const now = Date.now();
   const expiresAtMs = resolveNativeHookRelayExpiresAtMs(params.ttlMs);
   if (expiresAtMs === undefined) {
     throw new Error("Native hook relay expiry is outside the supported Date range");
@@ -108,9 +108,6 @@ export function registerNativeHookRelay(
     relayId,
     provider: params.provider,
     generation,
-    ...(generationMismatchGraceMs > 0
-      ? { generationMismatchGraceExpiresAtMs: now + generationMismatchGraceMs }
-      : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -154,35 +151,58 @@ export function registerNativeHookRelay(
     renew: (ttlMs) => {
       const current = relays.get(relayId);
       if (current !== registration) {
-        return;
+        return "dead";
       }
       const renewedExpiresAtMs = resolveNativeHookRelayExpiresAtMs(ttlMs);
       if (renewedExpiresAtMs === undefined) {
-        return;
+        return "live";
       }
       const bridge = relayBridges.get(relayId);
       if (bridge && bridge.server.listening) {
         try {
           const renewal = renewNativeHookRelayBridgeRecord(current, bridge, renewedExpiresAtMs);
-          if (renewal === "unavailable") {
-            return;
+          if (renewal === "unavailable" || renewal === "reclaimable") {
+            return "dead";
           }
-          if (renewal === "ownership-changed") {
+          if (renewal === "foreign-owner") {
             log.debug("native hook relay bridge record ownership changed", { relayId });
             unregisterNativeHookRelay(relayId, current);
-            return;
+            return "foreign-owner";
           }
         } catch (error) {
           log.debug("failed to renew native hook relay bridge record", { error, relayId });
-          return;
+          return "live";
         }
       }
       current.expiresAtMs = renewedExpiresAtMs;
       handle.expiresAtMs = renewedExpiresAtMs;
+      return "live";
+    },
+    rebindAttempt: (binding) => {
+      if (relays.get(relayId) !== registration) {
+        return false;
+      }
+      applyNativeHookRelayAttemptBinding(registration, binding);
+      applyNativeHookRelayAttemptBinding(handle, binding);
+      return true;
     },
     unregister: () => unregisterNativeHookRelay(relayId, registration),
   };
   return handle;
+}
+
+function applyNativeHookRelayAttemptBinding(
+  target: NativeHookRelayRegistration & { preToolUseLoopDetection?: boolean },
+  binding: NativeHookRelayAttemptBinding,
+): void {
+  target.preToolUseLoopDetection = binding.preToolUseLoopDetection !== false;
+  target.runId = binding.runId;
+  target.config = binding.config;
+  target.channelId = binding.channelId;
+  target.requester = binding.requester;
+  target.approvalContext = binding.approvalContext;
+  target.signal = binding.signal;
+  target.onPreToolUseFailure = binding.onPreToolUseFailure;
 }
 
 function unregisterNativeHookRelay(
@@ -243,14 +263,7 @@ export async function invokeNativeHookRelay(
   if (params.requireGeneration) {
     const generation = readNonEmptyString(params.generation, "generation");
     if (generation !== registration.generation) {
-      if (!canAcceptNativeHookRelayGenerationMismatch(registration, generation)) {
-        throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
-      }
-      log.debug("native hook relay accepted bootstrap generation mismatch", {
-        relayId,
-        event,
-        runId: registration.runId,
-      });
+      throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
     }
   }
   if (!registration.allowedEvents.includes(event)) {
@@ -260,15 +273,16 @@ export async function invokeNativeHookRelay(
     throw new Error("native hook relay payload must be JSON-compatible");
   }
 
+  const binding: NativeHookRelayInvocationBinding = { ...registration };
   const normalized = normalizeNativeHookInvocation({
-    registration,
+    binding,
     event,
     rawPayload: params.rawPayload,
   });
   recordNativeHookRelayInvocation(normalized);
   const startedAt = Date.now();
   const response = await processNativeHookRelayInvocation({
-    registration,
+    binding,
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
@@ -277,7 +291,7 @@ export async function invokeNativeHookRelay(
     response.failureDisposition &&
     readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
   ) {
-    projectNativeHookRelayPreToolUseFailure(registration, {
+    projectNativeHookRelayPreToolUseFailure(registration, binding.onPreToolUseFailure, {
       toolName: normalizeNativeHookToolName(normalized.toolName),
       toolCallId: normalized.toolUseId,
       disposition: response.failureDisposition,
@@ -289,14 +303,14 @@ export async function invokeNativeHookRelay(
 
 function projectNativeHookRelayPreToolUseFailure(
   registration: ActiveNativeHookRelayRegistration,
+  sink: NativeHookRelayInvocationBinding["onPreToolUseFailure"],
   failure: Parameters<NonNullable<NativeHookRelayRegistration["onPreToolUseFailure"]>>[0],
 ): void {
-  const callback = registration.onPreToolUseFailure;
-  if (!callback || registration.preToolUseFailureProjections.has(failure.toolCallId)) {
+  if (!sink || registration.preToolUseFailureProjections.has(failure.toolCallId)) {
     return;
   }
   const record = {
-    promise: Promise.resolve().then(() => callback(failure)),
+    promise: Promise.resolve().then(() => sink(failure)),
     settled: false,
   };
   registration.preToolUseFailureProjections.set(failure.toolCallId, record);
@@ -364,21 +378,6 @@ function removeNativeHookRelayInvocations(relayId: string): void {
       invocations.splice(index, 1);
     }
   }
-}
-
-function canAcceptNativeHookRelayGenerationMismatch(
-  registration: NativeHookRelayRegistration,
-  generation: string,
-): boolean {
-  const expiresAtMs = registration.generationMismatchGraceExpiresAtMs;
-  if (typeof expiresAtMs !== "number" || Date.now() > expiresAtMs) {
-    return false;
-  }
-  if (registration.generationMismatchGraceAcceptedGeneration) {
-    return registration.generationMismatchGraceAcceptedGeneration === generation;
-  }
-  registration.generationMismatchGraceAcceptedGeneration = generation;
-  return true;
 }
 
 function pruneExpiredNativeHookRelays(now = Date.now()): void {

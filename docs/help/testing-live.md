@@ -424,6 +424,26 @@ OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
   pnpm test:docker:live-codex-harness
 ```
 
+### Codex native subagent lifecycle probes
+
+- `extensions/codex/src/app-server/native-subagent-monitor.live.test.ts` —
+  detached native child recovery and completion delivery against the real
+  app-server binary. Enable: `OPENCLAW_LIVE_CODEX_NATIVE_SUBAGENT=1` (requires
+  `OPENAI_API_KEY`).
+- `extensions/codex/src/app-server/native-hook-relay.live.test.ts` — regression
+  proof for #111010/#118534: a detached native worker keeps reaching OpenClaw
+  policy through the native hook relay after its parent turn releases. Enable:
+  `OPENCLAW_LIVE_CODEX_NATIVE_HOOK_RELAY=1`. The test isolates itself: it stubs
+  `OPENCLAW_STATE_DIR` and `CODEX_HOME` into a temp dir and copies your
+  `~/.codex/auth.json` (from `codex login`) into that staged home, so the
+  app-server's refresh-token rotation never writes to your real Codex home.
+
+```bash
+OPENCLAW_LIVE_TEST=1 \
+  OPENCLAW_LIVE_CODEX_NATIVE_HOOK_RELAY=1 \
+  node scripts/test-live.mjs extensions/codex/src/app-server/native-hook-relay.live.test.ts
+```
+
 ## Live: OpenAI repeated compaction
 
 - Goal: exercise the embedded OpenClaw `openai-responses` agent loop through at

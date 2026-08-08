@@ -5,6 +5,10 @@ type PendingUnregister = {
 
 const pending = new Set<PendingUnregister>();
 
+type CodexNativeHookRelayRouteEntry = { dispose: () => void };
+
+export const codexNativeHookRelayOwners = new Map<string, CodexNativeHookRelayRouteEntry>();
+
 /** Owns delayed hook-relay cleanup across runtime scheduling and test teardown. */
 export const nativeHookRelayUnregisterQueue = {
   add(entry: PendingUnregister): void {

@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import type { CodexNativeHookRelayLease } from "./native-hook-relay.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type {
   CodexAppServerRequestResult,
@@ -14,6 +15,8 @@ import type {
 } from "./protocol.js";
 
 type CodexThreadReadResponse = CodexAppServerRequestResult<"thread/read">;
+
+const DESCENDANT_RELAY_QUIET_WINDOW_MS = 5 * 60_000;
 
 const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
 const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
@@ -133,13 +136,35 @@ function registerParent(
   monitor: CodexNativeSubagentMonitorInstance,
   parentThreadId = "parent-thread",
   requesterSessionKey = "agent:main:discord:channel:C123",
+  nativeHookRelay?: CodexNativeHookRelayLease,
 ) {
   return monitor.registerParent({
     parentThreadId,
     requesterSessionKey,
     taskRuntimeScope: createTaskScope(requesterSessionKey),
     agentId: "main",
+    nativeHookRelay,
   });
+}
+
+function createNativeHookRelayLease(
+  relayId = "native-hook-relay",
+  options: { released?: boolean } = {},
+) {
+  const releases = new Map<string, ReturnType<typeof vi.fn>>();
+  const acquireChild = vi.fn((childThreadId: string) => {
+    if (options.released) {
+      return undefined;
+    }
+    const release = vi.fn();
+    releases.set(childThreadId, release);
+    return release;
+  });
+  return {
+    acquireChild,
+    releases,
+    lease: { relayId, acquireChild } as unknown as CodexNativeHookRelayLease,
+  };
 }
 
 async function notifyChildStarted(
@@ -212,16 +237,51 @@ function nativeCompletionNotification(
   };
 }
 
+function subAgentActivityNotification(
+  spawnerThreadId: string,
+  spawnedThreadId: string,
+  kind: "started" | "interacted" | "interrupted" = "started",
+): CodexServerNotification {
+  return {
+    method: "item/completed",
+    params: {
+      threadId: spawnerThreadId,
+      item: {
+        id: `${spawnedThreadId}-activity`,
+        type: "subAgentActivity",
+        agentThreadId: spawnedThreadId,
+        agentPath: spawnedThreadId,
+        kind,
+      },
+    },
+  };
+}
+
+function descendantItemNotification(threadId: string, itemId: string): CodexServerNotification {
+  return {
+    method: "item/completed",
+    params: { threadId, item: { id: itemId, type: "agentMessage", text: "working" } },
+  };
+}
+
+function threadStatusChangedNotification(
+  threadId: string,
+  type: "active" | "idle" | "notLoaded" | "systemError",
+): CodexServerNotification {
+  return { method: "thread/status/changed", params: { threadId, status: { type } } };
+}
+
 function childTurnCompletedNotification(params: {
   status: "completed" | "failed" | "interrupted";
   error?: string;
   turnId?: string;
   items?: JsonValue[];
+  childThreadId?: string;
 }): CodexServerNotification {
   return {
     method: "turn/completed",
     params: {
-      threadId: "child-thread",
+      threadId: params.childThreadId ?? "child-thread",
       turn: {
         id: params.turnId ?? "child-turn",
         status: params.status,
@@ -867,7 +927,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const releaseClient = vi.fn();
     const retainClient = vi.fn(() => releaseClient);
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime, { retainClient });
-    registerParent(monitor);
+    registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123");
     await notifyChildStarted(client);
 
     await client.notify(childTurnCompletedNotification({ status: "interrupted" }));
@@ -894,6 +954,287 @@ describe("CodexNativeSubagentMonitor", () => {
       expect.objectContaining({ result: "resumed child result" }),
     );
     client.close();
+  });
+
+  it("re-registers a settled sub-agent that the parent messages again", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const relay = createNativeHookRelayLease();
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+    registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", relay.lease);
+    await client.notify(subAgentActivityNotification("parent-thread", "child-thread"));
+    await client.notify(
+      childTurnCompletedNotification({
+        turnId: "turn-1",
+        status: "completed",
+        items: [{ id: "final-1", type: "agentMessage", phase: "final_answer", text: "first" }],
+      }),
+    );
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+    expect(relay.releases.get("child-thread")).toHaveBeenCalledTimes(1);
+
+    await client.notify(
+      subAgentActivityNotification("parent-thread", "child-thread", "interacted"),
+    );
+    await client.notify(
+      childTurnCompletedNotification({
+        turnId: "turn-2",
+        status: "completed",
+        items: [{ id: "final-2", type: "agentMessage", phase: "final_answer", text: "second" }],
+      }),
+    );
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2);
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenLastCalledWith(
+      expect.objectContaining({ result: "second" }),
+    );
+    expect(relay.acquireChild.mock.calls.map(([threadId]) => threadId)).toEqual([
+      "child-thread",
+      "child-thread",
+    ]);
+    monitor.dispose();
+  });
+
+  it("retries a refused child claim, then pins the child to the route that granted it", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const releasedRelay = createNativeHookRelayLease("relay-released", { released: true });
+    const liveRelay = createNativeHookRelayLease("relay-live");
+    const rotatedRelay = createNativeHookRelayLease("relay-rotated");
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+    const resumeChildTurn = (turnId: string) =>
+      client.notify({
+        method: "turn/started",
+        params: {
+          threadId: "child-thread",
+          turn: { id: turnId, status: "inProgress", items: [], error: null },
+        },
+      });
+    registerParent(
+      monitor,
+      "parent-thread",
+      "agent:main:discord:channel:C123",
+      releasedRelay.lease,
+    );
+    await notifyChildStarted(client, "parent-thread", "child-thread");
+    expect(releasedRelay.acquireChild).toHaveBeenCalledTimes(1);
+
+    registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", liveRelay.lease);
+    await resumeChildTurn("turn-1");
+    expect(liveRelay.acquireChild.mock.calls.map(([threadId]) => threadId)).toEqual([
+      "child-thread",
+    ]);
+
+    registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", rotatedRelay.lease);
+    await resumeChildTurn("turn-2");
+    expect(rotatedRelay.acquireChild).not.toHaveBeenCalled();
+    expect(liveRelay.releases.get("child-thread")).not.toHaveBeenCalled();
+
+    monitor.dispose();
+    expect(liveRelay.releases.get("child-thread")).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims a re-announced direct child only once", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const relay = createNativeHookRelayLease();
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+    registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", relay.lease);
+
+    await notifyChildStarted(client, "parent-thread", "child-c");
+    await notifyChildStarted(client, "parent-thread", "child-c");
+
+    expect(relay.acquireChild.mock.calls.map(([threadId]) => threadId)).toEqual(["child-c"]);
+    monitor.dispose();
+  });
+
+  it("claims each descendant for its own lifetime, past its parent state's prune", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const relay = createNativeHookRelayLease();
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+    const registration = registerParent(
+      monitor,
+      "parent-thread",
+      "agent:main:discord:channel:C123",
+      relay.lease,
+    );
+    await notifyChildStarted(client, "parent-thread", "child-c");
+    const childTaskRuns = runtime.tryCreateRunningTaskRun.mock.calls.length;
+
+    await client.notify(subAgentActivityNotification("child-c", "grandchild-g"));
+    expect(runtime.tryCreateRunningTaskRun.mock.calls.length).toBe(childTaskRuns);
+
+    await client.notify(threadStatusChangedNotification("grandchild-g", "notLoaded"));
+    const reloadedRelease = relay.releases.get("grandchild-g");
+    expect(reloadedRelease).toHaveBeenCalledTimes(1);
+    await client.notify(subAgentActivityNotification("child-c", "grandchild-g", "interacted"));
+
+    await client.notify(
+      childTurnCompletedNotification({
+        childThreadId: "child-c",
+        turnId: "turn-c",
+        status: "completed",
+        items: [{ id: "final-c", type: "agentMessage", phase: "final_answer", text: "done" }],
+      }),
+    );
+    expect(relay.releases.get("child-c")).toHaveBeenCalledTimes(1);
+    expect(relay.releases.get("grandchild-g")).not.toHaveBeenCalled();
+
+    registration.unregister();
+    await client.notify(subAgentActivityNotification("grandchild-g", "great-grandchild-h"));
+    expect(relay.acquireChild.mock.calls.map(([threadId]) => threadId)).toEqual([
+      "child-c",
+      "grandchild-g",
+      "grandchild-g",
+      "great-grandchild-h",
+    ]);
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+    monitor.dispose();
+    expect(relay.releases.get("grandchild-g")).toHaveBeenCalledTimes(1);
+    expect(relay.releases.get("great-grandchild-h")).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases a settled descendant claim after its quiet window and re-claims it later", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      const relay = createNativeHookRelayLease();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        recoveryPollDelaysMs: [],
+      });
+      registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", relay.lease);
+      await notifyChildStarted(client, "parent-thread", "child-c");
+      await client.notify(subAgentActivityNotification("child-c", "grandchild-g"));
+      await client.notify(threadStatusChangedNotification("grandchild-g", "active"));
+      await client.notify(threadStatusChangedNotification("grandchild-g", "idle"));
+
+      await vi.advanceTimersByTimeAsync(DESCENDANT_RELAY_QUIET_WINDOW_MS - 1);
+      expect(relay.releases.get("grandchild-g")).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(relay.releases.get("grandchild-g")).toHaveBeenCalledTimes(1);
+
+      await client.notify(subAgentActivityNotification("child-c", "grandchild-g", "interacted"));
+      expect(relay.acquireChild.mock.calls.map(([threadId]) => threadId)).toEqual([
+        "child-c",
+        "grandchild-g",
+        "grandchild-g",
+      ]);
+      monitor.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a running descendant claim past the quiet window after its spawner settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      const relay = createNativeHookRelayLease();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        recoveryPollDelaysMs: [],
+      });
+      registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", relay.lease);
+      await notifyChildStarted(client, "parent-thread", "child-c");
+      await client.notify(subAgentActivityNotification("child-c", "grandchild-g"));
+      await client.notify(threadStatusChangedNotification("grandchild-g", "active"));
+      await client.notify(
+        childTurnCompletedNotification({
+          childThreadId: "child-c",
+          turnId: "turn-c",
+          status: "completed",
+          items: [{ id: "final-c", type: "agentMessage", phase: "final_answer", text: "done" }],
+        }),
+      );
+      expect(relay.releases.get("child-c")).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(DESCENDANT_RELAY_QUIET_WINDOW_MS * 3);
+      expect(relay.releases.get("grandchild-g")).not.toHaveBeenCalled();
+
+      await client.notify(threadStatusChangedNotification("grandchild-g", "idle"));
+      await vi.advanceTimersByTimeAsync(DESCENDANT_RELAY_QUIET_WINDOW_MS + 1);
+      expect(relay.releases.get("grandchild-g")).toHaveBeenCalledTimes(1);
+      monitor.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a descendant claimed when its turn is reported before it is announced", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      const relay = createNativeHookRelayLease();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        recoveryPollDelaysMs: [],
+      });
+      registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", relay.lease);
+      await notifyChildStarted(client, "parent-thread", "child-c");
+
+      await client.notify(threadStatusChangedNotification("grandchild-g", "active"));
+      await client.notify({
+        method: "turn/started",
+        params: {
+          threadId: "grandchild-g",
+          turn: { id: "turn-g", status: "inProgress", items: [], error: null },
+        },
+      });
+      await client.notify(subAgentActivityNotification("child-c", "grandchild-g"));
+      await client.notify(descendantItemNotification("grandchild-g", "g-message-1"));
+
+      await vi.advanceTimersByTimeAsync(DESCENDANT_RELAY_QUIET_WINDOW_MS * 3);
+      expect(relay.releases.get("grandchild-g")).not.toHaveBeenCalled();
+
+      await client.notify(threadStatusChangedNotification("grandchild-g", "idle"));
+      await vi.advanceTimersByTimeAsync(DESCENDANT_RELAY_QUIET_WINDOW_MS + 1);
+      expect(relay.releases.get("grandchild-g")).toHaveBeenCalledTimes(1);
+      monitor.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a re-messaged descendant claimed across its next turn", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createClient();
+      const runtime = createRuntime();
+      const relay = createNativeHookRelayLease();
+      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
+        recoveryPollDelaysMs: [],
+      });
+      registerParent(monitor, "parent-thread", "agent:main:discord:channel:C123", relay.lease);
+      await notifyChildStarted(client, "parent-thread", "child-c");
+      await client.notify(subAgentActivityNotification("child-c", "grandchild-g"));
+      await client.notify(threadStatusChangedNotification("grandchild-g", "active"));
+      await client.notify(threadStatusChangedNotification("grandchild-g", "idle"));
+
+      await vi.advanceTimersByTimeAsync(DESCENDANT_RELAY_QUIET_WINDOW_MS - 1_000);
+      await client.notify(subAgentActivityNotification("child-c", "grandchild-g", "interacted"));
+      await client.notify({
+        method: "turn/started",
+        params: {
+          threadId: "grandchild-g",
+          turn: { id: "turn-g2", status: "inProgress", items: [], error: null },
+        },
+      });
+
+      await client.notify(subAgentActivityNotification("child-c", "grandchild-g", "interacted"));
+      await vi.advanceTimersByTimeAsync(DESCENDANT_RELAY_QUIET_WINDOW_MS * 3);
+      expect(relay.releases.get("grandchild-g")).not.toHaveBeenCalled();
+      expect(relay.acquireChild.mock.calls.map(([threadId]) => threadId)).toEqual([
+        "child-c",
+        "grandchild-g",
+      ]);
+      monitor.dispose();
+      expect(relay.releases.get("grandchild-g")).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not recover an older result while the newest child turn is active", async () => {

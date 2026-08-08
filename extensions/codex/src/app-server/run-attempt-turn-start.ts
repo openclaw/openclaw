@@ -260,7 +260,7 @@ export async function startCodexAttemptTurn(
       }
       releaseCurrentRoute();
       activateNativePreToolUseFailureFallback();
-      resourceState.nativeHookRelay?.unregister();
+      resourceState.nativeHookRelay?.releaseParent();
       await releaseSandboxExecEnvironment();
       await runAgentCleanupStep({
         runId: params.runId,

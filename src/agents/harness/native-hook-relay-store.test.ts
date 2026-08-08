@@ -88,22 +88,24 @@ describe("native hook relay store", () => {
     expect(
       renewOrRestoreNativeHookRelayBridgeRecord({
         record: { ...record, pid: record.pid + 1, expiresAtMs: 30_000 },
+        updatedAtMs: 1_500,
         stateDbPath: primaryStateDbPath,
       }),
-    ).toBe(false);
+    ).toBe("foreign-owner");
     expect(
       renewOrRestoreNativeHookRelayBridgeRecord({
         record: { ...record, token: "decoy-token", expiresAtMs: 30_000 },
+        updatedAtMs: 1_500,
         stateDbPath: primaryStateDbPath,
       }),
-    ).toBe(false);
+    ).toBe("foreign-owner");
     expect(
       renewOrRestoreNativeHookRelayBridgeRecord({
         record: { ...record, expiresAtMs: 30_000 },
         updatedAtMs: 2_000,
         stateDbPath: primaryStateDbPath,
       }),
-    ).toBe(true);
+    ).toBe("renewed");
     expect(
       readNativeHookRelayBridgeRecord({
         relayId: record.relayId,
@@ -139,6 +141,23 @@ describe("native hook relay store", () => {
     ).toBeUndefined();
   });
 
+  it("reclaims an expired foreign record instead of yielding ownership", () => {
+    const record = bridgeRecord("relay-expired-foreign", { expiresAtMs: 5_000 });
+    writeNativeHookRelayBridgeRecord({
+      record,
+      updatedAtMs: 1_000,
+      stateDbPath: primaryStateDbPath,
+    });
+
+    expect(
+      renewOrRestoreNativeHookRelayBridgeRecord({
+        record: { ...record, pid: record.pid + 1, token: "test-auth-token", expiresAtMs: 30_000 },
+        updatedAtMs: 6_000,
+        stateDbPath: primaryStateDbPath,
+      }),
+    ).toBe("reclaimable");
+  });
+
   it("restores a missing record without overwriting another owner", () => {
     const record = bridgeRecord("relay-restored");
     expect(
@@ -147,7 +166,7 @@ describe("native hook relay store", () => {
         updatedAtMs: 1_000,
         stateDbPath: primaryStateDbPath,
       }),
-    ).toBe(true);
+    ).toBe("renewed");
     expect(
       readNativeHookRelayBridgeRecord({
         relayId: record.relayId,
@@ -170,7 +189,7 @@ describe("native hook relay store", () => {
         updatedAtMs: 3_000,
         stateDbPath: primaryStateDbPath,
       }),
-    ).toBe(false);
+    ).toBe("foreign-owner");
     expect(
       readNativeHookRelayBridgeRecord({
         relayId: record.relayId,

@@ -181,7 +181,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   } catch (error) {
     activateNativePreToolUseFailureFallback();
     releaseCurrentRoute();
-    state.nativeHookRelay?.unregister();
+    state.nativeHookRelay?.releaseParent();
     await releaseSandboxExecEnvironment();
     releaseSharedClientLeaseOnce();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);

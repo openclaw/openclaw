@@ -30,9 +30,9 @@ import type {
   ActiveNativeHookRelayRegistration,
   NativeHookRelayEvent,
   NativeHookRelayInvocation,
+  NativeHookRelayInvocationBinding,
   NativeHookRelayProcessResponse,
   NativeHookRelayProviderAdapter,
-  NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
@@ -99,7 +99,7 @@ export function nativeHookRelayEventToolMatcher(
 }
 
 export async function processNativeHookRelayInvocation(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -116,7 +116,7 @@ export async function processNativeHookRelayInvocation(params: {
 }
 
 async function runNativeHookRelayPreToolUse(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -129,16 +129,16 @@ async function runNativeHookRelayPreToolUse(params: {
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
     ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
-    signal: params.registration.signal,
+    signal: params.binding.signal,
     ctx: {
-      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-      sessionId: params.registration.sessionId,
-      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-      ...(params.registration.config ? { config: params.registration.config } : {}),
-      runId: params.registration.runId,
-      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-      ...(params.registration.requester ? { requester: params.registration.requester } : {}),
-      ...params.registration.approvalContext,
+      ...(params.binding.agentId ? { agentId: params.binding.agentId } : {}),
+      sessionId: params.binding.sessionId,
+      ...(params.binding.sessionKey ? { sessionKey: params.binding.sessionKey } : {}),
+      ...(params.binding.config ? { config: params.binding.config } : {}),
+      runId: params.binding.runId,
+      ...(params.binding.channelId ? { channelId: params.binding.channelId } : {}),
+      ...(params.binding.requester ? { requester: params.binding.requester } : {}),
+      ...params.binding.approvalContext,
       ...(params.invocation.cwd
         ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
         : {}),
@@ -155,7 +155,7 @@ async function runNativeHookRelayPreToolUse(params: {
   if (outcome.deferredApproval) {
     if (
       !setNativeHookRelayPreToolUseApproval({
-        relayId: params.registration.relayId,
+        relayId: params.binding.relayId,
         toolUseId: params.invocation.toolUseId,
         deferredApproval: outcome.deferredApproval,
         originalParamsFingerprint: originalToolInputFingerprint,
@@ -179,7 +179,7 @@ async function runNativeHookRelayPreToolUse(params: {
 }
 
 async function runNativeHookRelayPostToolUse(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -196,10 +196,10 @@ async function runNativeHookRelayPostToolUse(params: {
     ? rawResult
     : await createAgentToolResultMiddlewareRunner({
         runtime: "codex",
-        ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-        sessionId: params.registration.sessionId,
-        ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-        runId: params.registration.runId,
+        ...(params.binding.agentId ? { agentId: params.binding.agentId } : {}),
+        sessionId: params.binding.sessionId,
+        ...(params.binding.sessionKey ? { sessionKey: params.binding.sessionKey } : {}),
+        runId: params.binding.runId,
       }).applyToolResultMiddleware({
         turnId: params.invocation.turnId,
         toolCallId,
@@ -211,11 +211,11 @@ async function runNativeHookRelayPostToolUse(params: {
   await runAgentHarnessAfterToolCallHook({
     toolName,
     toolCallId,
-    runId: params.registration.runId,
-    ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-    sessionId: params.registration.sessionId,
-    ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-    ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
+    runId: params.binding.runId,
+    ...(params.binding.agentId ? { agentId: params.binding.agentId } : {}),
+    sessionId: params.binding.sessionId,
+    ...(params.binding.sessionKey ? { sessionKey: params.binding.sessionKey } : {}),
+    ...(params.binding.channelId ? { channelId: params.binding.channelId } : {}),
     startArgs,
     result,
   });
@@ -223,17 +223,17 @@ async function runNativeHookRelayPostToolUse(params: {
 }
 
 async function runNativeHookRelayBeforeAgentFinalize(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
   const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
     event: {
-      runId: params.registration.runId,
-      sessionId: params.registration.sessionId,
-      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      runId: params.binding.runId,
+      sessionId: params.binding.sessionId,
+      ...(params.binding.sessionKey ? { sessionKey: params.binding.sessionKey } : {}),
       ...(params.invocation.turnId ? { turnId: params.invocation.turnId } : {}),
-      provider: params.registration.provider,
+      provider: params.binding.provider,
       ...(params.invocation.model ? { model: params.invocation.model } : {}),
       ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
       ...(params.invocation.transcriptPath
@@ -245,11 +245,11 @@ async function runNativeHookRelayBeforeAgentFinalize(params: {
         : {}),
     },
     ctx: {
-      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-      sessionId: params.registration.sessionId,
-      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-      runId: params.registration.runId,
-      ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
+      ...(params.binding.agentId ? { agentId: params.binding.agentId } : {}),
+      sessionId: params.binding.sessionId,
+      ...(params.binding.sessionKey ? { sessionKey: params.binding.sessionKey } : {}),
+      runId: params.binding.runId,
+      ...(params.binding.channelId ? { channelId: params.binding.channelId } : {}),
       ...(params.invocation.cwd ? { workspaceDir: params.invocation.cwd } : {}),
       ...(params.invocation.model ? { modelId: params.invocation.model } : {}),
     },

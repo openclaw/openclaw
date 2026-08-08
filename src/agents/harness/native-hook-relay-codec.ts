@@ -4,10 +4,10 @@ import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-
 import type {
   JsonValue,
   NativeHookRelayInvocation,
+  NativeHookRelayInvocationBinding,
   NativeHookRelayInvocationMetadata,
   NativeHookRelayProvider,
   NativeHookRelayProviderAdapter,
-  NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import {
   isJsonObject,
@@ -58,22 +58,22 @@ export function getNativeHookRelayProviderAdapter(
 }
 
 export function normalizeNativeHookInvocation(params: {
-  registration: NativeHookRelayRegistration;
+  binding: NativeHookRelayInvocationBinding;
   event: NativeHookRelayInvocation["event"];
   rawPayload: JsonValue;
 }): NativeHookRelayInvocation {
-  const metadata = getNativeHookRelayProviderAdapter(
-    params.registration.provider,
-  ).normalizeMetadata(params.rawPayload);
+  const metadata = getNativeHookRelayProviderAdapter(params.binding.provider).normalizeMetadata(
+    params.rawPayload,
+  );
   return {
-    provider: params.registration.provider,
-    relayId: params.registration.relayId,
+    provider: params.binding.provider,
+    relayId: params.binding.relayId,
     event: params.event,
     ...metadata,
-    ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-    sessionId: params.registration.sessionId,
-    ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-    runId: params.registration.runId,
+    ...(params.binding.agentId ? { agentId: params.binding.agentId } : {}),
+    sessionId: params.binding.sessionId,
+    ...(params.binding.sessionKey ? { sessionKey: params.binding.sessionKey } : {}),
+    runId: params.binding.runId,
     rawPayload: params.rawPayload,
     receivedAt: new Date().toISOString(),
   };

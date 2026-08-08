@@ -16,6 +16,8 @@ import {
 
 export type { NativeHookRelayBridgeRecord } from "./native-hook-relay-bridge-record.js";
 
+export type NativeHookRelayBridgeRecordRenewal = "renewed" | "reclaimable" | "foreign-owner";
+
 type NativeHookRelayBridgePruneResult = {
   relayId: string;
   pid: number;
@@ -140,11 +142,11 @@ export function renewOrRestoreNativeHookRelayBridgeRecord(
     record: NativeHookRelayBridgeRecord;
     updatedAtMs?: number;
   } & NativeHookRelayBridgeStoreOptions,
-): boolean {
+): NativeHookRelayBridgeRecordRenewal {
   const { record } = params;
   const { token } = record;
   const updatedAtMs = params.updatedAtMs ?? Date.now();
-  return runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction<NativeHookRelayBridgeRecordRenewal>(
     (database) => {
       const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
       const current = readNativeHookRelayBridgeSnapshotFromDatabase({
@@ -167,10 +169,10 @@ export function renewOrRestoreNativeHookRelayBridgeRecord(
             })
             .onConflict((conflict) => conflict.column("relay_id").doNothing()),
         );
-        return result.numAffectedRows === 1n;
+        return result.numAffectedRows === 1n ? "renewed" : "foreign-owner";
       }
       if (current.record.pid !== record.pid || current.record.token !== token) {
-        return false;
+        return current.record.expiresAtMs > updatedAtMs ? "foreign-owner" : "reclaimable";
       }
       const result = executeSqliteQuerySync(
         database.db,
@@ -187,7 +189,7 @@ export function renewOrRestoreNativeHookRelayBridgeRecord(
           .where("token", "=", token)
           .where("updated_at_ms", "=", current.updatedAtMs),
       );
-      return result.numAffectedRows === 1n;
+      return result.numAffectedRows === 1n ? "renewed" : "reclaimable";
     },
     { path: params.stateDbPath },
   );

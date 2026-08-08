@@ -9,8 +9,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
-  emitCodexNativePreToolUseFailureDiagnostic,
-} from "./native-hook-relay.js";
+  CODEX_NATIVE_HOOK_RELAY_EVENTS,
+} from "./native-hook-relay-config.js";
+import { emitCodexNativePreToolUseFailureDiagnostic } from "./native-hook-relay.js";
 
 afterEach(() => resetDiagnosticEventsForTest());
 
@@ -24,6 +25,7 @@ describe("Codex native hook relay config", () => {
   it("builds deterministic Codex config overrides with command hooks", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
+      events: CODEX_NATIVE_HOOK_RELAY_EVENTS,
       hookTimeoutSec: 7,
       loopDetectionPreToolUseRelay: true,
     });
@@ -375,6 +377,16 @@ describe("Codex native hook relay config", () => {
     });
   });
 
+  it("clears every hook event when no event is selected", () => {
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay(),
+        events: [],
+        loopDetectionPreToolUseRelay: true,
+      }),
+    ).toEqual(buildCodexNativeHookRelayDisabledConfig());
+  });
+
   it.each([
     { reason: "turn_progress_idle_timeout", terminalReason: "timed_out" },
     { reason: "turn_completion_idle_timeout", terminalReason: "timed_out" },
@@ -451,7 +463,8 @@ function createRelay(options?: {
           ? " --pre-tool-use-unavailable noop"
           : ""
       }${commandOptions?.timeoutMs ? ` --timeout ${commandOptions.timeoutMs}` : ""}`,
-    renew: () => undefined,
+    renew: () => "live",
+    rebindAttempt: () => true,
     unregister: () => undefined,
   };
 }

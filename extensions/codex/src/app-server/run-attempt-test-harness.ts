@@ -27,6 +27,7 @@ import * as codexRequirements from "./config-requirements.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { clearCodexNativeHookRelayOwners } from "./native-hook-relay.test-harness.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
@@ -669,6 +670,7 @@ export function setupRunAttemptTestHooks(): void {
     dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     codexWorkspaceDirCache.clear();
     nativeHookRelayUnregisterQueue.clear();
+    clearCodexNativeHookRelayOwners();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     clearMemoryPluginState();
     clearPluginCommands();

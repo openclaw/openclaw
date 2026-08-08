@@ -4,7 +4,10 @@ import {
   invokeNativeHookRelay,
   type NativeHookRelayProcessResponse,
 } from "../../agents/harness/native-hook-relay.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 /** Gateway request handlers for invoking registered native hook relays. */
 export const nativeHookRelayHandlers: GatewayRequestHandlers = {
@@ -23,6 +26,12 @@ export const nativeHookRelayHandlers: GatewayRequestHandlers = {
       });
       respond(true, result);
     } catch (error) {
+      log.warn("native hook relay invocation rejected", {
+        relayId: params.relayId,
+        provider: params.provider,
+        event: params.event,
+        reason: error instanceof Error ? error.message : "unknown",
+      });
       respond(
         false,
         undefined,

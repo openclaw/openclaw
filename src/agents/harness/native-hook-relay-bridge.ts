@@ -14,6 +14,7 @@ import {
   renewOrRestoreNativeHookRelayBridgeRecord,
   writeNativeHookRelayBridgeRecord,
   type NativeHookRelayBridgeRecord,
+  type NativeHookRelayBridgeRecordRenewal,
 } from "./native-hook-relay-store.js";
 import type {
   ActiveNativeHookRelayRegistration,
@@ -161,7 +162,7 @@ export function renewNativeHookRelayBridgeRecord(
   registration: ActiveNativeHookRelayRegistration,
   bridge: NativeHookRelayBridgeRegistration,
   expiresAtMs: number,
-): "renewed" | "unavailable" | "ownership-changed" {
+): NativeHookRelayBridgeRecordRenewal | "unavailable" {
   const record = resolveNativeHookRelayBridgeRecord(registration, bridge, expiresAtMs);
   if (!record) {
     return "unavailable";
@@ -169,9 +170,7 @@ export function renewNativeHookRelayBridgeRecord(
   return renewOrRestoreNativeHookRelayBridgeRecord({
     record,
     stateDbPath: bridge.stateDbPath,
-  })
-    ? "renewed"
-    : "ownership-changed";
+  });
 }
 
 export function unregisterNativeHookRelayBridge(
