@@ -26,6 +26,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
+import { recordDiagnosticOutstandingBackgroundWork } from "../../logging/diagnostic-background-work.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type {
@@ -503,6 +504,17 @@ function clearTurnTimers(turn: ClaudeLiveTurn): void {
 
 function clearOutstandingBackgroundTasks(session: ClaudeLiveSession): void {
   session.outstandingBackgroundTaskIds.clear();
+  // Terminal paths can arrive before the task list drains (error result,
+  // abort, process exit, turn timeout). Release the diagnostic floor here too,
+  // or it would stay armed for later turns on this session.
+  const turn = session.currentTurn;
+  if (turn) {
+    recordDiagnosticOutstandingBackgroundWork({
+      sessionId: turn.diagnosticRefs.sessionId,
+      sessionKey: turn.diagnosticRefs.sessionKey,
+      outstanding: false,
+    });
+  }
 }
 
 function settleClaudeLivePendingControlRequest(
@@ -909,6 +921,17 @@ function applyBackgroundTasksChanged(
     if (taskId) {
       session.outstandingBackgroundTaskIds.add(taskId);
     }
+  }
+  // The diagnostic watchdog only sees stream silence. Hand it the same
+  // authoritative signal this session already uses to extend its own no-output
+  // deadline, so the two watchdogs stop disagreeing about the same run.
+  const turn = session.currentTurn;
+  if (turn) {
+    recordDiagnosticOutstandingBackgroundWork({
+      sessionId: turn.diagnosticRefs.sessionId,
+      sessionKey: turn.diagnosticRefs.sessionKey,
+      outstanding: session.outstandingBackgroundTaskIds.size > 0,
+    });
   }
 }
 
