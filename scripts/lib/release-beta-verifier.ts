@@ -91,6 +91,10 @@ const TRUSTED_TOOLING_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), ".
 // verifier on the same release train instead of forcing a republish/correction.
 const NPM_VIEW_ATTEMPTS = 30;
 const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
+// Bounds every subprocess spawned by the verifier (npm view, gh api, git
+// rev-parse, postpublish verifier) so a stalled registry, API, or local
+// process cannot hang the release verification indefinitely.
+const RELEASE_COMMAND_TIMEOUT_MS = 120_000;
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -146,12 +150,16 @@ function runCommand(command: string, args: string[], options: { cwd?: string } =
     cwd: options.cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: RELEASE_COMMAND_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   }).trim();
 }
 
 function runCommandInherited(command: string, args: string[]): void {
   execFileSync(command, args, {
     stdio: "inherit",
+    timeout: RELEASE_COMMAND_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
 }
 
