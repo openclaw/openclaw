@@ -2635,6 +2635,40 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(instruction).toBeNull();
   });
 
+  function resolveFailedReadContinuation(overrides: {
+    attemptOverrides?: Parameters<typeof makeAttemptResult>[0];
+    extraParams?: { hasTerminalToolPresentation?: boolean };
+  }) {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "read", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    return resolveSettledToolTerminalContinuationInstruction({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      ...overrides.extraParams,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "read", isError: true }],
+        messagesSnapshot: [
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "read", isError: true },
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+        lastAssistant: toolUseAssistant,
+        currentAttemptAssistant: toolUseAssistant,
+        lastToolError: { toolName: "read", error: "ENOENT" },
+        ...overrides.attemptOverrides,
+      }),
+    });
+  }
+
   it.each([
     {
       label: "an earlier successful tool presentation",
@@ -2658,35 +2692,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   ])(
     "finalizes an exact current failed terminal batch despite $label (#118489)",
     ({ attemptOverrides, extraParams }) => {
-      const toolUseAssistant = {
-        role: "assistant",
-        stopReason: "toolUse",
-        provider: "openai",
-        model: "gpt-5.5",
-        content: [{ type: "toolCall", id: "tool_1", name: "read", arguments: {} }],
-      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
-      const instruction = resolveSettledToolTerminalContinuationInstruction({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        modelApi: "openai-chatgpt-responses",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        ...extraParams,
-        attempt: makeAttemptResult({
-          assistantTexts: [],
-          toolMetas: [{ toolName: "read", isError: true }],
-          messagesSnapshot: [
-            toolUseAssistant,
-            { role: "toolResult", toolCallId: "tool_1", toolName: "read", isError: true },
-          ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
-          lastAssistant: toolUseAssistant,
-          currentAttemptAssistant: toolUseAssistant,
-          lastToolError: { toolName: "read", error: "ENOENT" },
-          ...attemptOverrides,
-        }),
-      });
-
+      const instruction = resolveFailedReadContinuation({ attemptOverrides, extraParams });
       expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
       expect(instruction).toContain(
         "If any tool failed, state that failure plainly and do not claim it succeeded.",
@@ -2733,35 +2739,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       },
     },
   ])("does not override stale lifecycle proof when $label (#118489)", ({ attemptOverrides }) => {
-    const toolUseAssistant = {
-      role: "assistant",
-      stopReason: "toolUse",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [{ type: "toolCall", id: "tool_1", name: "read", arguments: {} }],
-    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
-    const instruction = resolveSettledToolTerminalContinuationInstruction({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      modelApi: "openai-chatgpt-responses",
-      payloadCount: 0,
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: [],
-        toolMetas: [{ toolName: "read", isError: true }],
-        messagesSnapshot: [
-          toolUseAssistant,
-          { role: "toolResult", toolCallId: "tool_1", toolName: "read", isError: true },
-        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
-        lastAssistant: toolUseAssistant,
-        currentAttemptAssistant: toolUseAssistant,
-        lastToolError: { toolName: "read", error: "ENOENT" },
-        ...attemptOverrides,
-      }),
-    });
-
-    expect(instruction).toBeNull();
+    expect(resolveFailedReadContinuation({ attemptOverrides })).toBeNull();
   });
 
   it("still suppresses continuation when the presentation belongs to a successful batch (#118489)", () => {

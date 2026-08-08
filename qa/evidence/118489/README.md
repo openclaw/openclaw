@@ -8,7 +8,8 @@ directly in the PR.
 
 - `parity6-qa-evidence.json` - official `openclaw.qa.evidence-summary` v2 verdict
   for the runtime-pair run: `qa-channel-failed-tool-presentation-terminal-finalization`
-  = pass (`known harness gap in openclaw runtime; paired runtime passed`).
+  = pass (`known harness gap in openclaw runtime; paired runtime passed`). Keeps
+  only the #118489 entry from the suite run; unrelated scenarios are omitted.
 - `codex-cell-transcript-excerpt.json` - the codex cell session transcript
   (redacted): failing `read` (real ENOENT, persisted exactly once), successful
   presentation-producing `web_fetch` (HTTP 200), final delivered reply
