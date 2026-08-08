@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -164,6 +165,16 @@ function normalizePermissions(value: unknown): McpAppPermissions | undefined {
   return Object.keys(permissions).length > 0 ? permissions : undefined;
 }
 
+/** Matches the whitespace rule shared by the base64 helpers: code points at or below 0x20. */
+function isAsciiWhitespaceOnly(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    if (value.charCodeAt(i) > 0x20) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function decodeResourceHtml(content: Record<string, unknown>): string {
   if (typeof content.text === "string") {
     if (Buffer.byteLength(content.text, "utf8") > MCP_APP_RESOURCE_MAX_BYTES) {
@@ -178,7 +189,16 @@ function decodeResourceHtml(content: Record<string, unknown>): string {
   if (content.blob.length > maxEncodedBytes) {
     throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
   }
-  const decoded = Buffer.from(content.blob, "base64");
+  // Buffer.from silently drops out-of-alphabet characters, which would render
+  // corrupted HTML without any error. Canonicalize first and reject outright.
+  // A blob carrying only characters at or below 0x20 (the canonicalizer's
+  // whitespace rule, e.g. spaces, tabs, newlines, C0 controls) decodes to zero
+  // bytes with Node's lenient decoder; keep that existing valid behavior.
+  const canonicalBlob = isAsciiWhitespaceOnly(content.blob) ? "" : canonicalizeBase64(content.blob);
+  if (canonicalBlob === undefined) {
+    throw new Error("MCP App resource returned malformed base64 blob content");
+  }
+  const decoded = Buffer.from(canonicalBlob, "base64");
   if (decoded.byteLength > MCP_APP_RESOURCE_MAX_BYTES) {
     throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
   }
