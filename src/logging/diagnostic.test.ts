@@ -2870,6 +2870,55 @@ describe("stuck session recovery activity reconciliation", () => {
     });
   }
 
+  function expectQueuedFollowupDoesNotRecover(): void {
+    const recoverStuckSession = vi.fn();
+    vi.useFakeTimers();
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logMessageQueued({ sessionId, sessionKey, source: "test-followup" });
+      vi.advanceTimersByTime(60_000);
+
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+    } finally {
+      resetDiagnosticStateForTest();
+      vi.useRealTimers();
+    }
+  }
+
+  async function expectFailedRecoveryReconcilesOrphanedActivity(
+    markOrphanedActivity: () => void,
+  ): Promise<void> {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markOrphanedActivity();
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    state.queueDepth = 2;
+
+    requestStuckSessionRecovery({
+      recover: () => Promise.reject(new Error("recovery failed")),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })).toMatchObject({
+      state: "idle",
+      queueDepth: 0,
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      undefined,
+    );
+    expectQueuedFollowupDoesNotRecover();
+  }
+
   beforeEach(() => {
     setDiagnosticsEnabledForProcess(true);
     resetDiagnosticSessionStateForTest();
@@ -2908,6 +2957,29 @@ describe("stuck session recovery activity reconciliation", () => {
     expect(peekDiagnosticSessionState({ sessionId, sessionKey })).toMatchObject({
       state: "idle",
       queueDepth: 0,
+    });
+  });
+
+  it("clears orphaned tool activity after failed recovery before later work queues", async () => {
+    await expectFailedRecoveryReconcilesOrphanedActivity(() => {
+      markDiagnosticToolStartedForTest({
+        sessionId,
+        sessionKey,
+        toolName: "Bash",
+        toolCallId: "t1",
+      });
+    });
+  });
+
+  it("clears orphaned model activity after failed recovery before later work queues", async () => {
+    await expectFailedRecoveryReconcilesOrphanedActivity(() => {
+      markDiagnosticModelStartedForTest({
+        sessionId,
+        sessionKey,
+        runId: sessionId,
+        provider: "openai",
+        model: "gpt-5.5",
+      });
     });
   });
 

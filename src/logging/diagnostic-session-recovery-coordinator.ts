@@ -148,23 +148,20 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   // The idle declaration is authoritative for the recovered owner only. If a
   // different embedded owner appeared under the same session key while recovery
   // awaited abort/drain, keep the lane active instead of erasing fresh work.
-  if (!clearsFailedGhost) {
-    const activityClear = clearDiagnosticEmbeddedRunActivityForSession({
-      sessionId: state.sessionId,
-      sessionKey: state.sessionKey,
-      activeSessionId: params.outcome.activeSessionId,
-      recoveryStartedAfterEmbeddedRunSequence: params.recoveryStartedAfterEmbeddedRunSequence,
-      recoveryStartedAfterDiagnosticEventSequence:
-        params.recoveryStartedAfterDiagnosticEventSequence,
+  const activityClear = clearDiagnosticEmbeddedRunActivityForSession({
+    sessionId: state.sessionId,
+    sessionKey: state.sessionKey,
+    activeSessionId: params.outcome.activeSessionId,
+    recoveryStartedAfterEmbeddedRunSequence: params.recoveryStartedAfterEmbeddedRunSequence,
+    recoveryStartedAfterDiagnosticEventSequence: params.recoveryStartedAfterDiagnosticEventSequence,
+  });
+  if (activityClear.blockedByActiveEmbeddedRun) {
+    emitSessionRecoveryCompleted({
+      request: params.request,
+      outcome: params.outcome,
+      stale: true,
     });
-    if (activityClear.blockedByActiveEmbeddedRun) {
-      emitSessionRecoveryCompleted({
-        request: params.request,
-        outcome: params.outcome,
-        stale: true,
-      });
-      return;
-    }
+    return;
   }
   const prevState = state.state;
   state.state = "idle";
