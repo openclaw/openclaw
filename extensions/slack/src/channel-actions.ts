@@ -70,7 +70,10 @@ export function createSlackActions(
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     isToolDeliveryAction: ({ args }) =>
       typeof args.action === "string" && SLACK_TOOL_DELIVERY_ACTIONS.has(args.action),
-    prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
+    prepareSendPayload: ({ ctx, to, payload }) =>
+      ctx.action === "send" && !shouldUseWorkspaceAwareSlackActionSend(to, ctx.toolContext)
+        ? payload
+        : null,
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({
         providerId,
@@ -95,4 +98,28 @@ function normalizeSlackActionChannelTarget(raw: string): string {
   }
   const channelId = resolveSlackChannelId(raw);
   return formatSlackTeamTarget({ teamId: target.teamId, kind: "channel", id: channelId });
+}
+
+function shouldUseWorkspaceAwareSlackActionSend(
+  rawTarget: string,
+  context: ChannelMessageActionContext["toolContext"],
+): boolean {
+  const target = parseSlackTarget(rawTarget, { defaultKind: "channel" });
+  if (!target || target.teamId) {
+    return false;
+  }
+  for (const rawCurrentTarget of [context?.currentChannelId, context?.currentMessagingTarget]) {
+    if (!rawCurrentTarget) {
+      continue;
+    }
+    const currentTarget = parseSlackTarget(rawCurrentTarget);
+    if (
+      currentTarget?.teamId &&
+      currentTarget.kind === target.kind &&
+      currentTarget.id.toLowerCase() === target.id.toLowerCase()
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

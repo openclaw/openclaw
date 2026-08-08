@@ -101,6 +101,14 @@ function requireSlackHandleAction() {
   return handleAction;
 }
 
+function requireSlackPrepareSendPayload() {
+  const prepareSendPayload = slackPlugin.actions?.prepareSendPayload;
+  if (!prepareSendPayload) {
+    throw new Error("slack actions.prepareSendPayload unavailable");
+  }
+  return prepareSendPayload;
+}
+
 function requireSlackSendText() {
   const sendText = slackPlugin.outbound?.sendText;
   if (!sendText) {
@@ -207,6 +215,47 @@ function findSchemaEntry(
 }
 
 describe("slackPlugin actions", () => {
+  it("keeps a bare current Grid send on the workspace-aware Slack action path", async () => {
+    const prepareSendPayload = requireSlackPrepareSendPayload();
+    const payload = { text: "hello" };
+
+    const prepared = await prepareSendPayload({
+      ctx: {
+        action: "send",
+        channel: "slack",
+        cfg: {},
+        params: {},
+        toolContext: {
+          currentChannelId: "team:T123:channel:C123",
+          currentChannelProvider: "slack",
+        },
+      },
+      to: "channel:C123",
+      payload,
+    } as never);
+
+    expect(prepared).toBeNull();
+  });
+
+  it("keeps qualified and cross-channel sends on the core Slack delivery path", async () => {
+    const prepareSendPayload = requireSlackPrepareSendPayload();
+    const payload = { text: "hello" };
+    const ctx = {
+      action: "send",
+      channel: "slack",
+      cfg: {},
+      params: {},
+      toolContext: { currentChannelId: "team:T123:channel:C123" },
+    };
+
+    await expect(
+      prepareSendPayload({ ctx, to: "team:T123:channel:C123", payload } as never),
+    ).resolves.toBe(payload);
+    await expect(prepareSendPayload({ ctx, to: "channel:C999", payload } as never)).resolves.toBe(
+      payload,
+    );
+  });
+
   it("prefers session lookup for announce target routing", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
   });
