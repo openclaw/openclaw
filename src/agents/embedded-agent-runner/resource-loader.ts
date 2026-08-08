@@ -24,7 +24,7 @@ const EMBEDDED_AGENT_RESOURCE_LOADER_DISCOVERY_OPTIONS = {
 export function createEmbeddedAgentResourceLoader(
   options: Pick<
     DefaultResourceLoaderInit,
-    "cwd" | "agentDir" | "settingsManager" | "extensionFactories"
+    "cwd" | "agentDir" | "settingsManager" | "extensionFactories" | "maxSkillFileBytes"
   >,
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({

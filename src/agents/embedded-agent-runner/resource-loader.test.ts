@@ -43,4 +43,25 @@ describe("createEmbeddedAgentResourceLoader", () => {
       noContextFiles: true,
     });
   });
+
+  it("forwards the configured skill file size limit", () => {
+    const settingsManager = {};
+    const extensionFactories = [vi.fn()];
+
+    createEmbeddedAgentResourceLoader({
+      cwd: "/workspace",
+      agentDir: "/agent",
+      settingsManager: settingsManager as never,
+      extensionFactories: extensionFactories as never,
+      maxSkillFileBytes: 512_000,
+    });
+
+    expect(DefaultResourceLoader).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxSkillFileBytes: 512_000,
+        noExtensions: true,
+        noSkills: true,
+      }),
+    );
+  });
 });

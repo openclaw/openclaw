@@ -2,13 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readBoundedSkillFile } from "./bounded-skill-read.js";
 import { parseFrontmatter, resolveOpenClawMetadata } from "./frontmatter.js";
 import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function loadSkillsFromPath(dir: string) {
-  return loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir], includeDefaults: false });
+function loadSkillsFromPath(dir: string, maxSkillFileBytes?: number) {
+  return loadSkills({
+    cwd: dir,
+    agentDir: dir,
+    skillPaths: [dir],
+    includeDefaults: false,
+    maxSkillFileBytes,
+  });
 }
 
 describe("loadSkills", () => {
@@ -86,6 +93,91 @@ disable-model-invocation: true
       }),
     ]);
     expect(resolveOpenClawMetadata(frontmatter)?.requires?.env).toEqual(["EXAMPLE_VAR"]);
+  });
+
+  it("rejects oversized SKILL.md files and emits a diagnostic", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-scan-");
+    const skillDir = path.join(tempDir, "oversized");
+    await fs.mkdir(skillDir);
+    const skillFile = path.join(skillDir, "SKILL.md");
+    // Write content exceeding the size limit (256 KB).
+    const oversizeBody = "x".repeat(260_000);
+    await fs.writeFile(
+      skillFile,
+      `---\nname: oversized\ndescription: This file is too big\n---\n${oversizeBody}`,
+      "utf-8",
+    );
+
+    const result = loadSkillsFromPath(tempDir);
+
+    expect(result.skills).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "warning",
+        path: skillFile,
+        message: expect.stringContaining("exceeds"),
+      }),
+    ]);
+  });
+
+  it("honors a custom maxSkillFileBytes limit for discovery", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-custom-limit-");
+    const acceptedDir = path.join(tempDir, "accepted");
+    const rejectedDir = path.join(tempDir, "rejected");
+    await fs.mkdir(acceptedDir);
+    await fs.mkdir(rejectedDir);
+    const acceptedFile = path.join(acceptedDir, "SKILL.md");
+    const rejectedFile = path.join(rejectedDir, "SKILL.md");
+    // 200 KB body is under a 300 KB custom limit but over a 100 KB one.
+    const body = "x".repeat(200_000);
+    const skillFrontmatter = (name: string) =>
+      `---\nname: ${name}\ndescription: limit probe\n---\n`;
+    await fs.writeFile(acceptedFile, `${skillFrontmatter("accepted")}${body}`, "utf-8");
+    await fs.writeFile(rejectedFile, `${skillFrontmatter("rejected")}${body}`, "utf-8");
+
+    const acceptedResult = loadSkillsFromPath(tempDir, 300_000);
+    expect(acceptedResult.skills).toHaveLength(2);
+    expect(acceptedResult.skills.map((skill) => skill.name)).toEqual(
+      expect.arrayContaining(["accepted", "rejected"]),
+    );
+    expect(acceptedResult.diagnostics).toEqual([]);
+
+    const rejectedResult = loadSkillsFromPath(tempDir, 100_000);
+    expect(rejectedResult.skills).toEqual([]);
+    expect(rejectedResult.diagnostics).toHaveLength(2);
+    expect(rejectedResult.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "warning",
+          path: acceptedFile,
+          message: expect.stringContaining("exceeds"),
+        }),
+        expect.objectContaining({
+          type: "warning",
+          path: rejectedFile,
+          message: expect.stringContaining("exceeds"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects oversized files through the bounded descriptor reader (growth-race regression)", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-scan-");
+    const skillDir = path.join(tempDir, "oversized");
+    await fs.mkdir(skillDir);
+    const skillFile = path.join(skillDir, "SKILL.md");
+    // Write content well above the 256 KB limit so the bounded descriptor
+    // read catches it even if an earlier fstatSync reported a smaller size.
+    const oversizeBody = "x".repeat(512_000);
+    await fs.writeFile(
+      skillFile,
+      `---\nname: oversized\ndescription: Bypass attempt\n---\n${oversizeBody}`,
+      "utf-8",
+    );
+
+    // readBoundedSkillFile uses readFileDescriptorBoundedSync which
+    // enforces the bound regardless of any prior stat result.
+    expect(() => readBoundedSkillFile(skillFile)).toThrow("exceeds");
   });
 
   it("reports malformed frontmatter by file and keeps loading sibling skills", async () => {

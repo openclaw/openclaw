@@ -318,7 +318,16 @@ async function createAgentSessionImpl(
     options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, agentDir));
 
   if (!resourceLoader) {
-    resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
+    // Load config I/O lazily so SDK consumers that supply their own resource loader
+    // do not pay for the config runtime.
+    const { readBestEffortConfig } = await import("../../config/io.runtime.js");
+    const cfg = await readBestEffortConfig({ skipPluginValidation: true });
+    resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager,
+      maxSkillFileBytes: cfg.skills?.limits?.maxSkillFileBytes,
+    });
     await resourceLoader.reload();
     modelRegistry.refresh();
   }
