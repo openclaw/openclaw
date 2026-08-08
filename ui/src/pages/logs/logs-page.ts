@@ -80,6 +80,7 @@ class LogsPage extends OpenClawLightDomElement {
           lines?: unknown;
           truncated?: boolean;
           reset?: boolean;
+          skippedBytes?: number;
         }>(
           "logs.tail",
           {
@@ -111,7 +112,13 @@ class LogsPage extends OpenClawLightDomElement {
         ? result.payload.lines.filter((line): line is string => typeof line === "string")
         : [];
       const entries = lines.map(parseLogLine);
-      const shouldReset = result.reset || result.payload.reset || result.cursor == null;
+      // skippedBytes > 0 means the tail fast-forwarded past unread log data;
+      // appending would silently splice out the skipped lines, so re-anchor.
+      const shouldReset =
+        result.reset ||
+        result.payload.reset ||
+        (result.payload.skippedBytes ?? 0) > 0 ||
+        result.cursor == null;
       this.logsEntries = shouldReset
         ? entries
         : [...this.logsEntries, ...entries].slice(-LOG_BUFFER_LIMIT);

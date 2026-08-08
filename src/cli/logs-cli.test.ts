@@ -192,6 +192,48 @@ describe("logs cli", () => {
     expect(stderrWrites.join("")).toContain("Log cursor reset");
   });
 
+  it("does not report rotation when a tail window was only truncated", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 512,
+      size: 4096,
+      lines: ["new line after skipped burst"],
+      truncated: true,
+      reset: false,
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(stdoutWrites.join("")).toContain("new line after skipped burst");
+    expect(stderrWrites.join("")).toContain("Log tail truncated");
+    expect(stderrWrites.join("")).not.toContain("Log cursor reset");
+    expect(stderrWrites.join("")).not.toContain("file rotated");
+  });
+
+  it("reports a byte-budget skip as a re-anchor, not a rotation", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      cursor: 8192,
+      size: 8192,
+      lines: ["line after skipped burst"],
+      truncated: true,
+      reset: true,
+      skippedBytes: 4096,
+    });
+
+    const stdoutWrites = captureStdoutWrites();
+    const stderrWrites = captureStderrWrites();
+
+    await runLogsCli(["logs"]);
+
+    expect(stdoutWrites.join("")).toContain("line after skipped burst");
+    expect(stderrWrites.join("")).toContain("re-anchored (skipped 4096 bytes)");
+    expect(stderrWrites.join("")).not.toContain("file rotated");
+  });
+
   it("uses the passive local Gateway client for implicit loopback log reads", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",
