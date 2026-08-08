@@ -5,6 +5,9 @@
       "openclaw/plugin-sdk/*": [
         "../dist/plugin-sdk/*.d.ts"
       ],
+      "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-outbound-fenced-media-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/provider-setup": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-setup.d.ts"
       ],

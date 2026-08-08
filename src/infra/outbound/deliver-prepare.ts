@@ -13,7 +13,10 @@ import {
   resolveOutboundMediaAccessForSend,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
-import { createOutboundPayloadPlan } from "./payloads.js";
+import {
+  createOutboundPayloadPlan,
+  warnFencedMediaSkipsForAcceptedOutboundDelivery,
+} from "./payloads.js";
 import {
   PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
   type PreparedOutboundBatch,
@@ -130,6 +133,15 @@ export async function prepareOutboundPayloadBatch(
     conversationType: params.session?.conversationType,
     extractMarkdownImages: directiveOptions.extractMarkdownImages,
   });
+  // Transient plan-time fenced-skip facts keyed by sourceIndex. Channel
+  // sanitizers may flatten fences before the accepted boundary; do not put
+  // this signal into durable prepared-batch custody (#41966).
+  const fencedMediaSkipBySourceIndex = new Map<number, boolean>(
+    plan.map((entry) => [entry.sourceIndex, entry.mediaTokenSkippedInFence]),
+  );
+  const fencedSkippedDirectivesBySourceIndex = new Map<number, readonly string[]>(
+    plan.map((entry) => [entry.sourceIndex, entry.fencedSkippedMediaDirectives]),
+  );
   const handler = await createPreparationHandler(params);
   const normalized = normalizePayloadsForChannelDelivery(plan, handler);
   const normalizedIndexes = new Set(normalized.map((entry) => entry.index));
@@ -252,6 +264,24 @@ export async function prepareOutboundPayloadBatch(
       preparedMediaCount: buildPayloadSummary(compactPayload).mediaUrls.length,
     });
   }
+
+  // Shared accepted-delivery boundary: routed replies and sendMessage both
+  // prepare here. Derive the diagnostic from *final* accepted payload text
+  // (post hooks/normalization) and keep it out of durable custody (#41966).
+  warnFencedMediaSkipsForAcceptedOutboundDelivery(
+    entries
+      .filter(
+        (entry): entry is Extract<PreparedOutboundBatchEntry, { status: "accepted" }> =>
+          entry.status === "accepted",
+      )
+      .map((entry) => ({
+        text: entry.payload.text,
+        mediaTokenSkippedInFence: fencedMediaSkipBySourceIndex.get(entry.sourceIndex) === true,
+        fencedSkippedMediaDirectives: [
+          ...(fencedSkippedDirectivesBySourceIndex.get(entry.sourceIndex) ?? []),
+        ],
+      })),
+  );
 
   return {
     schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,

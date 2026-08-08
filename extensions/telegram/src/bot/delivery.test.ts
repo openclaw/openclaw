@@ -17,6 +17,7 @@ const messageHookRunner = vi.hoisted(() => ({
   runMessageSending: vi.fn(),
   runMessageSent: vi.fn(),
 }));
+const warnFencedMediaSkipsForAcceptedOutboundDelivery = vi.hoisted(() => vi.fn());
 const baseDeliveryParams = {
   chatId: "123",
   token: "tok",
@@ -56,6 +57,19 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   return {
     ...actual,
     getGlobalHookRunner: () => messageHookRunner,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime")
+    >();
+  return {
+    ...actual,
+    warnFencedMediaSkipsForAcceptedOutboundDelivery: (
+      ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
+    ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
   };
 });
 
@@ -316,6 +330,7 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSending.mockReset();
     messageHookRunner.runMessageSent.mockReset();
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {
@@ -2895,6 +2910,50 @@ describe("deliverReplies", () => {
 
     expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
     expect(recordSentMessage).toHaveBeenCalledWith("123", 303, cfg);
+  });
+});
+
+describe("deliverReplies fenced MEDIA warn on direct fallback (#41966)", () => {
+  it("emits accepted-delivery diagnostic after hooks for retained fenced MEDIA", async () => {
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+
+    await deliverWith({
+      replies: [{ text: fenced }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalled();
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).toHaveBeenCalled();
+    const arg = warnFencedMediaSkipsForAcceptedOutboundDelivery.mock.calls[0]?.[0];
+    expect(arg?.[0]?.mediaTokenSkippedInFence).toBe(true);
+    expect(arg?.[0]?.fencedSkippedMediaDirectives).toEqual(["MEDIA:/home/user/screenshot.png"]);
+    expect(String(arg?.[0]?.text ?? "")).toContain("MEDIA:/home/user/screenshot.png");
+  });
+
+  it("passes final accepted text into the shared diagnostic helper", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({
+      cancel: false,
+      content: "For media: see docs",
+    });
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
+    const fenced = "Here's how to send media:\n```\nMEDIA:/home/user/screenshot.png\n```\nEnd.";
+
+    await deliverWith({
+      replies: [{ text: fenced }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalled();
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalled();
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).toHaveBeenCalled();
+    const arg = warnFencedMediaSkipsForAcceptedOutboundDelivery.mock.calls.at(-1)?.[0];
+    expect(arg?.[0]?.text).toBe("For media: see docs");
+    expect(arg?.[0]?.mediaTokenSkippedInFence).toBe(true);
+    expect(arg?.[0]?.fencedSkippedMediaDirectives).toEqual(["MEDIA:/home/user/screenshot.png"]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

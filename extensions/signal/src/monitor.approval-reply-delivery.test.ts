@@ -11,11 +11,26 @@ const sendMocks = vi.hoisted(() => ({
   sendMessageSignal: vi.fn(),
 }));
 
+const warnFencedMediaSkipsForAcceptedOutboundDelivery = vi.hoisted(() => vi.fn());
+
 vi.mock("./send.js", async () => {
   const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
   return {
     ...actual,
     sendMessageSignal: sendMocks.sendMessageSignal,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("openclaw/plugin-sdk/channel-outbound-fenced-media-runtime")
+    >();
+  return {
+    ...actual,
+    warnFencedMediaSkipsForAcceptedOutboundDelivery: (
+      ...args: Parameters<typeof warnFencedMediaSkipsForAcceptedOutboundDelivery>
+    ) => warnFencedMediaSkipsForAcceptedOutboundDelivery(...args),
   };
 });
 
@@ -69,6 +84,7 @@ describe("Signal monitor reply delivery", () => {
     sendMocks.sendMessageSignal.mockReset().mockResolvedValue({
       messageId: "1700000000200",
     });
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
   });
 
   it("adds reaction hints and registers structured approval replies delivered by the monitor", async () => {
@@ -291,5 +307,43 @@ describe("Signal monitor reply delivery", () => {
         targetAuthor: botAccount,
       }),
     ).resolves.toBeNull();
+  });
+});
+
+describe("Signal deliverReplies fenced MEDIA warn (#41966)", () => {
+  beforeEach(() => {
+    sendMocks.sendMessageSignal.mockReset().mockResolvedValue({
+      messageId: "1700000000200",
+    });
+    warnFencedMediaSkipsForAcceptedOutboundDelivery.mockReset();
+  });
+
+  it("invokes shared helper with plan skip signal for fenced MEDIA", async () => {
+    await deliverReplyPayload({ text: "```\nMEDIA:/tmp/shot.png\n```" });
+    expect(warnFencedMediaSkipsForAcceptedOutboundDelivery).toHaveBeenCalled();
+    const arg = warnFencedMediaSkipsForAcceptedOutboundDelivery.mock.calls[0]?.[0];
+    expect(arg?.[0]?.mediaTokenSkippedInFence).toBe(true);
+  });
+
+  it("does not mark skip for unfenced MEDIA control", async () => {
+    await deliverReplyPayload({ text: "MEDIA:https://example.com/plain.png" });
+    const calls = warnFencedMediaSkipsForAcceptedOutboundDelivery.mock.calls;
+    for (const call of calls) {
+      const entry = call[0]?.[0] as { mediaTokenSkippedInFence?: boolean } | undefined;
+      expect(entry?.mediaTokenSkippedInFence).not.toBe(true);
+    }
+  });
+
+  it("keeps unfenced MEDIA as raw text (no plan projection into mediaUrls)", async () => {
+    await deliverReplyPayload({ text: "MEDIA:https://example.com/plain.png" });
+    expect(sendMocks.sendMessageSignal).toHaveBeenCalled();
+    for (const call of sendMocks.sendMessageSignal.mock.calls) {
+      // sendMessageSignal(target, text, opts)
+      const textArg = call[1];
+      const opts = call[2] as { mediaUrl?: string; mediaUrls?: string[] } | undefined;
+      expect(String(textArg ?? "")).toContain("MEDIA:https://example.com/plain.png");
+      expect(opts?.mediaUrl).toBeUndefined();
+      expect(opts?.mediaUrls).toBeUndefined();
+    }
   });
 });

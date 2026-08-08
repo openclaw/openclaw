@@ -192,6 +192,7 @@
   "channel-ingress-runtime",
   "channel-message",
   "channel-outbound",
+  "channel-outbound-fenced-media-runtime",
   "channel-pairing",
   "channel-policy",
   "channel-send-result",

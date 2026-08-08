@@ -26,6 +26,8 @@ import {
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
+import { logWarn } from "../../logger.js";
+import { splitMediaFromOutput } from "../../media/parse.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 
@@ -66,6 +68,17 @@ export type OutboundPayloadPlan = {
   hasPresentation: boolean;
   hasInteractive: boolean;
   hasChannelData: boolean;
+  /**
+   * True when planning saw a fenced `MEDIA:` token that remains visible text.
+   * Warning is emitted only for accepted outbound delivery (#41966).
+   */
+  mediaTokenSkippedInFence: boolean;
+  /**
+   * Exact fenced `MEDIA:` directive lines seen at plan time (trimmed).
+   * Used transiently at accepted delivery to avoid false warnings after hooks
+   * rewrite text to unrelated `media:` prose (#41966).
+   */
+  fencedSkippedMediaDirectives: string[];
 };
 
 type OutboundPayloadPlanContext = {
@@ -267,7 +280,32 @@ function createOutboundPayloadPlanEntry(
     hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
     hasInteractive: hasLegacyInteractiveReplyBlocks(normalizedPayload.interactive),
     hasChannelData,
+    // Prefer the first parse (pre-strip); stripped re-parse is only for citation markers.
+    mediaTokenSkippedInFence:
+      parsed.mediaTokenSkippedInFence || strippedParsed.mediaTokenSkippedInFence,
+    fencedSkippedMediaDirectives: mergeFencedSkippedMediaDirectives(
+      parsed.fencedSkippedMediaDirectives,
+      strippedParsed.fencedSkippedMediaDirectives,
+    ),
   };
+}
+
+function mergeFencedSkippedMediaDirectives(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const list of [a, b]) {
+    if (!list) {
+      continue;
+    }
+    for (const item of list) {
+      if (item && !out.includes(item)) {
+        out.push(item);
+      }
+    }
+  }
+  return out;
 }
 
 /** Builds the canonical outbound payload plan shared by delivery projections. */
@@ -289,6 +327,85 @@ export function createOutboundPayloadPlan(
     plan.push({ sourceIndex, ...entry });
   }
   return plan;
+}
+
+const FENCED_MEDIA_SKIP_WARN =
+  "media: MEDIA: token skipped — it is inside a fenced code block and will not be delivered as media. " +
+  "Fenced MEDIA lines stay visible text by design; delivery of legacy MEDIA: depends on the outbound path " +
+  "(some direct channel paths keep unfenced MEDIA: as literal text too).";
+
+/** True when final payload text still contains a fenced MEDIA: line (#41966). */
+function textHasFencedMediaTokenSkip(text: string | undefined): boolean {
+  if (!text || !/media:/i.test(text)) {
+    return false;
+  }
+  let skipped = false;
+  splitMediaFromOutput(text, {
+    onFencedMediaTokenSkipped: () => {
+      skipped = true;
+    },
+  });
+  return skipped;
+}
+
+/**
+ * True when final accepted text still retains the exact skipped directive
+ * identity (trimmed line), not merely any `media:` substring (#41966).
+ */
+function textRetainsFencedSkippedMediaDirective(
+  text: string | undefined,
+  directive: string | undefined,
+): boolean {
+  if (!text || !directive) {
+    return false;
+  }
+  const identity = directive.trim();
+  if (!identity) {
+    return false;
+  }
+  // Match whole lines after trim so hook prose like "For media: see docs" and a
+  // different unfenced MEDIA: line cannot falsely keep the original identity.
+  for (const line of text.split("\n")) {
+    if (line.trim() === identity) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Emit one operator warning per accepted delivery entry that was planned with a
+ * fenced MEDIA skip and whose *final* accepted text still retains that exact
+ * skipped directive identity. Carry plan identities by sourceIndex so channel
+ * sanitizers that flatten Markdown fences (SMS/plain-text) cannot erase the
+ * diagnostic, while hook rewrites that remove/replace the directive suppress
+ * the warn (#41966).
+ *
+ * Call only after hooks/suppression at the shared durable preparation boundary
+ * — not on recovery or pre-accept planning paths. Do not persist this
+ * diagnostic into prepared-batch custody.
+ */
+export function warnFencedMediaSkipsForAcceptedOutboundDelivery(
+  entries: readonly {
+    text?: string;
+    mediaTokenSkippedInFence?: boolean;
+    fencedSkippedMediaDirectives?: readonly string[];
+  }[],
+): void {
+  for (const entry of entries) {
+    const identities = entry.fencedSkippedMediaDirectives ?? [];
+    // Prefer exact directive identity. Boolean-only callers fall back to a
+    // still-fenced MEDIA line check (not a bare media: substring).
+    const retained =
+      identities.length > 0
+        ? identities.some((directive) =>
+            textRetainsFencedSkippedMediaDirective(entry.text, directive),
+          )
+        : Boolean(entry.mediaTokenSkippedInFence) && textHasFencedMediaTokenSkip(entry.text);
+    if (retained) {
+      logWarn(FENCED_MEDIA_SKIP_WARN);
+    }
+  }
 }
 
 /** Projects a payload plan back to normalized reply payloads for delivery. */

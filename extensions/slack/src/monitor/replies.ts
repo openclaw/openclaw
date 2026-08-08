@@ -2,6 +2,8 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
+import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -183,16 +185,36 @@ export async function deliverReplies(params: {
       ...(params.metadata ? { metadata: params.metadata } : {}),
     });
   };
-  for (const payload of params.replies) {
-    if (payload.isReasoning === true) {
-      continue;
-    }
+  const candidateReplies = params.replies.filter((payload) => payload.isReasoning !== true);
+  // Diagnostic-only plan: do not project delivery payloads (main keeps raw
+  // direct Slack replies; projecting would parse unfenced MEDIA into mediaUrls).
+  const outboundPlan = createOutboundPayloadPlan(candidateReplies, {
+    cfg: params.cfg,
+    surface: "slack",
+  });
+  const outboundPlanBySourceIndex = new Map(
+    outboundPlan.map((entry) => [entry.sourceIndex, entry] as const),
+  );
+  for (let candidateIndex = 0; candidateIndex < candidateReplies.length; candidateIndex++) {
+    const payload = candidateReplies[candidateIndex]!;
+    const planEntry = outboundPlanBySourceIndex.get(candidateIndex);
     const threadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: params.replyToMode,
       payloadReplyToId: payload.replyToId,
       replyThreadTs: params.replyThreadTs,
     });
     const reply = resolveSendableOutboundReplyParts(payload);
+    // Direct Slack delivery bypasses prepareOutboundPayloadBatch; emit shared
+    // fenced MEDIA diagnostic on accepted text without mutating the payload (#41966).
+    if (planEntry) {
+      warnFencedMediaSkipsForAcceptedOutboundDelivery([
+        {
+          text: reply.text ?? "",
+          mediaTokenSkippedInFence: planEntry.mediaTokenSkippedInFence,
+          fencedSkippedMediaDirectives: planEntry.fencedSkippedMediaDirectives,
+        },
+      ]);
+    }
     const textRaw =
       reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
         ? reply.trimmedText

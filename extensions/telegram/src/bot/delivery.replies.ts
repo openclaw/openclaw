@@ -5,6 +5,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { warnFencedMediaSkipsForAcceptedOutboundDelivery } from "openclaw/plugin-sdk/channel-outbound-fenced-media-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildCanonicalSentMessageHookContext,
@@ -819,14 +820,15 @@ export async function deliverReplies(params: {
     }
     candidateReplies.push(reply);
   }
-  const normalizedReplies = projectOutboundPayloadPlanForDelivery(
-    createOutboundPayloadPlan(candidateReplies, {
-      cfg: params.cfg,
-      sessionKey: params.policySessionKey ?? params.sessionKeyForInternalHooks,
-      surface: "telegram",
-    }),
-  );
-  for (const originalReply of normalizedReplies) {
+  const outboundPlan = createOutboundPayloadPlan(candidateReplies, {
+    cfg: params.cfg,
+    sessionKey: params.policySessionKey ?? params.sessionKeyForInternalHooks,
+    surface: "telegram",
+  });
+  const normalizedReplies = projectOutboundPayloadPlanForDelivery(outboundPlan);
+  for (let projectedIndex = 0; projectedIndex < normalizedReplies.length; projectedIndex++) {
+    const originalReply = normalizedReplies[projectedIndex]!;
+    const planEntry = outboundPlan[projectedIndex];
     let reply = canonicalizeTelegramPresentationPayload(originalReply, {
       allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",
       // HTML-mode text bypasses the markdown -> rich-block converter, so native
@@ -914,6 +916,19 @@ export async function deliverReplies(params: {
           ? { ...reply, spokenText: hookResult.content }
           : { ...reply, text: hookResult.content };
       }
+    }
+
+    // Direct Telegram fallback is an accepted-delivery path that bypasses
+    // prepareOutboundPayloadBatch; emit the shared fenced MEDIA diagnostic here
+    // after hooks so final accepted text still owns the warn (#41966).
+    if (planEntry) {
+      warnFencedMediaSkipsForAcceptedOutboundDelivery([
+        {
+          text: reply.text ?? "",
+          mediaTokenSkippedInFence: planEntry.mediaTokenSkippedInFence,
+          fencedSkippedMediaDirectives: planEntry.fencedSkippedMediaDirectives,
+        },
+      ]);
     }
 
     let contentForSentHook =
