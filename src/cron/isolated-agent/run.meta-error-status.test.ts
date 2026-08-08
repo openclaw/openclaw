@@ -1,5 +1,5 @@
 // Run meta error tests cover status reporting when cron run metadata fails.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -182,6 +182,33 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(dispatchCronDeliveryMock).toHaveBeenCalled();
     expect(result.status).toBe("ok");
     expect(result.error).toBeUndefined();
+  });
+
+  it("records error status when exec fails and agent replied with NO_REPLY (#116731)", async () => {
+    // Regression boundary proof: use the real resolveCronPayloadOutcome (not the harness stub)
+    // to verify the full path exec error + NO_REPLY → hasFatalErrorPayload → status: error.
+    const { resolveCronPayloadOutcome } =
+      await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
+    // Use mockImplementation (not Once) because resolveCronPayloadOutcome is called
+    // twice per run: interim in run-executor.ts and final in run-finalize.ts.
+    resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
+
+    mockAgentRun({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ Bash failed: /mnt/d: No such file or directory",
+          isError: true,
+        },
+      ],
+      meta: {
+        finalAssistantVisibleText: "NO_REPLY",
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/Bash failed/);
   });
 
   it("keeps committed message-tool deliveries as successful cron completions", async () => {
