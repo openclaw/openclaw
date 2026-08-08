@@ -1,6 +1,10 @@
 // Covers exec approval config normalization and safe-bin policy.
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  tryParseLegacyPersistedExecApprovals,
+  tryParsePersistedExecApprovals,
+} from "./exec-approvals-config.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   isSafeBinUsage,
@@ -446,5 +450,103 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
     expect(normalized.defaults?.askFallback).toBeUndefined();
     expect(normalized.agents?.main?.security).toBeUndefined();
     expect(normalized.agents?.main?.ask).toBeUndefined();
+  });
+});
+
+describe("legacy vs canonical exec-approvals parsing (#118242, #118524)", () => {
+  it("parses a legacy file with null lastUsedAt/lastUsedCommand", () => {
+    // Older OpenClaw versions wrote null for unused optional fields. The
+    // validator accepts undefined but rejects null, which blocked migration.
+    const raw = JSON.stringify({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off" },
+      agents: {
+        main: {
+          allowlist: [
+            {
+              pattern: "npm test",
+              lastUsedAt: null,
+              lastUsedCommand: null,
+              lastResolvedPath: null,
+            },
+          ],
+        },
+      },
+    });
+
+    const parsed = tryParseLegacyPersistedExecApprovals(raw);
+    expect(parsed).not.toBeNull();
+    const entry = parsed?.agents?.main?.allowlist?.[0];
+    expect(entry?.pattern).toBe("npm test");
+    expect(entry?.lastUsedAt).toBeUndefined();
+    expect(entry?.lastUsedCommand).toBeUndefined();
+    expect(entry?.lastResolvedPath).toBeUndefined();
+  });
+
+  it("keeps canonical SQLite rows fail-closed for null usage metadata (#118524)", () => {
+    // The shared strict parser must NOT normalize null usage metadata: a
+    // canonical SQLite row carrying it stays malformed (deny-and-warn) rather
+    // than being accepted and retaining its stored policy.
+    const raw = JSON.stringify({
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: "npm test", lastUsedAt: null }],
+        },
+      },
+    });
+    expect(tryParseLegacyPersistedExecApprovals(raw)).not.toBeNull();
+    expect(tryParsePersistedExecApprovals(raw)).toBeNull();
+  });
+
+  it("still rejects genuinely malformed entries after null normalization", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: 123 }], // pattern must be a string
+        },
+      },
+    });
+    expect(tryParseLegacyPersistedExecApprovals(raw)).toBeNull();
+  });
+
+  it("still rejects null security/ask policy fields after metadata normalization", () => {
+    // #118524 ClawSweeper P1: normalization must stay scoped to allowlist usage
+    // metadata. A null security/ask field is malformed policy that must NOT
+    // silently fall back to runtime defaults — null !== absent.
+    const raw = JSON.stringify({
+      version: 1,
+      defaults: { security: null, ask: "off" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: "npm test", lastUsedAt: null }],
+        },
+      },
+    });
+    expect(tryParseLegacyPersistedExecApprovals(raw)).toBeNull();
+  });
+
+  it("still rejects null socket fields after metadata normalization", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      socket: { path: null },
+      agents: {},
+    });
+    expect(tryParseLegacyPersistedExecApprovals(raw)).toBeNull();
+  });
+
+  it("still rejects null agent-level policy fields after metadata normalization", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      agents: {
+        main: {
+          security: null,
+          ask: null,
+          allowlist: [{ pattern: "npm test" }],
+        },
+      },
+    });
+    expect(tryParseLegacyPersistedExecApprovals(raw)).toBeNull();
   });
 });

@@ -166,6 +166,74 @@ export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile |
   return null;
 }
 
+/**
+ * Parse a legacy exec-approvals JSON source for migration, normalizing the
+ * null usage-metadata fields older versions emitted. Doctor-only: this is the
+ * legacy JSON import boundary. The shared strict parser (above) stays strict so
+ * canonical SQLite rows with null metadata still trigger the deny-and-warn
+ * malformed path at runtime (fail-closed), rather than being silently accepted.
+ */
+export function tryParseLegacyPersistedExecApprovals(raw: string): ExecApprovalsFile | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const normalized = normalizeLegacyAllowlistUsageMetadata(parsed);
+    if (isValidPersistedExecApprovals(normalized)) {
+      return normalizeExecApprovalsInternal(normalized);
+    }
+  } catch {
+    // A partial Windows fallback write is existing state, not a missing policy.
+  }
+  return null;
+}
+
+const LEGACY_ALLOWLIST_USAGE_METADATA_KEYS = new Set([
+  "lastUsedAt",
+  "lastUsedCommand",
+  "lastResolvedPath",
+]);
+
+/**
+ * Normalizes null-valued usage metadata in legacy exec-approvals allowlist
+ * entries to absent. Scoped strictly to the metadata fields older versions
+ * emitted as null for never-used entries — other null-valued fields (security,
+ * ask, socket) are deliberately left null so the validator still rejects them
+ * as malformed rather than silently falling back to runtime defaults.
+ */
+function normalizeLegacyAllowlistUsageMetadata(value: unknown): unknown {
+  if (!isPlainObject(value) || !isPlainObject(value.agents)) {
+    return value;
+  }
+  const agents: Record<string, unknown> = {};
+  for (const [agentId, agentValue] of Object.entries(value.agents)) {
+    if (!isPlainObject(agentValue) || !Array.isArray(agentValue.allowlist)) {
+      agents[agentId] = agentValue;
+      continue;
+    }
+    agents[agentId] = {
+      ...agentValue,
+      allowlist: agentValue.allowlist.map(normalizeAllowlistEntryUsageMetadata),
+    };
+  }
+  return { ...value, agents };
+}
+
+function normalizeAllowlistEntryUsageMetadata(entry: unknown): unknown {
+  if (!isPlainObject(entry)) {
+    return entry;
+  }
+  let changed = false;
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(entry)) {
+    if (LEGACY_ALLOWLIST_USAGE_METADATA_KEYS.has(key) && val === null) {
+      result[key] = undefined;
+      changed = true;
+    } else {
+      result[key] = val;
+    }
+  }
+  return changed ? result : entry;
+}
+
 function normalizeAllowlistPattern(value: string | undefined): string | null {
   const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
