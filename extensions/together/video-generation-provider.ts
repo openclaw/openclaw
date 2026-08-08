@@ -146,6 +146,7 @@ async function downloadTogetherVideo(params: {
     label: "Together generated video download",
     requestFailedMessage: "Together generated video download failed",
     maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
     fetchResponse: async ({ deadline }) => ({
       response: await fetchProviderDownloadResponse({
         url: params.url,

@@ -78,6 +78,7 @@ export async function downloadXaiVideo(
     label: "xAI generated video download",
     requestFailedMessage: "xAI generated video download failed",
     maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
     fetchResponse: async ({ timeoutMs }) =>
       await fetchXaiVideoResponse({
         url: params.url,
