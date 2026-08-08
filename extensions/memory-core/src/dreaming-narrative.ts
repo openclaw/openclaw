@@ -388,9 +388,26 @@ async function readSettledNarrativeText(params: {
 
 // ── Date formatting ────────────────────────────────────────────────────
 
+// An unusable TZ (blank, padded, or not an IANA zone) is not a valid override:
+// Intl.DateTimeFormat throws RangeError for it, which would suppress both the
+// diary entry and its fallback write. Validate once here and let Intl fall back
+// to the host zone for any unusable value, mirroring src/logging/timestamps.ts.
+function resolveEnvTimeZone(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: trimmed });
+    return trimmed;
+  } catch {
+    return undefined;
+  }
+}
+
 function formatNarrativeDate(epochMs: number, timezone?: string): string {
   const opts: Intl.DateTimeFormatOptions = {
-    timeZone: timezone ?? process.env.TZ,
+    timeZone: timezone ?? resolveEnvTimeZone(process.env.TZ),
     year: "numeric",
     month: "long",
     day: "numeric",
