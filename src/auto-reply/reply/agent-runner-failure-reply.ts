@@ -355,6 +355,25 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
   });
 }
 
+// Runtime-plan auth preparation throws plain Errors, so cooldown failures arrive
+// without failover structure. Without this match they fall through to the generic
+// runner-failure copy, which group silent-reply policy suppresses entirely — the
+// turn fails with no visible outcome.
+const AUTH_PROFILE_TEMPORARILY_UNAVAILABLE_RE =
+  /\bAuth profile "[^"]+" is temporarily unavailable for ([\w.-]+)(?:\/[\w".-]+)?\.?/u;
+
+function buildAuthProfileCooldownFailureText(message: string): string | null {
+  const match = AUTH_PROFILE_TEMPORARILY_UNAVAILABLE_RE.exec(message);
+  if (!match?.[1]) {
+    return null;
+  }
+  return formatAuthProfileFailureMessage({
+    reason: "rate_limit",
+    provider: match[1],
+    allInCooldown: true,
+  });
+}
+
 function formatForwardedExternalRunFailureText(message: string): string {
   const sanitized = sanitizeUserFacingText(message, { errorContext: true })
     .trim()
@@ -419,6 +438,10 @@ export function buildExternalRunFailureReply(
   const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  }
+  const authProfileCooldownFailure = buildAuthProfileCooldownFailureText(normalizedMessage);
+  if (authProfileCooldownFailure) {
+    return { text: authProfileCooldownFailure, isGenericRunnerFailure: false };
   }
   const cliMaxTurnsError = findCliMaxTurnsError(error);
   if (cliMaxTurnsError) {
