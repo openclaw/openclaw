@@ -20,6 +20,7 @@ type SubagentRunParams = {
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
+  promptMode?: "full" | "minimal" | "none";
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
