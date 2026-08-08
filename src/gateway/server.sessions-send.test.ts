@@ -1,17 +1,21 @@
 // sessions_send tests cover tool-driven agent-to-agent delivery, transcript
 // updates, gateway auth, plugin routing, and emitted agent events.
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
+import type { ChannelOutboundContext } from "../channels/plugins/outbound.types.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { buildOutboundMediaLoadOptions } from "../media/load-options.js";
+import { loadWebMediaRaw } from "../media/web-media.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
@@ -328,6 +332,250 @@ describe("sessions_send gateway loopback", () => {
       } finally {
         agentStepTesting.setDepsForTest();
         testState.sessionStorePath = undefined;
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+    },
+  );
+
+  it.each([
+    { name: "a generated image", scenario: "single" },
+    { name: "multiple generated images in order", scenario: "multiple" },
+    { name: "an attachment without a caption", scenario: "media-only" },
+    { name: "safe caption text without a traversal attachment", scenario: "traversal" },
+    { name: "an image from a non-default agent workspace", scenario: "non-default" },
+    {
+      name: "safe non-default agent text without a traversal attachment",
+      scenario: "non-default-traversal",
+    },
+  ] as const)(
+    "delivers $name through the real gateway to a local HTTP channel",
+    { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+    async ({ scenario }) => {
+      const stateDir = process.env.OPENCLAW_STATE_DIR;
+      if (!stateDir) {
+        throw new Error("gateway test must own an isolated state directory");
+      }
+      const isNonDefaultAgent = scenario === "non-default" || scenario === "non-default-traversal";
+      // The non-default workspace must not be inside the default agent's
+      // media roots: only the producing agent can grant access to its image.
+      const workspaceDir = path.join(stateDir, isNonDefaultAgent ? "workspace-orion" : "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const dir = await fs.mkdtemp(path.join(workspaceDir, "sessions-send-http-media-"));
+      const firstImage = path.join(dir, "first.png");
+      const secondImage = path.join(dir, "second.png");
+      const firstBytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=",
+        "base64",
+      );
+      const secondBytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5m8gAAAABJRU5ErkJggg==",
+        "base64",
+      );
+      await Promise.all([
+        fs.writeFile(firstImage, firstBytes),
+        fs.writeFile(secondImage, secondBytes),
+      ]);
+
+      type HttpDelivery = {
+        kind: "text" | "media";
+        to: string;
+        text: string;
+        mediaUrl?: string;
+        contentBase64?: string;
+      };
+      const deliveries: HttpDelivery[] = [];
+      const receiver = createServer((request, response) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer | string) => {
+          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        });
+        request.on("end", () => {
+          try {
+            deliveries.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as HttpDelivery);
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ ok: true }));
+          } catch {
+            response.writeHead(400);
+            response.end();
+          }
+        });
+      });
+      await new Promise<void>((resolve) => {
+        receiver.listen(0, "127.0.0.1", resolve);
+      });
+      const address = receiver.address();
+      if (!address || typeof address === "string") {
+        await new Promise<void>((resolve) => {
+          receiver.close(() => resolve());
+        });
+        throw new Error("local attachment receiver did not acquire a loopback port");
+      }
+      const receiverUrl = `http://127.0.0.1:${address.port}/attachments`;
+      const postDelivery = async (
+        kind: "text" | "media",
+        ctx: Pick<
+          ChannelOutboundContext,
+          "to" | "text" | "mediaUrl" | "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"
+        >,
+      ) => {
+        const media = ctx.mediaUrl
+          ? await loadWebMediaRaw(
+              ctx.mediaUrl,
+              buildOutboundMediaLoadOptions({
+                mediaAccess: ctx.mediaAccess,
+                mediaLocalRoots: ctx.mediaLocalRoots,
+                mediaReadFile: ctx.mediaReadFile,
+              }),
+            )
+          : undefined;
+        const delivery: HttpDelivery = {
+          kind,
+          to: ctx.to,
+          text: ctx.text,
+          ...(ctx.mediaUrl && media
+            ? {
+                mediaUrl: ctx.mediaUrl,
+                contentBase64: media.buffer.toString("base64"),
+              }
+            : {}),
+        };
+        const response = await fetch(receiverUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(delivery),
+        });
+        if (!response.ok) {
+          throw new Error(`local attachment receiver failed (${response.status})`);
+        }
+        return { channel: "whatsapp" as const, messageId: `loopback-${deliveries.length}` };
+      };
+
+      const sessionKey = `agent:${isNonDefaultAgent ? "orion" : "main"}:whatsapp:direct:peer-1`;
+      const reply =
+        scenario === "single" || scenario === "non-default"
+          ? `Your image is ready.\nMEDIA:${firstImage}`
+          : scenario === "multiple"
+            ? `Your images are ready.\nMEDIA:${firstImage}\nMEDIA:${secondImage}`
+            : scenario === "media-only"
+              ? `MEDIA:${firstImage}`
+              : "Your image is ready.\nMEDIA:../../../etc/passwd";
+      const expected: HttpDelivery[] =
+        scenario === "single" || scenario === "non-default"
+          ? [
+              {
+                kind: "media",
+                to: "peer-1",
+                text: "Your image is ready.",
+                mediaUrl: firstImage,
+                contentBase64: firstBytes.toString("base64"),
+              },
+            ]
+          : scenario === "multiple"
+            ? [
+                {
+                  kind: "media",
+                  to: "peer-1",
+                  text: "Your images are ready.",
+                  mediaUrl: firstImage,
+                  contentBase64: firstBytes.toString("base64"),
+                },
+                {
+                  kind: "media",
+                  to: "peer-1",
+                  text: "",
+                  mediaUrl: secondImage,
+                  contentBase64: secondBytes.toString("base64"),
+                },
+              ]
+            : scenario === "media-only"
+              ? [
+                  {
+                    kind: "media",
+                    to: "peer-1",
+                    text: "",
+                    mediaUrl: firstImage,
+                    contentBase64: firstBytes.toString("base64"),
+                  },
+                ]
+              : [{ kind: "text", to: "peer-1", text: "Your image is ready." }];
+
+      const plugin = createOutboundTestPlugin({
+        id: "whatsapp",
+        label: "WhatsApp",
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: ({ to }) => {
+            const target = to?.trim();
+            return target
+              ? { ok: true, to: target }
+              : { ok: false, error: new Error("missing target") };
+          },
+          sendText: async (ctx) => await postDelivery("text", ctx),
+          sendMedia: async (ctx) => await postDelivery("media", ctx),
+        },
+        messaging: { normalizeTarget: (raw) => raw },
+      });
+      setTestPluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin: {
+              ...plugin,
+              config: { ...plugin.config, listAccountIds: () => ["work"] },
+            },
+          },
+        ]),
+      );
+
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      try {
+        if (isNonDefaultAgent) {
+          testState.agentsConfig = {
+            list: [
+              { id: "main", default: true, tools: { fs: { workspaceOnly: true } } },
+              {
+                id: "orion",
+                workspace: workspaceDir,
+                tools: { fs: { workspaceOnly: true } },
+              },
+            ],
+          };
+        }
+        await writeSessionStore({
+          entries: {
+            [sessionKey]: {
+              sessionId: "sess-whatsapp-http-media",
+              updatedAt: Date.now(),
+              deliveryContext: { channel: "whatsapp", to: "peer-1" },
+              origin: { provider: "whatsapp", accountId: "work" },
+            },
+          },
+        });
+        agentStepTesting.setDepsForTest({
+          agentCommandFromIngress: async () => ({
+            payloads: [{ text: reply, mediaUrl: null }],
+            meta: { durationMs: 1 },
+          }),
+        });
+
+        await runSessionsSendA2AFlow({
+          targetSessionKey: sessionKey,
+          displayKey: sessionKey,
+          message: "Generate the requested images.",
+          announceTimeoutMs: 5_000,
+          maxPingPongTurns: 0,
+          roundOneReply: "The target agent completed.",
+        });
+
+        await vi.waitFor(() => expect(deliveries).toEqual(expected), { timeout: 5_000 });
+      } finally {
+        agentStepTesting.setDepsForTest();
+        testState.agentsConfig = undefined;
+        testState.sessionStorePath = undefined;
+        await new Promise<void>((resolve, reject) => {
+          receiver.close((error) => (error ? reject(error) : resolve()));
+        });
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
     },

@@ -138,6 +138,133 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.message).toBe("Substantive channel reply");
   });
 
+  it.each([
+    {
+      name: "a generated image and its caption",
+      reply: "Your image is ready.\nMEDIA:media/tool-image-generation/example.png",
+      message: "Your image is ready.",
+      mediaUrls: ["media/tool-image-generation/example.png"],
+    },
+    {
+      name: "multiple generated attachments in order",
+      reply: "Your images are ready.\nMEDIA:./first.png\nMEDIA:./second.png",
+      message: "Your images are ready.",
+      mediaUrls: ["./first.png", "./second.png"],
+    },
+    {
+      name: "a media-only announcement",
+      reply: "MEDIA:media/tool-image-generation/example.png",
+      message: "",
+      mediaUrls: ["media/tool-image-generation/example.png"],
+    },
+    {
+      name: "ordinary text without inventing an attachment field",
+      reply: "The MEDIA: tag is mentioned in this explanation.",
+      message: "The MEDIA: tag is mentioned in this explanation.",
+      mediaUrls: undefined,
+    },
+    {
+      name: "a fenced MEDIA example without reading it as an attachment",
+      reply: "Here is an example:\n```text\nMEDIA:./example.png\n```",
+      message: "Here is an example:\n```text\nMEDIA:./example.png\n```",
+      mediaUrls: undefined,
+    },
+    {
+      name: "safe caption text while rejecting a traversal attachment",
+      reply: "Your image is ready.\nMEDIA:../../../etc/passwd",
+      message: "Your image is ready.",
+      mediaUrls: undefined,
+    },
+  ])("projects $name into gateway send", async ({ reply, message, mediaUrls }) => {
+    const sessionKey = "agent:main:discord:channel:target-room";
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: sessionKey,
+      displayKey: sessionKey,
+      message: "Generate the requested media.",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey: sessionKey,
+      requesterChannel: "discord",
+      roundOneReply: reply,
+    });
+
+    const sendParams = requireGatewayCall("send").params as Record<string, unknown>;
+    expect(sendParams.message).toBe(message);
+    if (mediaUrls) {
+      expect(sendParams.mediaUrls).toEqual(mediaUrls);
+    } else {
+      expect(sendParams).not.toHaveProperty("mediaUrls");
+    }
+    expect(runAgentStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "a same-session channel reply", sameSession: true },
+    { name: "an agent-to-agent announcement", sameSession: false },
+  ])("scopes non-default agent media for $name", async ({ sameSession }) => {
+    const sessionKey = "agent:orion:discord:channel:target-room";
+    const reply = "Your image is ready.\nMEDIA:./generated.png";
+    if (!sameSession) {
+      vi.mocked(runAgentStep).mockResolvedValueOnce(reply);
+    }
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: sessionKey,
+      displayKey: sessionKey,
+      message: "Generate the requested media.",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey: sameSession ? sessionKey : "agent:main:discord:channel:requester-room",
+      requesterChannel: "discord",
+      roundOneReply: sameSession ? reply : "The target agent completed.",
+    });
+
+    const sendParams = requireGatewayCall("send").params as Record<string, unknown>;
+    expect(sendParams.message).toBe("Your image is ready.");
+    expect(sendParams.mediaUrls).toEqual(["./generated.png"]);
+    expect(sendParams.agentId).toBe("orion");
+    expect(sendParams).not.toHaveProperty("sessionKey");
+    if (sameSession) {
+      expect(runAgentStep).not.toHaveBeenCalled();
+    } else {
+      expect(runAgentStep).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it.each([
+    {
+      name: "ordinary text",
+      reply: "The generated image will arrive shortly.",
+      message: "The generated image will arrive shortly.",
+    },
+    {
+      name: "a rejected traversal attachment",
+      reply: "Your image is ready.\nMEDIA:../../../etc/passwd",
+      message: "Your image is ready.",
+    },
+  ])("does not add agent scope for non-default $name", async ({ reply, message }) => {
+    const sessionKey = "agent:orion:discord:channel:target-room";
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: sessionKey,
+      displayKey: sessionKey,
+      message: "Generate the requested media.",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey: sessionKey,
+      requesterChannel: "discord",
+      roundOneReply: reply,
+    });
+
+    const sendParams = requireGatewayCall("send").params as Record<string, unknown>;
+    expect(sendParams.message).toBe(message);
+    expect(sendParams).not.toHaveProperty("mediaUrls");
+    expect(sendParams).not.toHaveProperty("agentId");
+    expect(sendParams).not.toHaveProperty("sessionKey");
+    expect(runAgentStep).not.toHaveBeenCalled();
+  });
+
   it("bypasses the announce decider for delayed same-session channel replies", async () => {
     vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
       text: "Delayed channel reply",
