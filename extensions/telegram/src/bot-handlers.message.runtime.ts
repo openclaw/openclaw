@@ -32,6 +32,7 @@ import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import type { TelegramCachedMessageNode, TelegramReplyChainEntry } from "./message-cache.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
+import { readCachedReplyMedia, rememberReplyMedia } from "./reply-media-cache.js";
 
 export function createTelegramHandlerMessageRuntime({
   cfg,
@@ -116,24 +117,48 @@ export function createTelegramHandlerMessageRuntime({
         hasInboundMedia(node.sourceMessage) &&
         (await shouldHydrateMedia(node, index))
       ) {
+        // A quoted file is re-quoted on every reply in the thread, and each one
+        // otherwise costs a getFile plus a full download and resize.
+        const cached = readCachedReplyMedia({ accountId, fileId: replyFileId });
+        if (cached) {
+          mediaRef = {
+            path: cached.path,
+            kind: cached.kind,
+            ...(cached.contentType ? { contentType: cached.contentType } : {}),
+          };
+        }
         try {
-          const media = await resolveMedia({
-            ctx: {
-              message: node.sourceMessage,
-              me: ctx.me,
-              getFile: async (signal) => await bot.api.getFile(replyFileId, signal),
-            },
-            maxBytes: mediaMaxBytes,
-            ...mediaRuntimeWithAbort,
-          });
-          mediaRef = media
-            ? {
-                path: media.path,
-                kind: media.kind,
-                ...(media.contentType ? { contentType: media.contentType } : {}),
-                ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
-              }
-            : undefined;
+          const media = cached
+            ? undefined
+            : await resolveMedia({
+                ctx: {
+                  message: node.sourceMessage,
+                  me: ctx.me,
+                  getFile: async (signal) => await bot.api.getFile(replyFileId, signal),
+                },
+                maxBytes: mediaMaxBytes,
+                ...mediaRuntimeWithAbort,
+              });
+          if (media) {
+            mediaRef = {
+              path: media.path,
+              kind: media.kind,
+              ...(media.contentType ? { contentType: media.contentType } : {}),
+              ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
+            };
+          }
+          // Stickers keep their own description cache and carry metadata this
+          // store does not model, so they stay on the existing path.
+          if (media && !media.stickerMetadata) {
+            rememberReplyMedia({
+              accountId,
+              fileId: replyFileId,
+              path: media.path,
+              kind: media.kind,
+              cachedAt: new Date().toISOString(),
+              ...(media.contentType ? { contentType: media.contentType } : {}),
+            });
+          }
         } catch (err) {
           // Only durable ingress can replay a reply-media abort. Live polling must
           // preserve the current text instead of acknowledging it without dispatch.

@@ -55,7 +55,7 @@ import {
 } from "./message-cache-persistence.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
-import { setTelegramRuntime } from "./runtime.js";
+import { getOptionalTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
@@ -4143,6 +4143,69 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToBody).toBeUndefined();
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToSender).toBe("Ada");
+  });
+
+  it("reuses downloaded reply media when the same photo is quoted again", async () => {
+    const botShutdown = new AbortController();
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+    // The plugin runtime is process-global and beforeEach does not reset it, so
+    // restore the previous one or every later reply-media case inherits this store.
+    const previousRuntime = getOptionalTelegramRuntime();
+    setTelegramPluginStateRuntimeForTests();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        fetchAbortSignal: botShutdown.signal,
+        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      // Distinct file id: the reply-media store is process-global by design, so a
+      // shared id here would satisfy other cases' downloads and mask their asserts.
+      const quotePhoto = (text: string) => ({
+        chat: { id: 7, type: "private" },
+        text,
+        date: 1_736_380_800,
+        reply_to_message: {
+          message_id: 9101,
+          photo: [{ file_id: "reply-photo-reuse-1" }],
+          from: { first_name: "Ada" },
+        },
+      });
+
+      await handler({
+        message: quotePhoto("what is in this image?"),
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-reuse-1", expect.any(AbortSignal));
+      expect(mediaFetch).toHaveBeenCalledTimes(1);
+
+      getFileSpy.mockClear();
+      mediaFetch.mockClear();
+
+      // Same quoted file id: the second reply must reuse the stored download
+      // instead of paying another getFile plus transfer.
+      await handler({
+        message: quotePhoto("and what about now?"),
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      expect(getFileSpy).not.toHaveBeenCalled();
+      expect(mediaFetch).not.toHaveBeenCalled();
+    } finally {
+      botShutdown.abort();
+      ssrfMock.mockRestore();
+      setTelegramRuntime(previousRuntime as TelegramRuntime);
+    }
   });
 
   it("includes replied image media in inbound context for text replies", async () => {
