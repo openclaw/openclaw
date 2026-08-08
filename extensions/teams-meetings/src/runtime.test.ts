@@ -434,6 +434,82 @@ describe("Microsoft Teams meeting session flow", () => {
     });
   });
 
+  it("serializes a listening probe refresh behind an in-flight status refresh", async () => {
+    const harness = runtimeHarness({ tabOpen: true });
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({
+        defaultMode: "transcribe",
+        chrome: { launch: false, waitForInCallMs: 1 },
+      }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    harness.setCaptionText("Caption recovered after the older status refresh");
+    harness.gatewayRequest.mockClear();
+    const defaultGatewayRequest = harness.gatewayRequest.getMockImplementation();
+    if (!defaultGatewayRequest) {
+      throw new Error("expected browser gateway request implementation");
+    }
+    let releaseStatusTabList!: () => void;
+    let markStatusTabListStarted!: () => void;
+    const statusTabListStarted = new Promise<void>((resolve) => {
+      markStatusTabListStarted = resolve;
+    });
+    const statusTabListReleased = new Promise<void>((resolve) => {
+      releaseStatusTabList = resolve;
+    });
+    let tabListCalls = 0;
+    harness.gatewayRequest.mockImplementation(async (method, params) => {
+      if (params.path === "/tabs") {
+        tabListCalls += 1;
+        if (tabListCalls === 1) {
+          markStatusTabListStarted();
+          await statusTabListReleased;
+          return { tabs: [{ targetId: "stale-teams-tab", title: "Teams call", url: URL }] };
+        }
+      }
+      if (
+        params.path === "/act" &&
+        (params.body as { targetId?: unknown } | undefined)?.targetId === "stale-teams-tab"
+      ) {
+        return {
+          result: JSON.stringify({
+            inCall: true,
+            micMuted: true,
+            cameraOff: true,
+            url: URL,
+            title: "Teams call",
+          }),
+        };
+      }
+      return await defaultGatewayRequest(method, params);
+    });
+
+    const listening = runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 1_000 });
+    const status = runtime.status(joined.session.id);
+    await statusTabListStarted;
+    for (let index = 0; index < 5; index += 1) {
+      await Promise.resolve();
+    }
+
+    expect(tabListCalls).toBe(1);
+    releaseStatusTabList();
+    const [listenResult] = await Promise.all([listening, status]);
+
+    expect(listenResult).toMatchObject({
+      listenTimedOut: false,
+      listenVerified: true,
+      lastCaptionText: "Caption recovered after the older status refresh",
+      transcriptLines: 1,
+    });
+    expect(joined.session).toMatchObject({
+      browserLeft: undefined,
+      chrome: { browserTab: { targetId: "teams-tab" } },
+    });
+  });
+
   it("clears stale manual actions from ordinary status after a thrown recovery", async () => {
     const harness = runtimeHarness();
     const runtime = new TeamsMeetingsRuntime({

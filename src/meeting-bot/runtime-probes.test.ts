@@ -448,4 +448,57 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
     });
     expect(refreshCaptionHealth).toHaveBeenCalled();
   });
+
+  it("keeps an authoritative action from a refresh that completes at the deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-08T00:00:00.000Z"));
+    try {
+      const probes = createProbes();
+      const authoritativeAction = {
+        reason: `${testCase.name.toLowerCase()}-deadline-action`,
+        message: "The completed refresh produced current operator guidance.",
+      };
+      const session = {
+        id: `${testCase.name.toLowerCase()}-deadline-action`,
+        chrome: {
+          ...testCase.session.chrome,
+          health: {},
+        },
+      } satisfies Session;
+      const refreshCaptionHealth = vi.fn(async () => {
+        session.chrome.health = { manualAction: authoritativeAction };
+        vi.setSystemTime(new Date(Date.now() + 5));
+        return { browserHealthChecked: true, manualActionIsAuthoritative: true } as const;
+      });
+      const context = {
+        config: { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 5 }, chromeNode: {} },
+        resolveAgentId: () => "main",
+        list: () => [session],
+        join: vi.fn(async () => ({
+          browserHealthChecked: false,
+          manualActionIsAuthoritative: false,
+          session,
+        })),
+        isReusable: () => true,
+        hasHealthHandle: () => false,
+        refreshHealth: vi.fn(),
+        refreshCaptionHealth,
+      };
+
+      await expect(
+        probes.testListening(context, {
+          url: "https://example.test/meeting",
+          mode: "transcribe",
+          timeoutMs: 5,
+        }),
+      ).resolves.toMatchObject({
+        listenTimedOut: false,
+        listenVerified: false,
+        manualAction: authoritativeAction,
+      });
+      expect(refreshCaptionHealth).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

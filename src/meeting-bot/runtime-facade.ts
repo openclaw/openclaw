@@ -294,7 +294,9 @@ export function createMeetingRuntimeFacade<
         hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
         refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
         refreshCaptionHealth: async (session, timeoutMs) =>
-          await this.#refreshBrowserHealth(session, { force: true, timeoutMs }),
+          await getMeetingSessionRuntimeProbeAccess<Session, Request>(
+            this.#sessions,
+          ).refreshCaptionHealthForProbe(session, timeoutMs),
       };
     }
 

@@ -275,9 +275,6 @@ export function createMeetingRuntimeProbes<
           break;
         }
         health = result.session.chrome?.health;
-        if (Date.now() >= deadline) {
-          break;
-        }
         if (advanced()) {
           listenVerified = true;
         }
@@ -286,6 +283,9 @@ export function createMeetingRuntimeProbes<
           // Compatibility inference applies only when older refresh implementations omit it.
           (refreshOutcome.browserHealthChecked ? true : manualActionIsAuthoritative);
         if (listenVerified || (manualActionIsAuthoritative && health?.manualAction)) {
+          break;
+        }
+        if (Date.now() >= deadline) {
           break;
         }
         const retryDelayMs = deadline - Date.now();

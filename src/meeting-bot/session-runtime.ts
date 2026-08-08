@@ -102,7 +102,7 @@ export type MeetingSessionRuntimeOptions<
   releaseBrowserTab(session: TSession): Promise<boolean | undefined>;
   refreshBrowserHealth(
     session: TSession,
-    options?: { force?: boolean; readOnly?: boolean },
+    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
   ): Promise<void>;
   refreshStatus(session: TSession): Promise<void>;
   refreshReusableSession(
@@ -189,8 +189,8 @@ export class MeetingSessionRuntime<
     });
     registerMeetingSessionRuntimeProbeAccess<TSession, TRequest>(this, {
       joinForProbe: async (request) => await this.#joinForProbe(request),
-      refreshCaptionHealthForProbe: async (session) =>
-        await this.#refreshCaptionHealthForProbe(session),
+      refreshCaptionHealthForProbe: async (session, timeoutMs) =>
+        await this.#refreshCaptionHealthForProbe(session, timeoutMs),
     });
   }
 
@@ -385,14 +385,14 @@ export class MeetingSessionRuntime<
 
   async refreshBrowserHealth(
     session: TSession,
-    options: { force?: boolean; readOnly?: boolean } = {},
+    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number } = {},
   ): Promise<void> {
     await this.#refreshBrowserHealth(session, options);
   }
 
   async #refreshBrowserHealth(
     session: TSession,
-    options: { force?: boolean; readOnly?: boolean } = {},
+    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number } = {},
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
     return await this.#browserHealthRefreshLock.run(
       session.id,
@@ -402,7 +402,7 @@ export class MeetingSessionRuntime<
 
   async #refreshBrowserHealthUnlocked(
     session: TSession,
-    options: { force?: boolean; readOnly?: boolean },
+    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
     const browserTransport = this.options.isBrowserTransport(session.transport);
     const browser = browserTransport ? this.options.getBrowser(session) : undefined;
@@ -446,12 +446,13 @@ export class MeetingSessionRuntime<
 
   async #refreshCaptionHealthForProbe(
     session: TSession,
+    timeoutMs?: number,
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
     if (!this.options.isTranscribeMode(session.mode)) {
       this.refreshSpeechReadiness(session);
       return { browserHealthChecked: false, manualActionIsAuthoritative: false };
     }
-    return await this.#refreshBrowserHealth(session, { force: true });
+    return await this.#refreshBrowserHealth(session, { force: true, timeoutMs });
   }
 
   refreshSpeechReadiness(session: TSession): {

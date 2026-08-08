@@ -124,7 +124,7 @@ function createTestRuntime(params: {
   ): Promise<{ keepBrowserTab: boolean } | void>;
   refreshBrowserHealth?(
     session: TestSession,
-    options?: { force?: boolean; readOnly?: boolean },
+    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
   ): Promise<MeetingBrowserHealthRefreshOutcome | boolean | void>;
   refreshStatus?(session: TestSession): Promise<void>;
   joinTransport(input: {
@@ -388,8 +388,10 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
       manualActionIsAuthoritative: true,
     } as const;
     const refreshBrowserHealth = vi.fn(
-      async (_session: TestSession, _options?: { force?: boolean; readOnly?: boolean }) =>
-        refreshOutcome,
+      async (
+        _session: TestSession,
+        _options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
+      ) => refreshOutcome,
     );
     const { runtime } = createTestRuntime({
       transcribe: true,
@@ -415,11 +417,68 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
     await expect(
       getMeetingSessionRuntimeProbeAccess<TestSession, TestRequest>(
         runtime,
-      ).refreshCaptionHealthForProbe(session),
+      ).refreshCaptionHealthForProbe(session, 125),
     ).resolves.toEqual(refreshOutcome);
     expect(refreshBrowserHealth).toHaveBeenCalledTimes(2);
     expect(refreshBrowserHealth.mock.calls[0]?.[1]).toEqual({});
-    expect(refreshBrowserHealth.mock.calls[1]?.[1]).toEqual({ force: true });
+    expect(refreshBrowserHealth.mock.calls[1]?.[1]).toEqual({ force: true, timeoutMs: 125 });
+  });
+
+  it("serializes probe and lifecycle browser refreshes", async () => {
+    let releaseFirstRefresh!: () => void;
+    let markFirstRefreshStarted!: () => void;
+    const firstRefreshStarted = new Promise<void>((resolve) => {
+      markFirstRefreshStarted = resolve;
+    });
+    const firstRefreshReleased = new Promise<void>((resolve) => {
+      releaseFirstRefresh = resolve;
+    });
+    let activeRefreshes = 0;
+    let maxActiveRefreshes = 0;
+    const refreshBrowserHealth = vi.fn(async () => {
+      activeRefreshes += 1;
+      maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
+      if (refreshBrowserHealth.mock.calls.length === 1) {
+        markFirstRefreshStarted();
+        await firstRefreshReleased;
+      }
+      activeRefreshes -= 1;
+      return { browserHealthChecked: true, manualActionIsAuthoritative: true } as const;
+    });
+    const { runtime } = createTestRuntime({
+      transcribe: true,
+      refreshBrowserHealth,
+      releaseBrowserTab: async () => true,
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: false,
+          tab: { targetId: "retained-caption-tab", openedByPlugin: false },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/serialized-captions",
+      agentId: "main",
+    });
+
+    const lifecycleRefresh = runtime.refreshBrowserHealth(session, { force: true });
+    await firstRefreshStarted;
+    const probeRefresh = getMeetingSessionRuntimeProbeAccess<TestSession, TestRequest>(
+      runtime,
+    ).refreshCaptionHealthForProbe(session, 250);
+    await Promise.resolve();
+
+    expect(refreshBrowserHealth).toHaveBeenCalledTimes(1);
+    releaseFirstRefresh();
+    await Promise.all([lifecycleRefresh, probeRefresh]);
+
+    expect(maxActiveRefreshes).toBe(1);
+    expect(refreshBrowserHealth).toHaveBeenNthCalledWith(1, session, { force: true });
+    expect(refreshBrowserHealth).toHaveBeenNthCalledWith(2, session, {
+      force: true,
+      timeoutMs: 250,
+    });
   });
 });
 

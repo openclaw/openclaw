@@ -97,12 +97,15 @@ export type MeetingSessionProbeJoinResult<TSession> = MeetingPluginJoinResult<TS
 
 type MeetingSessionRuntimeProbeAccess<TSession, TRequest> = {
   joinForProbe(request: TRequest): Promise<MeetingSessionProbeJoinResult<TSession>>;
-  refreshCaptionHealthForProbe(session: TSession): Promise<MeetingBrowserHealthRefreshOutcome>;
+  refreshCaptionHealthForProbe(
+    session: TSession,
+    timeoutMs?: number,
+  ): Promise<MeetingBrowserHealthRefreshOutcome>;
 };
 
 type MeetingSessionRuntimeHealthRefresh<TSession> = (
   session: TSession,
-  options?: { force?: boolean; readOnly?: boolean },
+  options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
 ) => Promise<MeetingBrowserHealthRefreshOutcome>;
 
 type MeetingSessionRuntimeRecoveryFailure<TSession> = (
