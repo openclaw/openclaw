@@ -237,6 +237,17 @@ function cleanupSmokeLogTailHelpers(): string {
   return helpers;
 }
 
+function upgradeSurvivorRestartDiagnosticHelpers(): string {
+  const script = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+  const match = script.match(
+    /(print_redacted_update_restart_log\(\) \{[\s\S]*?\n\}\n\nprint_update_restart_failure_diagnostics\(\) \{[\s\S]*?\n\})\n\non_error\(\)/u,
+  );
+  if (!match?.[1]) {
+    throw new Error("upgrade survivor restart diagnostic helpers were not found");
+  }
+  return match[1];
+}
+
 function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
   const script = readFileSync(CLEANUP_DOCKER_SMOKE_PATH, "utf8");
   const match = script.match(/(resolve_default_cleanup_platform\(\) \{[\s\S]*?\n\})\n\nPLATFORM=/u);
@@ -3002,6 +3013,23 @@ if (starts === 1) {
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$STATUS_ERR"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$STATUS_JSON"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$log_file"');
+    expectTextToIncludeAll(publishedRunner, [
+      'print_redacted_update_restart_log "$path"',
+      '"$SYSTEMCTL_SHIM_LOG"',
+      '"$SYSTEMCTL_SHIM_DAEMON_LOG"',
+      '"$UPDATE_ERR"',
+      '"$UPDATE_JSON"',
+      '"$state_dir/logs/gateway-restart.log"',
+      '"$GATEWAY_LOG"',
+      'if [ "$status" -ne 0 ] && [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
+      "print_update_restart_failure_diagnostics || true",
+      "umask 077",
+      "mode: 0o600",
+      "fs.chmodSync(target, 0o600)",
+    ]);
+    expect(
+      publishedRunner.indexOf("print_update_restart_failure_diagnostics || true"),
+    ).toBeLessThan(publishedRunner.indexOf("  cleanup\n"));
     expect(publishedRunner).not.toContain('cat "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).not.toContain('cat "$BASELINE_CONFIG_VALIDATE_LOG"');
     expect(publishedRunner).not.toContain('cat "$BASELINE_SERVICE_INSTALL_ERR"');
@@ -3015,6 +3043,158 @@ if (starts === 1) {
     expect(publishedRunner).not.toContain('cat "$log_file"');
     expect(publishedRunner).not.toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_LOG"');
     expect(publishedRunner).not.toContain('openclaw_e2e_print_log "$SYSTEMCTL_SHIM_DAEMON_LOG"');
+  });
+
+  it("redacts update restart diagnostics before exposing private temporary files", () => {
+    const workDir = tempDirs.make("openclaw-update-restart-redaction-");
+    const logPath = join(workDir, "gateway-restart.log");
+    const missingPath = join(workDir, "missing.log");
+    const helpersPath = join(workDir, "restart-diagnostic-helpers.sh");
+    const sensitiveHeaders = [
+      ["x-goog-api-key", "google-header-secret"],
+      ["api-key", "api-header-secret"],
+      ["apikey", "apikey-header-secret"],
+      ["x-api-token", "api-token-header-secret"],
+      ["x-access-token", "access-token-header-secret"],
+      ["X-OpenClaw-Token", "openclaw-header-secret"],
+      ["x-pomerium-jwt-assertion", "pomerium-header-secret"],
+      ["X-Api-Key", "gateway-api-header-secret"],
+      ["X-Auth-Token", "gateway-auth-header-secret"],
+    ] as const;
+    const secrets = [
+      "upgrade-survivor-token",
+      "sk-openclaw-upgrade-survivor",
+      "upgrade-survivor-discord-token",
+      "123456:upgrade-survivor-telegram-token",
+      "upgrade-survivor-feishu-secret",
+      "upgrade-survivor-matrix-token",
+      "BSA_upgrade_survivor_brave_key",
+      "bearer-sensitive-value",
+      "json-token-value",
+      "json-password-value",
+      "json-api-key-value",
+      "json-client-secret-value",
+      "shell-token-value",
+      "shell-password-value",
+      "shell-api-value",
+      "cli-token-value",
+      "basic-sensitive-value",
+      "digest-sensitive-value",
+      "proxy-sensitive-value",
+      "aws-sensitive-value",
+      "aws-signature-sensitive-value",
+      "serialized-sensitive-value",
+      "folded-sensitive-value",
+      "serialized-continuation-sensitive-value",
+      ...sensitiveHeaders.map(([, secret]) => secret),
+      "quoted-auth-secret",
+      "serialized-api-secret",
+      "folded-gateway-secret",
+    ];
+    writeFileSync(
+      logPath,
+      [
+        "useful gateway failure",
+        ...secrets.slice(0, 7),
+        "Authorization: Bearer bearer-sensitive-value",
+        '{"token":"json-token-value","password":"json-password-value","apiKey":"json-api-key-value","clientSecret":"json-client-secret-value","safe":"useful-json"}',
+        "export SERVICE_TOKEN=shell-token-value",
+        "GATEWAY_PASSWORD='shell-password-value'",
+        'API_KEY="shell-api-value"',
+        "gateway --token cli-token-value",
+        "authorization: Basic basic-sensitive-value",
+        'AuThOrIzAtIoN: Digest username="digest-sensitive-value",',
+        "\tfolded=folded-sensitive-value",
+        "pRoXy-AuThOrIzAtIoN: Negotiate proxy-sensitive-value",
+        '{"Proxy-Authorization":"AWS4-HMAC-SHA256 Credential=aws-sensitive-value/20260807/us-east-1/service/aws4_request, Signature=aws-signature-sensitive-value","safeProxy":"useful-proxy-json"}',
+        String.raw`serialized={\"Authorization\":\"Digest username=\\\"serialized-sensitive-value\\\",\\n\\tcontinuation=serialized-continuation-sensitive-value\",\"safe\":\"useful-serialized\"}`,
+        ...sensitiveHeaders.map(
+          ([name, secret]) => `${name}${name === "X-Api-Key" ? "=" : ":"} ${secret}`,
+        ),
+        'curl -H "Authorization: Basic quoted-auth-secret" --retry 2',
+        String.raw`serializedHeader={\"x-goog-api-key\":\"serialized-api-secret\",\"safeHeader\":\"useful-header-serialized\"}`,
+        "X-OpenClaw-Token: folded-gateway-secret\n\tcontinued=folded-gateway-secret",
+        "X-Authorization: ordinary-value",
+        "the authorization model is useful",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(helpersPath, upgradeSurvivorRestartDiagnosticHelpers());
+    const script = repoShell(workDir)`
+ARTIFACT_ROOT="$TMPDIR"
+export GATEWAY_AUTH_TOKEN_REF=upgrade-survivor-token
+export OPENAI_API_KEY=sk-openclaw-upgrade-survivor
+export DISCORD_BOT_TOKEN=upgrade-survivor-discord-token
+export TELEGRAM_BOT_TOKEN=123456:upgrade-survivor-telegram-token
+export FEISHU_APP_SECRET=upgrade-survivor-feishu-secret
+export MATRIX_ACCESS_TOKEN=upgrade-survivor-matrix-token
+export BRAVE_API_KEY=BSA_upgrade_survivor_brave_key
+
+source ${shellQuote(helpersPath)}
+
+openclaw_e2e_print_log() {
+  node -e '
+    const fs = require("node:fs");
+    const mode = fs.statSync(process.argv[1]).mode & 0o777;
+    process.stdout.write(\`mode=\${mode.toString(8)}\\n\`);
+  ' "$1"
+  cat "$1"
+}
+
+print_redacted_update_restart_log ${shellQuote(missingPath)}
+print_redacted_update_restart_log ${shellQuote(logPath)}
+`;
+
+    const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("mode=600");
+    expect(result.stderr).toContain("useful gateway failure");
+    expect(result.stderr).toContain("useful-json");
+    expect(result.stderr).toContain("useful-proxy-json");
+    expect(result.stderr).toContain("useful-serialized");
+    expect(result.stderr).toContain("useful-header-serialized");
+    expect(result.stderr).toContain('" --retry 2');
+    expect(result.stderr).toContain("X-Authorization: ordinary-value");
+    expect(result.stderr).toContain("the authorization model is useful");
+    expect(result.stderr).toContain("[REDACTED]");
+    expect(result.stderr).not.toContain(missingPath);
+    for (const secret of secrets) {
+      expect(result.stderr).not.toContain(secret);
+    }
+    expect(readdirSync(workDir).filter((entry) => entry.includes("redacted"))).toEqual([]);
+  });
+
+  it("redacts complete update restart logs before bounded tailing", () => {
+    const workDir = tempDirs.make("openclaw-update-restart-redaction-tail-");
+    const logPath = join(workDir, "gateway-restart.log");
+    const helpersPath = join(workDir, "restart-diagnostic-helpers.sh");
+    const secret = "sk-openclaw-upgrade-survivor";
+    writeFileSync(
+      logPath,
+      `old-output-that-must-be-truncated\n${"x".repeat(200)}${secret}${"y".repeat(40)}\nuseful-tail\n`,
+    );
+    writeFileSync(helpersPath, upgradeSurvivorRestartDiagnosticHelpers());
+    const script = repoShell(workDir)`
+ARTIFACT_ROOT="$TMPDIR"
+export OPENAI_API_KEY=${shellQuote(secret)}
+export OPENCLAW_E2E_LOG_TAIL_BYTES=64
+export OPENCLAW_E2E_LOG_TAIL_LINES=120
+source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
+
+source ${shellQuote(helpersPath)}
+
+print_redacted_update_restart_log ${shellQuote(logPath)}
+`;
+
+    const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("useful-tail");
+    expect(result.stderr).not.toContain("old-output-that-must-be-truncated");
+    expect(result.stderr).not.toContain(secret);
+    expect(result.stderr).not.toContain(secret.slice(-10));
+    expect(readdirSync(workDir).filter((entry) => entry.includes("redacted"))).toEqual([]);
   });
 
   it("preserves caller-owned file descriptors around harness runs", () => {

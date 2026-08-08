@@ -243,6 +243,108 @@ cleanup() {
   fi
 }
 
+print_redacted_update_restart_log() {
+  local source_path="$1"
+  [ -f "$source_path" ] || return 0
+
+  local redacted_path=""
+  local original_umask
+  original_umask="$(umask)"
+  umask 077
+  redacted_path="$(mktemp "$ARTIFACT_ROOT/update-restart-redacted.XXXXXX")"
+  local create_status=$?
+  umask "$original_umask"
+  if [ "$create_status" -ne 0 ] || [ -z "$redacted_path" ]; then
+    echo "Could not create redacted update restart diagnostic for $source_path." >&2
+    return 1
+  fi
+
+  local redact_status=0
+  OPENCLAW_E2E_REDACT_SOURCE="$source_path" \
+    OPENCLAW_E2E_REDACT_TARGET="$redacted_path" \
+    node -e '
+const fs = require("node:fs");
+
+const source = process.env.OPENCLAW_E2E_REDACT_SOURCE;
+const target = process.env.OPENCLAW_E2E_REDACT_TARGET;
+if (!source || !target) {
+  throw new Error("missing update restart diagnostic redaction path");
+}
+
+let text = fs.readFileSync(source, "utf8");
+for (const name of [
+  "GATEWAY_AUTH_TOKEN_REF",
+  "OPENAI_API_KEY",
+  "DISCORD_BOT_TOKEN",
+  "TELEGRAM_BOT_TOKEN",
+  "FEISHU_APP_SECRET",
+  "MATRIX_ACCESS_TOKEN",
+  "BRAVE_API_KEY",
+]) {
+  const secret = process.env[name];
+  if (secret) {
+    text = text.split(secret).join("[REDACTED]");
+  }
+}
+
+const sensitiveHeaderKeys = String.raw`(?:proxy-)?authorization|x-goog-api-key|api-key|apikey|x-api-token|x-access-token|x-openclaw-token|x-pomerium-jwt-assertion|x-api-key|x-auth-token`;
+const escapedHeaderPattern = new RegExp(String.raw`(\\"(?:${sensitiveHeaderKeys})\\"\s*[:=]\s*\\")[^\r\n]*?(?=\\"\s*(?:,\s*\\"[^"\r\n]+\\"\s*[:=]|\}))`, "giu");
+const jsonHeaderPattern = new RegExp(String.raw`("(?:${sensitiveHeaderKeys})"\s*[:=]\s*")(?:(?:\\.)|[^"\\])*(?=")`, "giu");
+const quotedHeaderPattern = new RegExp(String.raw`((["\x27])(?:${sensitiveHeaderKeys})\s*[:=]\s*)(?:(?!\2)[^\r\n])*(\2)`, "giu");
+const rawHeaderPattern = new RegExp(String.raw`(^|[^A-Za-z0-9_\x27"\\-])((?:${sensitiveHeaderKeys})\s*[:=]\s*)[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*`, "gimu");
+text = text
+  .replace(escapedHeaderPattern, "$1[REDACTED]")
+  .replace(jsonHeaderPattern, "$1[REDACTED]")
+  .replace(quotedHeaderPattern, "$1[REDACTED]$3")
+  .replace(rawHeaderPattern, "$1$2[REDACTED]")
+  .replace(
+    /("(?:[^"\\]|\\.)*(?:token|password|secret|api[_-]?key|access[_-]?key)(?:[^"\\]|\\.)*"\s*:\s*)"(?:[^"\\]|\\.)*"/giu,
+    "$1\"[REDACTED]\"",
+  )
+  .replace(
+    /(\b(?:export\s+)?(?:[A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET)[A-Z0-9_]*|[A-Z0-9_]*(?:API|ACCESS)_KEY[A-Z0-9_]*)\s*=\s*)(?:"(?:[^"\\]|\\.)*"|\x27[^\x27]*\x27|[^\s;]+)/giu,
+    "$1[REDACTED]",
+  )
+  .replace(
+    /(\s--(?:token|password|secret|api-key|access-key)(?:=|\s+))(?:"(?:[^"\\]|\\.)*"|\x27[^\x27]*\x27|[^\s]+)/giu,
+    "$1[REDACTED]",
+  );
+
+fs.writeFileSync(target, text, { encoding: "utf8", mode: 0o600 });
+fs.chmodSync(target, 0o600);
+if ((fs.statSync(target).mode & 0o777) !== 0o600) {
+  throw new Error("redacted update restart diagnostic is not mode 0600");
+}
+' || redact_status=$?
+
+  if [ "$redact_status" -ne 0 ]; then
+    echo "Could not redact update restart diagnostic $source_path." >&2
+    rm -f "$redacted_path"
+    return "$redact_status"
+  fi
+
+  echo "--- redacted update restart diagnostic: $source_path ---" >&2
+  openclaw_e2e_print_log "$redacted_path" >&2 || redact_status=$?
+  rm -f "$redacted_path"
+  return "$redact_status"
+}
+
+print_update_restart_failure_diagnostics() {
+  local status=0
+  local state_dir="${OPENCLAW_STATE_DIR:-${HOME:?missing HOME}/.openclaw}"
+  local path
+  for path in \
+    "$SYSTEMCTL_SHIM_LOG" \
+    "$SYSTEMCTL_SHIM_DAEMON_LOG" \
+    "$UPDATE_ERR" \
+    "$UPDATE_JSON" \
+    "$state_dir/logs/gateway-restart.log" \
+    "$GATEWAY_LOG"; do
+    print_redacted_update_restart_log "$path" || status=1
+  done
+  return "$status"
+}
+
 on_error() {
   local status="$1"
   FAILURE_PHASE="${CURRENT_PHASE:-unknown}"
@@ -254,6 +356,9 @@ on_error() {
 on_exit() {
   local status="$1"
   set +e
+  if [ "$status" -ne 0 ] && [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    print_update_restart_failure_diagnostics || true
+  fi
   cleanup
   if [ "$status" -eq 0 ]; then
     write_summary passed ""
@@ -1312,8 +1417,10 @@ update_candidate() {
   fi
   if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR"; then
     echo "openclaw update failed" >&2
-    openclaw_e2e_print_log "$UPDATE_ERR" >&2
-    openclaw_e2e_print_log "$UPDATE_JSON" >&2
+    if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
+      openclaw_e2e_print_log "$UPDATE_ERR" >&2
+      openclaw_e2e_print_log "$UPDATE_JSON" >&2
+    fi
     return 1
   fi
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
@@ -1431,15 +1538,19 @@ check_gateway_status() {
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"
   if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
     echo "gateway status failed" >&2
-    openclaw_e2e_print_log "$STATUS_ERR" >&2
-    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
+    if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
+      openclaw_e2e_print_log "$STATUS_ERR" >&2
+      openclaw_e2e_print_log "$GATEWAY_LOG" >&2
+    fi
     return 1
   fi
   status_end="$(node -e "process.stdout.write(String(Date.now()))")"
   status_seconds=$(((status_end - status_start + 999) / 1000))
   if [ "$status_seconds" -gt "$budget" ]; then
     echo "gateway status exceeded survivor budget: ${status_seconds}s > ${budget}s" >&2
-    openclaw_e2e_print_log "$STATUS_JSON" >&2
+    if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
+      openclaw_e2e_print_log "$STATUS_JSON" >&2
+    fi
     return 1
   fi
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json "$STATUS_JSON"
