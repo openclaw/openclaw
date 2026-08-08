@@ -7,6 +7,7 @@ import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read
 import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
@@ -131,8 +132,15 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
     updatedAt: session.updatedAt || null,
     age: session.updatedAt ? Date.now() - session.updatedAt : null,
   }));
+  // The configured store path is a legacy JSON locator; entries are read from
+  // the resolved SQLite database, so report that path instead of a file that
+  // may not exist.
+  const resolvedTarget = resolveSqliteTargetFromSessionStorePath(
+    storePath,
+    agentId ? { agentId } : {},
+  );
   return {
-    path: storePath,
+    path: resolvedTarget.path,
     count: sessions.length,
     recent,
   } satisfies HealthSummary["sessions"];

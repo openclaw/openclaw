@@ -27,6 +27,11 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       listSessionEntries: () => [],
       listSessionEntriesReadOnly: () => [],
     }));
+    vi.doMock("../config/sessions/session-sqlite-target.js", () => ({
+      resolveSqliteTargetFromSessionStorePath: (storePath: string) => ({
+        path: storePath,
+      }),
+    }));
     vi.doMock("../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => [],
     }));
