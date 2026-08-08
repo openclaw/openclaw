@@ -105,7 +105,10 @@ export function isChangedLaneTestPath(changedPath) {
  * @internal Shared repository-script contract.
  */
 export function detectChangedLanes(changedPaths, options = {}) {
-  const paths = [...new Set(changedPaths.map(normalizeChangedPath).filter(Boolean))]
+  const pathNormalizer = options.pathsAreRawGitTokens
+    ? (changedPath) => String(changedPath ?? "")
+    : normalizeChangedPath;
+  const paths = [...new Set(changedPaths.map(pathNormalizer).filter(Boolean))]
     .toSorted((left, right) => left.localeCompare(right))
     .filter((changedPath) => changedPath !== "--");
   const lanes = createEmptyChangedLanes();
@@ -137,7 +140,9 @@ export function detectChangedLanes(changedPaths, options = {}) {
   }
 
   for (const changedPath of paths) {
-    const facts = getChangedPathFacts(changedPath);
+    const facts = getChangedPathFacts(changedPath, {
+      preserveRawPath: options.pathsAreRawGitTokens === true,
+    });
     if (BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)) {
       lanes.bundledChannelConfigMetadata = true;
       reasons.push(`${changedPath}: bundled channel config metadata input`);
@@ -285,7 +290,10 @@ export function detectChangedLanesForPaths(params) {
         staged: params.staged,
       })
     : null;
-  return detectChangedLanes(params.paths, { packageJsonChangeKind });
+  return detectChangedLanes(params.paths, {
+    packageJsonChangeKind,
+    pathsAreRawGitTokens: params.pathsAreRawGitTokens === true,
+  });
 }
 
 /**
@@ -651,6 +659,7 @@ if (isDirectRun()) {
     head: args.head,
     staged: args.staged,
     mergeHeadFirstParent: args.mergeHeadFirstParent,
+    pathsAreRawGitTokens: args.paths.length === 0,
   });
   if (args.githubOutput) {
     writeChangedLaneGitHubOutput(result);

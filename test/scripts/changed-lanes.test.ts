@@ -437,6 +437,23 @@ describe("scripts/changed-lanes", () => {
     ).toEqual([quotedPath]);
   });
 
+  it("keeps raw Git path tokens separate from explicit path normalization", () => {
+    const rawPaths = [
+      " scripts/generated.ts",
+      String.raw`scripts\generated.ts`,
+      "scripts/trailing.ts ",
+    ];
+
+    expect(detectChangedLanes(rawPaths, { pathsAreRawGitTokens: true })).toMatchObject({
+      paths: [...rawPaths].toSorted((left, right) => left.localeCompare(right)),
+      lanes: { all: true },
+    });
+    expect(detectChangedLanes(rawPaths).paths).toEqual([
+      "scripts/generated.ts",
+      "scripts/trailing.ts",
+    ]);
+  });
+
   it("falls back to a two-dot diff when a delegated checkout has no merge base", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-no-merge-base-");
     git(dir, ["init", "-q", "--initial-branch=main"]);

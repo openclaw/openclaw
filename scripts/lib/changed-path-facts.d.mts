@@ -21,4 +21,7 @@ export type ChangedPathFacts = {
 };
 
 export function normalizeChangedPath(inputPath: unknown): string;
-export function getChangedPathFacts(inputPath: unknown): ChangedPathFacts;
+export function getChangedPathFacts(
+  inputPath: unknown,
+  options?: { preserveRawPath?: boolean },
+): ChangedPathFacts;

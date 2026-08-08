@@ -26,6 +26,7 @@ export type ChangedLaneResult = {
 
 export type DetectChangedLanesOptions = {
   packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
+  pathsAreRawGitTokens?: boolean;
 };
 
 export function createEmptyChangedLanes(): ChangedLanes;
@@ -40,6 +41,7 @@ export function detectChangedLanesForPaths(params: {
   head?: string;
   staged?: boolean;
   mergeHeadFirstParent?: boolean;
+  pathsAreRawGitTokens?: boolean;
 }): ChangedLaneResult;
 export function listChangedPathsFromGit(params: {
   base: string;
