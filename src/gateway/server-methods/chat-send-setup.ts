@@ -28,7 +28,7 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  const preparedSession = prepareChatSendSession({
+  const preparedSession = await prepareChatSendSession({
     request: normalizedRequest.value,
     context,
     client,

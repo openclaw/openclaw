@@ -2580,6 +2580,55 @@ describe("gateway server chat", () => {
     },
   );
 
+  test("chat.send stop command bypasses session model catalog validation", async () => {
+    openDirectChatSession();
+    try {
+      testState.agentConfig = {
+        model: { primary: "openai/gpt-5.4" },
+      };
+      await writeStoredMainSession({
+        providerOverride: "custom-api-deepseek-com",
+        modelOverride: "deepseek-v4-pro",
+        modelProvider: "custom-api-deepseek-com",
+        model: "deepseek-v4-pro",
+      });
+      const context = createDirectChatContext({
+        chatQueuedTurns: new Map(),
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
+          async () => {
+            throw new Error("stop command must not load model catalog");
+          },
+        ),
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+
+      await callDirectChat("chat.send", {
+        id: "stop-bypasses-model-catalog",
+        params: {
+          sessionKey: "main",
+          message: "/stop",
+          idempotencyKey: "idem-stop-bypass-model-catalog",
+        },
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(context.loadGatewayModelCatalog).not.toHaveBeenCalled();
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: false, runIds: [] },
+          error: undefined,
+        },
+      ]);
+    } finally {
+      testState.agentConfig = undefined;
+      resetDirectChatSession();
+    }
+  });
+
   test("chat.send durably admits a restart-safe Control UI turn before ACK", async () => {
     const { storePath } = openDirectChatSession();
     const dispatchRelease = createDeferred();

@@ -7,7 +7,10 @@ import {
   resolveSessionRoutingContract,
 } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
+import {
+  measureDiagnosticsTimelineSpan,
+  measureDiagnosticsTimelineSpanSync,
+} from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
@@ -16,6 +19,7 @@ import {
   loadSessionEntry,
   resolveDeletedAgentIdFromSessionKey,
   resolveSessionModelRef,
+  shouldLoadModelCatalogForSessionModelResolution,
 } from "../session-utils.js";
 import {
   hasGatewayAdminScope,
@@ -100,13 +104,13 @@ function loadChatSendSessionContext(params: {
 }
 
 /** Load and validate the session/model facts shared by later admission and dispatch phases. */
-export function prepareChatSendSession(params: {
+export async function prepareChatSendSession(params: {
   request: NormalizedChatSendRequest;
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
 }) {
   const loaded = loadChatSendSessionContext(params);
-  const { request, client } = params;
+  const { request, client, context } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind, rawMessage } = request;
   const { cfg, sessionKey, entry, legacyKey, rawSessionKey, requestedAgentId } = loaded;
   if (isIncognitoSessionKey(sessionKey) && !entry) {
@@ -147,7 +151,21 @@ export function prepareChatSendSession(params: {
     agentId: selectedAgent.agentId,
     mainKey: cfg.session?.mainKey,
   });
-  const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
+  const sessionModelCatalog =
+    !request.stopCommand && shouldLoadModelCatalogForSessionModelResolution(cfg, entry, agentId)
+      ? await measureDiagnosticsTimelineSpan(
+          "gateway.chat_send.session_model_catalog",
+          async () =>
+            context.loadGatewayModelCatalog({ agentId, readOnly: true }).catch(() => undefined),
+          {
+            config: cfg,
+            phase: "chat.send",
+          },
+        )
+      : undefined;
+  const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId, {
+    modelCatalog: sessionModelCatalog,
+  });
   const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
     config: cfg,
   });
@@ -192,6 +210,6 @@ export function prepareChatSendSession(params: {
 }
 
 export type PreparedChatSendSession = Extract<
-  ReturnType<typeof prepareChatSendSession>,
+  Awaited<ReturnType<typeof prepareChatSendSession>>,
   { ok: true }
 >["value"];
