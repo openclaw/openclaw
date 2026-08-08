@@ -29,6 +29,10 @@ import type {
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBridgeCreateRequest,
+} from "../../../talk/provider-types.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
@@ -204,6 +208,11 @@ export type RunEmbeddedAgentParams = {
   toolOverrides?: SessionToolOverrides;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
+  /** Host-owned realtime bridge request prepared through the normal bound agent lifecycle. */
+  realtimeVoice?: {
+    request: RealtimeVoiceBridgeCreateRequest;
+    onBridgeReady: (bridge: RealtimeVoiceBridge) => void;
+  };
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   /** Finalizes caller-owned guidance after the submitted tool surface is known. */

@@ -223,7 +223,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
       // +1: simple channel secret contract factory replacing repeated collectors.
-      4835,
+      // +1: canonical session model reference resolver for plugin-owned bound sessions.
+      4836,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -274,7 +275,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
       // +1: simple channel secret contract factory replacing repeated collectors.
-      2912,
+      // +1: canonical session model reference resolver for plugin-owned bound sessions.
+      2913,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

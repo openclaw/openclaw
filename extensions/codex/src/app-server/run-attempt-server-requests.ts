@@ -38,6 +38,12 @@ export function createCodexAttemptServerRequestController(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
+  options?: {
+    /** Resolve native turns that are started outside OpenClaw's text-turn entrypoint. */
+    resolveTurnId?: (scope: CodexThreadRouteScope) => string | undefined;
+    /** Disable single-turn liveness bookkeeping for a multi-turn native session. */
+    trackTurnActivity?: boolean;
+  },
 ) {
   const { prompt, state: resourceState, projectorRef, trajectoryRecorder } = resources;
   const { context } = prompt;
@@ -71,17 +77,21 @@ export function createCodexAttemptServerRequestController(
     scheduleTurnReleaseAfterTerminalDynamicTool,
     scheduleTerminalDynamicToolReleaseCheck,
   } = lifecycle;
+  const trackTurnActivity = options?.trackTurnActivity !== false;
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
     requestSignal: AbortSignal = new AbortController().signal,
   ) => {
     const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
-    const turnId = turnIdRef.current;
+    const turnId = options?.resolveTurnId?.(scope) ?? turnIdRef.current;
     const projector = projectorRef.current;
     let armCompletionWatchOnResponse = false;
     let requestCountsAsTurnActivity = false;
     const markCurrentTurnRequestProgress = () => {
+      if (!trackTurnActivity) {
+        return;
+      }
       state.activeAppServerTurnRequests += 1;
       turnWatches.clearCompletionIdleTimer();
       turnWatches.disarmAssistantCompletionIdleWatch();
@@ -300,6 +310,9 @@ export function createCodexAttemptServerRequestController(
           });
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
+        if (!trackTurnActivity) {
+          return protocolResponse as JsonValue;
+        }
         if (response.terminate === true && response.success) {
           scheduleTurnReleaseAfterTerminalDynamicTool({
             call,
@@ -356,7 +369,7 @@ export function createCodexAttemptServerRequestController(
           turnWatches.armCompletionIdleWatch({ timeoutMs: postToolContinuationTimeoutMs });
         }
         scheduleTerminalDynamicToolReleaseCheck();
-      } else {
+      } else if (trackTurnActivity) {
         turnWatches.scheduleProgressWatches();
       }
     }

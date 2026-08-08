@@ -26,6 +26,10 @@ export type TestRealtimeSessionEntry = {
   };
   processingQueue: Promise<void>;
   realtime?: {
+    acceptsSpeaker: (
+      context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+      userId: string,
+    ) => boolean;
     beginSpeakerTurn: (
       context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
       userId: string,
@@ -44,6 +48,8 @@ export type TestRealtimeBridgeParams = {
   cfg?: unknown;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
+  onClose?: (reason: "completed" | "error") => void;
+  onError?: (error: Error) => void;
   onEvent?: (event: { detail?: string; direction: "client" | "server"; type: string }) => void;
   onReady?: () => void;
   onToolCall?: (

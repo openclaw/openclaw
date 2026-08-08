@@ -1,6 +1,7 @@
 // Discord helper module supports secret config contract behavior.
 import {
   collectNestedChannelFieldAssignments,
+  collectSecretInputAssignment,
   collectSimpleChannelFieldAssignments,
   getChannelSurface,
   hasConfiguredSecretInputValue,
@@ -12,6 +13,70 @@ import {
   type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectNestedChannelTtsAssignments } from "openclaw/plugin-sdk/channel-secret-tts-runtime";
+import {
+  canonicalizeRealtimeVoiceProviderId,
+  listRealtimeVoiceProviders,
+} from "openclaw/plugin-sdk/realtime-voice";
+
+function isRealtimeVoiceEnabled(voice: Record<string, unknown>): boolean {
+  return isEnabledFlag(voice) && voice.mode !== "stt-tts";
+}
+
+function materializeModelProviderApiKeys(
+  sourceConfig: ResolverContext["sourceConfig"],
+  defaults: SecretDefaults | undefined,
+): ResolverContext["sourceConfig"] {
+  const config = structuredClone(sourceConfig);
+  if (!isRecord(config.models) || !isRecord(config.models.providers)) {
+    return config;
+  }
+  for (const providerConfig of Object.values(config.models.providers)) {
+    if (
+      isRecord(providerConfig) &&
+      hasConfiguredSecretInputValue(providerConfig.apiKey, defaults)
+    ) {
+      providerConfig.apiKey = "configured-secret";
+    }
+  }
+  return config;
+}
+
+function resolveAutoRealtimeProviderId(params: {
+  providers: Record<string, unknown>;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): string | undefined {
+  const config = materializeModelProviderApiKeys(params.context.sourceConfig, params.defaults);
+  for (const provider of listRealtimeVoiceProviders(config).toSorted(
+    (left, right) =>
+      (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
+      (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER),
+  )) {
+    const providerConfig = params.providers[provider.id];
+    const rawConfig = isRecord(providerConfig) ? { ...providerConfig } : {};
+    if (hasConfiguredSecretInputValue(rawConfig.apiKey, params.defaults)) {
+      rawConfig.apiKey = "configured-secret";
+    }
+    try {
+      const resolvedConfig =
+        provider.resolveConfig?.({
+          cfg: config,
+          rawConfig,
+        }) ?? rawConfig;
+      if (
+        provider.isConfigured({
+          cfg: config,
+          providerConfig: resolvedConfig,
+        })
+      ) {
+        return provider.id;
+      }
+    } catch {
+      // Invalid provider config remains a provider/runtime validation concern.
+    }
+  }
+  return undefined;
+}
 
 export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
@@ -37,6 +102,18 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "channels.discord.accounts.*.voice.realtime.providers.*.apiKey",
+    targetType: "channels.discord.accounts.*.voice.realtime.providers.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "channels.discord.accounts.*.voice.realtime.providers.*.apiKey",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 7,
+  },
+  {
     id: "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
     targetType: "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
     configFile: "openclaw.json",
@@ -46,7 +123,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
-    providerIdPathSegmentIndex: 6,
+    providerIdPathSegmentIndex: 7,
   },
   {
     id: "channels.discord.pluralkit.token",
@@ -71,6 +148,18 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "channels.discord.voice.realtime.providers.*.apiKey",
+    targetType: "channels.discord.voice.realtime.providers.*.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "channels.discord.voice.realtime.providers.*.apiKey",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    providerIdPathSegmentIndex: 5,
+  },
+  {
     id: "channels.discord.voice.tts.providers.*.apiKey",
     targetType: "channels.discord.voice.tts.providers.*.apiKey",
     configFile: "openclaw.json",
@@ -80,9 +169,62 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
-    providerIdPathSegmentIndex: 4,
+    providerIdPathSegmentIndex: 5,
   },
 ];
+
+function collectRealtimeProviderApiKeyAssignments(params: {
+  realtime: unknown;
+  pathPrefix: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  active: boolean;
+  inactiveReason: string;
+}): void {
+  if (!isRecord(params.realtime) || !isRecord(params.realtime.providers)) {
+    return;
+  }
+  const selectedProviderId =
+    typeof params.realtime.provider === "string"
+      ? params.realtime.provider.trim() || undefined
+      : undefined;
+  const selectedProviderConfig = selectedProviderId
+    ? params.realtime.providers[selectedProviderId]
+    : undefined;
+  const activeProviderId = selectedProviderId
+    ? isRecord(selectedProviderConfig) && Object.hasOwn(selectedProviderConfig, "apiKey")
+      ? selectedProviderId
+      : canonicalizeRealtimeVoiceProviderId(selectedProviderId, params.context.sourceConfig)
+    : resolveAutoRealtimeProviderId({
+        providers: params.realtime.providers,
+        defaults: params.defaults,
+        context: params.context,
+      });
+  for (const [providerId, providerConfig] of Object.entries(params.realtime.providers)) {
+    if ((activeProviderId && providerId !== activeProviderId) || !isRecord(providerConfig)) {
+      continue;
+    }
+    collectSecretInputAssignment({
+      value: providerConfig.apiKey,
+      path: `${params.pathPrefix}.providers.${providerId}.apiKey`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      owner: {
+        ownerKind: "capability",
+        ownerId: `${params.pathPrefix}.providers.${providerId}`,
+        requiredForGateway: false,
+        disposition: "isolate",
+        contract: providerConfig,
+      },
+      apply: (value) => {
+        providerConfig.apiKey = value;
+      },
+    });
+  }
+}
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
@@ -156,4 +298,35 @@ export function collectRuntimeConfigAssignments(params: {
       enabled && isRecord(account.voice) && isEnabledFlag(account.voice),
     accountInactiveReason: "Discord account is disabled or voice is disabled for this account.",
   });
+  const rootVoice = discord.voice;
+  if (isRecord(rootVoice)) {
+    collectRealtimeProviderApiKeyAssignments({
+      realtime: rootVoice.realtime,
+      pathPrefix: "channels.discord.voice.realtime",
+      defaults: params.defaults,
+      context: params.context,
+      active:
+        isBaseFieldActiveForChannelSurface(surface, "voice") && isRealtimeVoiceEnabled(rootVoice),
+      inactiveReason:
+        "no enabled Discord surface inherits this top-level voice config, voice is disabled, or voice mode is stt-tts.",
+    });
+  }
+  if (!surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const { accountId, account, enabled } of surface.accounts) {
+    const accountVoice = account.voice;
+    if (!isRecord(accountVoice)) {
+      continue;
+    }
+    collectRealtimeProviderApiKeyAssignments({
+      realtime: accountVoice.realtime,
+      pathPrefix: `channels.discord.accounts.${accountId}.voice.realtime`,
+      defaults: params.defaults,
+      context: params.context,
+      active: enabled && isRealtimeVoiceEnabled(accountVoice),
+      inactiveReason:
+        "Discord account is disabled, voice is disabled, or voice mode is stt-tts for this account.",
+    });
+  }
 }

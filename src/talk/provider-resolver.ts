@@ -40,6 +40,8 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   defaultModel?: string;
   /** Runtime surface being selected. Defaults to the provider bridge path. */
   surface?: "browser-session" | "gateway-relay" | "bridge";
+  /** The host has resolved and authorized a canonical agent session for this launch. */
+  boundAgentSession?: boolean;
   noRegisteredProviderMessage?: string;
 };
 
@@ -72,7 +74,11 @@ export function isRealtimeVoiceProviderConfigured(params: {
   providerConfig: RealtimeVoiceProviderConfig;
   agentId?: string;
   surface?: "browser-session" | "gateway-relay" | "bridge";
+  boundAgentSession?: boolean;
 }): boolean {
+  if (params.provider.capabilities?.requiresBoundAgentSession && !params.boundAgentSession) {
+    return false;
+  }
   const internalConfigured =
     params.surface === "browser-session"
       ? isInternalRealtimeVoiceBrowserSessionConfigured(params)
@@ -128,6 +134,7 @@ export function resolveConfiguredRealtimeVoiceProvider(
         providerConfig,
         agentId: params.agentId,
         surface: params.surface,
+        boundAgentSession: params.boundAgentSession,
       }),
   });
 

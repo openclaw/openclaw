@@ -55,7 +55,7 @@ type EmbeddedRunContextWindowInfo = {
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
 
-type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
+type EmbeddedRunAttemptOperation = "attempt" | "realtime-voice" | "settled-tool-finalization";
 
 type EmbeddedRunAttemptToolTerminalObservation = {
   toolCallId?: string;

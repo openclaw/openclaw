@@ -292,6 +292,8 @@ type AgentHarnessRunCapability = {
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  /** Runs a transport-bound realtime voice session without synthesizing a text turn. */
+  runRealtimeVoiceSession?(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
   /**
    * Produces one final answer from a settled tool transcript without exposing
    * capabilities that can repeat or extend the completed work.

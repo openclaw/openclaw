@@ -177,6 +177,8 @@ export type ResolvedCodexPluginsPolicy = {
 
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
+  /** Confirms that env contains an explicitly selected realtime-only OpenAI API key. */
+  requiresRealtimeOpenAiApiKeyEnv?: boolean;
   homeScope?: CodexAppServerHomeScope;
   command: string;
   commandSource?: CodexAppServerCommandSource;

@@ -201,7 +201,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         })
       : undefined;
   const attemptParams: EmbeddedRunAttemptParams = {
-    operation: "attempt",
+    operation: params.realtimeVoice ? "realtime-voice" : "attempt",
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
     conversationRecall: params.conversationRecall,
@@ -260,6 +260,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       : {}),
     skillsSnapshot: params.skillsSnapshot,
     prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+    realtimeVoice: params.realtimeVoice,
     transcriptPrompt:
       pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
         ? preparedExecApprovalContinuation.prompt

@@ -69,6 +69,7 @@ export {
   resolveModelRefFromString,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "../agents/model-selection.js";
+export { resolveSessionModelRef } from "../agents/session-model-ref.js";
 
 export { EmbeddedBlockChunker } from "../agents/embedded-agent-block-chunker.js";
 export { formatReasoningMessage } from "../agents/embedded-agent-utils.js";

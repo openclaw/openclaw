@@ -46,6 +46,7 @@ export type VoiceRealtimeSpeakerTurn = {
 };
 
 export type VoiceRealtimeSession = {
+  acceptsSpeaker: (context: VoiceRealtimeSpeakerContext, userId: string) => boolean;
   beginSpeakerTurn: (
     context: VoiceRealtimeSpeakerContext,
     userId: string,
@@ -69,6 +70,7 @@ export type VoiceSessionEntry = {
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
+  requester?: { senderId: string; senderIsOwner: boolean };
   pendingRealtime?: VoiceRealtimeSession;
   realtime?: VoiceRealtimeSession;
   transcripts?: {

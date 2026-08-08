@@ -543,6 +543,52 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("injects only the explicitly selected OpenAI realtime key under subscription auth", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({
+      requiresRealtimeOpenAiApiKeyEnv: true,
+      env: { OPENAI_API_KEY: "selected-realtime-key" },
+      clearEnv: ["FOO"],
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai:default",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 24 * 60 * 60_000,
+          accountId: "account-123",
+        },
+      });
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          OPENAI_API_KEY: "selected-realtime-key",
+        },
+        clearEnv: ["FOO", "CODEX_API_KEY"],
+      });
+      expect(
+        resolveCodexAppServerSpawnEnv(
+          await bridgeCodexAppServerStartOptions({ startOptions, agentDir }),
+          { OPENAI_API_KEY: "unrelated-ambient-key" },
+        ),
+      ).toMatchObject({ OPENAI_API_KEY: "selected-realtime-key" });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears an inherited OpenAI API key for an explicit Codex OAuth profile", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({ clearEnv: ["FOO"] });
@@ -660,6 +706,65 @@ describe("bridgeCodexAppServerStartOptions", () => {
       }
     },
   );
+
+  it("injects the selected OpenAI realtime key for prepared subscription auth", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({
+      requiresRealtimeOpenAiApiKeyEnv: true,
+      env: { OPENAI_API_KEY: "selected-realtime-key" },
+      clearEnv: ["FOO"],
+    });
+    try {
+      const bridged = await bridgeCodexAppServerStartOptions({
+        startOptions,
+        agentDir,
+        authProfileId: "openai:prepared",
+        preparedAuth: {
+          kind: "profile",
+          profileId: "openai:prepared",
+          store: { version: 1, profiles: {} },
+        },
+      });
+      expect(bridged).toEqual({
+        ...startOptions,
+        args: EPHEMERAL_AUTH_ARGS,
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          OPENAI_API_KEY: "selected-realtime-key",
+        },
+        clearEnv: ["FOO", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+      });
+      expect(
+        resolveCodexAppServerSpawnEnv(bridged, {
+          CODEX_API_KEY: "ambient-codex-key",
+          OPENAI_API_KEY: "ambient-openai-key",
+          CODEX_ACCESS_TOKEN: "ambient-access-token",
+        }),
+      ).toMatchObject({ OPENAI_API_KEY: "selected-realtime-key" });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects prepared subscription realtime startup without a selected Platform key", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    try {
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions: createStartOptions({ requiresRealtimeOpenAiApiKeyEnv: true }),
+          agentDir,
+          authProfileId: "openai:prepared",
+          preparedAuth: {
+            kind: "profile",
+            profileId: "openai:prepared",
+            store: { version: 1, profiles: {} },
+          },
+        }),
+      ).rejects.toThrow("Codex realtime requires an explicitly selected OpenAI Platform API key");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
 
   it("maps a prepared API-key route to one closed auth handoff", async () => {
     await expect(

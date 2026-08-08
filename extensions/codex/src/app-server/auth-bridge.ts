@@ -89,9 +89,17 @@ export async function bridgeCodexAppServerStartOptions(params: {
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();
+    if (
+      params.startOptions.requiresRealtimeOpenAiApiKeyEnv &&
+      params.preparedAuth.kind === "profile"
+    ) {
+      assertSelectedRealtimeOpenAiApiKey(scopedStartOptions);
+    }
     return withClearedEnvironmentVariables(
       scopedStartOptions,
-      CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS,
+      params.startOptions.requiresRealtimeOpenAiApiKeyEnv && params.preparedAuth.kind === "profile"
+        ? [CODEX_API_KEY_ENV_VAR, CODEX_ACCESS_TOKEN_ENV_VAR]
+        : CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS,
     );
   }
   if (params.authProfileId === null) {
@@ -117,9 +125,25 @@ export async function bridgeCodexAppServerStartOptions(params: {
     store,
     authProfileId,
   });
+  if (shouldClearInheritedOpenAiApiKey && params.startOptions.requiresRealtimeOpenAiApiKeyEnv) {
+    assertSelectedRealtimeOpenAiApiKey(scopedStartOptions);
+  }
   return shouldClearInheritedOpenAiApiKey
-    ? withClearedEnvironmentVariables(scopedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
+    ? withClearedEnvironmentVariables(
+        scopedStartOptions,
+        params.startOptions.requiresRealtimeOpenAiApiKeyEnv
+          ? [CODEX_API_KEY_ENV_VAR]
+          : CODEX_APP_SERVER_API_KEY_ENV_VARS,
+      )
     : scopedStartOptions;
+}
+
+function assertSelectedRealtimeOpenAiApiKey(startOptions: CodexAppServerStartOptions): void {
+  if (!startOptions.env?.[OPENAI_API_KEY_ENV_VAR]?.trim()) {
+    throw new AgentHarnessPreflightError(
+      "Codex realtime requires an explicitly selected OpenAI Platform API key",
+    );
+  }
 }
 
 function assertNoUnimportedAgentCodexAuthFile(params: {

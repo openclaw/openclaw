@@ -93,6 +93,36 @@ describe("realtime voice bridge session runtime", () => {
     );
   });
 
+  it("passes the resolved agent session binding to the provider bridge", () => {
+    let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (nextRequest) => {
+        request = nextRequest;
+        return makeBridge();
+      },
+    };
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    expect(expectBridgeRequest(request)).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+    });
+  });
+
   it("passes the audio auto-response preference to the provider bridge", () => {
     let request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const provider: RealtimeVoiceProviderPlugin = {
@@ -204,6 +234,7 @@ describe("realtime voice bridge session runtime", () => {
       },
     };
     const onToolCall = vi.fn();
+    const onReady = vi.fn();
 
     const session = createRealtimeVoiceBridgeSession({
       provider,
@@ -212,6 +243,7 @@ describe("realtime voice bridge session runtime", () => {
       initialGreetingInstructions: "Say hello",
       triggerGreetingOnReady: true,
       onToolCall,
+      onReady,
     });
     const event = {
       itemId: "item-1",
@@ -221,9 +253,12 @@ describe("realtime voice bridge session runtime", () => {
     };
 
     callbacks?.onReady?.();
+    callbacks?.onReady?.();
     callbacks?.onToolCall?.(event);
 
+    expect(bridge["triggerGreeting"]).toHaveBeenCalledOnce();
     expect(bridge["triggerGreeting"]).toHaveBeenCalledWith("Say hello");
+    expect(onReady).toHaveBeenCalledTimes(2);
     expect(onToolCall).toHaveBeenCalledWith(event, session);
   });
 

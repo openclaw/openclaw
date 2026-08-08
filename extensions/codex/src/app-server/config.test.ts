@@ -9,6 +9,7 @@ import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
+  enableCodexRealtimeConversation,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -72,6 +73,66 @@ function expectRuntimePolicy(
 }
 
 describe("Codex app-server config", () => {
+  it("enables realtime conversation only for spawned app-server clients", () => {
+    const stdio = resolveRuntimeForTest();
+    const enabled = enableCodexRealtimeConversation(stdio);
+
+    expect(enabled.start.args).toEqual([
+      "app-server",
+      "--listen",
+      "stdio://",
+      "--enable",
+      "realtime_conversation",
+    ]);
+    expect(enabled.start.requiresRealtimeOpenAiApiKeyEnv).toBeUndefined();
+    expect(enabled.start.env?.OPENAI_API_KEY).toBeUndefined();
+    expect(enableCodexRealtimeConversation(enabled)).toBe(enabled);
+
+    const selectedV2 = enableCodexRealtimeConversation(stdio, {
+      version: "v2",
+      apiKey: "selected-platform-key",
+    });
+    expect(selectedV2.start).toMatchObject({
+      requiresRealtimeOpenAiApiKeyEnv: true,
+      env: { OPENAI_API_KEY: "selected-platform-key" },
+    });
+    expect(
+      enableCodexRealtimeConversation(selectedV2, {
+        version: "v2",
+        apiKey: "selected-platform-key",
+      }),
+    ).toBe(selectedV2);
+    expect(() => enableCodexRealtimeConversation(stdio, { version: "v2" })).toThrow(
+      "Codex realtime V1/V2 requires an explicitly selected OpenAI Platform API key",
+    );
+    expect(() => enableCodexRealtimeConversation(stdio, { version: "v4" })).toThrow(
+      'Codex realtime version must be "v1", "v2", or "v3"',
+    );
+
+    const websocket = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+    });
+    const unix = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "unix",
+          homeScope: "user",
+          url: "unix:///tmp/openclaw-codex.sock",
+        },
+      },
+    });
+    for (const remote of [websocket, unix]) {
+      expect(() =>
+        enableCodexRealtimeConversation(remote, { version: "v2", apiKey: "unused" }),
+      ).toThrow("Codex realtime requires app-server.transport=stdio");
+    }
+  });
+
   it("only auto-approves app-server approvals for full yolo runtime policy", () => {
     expect(
       shouldAutoApproveCodexAppServerApprovals({
