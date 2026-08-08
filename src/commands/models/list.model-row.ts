@@ -9,11 +9,20 @@ export type ListRowModel = {
   name: string;
   provider: string;
   api?: string | null;
-  input?: Array<"text" | "image" | "document">;
+  input?: Array<"text" | "image" | "video" | "document">;
   baseUrl?: string;
   contextWindow?: number | null;
   contextTokens?: number | null;
 };
+
+/** Keeps executable inputs and document metadata visible without promoting audio. */
+export function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
+  const parsed = input?.filter(
+    (item): item is NonNullable<ListRowModel["input"]>[number] =>
+      item === "text" || item === "image" || item === "video" || item === "document",
+  );
+  return parsed?.length ? parsed : ["text"];
+}
 
 /** Builds a display row, preserving configured tags and alias metadata. */
 export function toModelRow(params: {

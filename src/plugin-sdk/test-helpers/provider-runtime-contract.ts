@@ -45,7 +45,8 @@ function createManifestModelFactory(providerId: string, catalog: unknown) {
       throw new Error(`Missing ${providerId} manifest model ${modelId}`);
     }
     const input = model.input.filter(
-      (item): item is "text" | "image" => item === "text" || item === "image",
+      (item): item is ProviderRuntimeModel["input"][number] =>
+        item === "text" || item === "image" || item === "video",
     );
     if (input.length !== model.input.length) {
       throw new Error(`Unsupported ${providerId} manifest model input for ${modelId}`);

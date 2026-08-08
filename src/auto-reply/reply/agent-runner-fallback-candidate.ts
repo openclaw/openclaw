@@ -219,7 +219,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           fastModeAutoProgressState,
           bootstrapContextRunKind,
           bootstrapPromptWarningSignaturesSeen: params.state.bootstrapPromptWarningSignaturesSeen,
-          currentTurnImages: params.currentTurnImages,
+          currentTurnMedia: params.currentTurnMedia,
           signalExecutionPhaseForTyping: params.signalExecutionPhaseForTyping,
           notifyAgentRunStart: params.notifyAgentRunStart,
           preserveProgressCallbackStartOrder,

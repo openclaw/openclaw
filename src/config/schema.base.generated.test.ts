@@ -121,6 +121,25 @@ describe("base config schema", () => {
     );
   });
 
+  it("publishes native video among configured model input modalities", () => {
+    const inputItem = schemaAt(BASE_SCHEMA, [
+      "models",
+      "providers",
+      "*",
+      "models",
+      "[]",
+      "input",
+      "[]",
+    ]);
+    const modalities = inputItem?.enum ?? inputItem?.anyOf?.map((branch) => branch.const);
+
+    expect(modalities).toEqual(["text", "image", "video", "audio"]);
+    expect(BASE_CONFIG_SCHEMA.uiHints["models.providers.*.models[].input"]).toMatchObject({
+      label: "Model Input Modalities",
+      help: expect.stringContaining('"video"'),
+    });
+  });
+
   it("omits legacy compatibility paths from the public schema payload", () => {
     const rootProperties = (
       BASE_CONFIG_SCHEMA.schema as {

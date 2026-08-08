@@ -5,7 +5,10 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
-import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
+import {
+  canonicalizePersistedUserMessageMedia,
+  readPersistedMediaFacts,
+} from "../../media/media-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   TranscriptEvent,
@@ -612,8 +615,64 @@ function canonicalizeTranscriptEventMedia(event: TranscriptEvent): TranscriptEve
   ) {
     return event;
   }
-  const canonical = canonicalizePersistedUserMessageMedia(message);
-  return canonical.changed ? { ...record, message: canonical.message } : event;
+  const persistedMessage = projectTranscriptUserVideoContent(message);
+  const canonical = canonicalizePersistedUserMessageMedia(persistedMessage);
+  return persistedMessage !== message || canonical.changed
+    ? { ...record, message: canonical.message }
+    : event;
+}
+
+function projectTranscriptUserVideoContent(message: object): object {
+  const record = message as Record<string, unknown>;
+  if (record.role !== "user" || !Array.isArray(record.content)) {
+    return message;
+  }
+
+  const durableVideoFacts = (readPersistedMediaFacts(message) ?? []).filter(
+    (fact) =>
+      fact.kind === "video" && Boolean(fact.path || fact.url?.startsWith("media://inbound/")),
+  );
+  if (durableVideoFacts.length === 0) {
+    return message;
+  }
+
+  const content = record.content.filter((block) => {
+    if (typeof block !== "object" || block === null || Array.isArray(block)) {
+      return true;
+    }
+    const candidate = block as { mimeType?: unknown; type?: unknown };
+    if (candidate.type !== "video") {
+      return true;
+    }
+    const mimeType = typeof candidate.mimeType === "string" ? candidate.mimeType : undefined;
+    const factIndex = durableVideoFacts.findIndex(
+      (fact) => !mimeType || !fact.contentType || fact.contentType === mimeType,
+    );
+    if (factIndex < 0) {
+      return true;
+    }
+    durableVideoFacts.splice(factIndex, 1);
+    return false;
+  });
+  if (content.length === record.content.length) {
+    return message;
+  }
+
+  // The session manager retains the original inline blocks for the live model;
+  // SQLite stores only claim checks so attachment TTL can actually erase bytes.
+  const onlyBlock = content[0];
+  const persistedContent =
+    content.length === 0
+      ? ""
+      : content.length === 1 &&
+          typeof onlyBlock === "object" &&
+          onlyBlock !== null &&
+          !Array.isArray(onlyBlock) &&
+          (onlyBlock as { type?: unknown }).type === "text" &&
+          typeof (onlyBlock as { text?: unknown }).text === "string"
+        ? (onlyBlock as { text: string }).text
+        : content;
+  return { ...record, content: persistedContent };
 }
 
 export function readMessageIdempotencyKey(message: unknown): string | null {
@@ -643,9 +702,11 @@ export function redactTranscriptMessageForStorage<TMessage>(
   message: TMessage,
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "config">,
 ): TMessage {
-  return isTranscriptAgentMessage(message)
-    ? (redactTranscriptMessage(message, options.config) as TMessage)
-    : redactSecrets(message);
+  if (!isTranscriptAgentMessage(message)) {
+    return redactSecrets(message);
+  }
+  const persistedMessage = projectTranscriptUserVideoContent(message) as AgentMessage;
+  return redactTranscriptMessage(persistedMessage, options.config) as TMessage;
 }
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {

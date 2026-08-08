@@ -236,7 +236,7 @@ Generation and description.
 openclaw infer video generate --prompt "cinematic sunset over the ocean" --json
 openclaw infer video generate --prompt "slow drone shot over a forest lake" --resolution 768P --duration 6 --json
 openclaw infer video describe --file ./clip.mp4 --json
-openclaw infer video describe --file ./clip.mp4 --model openai/gpt-5.4-mini --json
+openclaw infer video describe --file ./clip.mp4 --model moonshot/kimi-k3 --json
 ```
 
 Notes:
@@ -244,7 +244,8 @@ Notes:
 - `video generate` accepts `--size`, `--aspect-ratio`, `--resolution`, `--duration`, `--audio`, `--watermark`, and `--timeout-ms`, forwarded to the video-generation runtime.
 - Provider-hosted video downloads reject empty, text, and JSON responses instead of reporting an unusable file as successful output.
 - With `--output`, URL-backed video streams to a sibling temporary file and replaces the destination only after the complete non-empty download succeeds; a failed stream leaves an existing destination unchanged.
-- `--model` must be `<provider/model>` for `video describe`.
+- `--model` must be `<provider/model>` for `video describe`, and the selected provider must register video understanding. Supported description providers include Google, Moonshot, Qwen, and Z.AI; OpenAI models do not become video-description providers merely because they support image input.
+- `video describe` always produces a standalone description. Native video attachments in an agent conversation instead go directly to a compatible selected reply model.
 
 ## Web
 

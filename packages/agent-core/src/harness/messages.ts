@@ -1,5 +1,5 @@
 // Agent Core module implements messages behavior.
-import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
+import type { Message, ModelInputContent } from "@openclaw/llm-core";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -119,7 +119,7 @@ export function createCompactionSummaryMessage(
 /** Build a custom transcript message that can be shown and replayed into context. */
 export function createCustomMessage(
   customType: string,
-  content: string | (TextContent | ImageContent)[],
+  content: string | ModelInputContent[],
   display: boolean,
   details: unknown,
   timestamp: string,

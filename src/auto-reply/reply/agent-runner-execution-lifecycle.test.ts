@@ -51,6 +51,30 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 
+  it("preserves ordered native video and image payloads through embedded fallback execution", async () => {
+    const video = { type: "video" as const, data: "video", mimeType: "video/mp4" };
+    const image = { type: "image" as const, data: "image", mimeType: "image/png" };
+    const followupRun = createFollowupRun();
+    followupRun.inputMedia = [video, image];
+    followupRun.images = [image];
+    followupRun.imageOrder = ["inline"];
+    followupRun.media = [
+      { path: "/tmp/clip.mp4", kind: "video", contentType: "video/mp4" },
+      { path: "/tmp/photo.png", kind: "image", contentType: "image/png" },
+    ];
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
+      inputMedia: [video, image],
+      images: [image],
+      imageOrder: ["inline"],
+      media: followupRun.media,
+    });
+  });
+
   it("records diagnostic progress from global-lane wait notifications", async () => {
     const replyOperation = createReplyOperation({
       sessionKey: "agent:main:global-lane-progress",
@@ -455,13 +479,13 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         content: [{ type: "text", text: "still pending" }],
       },
     );
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image"));
+    state.resolveCurrentTurnInputMediaMock.mockRejectedValueOnce(new Error("invalid image"));
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     await expect(executeAgentTurn(createMinimalRunAgentTurnParams())).rejects.toThrow(
       "invalid image",
     );
-    state.resolveCurrentTurnImagesMock.mockResolvedValueOnce({});
+    state.resolveCurrentTurnInputMediaMock.mockResolvedValueOnce({});
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       params.onExecutionPhase?.({ phase: "model_call_started" });
       return { payloads: [{ text: "ok" }], meta: {} };
@@ -510,6 +534,61 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       model: "gpt-5.4",
       clientCaps: ["tool-events", "inline-widgets"],
       media: followupRun.media,
+    });
+  });
+
+  it.each([
+    {
+      name: "native video input",
+      inputMedia: [{ type: "video" as const, data: "video", mimeType: "video/mp4" }],
+      media: undefined,
+      omitted: true,
+    },
+    {
+      name: "an unsuppressed video fact",
+      inputMedia: undefined,
+      media: [{ path: "/tmp/clip.mp4", contentType: "video/mp4" }],
+      omitted: true,
+    },
+    {
+      name: "an already-described video fact",
+      inputMedia: undefined,
+      media: [
+        {
+          path: "/tmp/clip.mp4",
+          contentType: "video/mp4",
+          hydrationSuppressed: true,
+        },
+      ],
+      omitted: false,
+    },
+  ])("makes CLI fallback handling explicit for $name", async (testCase) => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "ok" }], meta: {} });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    followupRun.inputMedia = testCase.inputMedia;
+    followupRun.media = testCase.media;
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      commandBody: "describe this clip",
+      transcriptCommandBody: "describe this clip",
+    });
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      prompt: testCase.omitted
+        ? "describe this clip\n\n(video omitted: model does not support videos)"
+        : "describe this clip",
+      transcriptPrompt: "describe this clip",
     });
   });
 
@@ -589,7 +668,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     const agentRunRegistry = await import("../../infra/agent-run-registry.js");
     const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
     let resolveImages: (() => void) | undefined;
-    state.resolveCurrentTurnImagesMock.mockImplementationOnce(
+    state.resolveCurrentTurnInputMediaMock.mockImplementationOnce(
       () =>
         new Promise<Record<string, never>>((resolve) => {
           resolveImages = () => resolve({});
@@ -619,7 +698,9 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   it("clears run ownership when image preflight fails", async () => {
     const agentRunRegistry = await import("../../infra/agent-run-registry.js");
     const clearAgentRunContext = vi.mocked(agentRunRegistry.clearAgentRunContext);
-    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+    state.resolveCurrentTurnInputMediaMock.mockRejectedValueOnce(
+      new Error("invalid image metadata"),
+    );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     await expect(

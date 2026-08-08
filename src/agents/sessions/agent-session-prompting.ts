@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { ImageContent, TextContent } from "../../llm/types.js";
+import type { MediaContent, ModelInputContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
@@ -85,21 +85,20 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return this.agent.hasQueuedMessages() ? "continue" : "settled";
   }
 
-  private createUserContent(
-    text: string,
-    images?: ImageContent[],
-  ): Array<TextContent | ImageContent> {
-    return [{ type: "text", text }, ...(images ?? [])];
+  private createUserContent(text: string, media?: MediaContent[]): ModelInputContent[] {
+    return [{ type: "text", text }, ...(media ?? [])];
   }
 
-  private createUserMessage(text: string, images?: ImageContent[]): PersistedUserTurnMessage {
+  private createUserMessage(text: string, media?: MediaContent[]): PersistedUserTurnMessage {
     const message = {
       role: "user",
-      content: this.createUserContent(text, images),
+      content: this.createUserContent(text, media),
       timestamp: Date.now(),
     } satisfies PersistedUserTurnMessage;
-    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
-    return imageFactIndexes
+    const imageFactIndexes = readRuntimePromptImageFactIndexes(media)?.filter(
+      (_factIndex, index) => media?.[index]?.type === "image",
+    );
+    return imageFactIndexes?.length
       ? ({
           ...message,
           __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes },
@@ -135,11 +134,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
       // Emit input event for extension interception (before skill/template expansion)
       let currentText = text;
-      let currentImages = options?.images;
+      let currentMedia = options?.media ?? options?.images;
       if (this.currentExtensionRunner.hasHandlers("input")) {
         const inputResult = await this.currentExtensionRunner.emitInput(
           currentText,
-          currentImages,
+          currentMedia,
           options?.source ?? "interactive",
         );
         if (inputResult.action === "handled") {
@@ -148,7 +147,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         }
         if (inputResult.action === "transform") {
           currentText = inputResult.text;
-          currentImages = inputResult.images ?? currentImages;
+          currentMedia = inputResult.media ?? currentMedia;
         }
       }
 
@@ -167,9 +166,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
           );
         }
         if (options.streamingBehavior === "followUp") {
-          await this.queueFollowUp(expandedText, currentImages);
+          await this.queueFollowUp(expandedText, currentMedia);
         } else {
-          await this.queueSteer(expandedText, currentImages);
+          await this.queueSteer(expandedText, currentMedia);
         }
         preflightResult?.(true);
         return;
@@ -206,7 +205,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       messages = [];
 
       // Add user message
-      messages.push(this.createUserMessage(expandedText, currentImages));
+      messages.push(this.createUserMessage(expandedText, currentMedia));
 
       // Inject any pending "nextTurn" messages as context alongside the user message
       for (const msg of this.pendingNextTurnMessages) {
@@ -217,7 +216,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       // Emit before_agent_start extension event
       const result = await this.currentExtensionRunner.emitBeforeAgentStart(
         expandedText,
-        currentImages,
+        currentMedia,
         this.baseSystemPrompt,
         this.baseSystemPromptOptions,
       );
@@ -327,15 +326,15 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Delivered after the current assistant turn finishes executing its tool calls,
    * before the next LLM call.
    * Expands skill commands and prompt templates. Errors on extension commands.
-   * @param images Optional image attachments to include with the message
+   * @param inputMedia Optional native image and video attachments
    * @param userTurnTranscriptRecorder Prepared channel fields for transcript-only persistence
    * @throws Error if text is an extension command
    */
   async steer(
     text: string,
-    images?: ImageContent[],
+    inputMedia?: MediaContent[],
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
+    mediaFacts?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
   ): Promise<void> {
@@ -351,11 +350,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
     await this.queueSteer(
       expandedText,
-      images,
+      inputMedia,
       preparedMessage && userTurnTranscriptRecorder
         ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
         : undefined,
-      media,
+      mediaFacts,
       imageOrder,
       queueIdentity,
     );
@@ -365,10 +364,10 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Queue a follow-up message to be processed after the agent finishes.
    * Delivered only when agent has no more tool calls or steering messages.
    * Expands skill commands and prompt templates. Errors on extension commands.
-   * @param images Optional image attachments to include with the message
+   * @param media Optional native image and video attachments
    * @throws Error if text is an extension command
    */
-  async followUp(text: string, images?: ImageContent[]): Promise<void> {
+  async followUp(text: string, media?: MediaContent[]): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
@@ -378,7 +377,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     let expandedText = this.expandSkillCommand(text);
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-    await this.queueFollowUp(expandedText, images);
+    await this.queueFollowUp(expandedText, media);
   }
 
   /**
@@ -386,20 +385,20 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    */
   private async queueSteer(
     text: string,
-    images?: ImageContent[],
+    inputMedia?: MediaContent[],
     transcriptContext?: {
       message: PersistedUserTurnMessage;
       recorder: UserTurnTranscriptRecorder;
     },
-    media?: MediaFact[],
+    mediaFacts?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
   ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
-    const runtimeMessage = this.createUserMessage(text, images);
-    const promptMessage = media?.length
-      ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
+    const runtimeMessage = this.createUserMessage(text, inputMedia);
+    const promptMessage = mediaFacts?.length
+      ? attachRuntimePromptMediaFacts(runtimeMessage, mediaFacts, imageOrder)
       : runtimeMessage;
     setSteeringMessageIdentity(promptMessage, queueIdentity);
     this.agent.steer(
@@ -412,12 +411,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   /**
    * Internal: Queue a follow-up message (already expanded, no extension command check).
    */
-  private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+  private async queueFollowUp(text: string, media?: MediaContent[]): Promise<void> {
     this.followUpMessages.push(text);
     this.emitQueueUpdate();
     this.agent.followUp({
       role: "user",
-      content: this.createUserContent(text, images),
+      content: this.createUserContent(text, media),
       timestamp: Date.now(),
     });
   }
@@ -492,28 +491,28 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @param options.deliverAs Delivery mode when streaming: "steer" or "followUp"
    */
   async sendUserMessage(
-    content: string | (TextContent | ImageContent)[],
+    content: string | ModelInputContent[],
     options?: { deliverAs?: "steer" | "followUp" },
   ): Promise<void> {
-    // Normalize content to text string + optional images
+    // Normalize text separately while preserving the relative order of all native media.
     let text: string;
-    let images: ImageContent[] | undefined;
+    let media: MediaContent[] | undefined;
 
     if (typeof content === "string") {
       text = content;
     } else {
       const textParts: string[] = [];
-      images = [];
+      media = [];
       for (const part of content) {
         if (part.type === "text") {
           textParts.push(part.text);
         } else {
-          images.push(part);
+          media.push(part);
         }
       }
       text = textParts.join("\n");
-      if (images.length === 0) {
-        images = undefined;
+      if (media.length === 0) {
+        media = undefined;
       }
     }
 
@@ -521,7 +520,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     await this.prompt(text, {
       expandPromptTemplates: false,
       streamingBehavior: options?.deliverAs,
-      images,
+      media,
       source: "extension",
     });
   }

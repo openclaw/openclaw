@@ -51,4 +51,19 @@ describe("live discovery unknown-model gate", () => {
     const ids = buildOpenAICompatibleLiveModels(rows, fallback, () => true).map((m) => m.id);
     expect(ids).toEqual(["brand-new-model", "known-model"]);
   });
+
+  it("preserves supported native video input without advertising unsupported audio", () => {
+    const [model] = buildOpenAICompatibleLiveModels(
+      [
+        {
+          id: "brand-new-multimodal-model",
+          object: "model",
+          input_modalities: ["text", "image", "audio", "video"],
+        },
+      ],
+      { ...fallback, api: "openai-completions" },
+    );
+
+    expect(model?.input).toEqual(["text", "image", "video"]);
+  });
 });

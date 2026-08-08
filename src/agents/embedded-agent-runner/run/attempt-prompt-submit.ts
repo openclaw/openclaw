@@ -2,7 +2,7 @@
  * Submits one prepared prompt while owning provider transforms and cleanup.
  */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { ImageContent } from "../../../llm/types.js";
+import type { MediaContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { ackPendingAgentSteeringItems } from "../../subagent-registry.js";
@@ -36,7 +36,7 @@ type PromptSubmissionSession = {
 type PromptActiveSession = (
   prompt: string,
   options?: {
-    images?: ImageContent[];
+    media?: MediaContent[];
     preflightResult?: (submitted: boolean) => void;
   },
 ) => Promise<void>;
@@ -53,7 +53,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   activeSession: PromptSubmissionSession;
   appendContext?: string;
   contextTokenBudget: number;
-  images: ImageContent[];
+  inputMedia: MediaContent[];
   leasedSteering?: SteeringLease;
   modelPrompt: string;
   onFinalPromptText: (prompt: string) => void;
@@ -116,7 +116,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     prompt: input.modelPrompt,
     systemPrompt: input.systemPrompt,
     messages: activeSession.messages,
-    imagesCount: input.images.length,
+    imagesCount: input.inputMedia.filter((part) => part.type === "image").length,
+    videosCount: input.inputMedia.filter((part) => part.type === "video").length,
   });
   updateActiveEmbeddedRunSnapshot(attempt.sessionId, {
     transcriptLeafId: input.transcriptLeafId,
@@ -151,7 +152,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       });
       try {
         await input.promptActiveSession(input.transcriptPrompt, {
-          ...(input.images.length > 0 ? { images: input.images } : {}),
+          ...(input.inputMedia.length > 0 ? { media: input.inputMedia } : {}),
           preflightResult: armModelPromptTransform,
         });
       } finally {

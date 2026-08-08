@@ -256,6 +256,7 @@ describe("rewindChatHistory", () => {
         editorText: "edit this",
         editorAttachments: [
           { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "video/mp4", data: "dmlkZW8=" },
           { mimeType: "application/pdf", data: "aW1hZ2U=" },
           { mimeType: "image/png", data: "not base64!!" },
           { mimeType: "image/png", data: "A" },
@@ -285,6 +286,7 @@ describe("rewindChatHistory", () => {
       editorText: "edit this",
       editorAttachments: [
         { mimeType: "image/png", data: "aW1hZ2U=" },
+        { mimeType: "video/mp4", data: "dmlkZW8=" },
         { mimeType: "application/pdf", data: "aW1hZ2U=" },
         { mimeType: "image/png", data: "not base64!!" },
         { mimeType: "image/png", data: "A" },
@@ -296,6 +298,11 @@ describe("rewindChatHistory", () => {
         id: expect.stringMatching(/^att-/),
         mimeType: "image/png",
         dataUrl: "data:image/png;base64,aW1hZ2U=",
+      },
+      {
+        id: expect.stringMatching(/^att-/),
+        mimeType: "video/mp4",
+        dataUrl: "data:video/mp4;base64,dmlkZW8=",
       },
     ]);
     expect(state.chatAttachments[0]?.id).not.toBe("old");

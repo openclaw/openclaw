@@ -1,4 +1,4 @@
-import type { ImageContent, Model } from "../../llm/types.js";
+import type { ImageContent, MediaContent, Model } from "../../llm/types.js";
 import type {
   Agent,
   AgentEvent,
@@ -97,7 +97,9 @@ export interface ExtensionBindings {
 export interface PromptOptions {
   /** Expand file-based prompt templates. Defaults to true. */
   expandPromptTemplates?: boolean;
-  /** Image attachments. */
+  /** Native image and video attachments for the selected model. */
+  media?: MediaContent[];
+  /** @deprecated Use media. Retained for the released session SDK contract. */
   images?: ImageContent[];
   /** Queue behavior when an agent is already streaming. */
   streamingBehavior?: "steer" | "followUp";

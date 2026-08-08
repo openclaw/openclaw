@@ -564,6 +564,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.request.tls.insecureSkipVerify": "Model Provider Request TLS Skip Verify",
   "models.providers.*.request.allowPrivateNetwork": "Model Provider Request Allow Private Network",
   "models.providers.*.models": "Model Provider Model List",
+  "models.providers.*.models[].input": "Model Input Modalities",
   "models.providers.*.models[].agentRuntime": "Model Runtime",
   "models.providers.*.models[].agentRuntime.id": "Model Runtime ID",
   "models.providers.*.models[].mediaInput": "Model Media Input",

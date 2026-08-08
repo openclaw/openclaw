@@ -454,6 +454,48 @@ describe("ClawRouter plugin", () => {
     expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
   });
 
+  it("retains catalog-declared native video when preparing dynamic routed models", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "resolved-proxy-key",
+      mode: "api-key",
+      source: "auth profile",
+    });
+    const catalog = structuredClone(LIVE_CATALOG);
+    const catalogProvider = catalog.providers[0]!;
+    catalogProvider.id = "moonshot";
+    catalogProvider.displayName = "Moonshot";
+    catalogProvider.nativeBaseUrl = "/v1/native/moonshot";
+    const catalogModel = catalogProvider.models[0]!;
+    catalogModel.id = "moonshot/kimi-k3";
+    catalogModel.upstream = "kimi-k3";
+    catalogModel.capabilities = ["llm.chat"];
+    Object.assign(catalogModel, { input_modalities: ["text", "image", "video", "audio"] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(catalog)),
+    );
+    const provider = await registerSingleProviderPlugin(plugin);
+    const context = {
+      config: { models: {} },
+      agentDir: "/agent",
+      workspaceDir: "/workspace",
+      provider: "clawrouter",
+      modelId: "moonshot/kimi-k3",
+      modelRegistry: { find: vi.fn(() => null) },
+      authProfileId: "clawrouter-profile",
+      authProfileMode: "api_key",
+    };
+
+    await provider?.prepareDynamicModel?.(context as never);
+
+    expect(provider?.resolveDynamicModel?.(context as never)).toMatchObject({
+      id: "moonshot/kimi-k3",
+      provider: "clawrouter",
+      api: "openai-completions",
+      input: ["text", "image", "video"],
+    });
+  });
+
   it("keeps discovered models isolated to their plugin registration", async () => {
     providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
       apiKey: "resolved-proxy-key",

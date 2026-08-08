@@ -617,6 +617,7 @@ export function normalizeClaudeCliStreamJsonRecord(
       }
       if (
         block.type !== "image" &&
+        block.type !== "video" &&
         !(block.type === "document" && block.source.media_type === "application/pdf")
       ) {
         continue;

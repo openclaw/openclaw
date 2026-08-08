@@ -235,15 +235,27 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-const IMAGE_BLOCK_CHARS = 4800;
+const MEDIA_BLOCK_CHARS = 4800;
+const VIDEO_BYTES_PER_TOKEN = 512;
+const MAX_VIDEO_BLOCK_TOKENS = 32_768;
 
 function countContentBlockChars(
-  content: Array<{ type: string; content?: unknown; text?: string }>,
+  content: Array<{ type: string; content?: unknown; data?: string; text?: string }>,
 ): number {
   let chars = 0;
   for (const block of content) {
     if (block.type === "image") {
-      chars += IMAGE_BLOCK_CHARS;
+      chars += MEDIA_BLOCK_CHARS;
+    } else if (block.type === "video") {
+      const data = block.data ?? "";
+      const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+      const decodedBytes = Math.max(0, Math.floor((data.length * 3) / 4) - padding);
+      // Video consumes visual context, but its opaque base64 is never model text.
+      const estimatedTokens = Math.min(
+        MAX_VIDEO_BLOCK_TOKENS,
+        Math.ceil(decodedBytes / VIDEO_BYTES_PER_TOKEN),
+      );
+      chars += Math.max(MEDIA_BLOCK_CHARS, estimatedTokens * CHARS_PER_TOKEN_ESTIMATE);
     } else {
       chars += estimateStringChars(getCompactionContentBlockText(block));
     }

@@ -46,6 +46,7 @@ function scanResult(overrides: Partial<ModelScanResult> = {}): ModelScanResult {
     maxCompletionTokens: 8192,
     supportedParametersCount: 2,
     supportsToolsMeta: true,
+    input: ["text"],
     modality: "text",
     inferredParamB: 70,
     createdAtMs: 1_700_000_000_000,

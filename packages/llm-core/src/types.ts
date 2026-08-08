@@ -257,6 +257,19 @@ export interface ImageContent {
   mimeType: string; // e.g., "image/jpeg", "image/png"
 }
 
+/** Base64 video content block with MIME type metadata. */
+export interface VideoContent {
+  type: "video";
+  data: string; // base64 encoded video data
+  mimeType: string; // e.g., "video/mp4", "video/webm"
+}
+
+/** Inline media content accepted by a compatible multimodal model. */
+export type MediaContent = ImageContent | VideoContent;
+
+/** Normalized text or inline media content carried by model input messages. */
+export type ModelInputContent = TextContent | MediaContent;
+
 /** Normalized assistant tool call emitted by providers or repaired from text. */
 export interface ToolCall {
   type: "toolCall";
@@ -299,7 +312,7 @@ export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
-  content: string | (TextContent | ImageContent)[];
+  content: string | ModelInputContent[];
   timestamp: number; // Unix timestamp in milliseconds
   /**
    * Marks a user message that carries transient current-turn runtime context
@@ -337,7 +350,7 @@ export interface ToolResultMessage<TDetails = unknown> {
   role: "toolResult";
   toolCallId: string;
   toolName: string;
-  content: (TextContent | ImageContent)[]; // Supports text and images
+  content: ModelInputContent[];
   details?: TDetails;
   isError: boolean;
   timestamp: number; // Unix timestamp in milliseconds
@@ -629,7 +642,7 @@ export interface Model<TApi extends Api = Api> {
    * Missing keys use provider defaults. null marks a level as unsupported.
    */
   thinkingLevelMap?: ThinkingLevelMap;
-  input: ("text" | "image")[];
+  input: ("text" | "image" | "video")[];
   cost: {
     input: number; // $/million tokens
     output: number; // $/million tokens
@@ -675,6 +688,7 @@ export interface ImagesModel<TApi extends ImagesApi = ImagesApi> extends Omit<
 > {
   api: TApi;
   provider: ImagesProvider;
+  input: ("text" | "image")[];
   output: ("text" | "image")[];
 }
 

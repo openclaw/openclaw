@@ -5,9 +5,10 @@ export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
   imageCount: number;
+  videoCount?: number;
   runtimeOnly?: boolean;
 }): PromptSubmissionSkipReason | null {
-  if (params.prompt.trim().length > 0 || params.imageCount > 0) {
+  if (params.prompt.trim().length > 0 || params.imageCount > 0 || (params.videoCount ?? 0) > 0) {
     return null;
   }
   return params.messages.some(hasVisiblePromptHistory)
@@ -36,6 +37,9 @@ function hasNonEmptyContent(content: unknown): boolean {
   if (!content || typeof content !== "object") {
     return false;
   }
-  const record = content as { text?: unknown; content?: unknown };
+  const record = content as { type?: unknown; text?: unknown; content?: unknown; data?: unknown };
+  if ((record.type === "image" || record.type === "video") && typeof record.data === "string") {
+    return record.data.length > 0;
+  }
   return hasNonEmptyContent(record.text) || hasNonEmptyContent(record.content);
 }

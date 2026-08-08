@@ -475,6 +475,36 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(8192);
   });
 
+  it("preserves native video inputs while normalizing configured provider models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "google/gemini-3-pro-preview",
+                name: "Gemini via proxy",
+                reasoning: false,
+                input: ["text", "image", "video", "audio"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const model = applyModelDefaults(cfg).models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.id).toBe("google/gemini-3.1-pro-preview");
+    expect(model?.input).toEqual(["text", "image", "video", "audio"]);
+    expect(model?.maxTokens).toBe(32_768);
+  });
+
   it("clamps maxTokens to contextWindow", () => {
     const cfg = buildProxyProviderConfig({ contextWindow: 32768, maxTokens: 40960 });
 

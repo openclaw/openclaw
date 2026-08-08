@@ -169,7 +169,10 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   provider: string;
   model: string;
 } {
-  if (params.images?.length || params.imageOrder?.length) {
+  if (params.inputMedia?.some((part) => part.type === "video")) {
+    throw new Error("Cloud worker turns do not yet support current-turn video input");
+  }
+  if (params.inputMedia?.length || params.images?.length || params.imageOrder?.length) {
     throw new Error("Cloud worker turns do not yet support current-turn image input");
   }
   if (params.clientTools?.length) {

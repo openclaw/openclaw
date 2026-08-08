@@ -290,13 +290,18 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
 
 function collectQueuedPromptMedia(
   items: FollowupRun[],
-): Pick<FollowupRun, "images" | "imageOrder" | "media"> {
+): Pick<FollowupRun, "images" | "inputMedia" | "imageOrder" | "media"> {
   const images: NonNullable<FollowupRun["images"]> = [];
+  const inputMedia: NonNullable<FollowupRun["inputMedia"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
   const media: NonNullable<FollowupRun["media"]> = [];
   for (const item of items) {
     if (item.images) {
       images.push(...item.images);
+    }
+    const itemInputMedia = item.inputMedia ?? item.images;
+    if (itemInputMedia) {
+      inputMedia.push(...itemInputMedia);
     }
     if (item.imageOrder) {
       imageOrder.push(...item.imageOrder);
@@ -307,6 +312,7 @@ function collectQueuedPromptMedia(
   }
   return {
     ...(images.length > 0 ? { images } : {}),
+    ...(inputMedia.length > 0 ? { inputMedia } : {}),
     ...(imageOrder.length > 0 ? { imageOrder } : {}),
     ...(media.length > 0 ? { media } : {}),
   };
@@ -902,6 +908,9 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    images: source.images,
+    inputMedia: source.inputMedia,
+    imageOrder: source.imageOrder,
     media: source.media,
     messageId: source.messageId,
     summaryLine: source.summaryLine,

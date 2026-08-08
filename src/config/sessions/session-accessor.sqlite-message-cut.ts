@@ -531,7 +531,7 @@ function extractEditorText(content: unknown): string | undefined {
   return text || undefined;
 }
 
-// Gateway-written inline images are already size-capped at send time; these bounds
+// Gateway-written inline media are already size-capped at send time; these bounds
 // only keep a corrupted transcript from ballooning the rewind/fork response.
 const EDITOR_ATTACHMENT_LIMIT = 10;
 const EDITOR_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
@@ -544,12 +544,12 @@ function extractEditorAttachments(
   }
   const attachments = content.flatMap((block) => {
     const record = asRecord(block);
-    return record?.type === "image" &&
+    return (record?.type === "image" || record?.type === "video") &&
       typeof record.data === "string" &&
       record.data.trim() &&
       record.data.length <= EDITOR_ATTACHMENT_MAX_BASE64_CHARS &&
       typeof record.mimeType === "string" &&
-      record.mimeType.startsWith("image/")
+      record.mimeType.startsWith(`${record.type}/`)
       ? [{ mimeType: record.mimeType, data: record.data }]
       : [];
   });
@@ -567,7 +567,9 @@ function extractEditorMediaRefs(
     const record = asRecord(entry);
     const mediaPath = typeof record?.path === "string" ? record.path.trim() : "";
     const contentType = record?.contentType;
-    return mediaPath && typeof contentType === "string" && contentType.startsWith("image/")
+    return mediaPath &&
+      typeof contentType === "string" &&
+      (contentType.startsWith("image/") || contentType.startsWith("video/"))
       ? [{ path: mediaPath, contentType }]
       : [];
   });

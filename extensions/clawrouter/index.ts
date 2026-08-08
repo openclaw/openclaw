@@ -68,7 +68,8 @@ function buildRuntimeModels(
       baseUrl,
       provider: PROVIDER_ID,
       input: model.input.filter(
-        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+        (entry): entry is "text" | "image" | "video" =>
+          entry === "text" || entry === "image" || entry === "video",
       ),
     });
   }

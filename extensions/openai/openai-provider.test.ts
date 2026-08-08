@@ -988,6 +988,29 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects video from the Codex model catalog while preserving supported audio", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({
+        models: [
+          {
+            slug: "gpt-5.5",
+            visibility: "list",
+            input_modalities: ["text", "image", "video", "audio"],
+          },
+        ],
+      }),
+      finalUrl: OPENAI_CODEX_MODELS_URL,
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "oauth-native-video-regression",
+      fetchGuard,
+    });
+
+    expect(provider.models[0]?.input).toEqual(["text", "image", "audio"]);
+  });
+
   it("caps base and forward-compatible GPT-5.6 Codex catalog rows", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
@@ -1189,6 +1212,75 @@ describe("buildOpenAIProvider", () => {
       baseUrl: "https://chatgpt.com/backend-api/codex",
       input: ["text", "image"],
     });
+  });
+
+  it.each([
+    {
+      name: "official Responses",
+      api: "openai-responses" as const,
+      baseUrl: OPENAI_API_BASE_URL,
+      supportsVideo: false,
+    },
+    {
+      name: "official authored Completions",
+      api: "openai-completions" as const,
+      baseUrl: OPENAI_API_BASE_URL,
+      supportsVideo: false,
+    },
+    {
+      name: "ChatGPT Responses",
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+      supportsVideo: false,
+    },
+    {
+      name: "a custom OpenAI-compatible Responses endpoint",
+      api: "openai-responses" as const,
+      baseUrl: "https://video.example.test/v1",
+      supportsVideo: true,
+    },
+    {
+      name: "a custom OpenAI-compatible Completions endpoint",
+      api: "openai-completions" as const,
+      baseUrl: "https://video.example.test/v1",
+      supportsVideo: true,
+    },
+    {
+      name: "ChatGPT transport through a custom relay",
+      api: "openai-chatgpt-responses" as const,
+      baseUrl: "https://video.example.test/v1",
+      supportsVideo: false,
+    },
+  ])("normalizes falsely advertised native video for $name", ({ api, baseUrl, supportsVideo }) => {
+    const provider = buildOpenAIProvider();
+    const model = {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api,
+      baseUrl,
+      input: ["text", "image", "video"],
+    };
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            api,
+            baseUrl,
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model,
+        config,
+      } as never)?.input,
+    ).toEqual(supportsVideo ? ["text", "image", "video"] : ["text", "image"]);
   });
 
   it("upgrades catalog Completions metadata but preserves authored official adapters", () => {

@@ -1,5 +1,5 @@
+import type { ImageContent, VideoContent } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import type { ImageContent } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { estimateTokens, findCutPoint } from "./compaction.js";
@@ -10,8 +10,16 @@ function imageBlock(): ImageContent {
   return { type: "image", data: IMAGE_PAYLOAD, mimeType: "image/png" };
 }
 
+function videoBlock(data = IMAGE_PAYLOAD): VideoContent {
+  return { type: "video", data, mimeType: "video/mp4" };
+}
+
 function userImage(timestamp: number): AgentMessage {
   return { role: "user", content: [imageBlock()], timestamp };
+}
+
+function userVideo(timestamp: number): AgentMessage {
+  return { role: "user", content: [videoBlock()], timestamp };
 }
 
 function userText(text: string, timestamp: number): AgentMessage {
@@ -24,6 +32,17 @@ function toolResultImage(timestamp: number): AgentMessage {
     toolCallId: "call-1",
     toolName: "screenshot",
     content: [imageBlock()],
+    isError: false,
+    timestamp,
+  };
+}
+
+function toolResultVideo(timestamp: number): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "record",
+    content: [videoBlock()],
     isError: false,
     timestamp,
   };
@@ -77,11 +96,57 @@ describe("estimateTokens image accounting", () => {
     expect(userTokens).toBe(toolTokens);
     expect(userTokens).toBeGreaterThanOrEqual(1200);
   });
+
+  it("charges video blocks in user and tool-result messages without tokenizing base64", () => {
+    const userTokens = estimateTokens(userVideo(1));
+    const toolTokens = estimateTokens(toolResultVideo(1));
+
+    expect(userTokens).toBe(toolTokens);
+    expect(userTokens).toBeGreaterThan(estimateTokens(userImage(1)));
+    expect(userTokens).toBeLessThan(IMAGE_PAYLOAD.length / 100);
+  });
+
+  it("scales video estimates with decoded size while retaining the image-equivalent minimum", () => {
+    const shortVideo: AgentMessage = {
+      role: "user",
+      content: [videoBlock("YQ==")],
+      timestamp: 1,
+    };
+    const longVideo: AgentMessage = {
+      role: "user",
+      content: [videoBlock()],
+      timestamp: 2,
+    };
+
+    expect(estimateTokens(shortVideo)).toBe(estimateTokens(userImage(1)));
+    expect(estimateTokens(longVideo)).toBeGreaterThan(estimateTokens(shortVideo));
+  });
+
+  it("caps large native-video accounting instead of charging its full base64 payload", () => {
+    const hugeVideo: AgentMessage = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "record",
+      content: [videoBlock(IMAGE_PAYLOAD.repeat(16))],
+      isError: false,
+      timestamp: 1,
+    };
+
+    expect(estimateTokens(hugeVideo)).toBe(32_768);
+  });
 });
 
 describe("findCutPoint with image-heavy recent turns", () => {
   it("trims image-dominated user turns instead of keeping the whole transcript", () => {
     const entries = buildTranscript([userImage(10), userImage(20), userImage(30)]);
+
+    const result = findCutPoint(entries, 0, entries.length, 1500);
+
+    expect(result.firstKeptEntryIndex).toBeGreaterThan(0);
+  });
+
+  it("trims video-dominated user turns instead of treating clips as free context", () => {
+    const entries = buildTranscript([userVideo(10), userVideo(20), userVideo(30)]);
 
     const result = findCutPoint(entries, 0, entries.length, 1500);
 

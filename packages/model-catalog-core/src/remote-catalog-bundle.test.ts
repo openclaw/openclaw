@@ -54,6 +54,24 @@ describe("remote model catalog bundle", () => {
     });
   });
 
+  it("accepts native video input in remote model catalog rows", () => {
+    const parsed = parseRemoteModelCatalogBundle({
+      ...validBundle,
+      providers: {
+        multimodal: {
+          models: [{ id: "video-model", input: ["text", "image", "video", "document"] }],
+        },
+      },
+    });
+
+    expect(parsed.providers.multimodal?.models[0]?.input).toEqual([
+      "text",
+      "image",
+      "video",
+      "document",
+    ]);
+  });
+
   it("rejects unsupported versions, invalid timestamps, and malformed providers", () => {
     expect(() => parseRemoteModelCatalogBundle({ ...validBundle, schemaVersion: 2 })).toThrow();
     expect(() => parseRemoteModelCatalogBundle({ ...validBundle, generatedAt: 0 })).toThrow();

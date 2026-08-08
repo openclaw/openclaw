@@ -245,16 +245,17 @@ function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
   return marker !== undefined;
 }
 
-function userMessageHasImageContent(message: AgentMessage): boolean {
+function userMessageHasNativeMediaContent(message: AgentMessage): boolean {
   return (
     isUserMessage(message) &&
     Array.isArray(message.content) &&
-    message.content.some(
-      (block) =>
-        typeof block === "object" &&
-        block !== null &&
-        (block as { type?: unknown }).type === "image",
-    )
+    message.content.some((block) => {
+      if (typeof block !== "object" || block === null) {
+        return false;
+      }
+      const type = (block as { type?: unknown }).type;
+      return type === "image" || type === "video";
+    })
   );
 }
 
@@ -279,7 +280,7 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
     ...runtimeMessage,
     ...preparedMessage,
     ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
-    ...(userMessageHasImageContent(params.runtimeMessage)
+    ...(userMessageHasNativeMediaContent(params.runtimeMessage)
       ? { content: params.runtimeMessage.content }
       : {}),
   } as unknown as AgentMessage;

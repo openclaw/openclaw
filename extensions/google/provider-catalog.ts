@@ -7,7 +7,11 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { isGoogleTextGenerationModelId, resolveGoogleStaticModelId } from "./provider-models.js";
+import {
+  isGoogleTextGenerationModelId,
+  resolveGoogleModelInput,
+  resolveGoogleStaticModelId,
+} from "./provider-models.js";
 
 const GOOGLE_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GOOGLE_GEMINI_MODELS_ENDPOINT = `${GOOGLE_GEMINI_BASE_URL}/models?pageSize=1000`;
@@ -33,7 +37,7 @@ const GOOGLE_GEMINI_TEXT_MODELS: ModelDefinitionConfig[] = GOOGLE_GEMINI_TEXT_MO
       id,
       name,
       reasoning: true,
-      input: ["text", "image"],
+      input: resolveGoogleModelInput(id),
       cost: GOOGLE_GEMINI_COST,
       contextWindow: 1_048_576,
       maxTokens: 65_536,
@@ -77,17 +81,6 @@ function readPositiveInteger(row: Record<string, unknown>, key: string): number 
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-function googleLiveModelInput(id: string): ModelDefinitionConfig["input"] {
-  if (!id.startsWith("gemma-")) {
-    return ["text", "image"];
-  }
-  const isMultimodalGemma =
-    /^gemma-3-(?:4b|12b|27b)(?:-|$)/.test(id) ||
-    id.startsWith("gemma-3n-") ||
-    id.startsWith("gemma-4-");
-  return isMultimodalGemma ? ["text", "image"] : ["text"];
-}
-
 function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   if (!row || typeof row !== "object" || Array.isArray(row)) {
     return undefined;
@@ -117,9 +110,8 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
     id,
     name: readString(record, "displayName") ?? id,
     reasoning: record.thinking === true,
-    // models.list omits modalities. Gemma has both text-only small variants and
-    // multimodal families, so keep this capability distinction explicit.
-    input: googleLiveModelInput(id),
+    // models.list omits modalities; Gemini owns video, while Gemma never does.
+    input: resolveGoogleModelInput(id),
     cost: GOOGLE_GEMINI_COST,
     contextWindow,
     maxTokens,

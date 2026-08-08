@@ -1000,7 +1000,7 @@ Model fields:
 | `api`              | `ModelApi`                                                     | Optional per-model API override.                                                     |
 | `baseUrl`          | `string`                                                       | Optional per-model base URL override.                                                |
 | `headers`          | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`            | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `input`            | `Array<"text" \| "image" \| "video" \| "document">`            | Accepted model modalities; `video` requires a compatible provider transport.         |
 | `reasoning`        | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
 | `contextWindow`    | `number`                                                       | Native provider context window.                                                      |
 | `contextTokens`    | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
@@ -1015,6 +1015,10 @@ Model fields:
 | `replaces`         | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
 | `replacedBy`       | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
 | `tags`             | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
+
+`document` is catalog metadata, not a native conversation input. Advertise
+`video` only when both the model and its selected provider transport accept
+video; unsupported modality values are dropped during catalog normalization.
 
 Suppression fields:
 

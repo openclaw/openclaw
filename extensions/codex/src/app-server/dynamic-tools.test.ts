@@ -1167,6 +1167,34 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("original 13000 chars, weighted budget 32000");
   });
 
+  it("replaces unsupported tool-result videos without leaking bytes or dropping text/images", async () => {
+    const videoPayload = "sensitive-video-payload-".repeat(1024);
+    const bridge = createBridgeWithToolResult("mixed_media_lookup", {
+      content: [
+        { type: "text", text: "Captured footage" },
+        { type: "video", mimeType: "video/mp4", data: videoPayload },
+        { type: "image", mimeType: "image/png", data: COMPUTER_FRAME_IMAGE },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-mixed-video",
+      namespace: null,
+      tool: "mixed_media_lookup",
+      arguments: {},
+    });
+
+    expect(result.contentItems).toEqual([
+      { type: "inputText", text: "Captured footage" },
+      { type: "inputText", text: "(tool video omitted: model does not support videos)" },
+      { type: "inputImage", imageUrl: `data:image/png;base64,${COMPUTER_FRAME_IMAGE}` },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(videoPayload);
+  });
+
   it.each([
     { toolName: "tts", mediaUrl: "/tmp/reply.opus", audioAsVoice: true },
     { toolName: "image_generate", mediaUrl: "/tmp/generated.png" },

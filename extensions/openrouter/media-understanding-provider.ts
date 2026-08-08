@@ -1,11 +1,17 @@
 // Openrouter provider module implements model/runtime integration.
 import path from "node:path";
 import {
+  buildOpenAiCompatibleVideoRequestBody,
+  coerceOpenAiCompatibleVideoText,
   describeImageWithModel,
   describeImagesWithModel,
+  resolveMediaUnderstandingString,
   type AudioTranscriptionRequest,
   type AudioTranscriptionResult,
   type MediaUnderstandingProvider,
+  type OpenAiCompatibleVideoPayload,
+  type VideoDescriptionRequest,
+  type VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowHttpError,
@@ -18,6 +24,8 @@ import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL = "openai/whisper-large-v3-turbo";
+const DEFAULT_OPENROUTER_VIDEO_MODEL = "moonshotai/kimi-k2.6";
+const DEFAULT_OPENROUTER_VIDEO_PROMPT = "Describe the video.";
 const SUPPORTED_AUDIO_FORMATS = new Set(["wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"]);
 
 function normalizeMimeType(mime?: string): string | undefined {
@@ -100,6 +108,28 @@ type OpenRouterSttResponse = {
   text?: string;
 };
 
+function resolveOpenRouterMediaRequest(
+  params: Pick<AudioTranscriptionRequest, "apiKey" | "baseUrl" | "headers" | "request">,
+  capability: "audio" | "video",
+) {
+  return resolveProviderHttpRequestConfig({
+    baseUrl: params.baseUrl,
+    defaultBaseUrl: OPENROUTER_BASE_URL,
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: {
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+    },
+    provider: "openrouter",
+    api: capability === "audio" ? "openrouter-stt" : "openai-completions",
+    capability,
+    transport: "media-understanding",
+  });
+}
+
 async function transcribeOpenRouterAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
@@ -109,23 +139,10 @@ async function transcribeOpenRouterAudio(
     fileName: params.fileName,
   });
   const fetchFn = params.fetchFn ?? fetch;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: params.baseUrl,
-      defaultBaseUrl: OPENROUTER_BASE_URL,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders: {
-        Authorization: `Bearer ${params.apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
-      },
-      provider: "openrouter",
-      api: "openrouter-stt",
-      capability: "audio",
-      transport: "media-understanding",
-    });
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } = resolveOpenRouterMediaRequest(
+    params,
+    "audio",
+  );
   const temperature = asFiniteNumber(params.query?.temperature);
 
   const { response, release } = await postJsonRequest({
@@ -166,17 +183,65 @@ async function transcribeOpenRouterAudio(
   }
 }
 
+async function describeOpenRouterVideo(
+  params: VideoDescriptionRequest,
+): Promise<VideoDescriptionResult> {
+  const model = resolveMediaUnderstandingString(params.model, DEFAULT_OPENROUTER_VIDEO_MODEL);
+  const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
+  const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_OPENROUTER_VIDEO_PROMPT);
+  const fetchFn = params.fetchFn ?? fetch;
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } = resolveOpenRouterMediaRequest(
+    params,
+    "video",
+  );
+
+  const { response, release } = await postJsonRequest({
+    url: `${baseUrl}/chat/completions`,
+    headers,
+    body: buildOpenAiCompatibleVideoRequestBody({
+      model,
+      prompt,
+      mime,
+      buffer: params.buffer,
+    }),
+    timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
+    fetchFn,
+    allowPrivateNetwork,
+    dispatcherPolicy,
+    auditContext: "openrouter video",
+  });
+
+  try {
+    await assertOkOrThrowHttpError(response, "OpenRouter video description failed");
+    const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
+      response,
+      "OpenRouter video description failed",
+    );
+    const text = coerceOpenAiCompatibleVideoText(payload);
+    if (!text) {
+      throw new Error("OpenRouter video description response missing content");
+    }
+    return { text, model };
+  } finally {
+    await release();
+  }
+}
+
 export const openrouterMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "openrouter",
-  capabilities: ["image", "audio"],
+  capabilities: ["image", "audio", "video"],
   defaultModels: {
     image: "auto",
     audio: DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL,
+    video: DEFAULT_OPENROUTER_VIDEO_MODEL,
   },
   autoPriority: {
     audio: 35,
+    video: 30,
   },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
   transcribeAudio: transcribeOpenRouterAudio,
+  describeVideo: describeOpenRouterVideo,
 };

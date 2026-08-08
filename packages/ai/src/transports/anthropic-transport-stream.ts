@@ -1,11 +1,9 @@
 import type {
   AssistantMessageDiagnostic,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   StreamFn,
-  TextContent,
   Usage,
 } from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -383,14 +381,13 @@ async function convertAnthropicMessages(
         continue;
       }
       const normalizedContent = model.input.includes("image")
-        ? await normalizeAnthropicInlineContent(
-            msg.content as readonly (TextContent | ImageContent)[],
-            imageBudget,
-          )
+        ? await normalizeAnthropicInlineContent(msg.content, imageBudget)
         : msg.content.map((item) =>
             item.type === "image"
               ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
-              : item,
+              : item.type === "video"
+                ? { type: "text" as const, text: "(video omitted: model does not support videos)" }
+                : item,
           );
       const blocks: Array<
         | { type: "text"; text: string }

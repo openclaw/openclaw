@@ -1,4 +1,4 @@
-/** Prepares prompt-lock ownership and prompt-local images for submission. */
+/** Prepares prompt-lock ownership and prompt-local media for submission. */
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OwnedSessionTranscriptCacheSnapshot } from "../../../config/sessions/transcript-write-context.js";
 import { readPersistedMediaFacts } from "../../../media/media-facts.js";
@@ -9,7 +9,7 @@ import {
   type EmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
-import { detectAndLoadPromptImages } from "./images.js";
+import { detectAndLoadPromptMedia } from "./images.js";
 import { readPersistedMediaImageLayout } from "./prompt-image-metadata.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -18,6 +18,7 @@ type PromptExecutionAttempt = Pick<
   | "config"
   | "imageOrder"
   | "images"
+  | "inputMedia"
   | "media"
   | "model"
   | "sessionFile"
@@ -25,10 +26,11 @@ type PromptExecutionAttempt = Pick<
   | "sessionTarget"
   | "userTurnTranscriptRecorder"
 >;
-type PromptImageResult = Awaited<ReturnType<typeof detectAndLoadPromptImages>>;
+type PromptMediaResult = Awaited<ReturnType<typeof detectAndLoadPromptMedia>>;
 
-function emptyPromptImages(): PromptImageResult {
+function emptyPromptMedia(): PromptMediaResult {
   return {
+    media: [],
     images: [],
     imageFactIndexes: [],
     detectedRefs: [],
@@ -47,9 +49,9 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   session: AgentSession;
   sessionLockController: EmbeddedAttemptSessionLockController;
   skipPromptSubmission: boolean;
-}): Promise<PromptImageResult> {
+}): Promise<PromptMediaResult> {
   if (input.skipPromptSubmission) {
-    return emptyPromptImages();
+    return emptyPromptMedia();
   }
 
   const { attempt } = input;
@@ -73,11 +75,11 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     (await attempt.userTurnTranscriptRecorder?.resolveMessage());
   const persistedMedia = persistedMessage ? (readPersistedMediaFacts(persistedMessage) ?? []) : [];
 
-  return await detectAndLoadPromptImages({
+  return await detectAndLoadPromptMedia({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
     model: attempt.model,
-    existingImages: attempt.images,
+    existingMedia: attempt.inputMedia ?? attempt.images,
     imageOrder: attempt.imageOrder,
     media: persistedMedia.length > 0 ? persistedMedia : attempt.media,
     mediaImageLayout: persistedMessage

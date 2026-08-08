@@ -43,7 +43,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
+import type { ImageContent, TextContent, VideoContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import {
   asOptionalRecord,
@@ -1449,20 +1449,27 @@ function normalizeToolResultMaxChars(maxChars: number): number {
     : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 function convertToolContents(
-  content: Array<TextContent | ImageContent>,
+  content: Array<TextContent | ImageContent | VideoContent>,
   toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
+  // Codex app-server accepts text/images but has no video output variant; keep
+  // the omission visible and apply the existing bounded tool-text budget.
+  const supportedContent: Array<TextContent | ImageContent> = content.map((item) =>
+    item.type === "video"
+      ? { type: "text", text: "(tool video omitted: model does not support videos)" }
+      : item,
+  );
   const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
-  const totalTextChars = content.reduce(
+  const totalTextChars = supportedContent.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),
     0,
   );
-  const totalTextBudget = content.reduce(
+  const totalTextBudget = supportedContent.reduce(
     (total, item) => total + (item.type === "text" ? estimateToolResultTextChars(item.text) : 0),
     0,
   );
   if (totalTextBudget <= maxChars) {
-    return content.flatMap(convertToolContent);
+    return supportedContent.flatMap(convertToolContent);
   }
   const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
   const notice = `\n${noticeText}`;
@@ -1471,7 +1478,7 @@ function convertToolContents(
   let remainingTextBudget = textBudget;
   let appendedNotice = false;
   const output: CodexDynamicToolCallOutputContentItem[] = [];
-  for (const item of content) {
+  for (const item of supportedContent) {
     if (item.type !== "text") {
       output.push(...convertToolContent(item));
       continue;

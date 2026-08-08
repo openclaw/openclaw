@@ -73,8 +73,8 @@ export async function runCliFallbackCandidate(params: {
   fastModeAutoProgressState: FastModeAutoProgressState;
   bootstrapContextRunKind: BootstrapContextRunKind;
   bootstrapPromptWarningSignaturesSeen: string[];
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
+  currentTurnMedia: Awaited<
+    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnInputMedia>
   >;
   signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
   notifyAgentRunStart: () => void;
@@ -87,6 +87,17 @@ export async function runCliFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const hasUnsupportedNativeVideo =
+    params.currentTurnMedia.inputMedia?.some((media) => media.type === "video") === true ||
+    turn.followupRun.media?.some(
+      (fact) =>
+        fact.hydrationSuppressed !== true &&
+        (fact.kind === "video" || fact.contentType?.toLowerCase().startsWith("video/")),
+    ) === true;
+  // CLI backends accept image payloads only; make dropped native video visible to the model.
+  const cliPrompt = hasUnsupportedNativeVideo
+    ? `${turn.commandBody}\n\n(video omitted: model does not support videos)`
+    : turn.commandBody;
   const cliSessionBinding = getCliSessionBinding(
     turn.getActiveSessionEntry(),
     params.cliExecutionProvider,
@@ -344,7 +355,7 @@ export async function runCliFallbackCandidate(params: {
             cwd: turn.followupRun.run.cwd,
             config: params.runtimeConfig,
             toolOverrides: turn.followupRun.run.toolOverrides,
-            prompt: turn.commandBody,
+            prompt: cliPrompt,
             transcriptPrompt: turn.transcriptCommandBody,
             media: turn.followupRun.media,
             suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
@@ -392,8 +403,8 @@ export async function runCliFallbackCandidate(params: {
               params.bootstrapPromptWarningSignaturesSeen[
                 params.bootstrapPromptWarningSignaturesSeen.length - 1
               ],
-            images: params.currentTurnImages.images,
-            imageOrder: params.currentTurnImages.imageOrder,
+            images: params.currentTurnMedia.images,
+            imageOrder: params.currentTurnMedia.imageOrder,
             skillsSnapshot: turn.followupRun.run.skillsSnapshot,
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,

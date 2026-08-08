@@ -328,6 +328,7 @@ function resolveGatewayProviderStaticModel(params: {
   provider?: string;
   model: string;
   catalogEntry?: ModelCatalogEntry;
+  input: "image" | "video";
 }): ModelCatalogEntry | undefined {
   if (
     !params.agentId ||
@@ -360,7 +361,7 @@ function resolveGatewayProviderStaticModel(params: {
   const configuredModel = configuredProvider?.models?.find(
     (model) => normalizeLowercaseStringOrEmpty(model.id) === normalizedModelId,
   );
-  if (configuredModel?.input && !configuredModel.input.includes("image")) {
+  if (configuredModel?.input && !configuredModel.input.includes(params.input)) {
     return undefined;
   }
   const configuredApi = configuredModel?.api ?? configuredProvider?.api;
@@ -376,7 +377,7 @@ function resolveGatewayProviderStaticModel(params: {
   return staticEntry;
 }
 
-export async function resolveGatewayModelSupportsImages(params: {
+type GatewayModelInputCapabilityParams = {
   loadGatewayModelCatalog: (params?: {
     agentId?: string;
     readOnly?: boolean;
@@ -388,9 +389,19 @@ export async function resolveGatewayModelSupportsImages(params: {
   agentId?: string;
   provider?: string;
   model?: string;
-}): Promise<boolean> {
-  if (!params.model) {
-    return true;
+};
+
+type GatewayModelInputCapabilities = {
+  supportsImages: boolean;
+  supportsVideo: boolean;
+};
+
+export async function resolveGatewayModelInputCapabilities(
+  params: GatewayModelInputCapabilityParams,
+): Promise<GatewayModelInputCapabilities> {
+  const model = params.model;
+  if (!model) {
+    return { supportsImages: true, supportsVideo: false };
   }
 
   try {
@@ -404,31 +415,34 @@ export async function resolveGatewayModelSupportsImages(params: {
     const catalog = snapshot ? snapshot.entries : await params.loadGatewayModelCatalog(loadParams);
     const catalogEntry = findModelCatalogEntry(catalog, {
       provider: params.provider,
-      modelId: params.model,
+      modelId: model,
     });
     // Same-generation provider facts repair stale discovered capabilities without
     // crossing agent ownership, physical routes, or authored input policy.
-    const staticEntry =
-      snapshot && (!catalogEntry || !modelSupportsInput(catalogEntry, "image"))
-        ? resolveGatewayProviderStaticModel({
+    const resolveInputModel = (input: "image" | "video") =>
+      snapshot && (!catalogEntry || !modelSupportsInput(catalogEntry, input))
+        ? (resolveGatewayProviderStaticModel({
             snapshot,
             agentId: params.agentId,
             provider: params.provider,
-            model: params.model,
+            model,
             catalogEntry,
-          })
-        : undefined;
-    const modelEntry = staticEntry ?? catalogEntry;
+            input,
+          }) ?? catalogEntry)
+        : catalogEntry;
+    const imageModelEntry = resolveInputModel("image");
+    const videoModelEntry = resolveInputModel("video");
+    const supportsVideo = modelSupportsInput(videoModelEntry, "video");
     const normalizedProvider = normalizeOptionalLowercaseString(
-      params.provider ?? modelEntry?.provider,
+      params.provider ?? imageModelEntry?.provider,
     );
     const normalizedCandidates = [
-      normalizeLowercaseStringOrEmpty(params.model),
-      normalizeLowercaseStringOrEmpty(modelEntry?.name),
+      normalizeLowercaseStringOrEmpty(model),
+      normalizeLowercaseStringOrEmpty(imageModelEntry?.name),
     ].filter(Boolean);
-    if (modelEntry) {
-      if (modelSupportsInput(modelEntry, "image")) {
-        return true;
+    if (imageModelEntry) {
+      if (modelSupportsInput(imageModelEntry, "image")) {
+        return { supportsImages: true, supportsVideo };
       }
       // Legacy safety shim for stale persisted Foundry rows that predate
       // provider-owned capability normalization.
@@ -443,7 +457,7 @@ export async function resolveGatewayModelSupportsImages(params: {
             candidate === "computer-use-preview",
         )
       ) {
-        return true;
+        return { supportsImages: true, supportsVideo };
       }
       if (
         normalizedProvider === "claude-cli" &&
@@ -455,9 +469,9 @@ export async function resolveGatewayModelSupportsImages(params: {
             candidate.startsWith("claude-"),
         )
       ) {
-        return true;
+        return { supportsImages: true, supportsVideo };
       }
-      return false;
+      return { supportsImages: false, supportsVideo };
     }
     if (
       normalizedProvider === "claude-cli" &&
@@ -469,12 +483,18 @@ export async function resolveGatewayModelSupportsImages(params: {
           candidate.startsWith("claude-"),
       )
     ) {
-      return true;
+      return { supportsImages: true, supportsVideo };
     }
-    return false;
+    return { supportsImages: false, supportsVideo };
   } catch {
-    return false;
+    return { supportsImages: false, supportsVideo: false };
   }
+}
+
+export async function resolveGatewayModelSupportsImages(
+  params: GatewayModelInputCapabilityParams,
+): Promise<boolean> {
+  return (await resolveGatewayModelInputCapabilities(params)).supportsImages;
 }
 
 export function resolveSessionDisplayModelIdentityRefCached(params: {

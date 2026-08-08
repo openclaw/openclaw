@@ -87,6 +87,47 @@ describe("ModelsConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts and preserves provider-declared native video input", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "custom-video": {
+          baseUrl: "https://video.example.test/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "video-model",
+              name: "Video Model",
+              input: ["text", "image", "video", "audio"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data?.providers?.["custom-video"]?.models?.[0]?.input).toEqual([
+        "text",
+        "image",
+        "video",
+        "audio",
+      ]);
+    }
+  });
+
+  it("rejects undeclared model input modalities", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "custom-video": {
+          baseUrl: "https://video.example.test/v1",
+          models: [{ id: "video-model", name: "Video Model", input: ["text", "document"] }],
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("accepts compat.requiresReasoningContentOnAssistantMessages (issue #89660)", () => {
     // The field is consumed at runtime (detectCompat/getCompat) and is present
     // in the ModelCompat type, but was missing from the strict Zod schema, so a

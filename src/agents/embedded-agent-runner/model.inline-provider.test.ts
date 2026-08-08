@@ -310,6 +310,16 @@ describe("buildInlineProviderModels", () => {
 });
 
 describe("resolveProviderModelInput", () => {
+  it("preserves configured native video while filtering unsupported audio", () => {
+    expect(
+      resolveProviderModelInput({
+        provider: "multimodal",
+        modelId: "video-model",
+        input: ["text", "image", "audio", "video"],
+      }),
+    ).toEqual(["text", "image", "video"]);
+  });
+
   it("keeps configured Anthropic model input unchanged before provider-owned normalization", () => {
     expect(
       resolveProviderModelInput({

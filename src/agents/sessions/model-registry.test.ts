@@ -622,9 +622,9 @@ describe("ModelRegistry models.json auth", () => {
     });
   });
 
-  it("loads richer generated catalog metadata without widening runtime inputs", () => {
-    // Generated catalogs can report video/audio support. Keep those rows while
-    // projecting their metadata to the runtime execution contract.
+  it("preserves native video from generated catalogs while filtering unsupported audio", () => {
+    // Video is an executable runtime modality; audio remains catalog metadata
+    // until the agent runtime gains native audio content support.
     const modelsPath = writeModelsJsonWithPluginCatalogs({
       root: { providers: {} },
       pluginCatalogs: [
@@ -681,7 +681,7 @@ describe("ModelRegistry models.json auth", () => {
     );
 
     expect(registry.getError()).toBeUndefined();
-    expect(registry.find("minimax", "MiniMax-M3")?.input).toEqual(["text", "image"]);
+    expect(registry.find("minimax", "MiniMax-M3")?.input).toEqual(["text", "image", "video"]);
     expect(registry.find("nvidia", "microsoft/phi-4-multimodal-instruct")?.input).toEqual([
       "text",
       "image",

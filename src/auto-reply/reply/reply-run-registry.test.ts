@@ -1652,6 +1652,42 @@ describe("reply run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("inspect", { images });
   });
 
+  it("never routes native video through an image-only steering backend", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createTestReplyOperation({ sessionId: "session-video" });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+      supportsQueueMessageImages: true,
+    });
+    operation.setPhase("running");
+    const inputMedia = [
+      { type: "video" as const, data: "video", mimeType: "video/mp4" },
+      { type: "image" as const, data: "png", mimeType: "image/png" },
+    ];
+
+    await expect(
+      queueCurrentReplyRunMessage("session-video", "inspect", { inputMedia }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "image_input_unsupported" });
+    expect(queueMessage).not.toHaveBeenCalled();
+
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => true,
+      queueMessage,
+      supportsQueueMessageImages: true,
+      supportsQueueMessageMedia: true,
+    });
+
+    await expect(
+      queueCurrentReplyRunMessage("session-video", "inspect", { inputMedia }),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(queueMessage).toHaveBeenCalledWith("inspect", { inputMedia });
+  });
+
   it("queues messages through queue-first legacy backends while token streaming is idle", async () => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({

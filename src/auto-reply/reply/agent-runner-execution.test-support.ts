@@ -40,7 +40,7 @@ const state = vi.hoisted(() => ({
   isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
   updateSessionStoreMock: vi.fn(),
-  resolveCurrentTurnImagesMock: vi.fn(),
+  resolveCurrentTurnInputMediaMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
 }));
 
@@ -239,7 +239,7 @@ vi.mock("../heartbeat.js", () => ({
 }));
 
 vi.mock("./current-turn-images.js", () => ({
-  resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
+  resolveCurrentTurnInputMedia: (params: unknown) => state.resolveCurrentTurnInputMediaMock(params),
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -684,14 +684,22 @@ export function setupAgentRunnerExecutionTestState() {
     state.isLikelyContextOverflowErrorMock.mockReset();
     state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.updateSessionStoreMock.mockReset();
-    state.resolveCurrentTurnImagesMock.mockReset();
+    state.resolveCurrentTurnInputMediaMock.mockReset();
     state.peekSessionMcpRuntimeMock.mockReset();
     state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
-    state.resolveCurrentTurnImagesMock.mockImplementation(
-      async (params: { images?: unknown[]; imageOrder?: unknown[] }) => ({
-        images: params.images,
-        imageOrder: params.imageOrder,
-      }),
+    state.resolveCurrentTurnInputMediaMock.mockImplementation(
+      async (params: {
+        inputMedia?: Array<{ type: string }>;
+        images?: Array<{ type: string }>;
+        imageOrder?: unknown[];
+      }) => {
+        const inputMedia = params.inputMedia ?? params.images;
+        return {
+          inputMedia,
+          images: inputMedia?.filter((media) => media.type === "image"),
+          imageOrder: params.imageOrder,
+        };
+      },
     );
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),

@@ -150,7 +150,7 @@ function sanitizeHistoryContentBlock(block: unknown): {
     truncated ||= res.truncated;
     redacted ||= res.redacted;
   }
-  if (type === "image") {
+  if (type === "image" || type === "video") {
     const data = readStringValue(entry.data);
     const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
     const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);

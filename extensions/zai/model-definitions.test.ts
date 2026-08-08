@@ -69,7 +69,7 @@ describe("zai model definitions", () => {
     expectZaiModelFields({
       id: "glm-5v-turbo",
       reasoning: true,
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       contextWindow: 200_000,
       maxTokens: 131_072,
       cost: { input: 1.2, output: 4, cacheRead: 0.24, cacheWrite: 0 },

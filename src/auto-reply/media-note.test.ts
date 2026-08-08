@@ -299,7 +299,7 @@ describe("buildInboundMediaNote", () => {
   });
 
   it("keeps video attachments after video descriptions are added", () => {
-    const note = buildInboundMediaNote({
+    const projection = buildProjection({
       MediaPaths: ["/tmp/clip.mp4"],
       MediaUrls: ["https://example.com/clip.mp4"],
       MediaTypes: ["video/mp4"],
@@ -312,7 +312,44 @@ describe("buildInboundMediaNote", () => {
         },
       ],
     });
-    expect(note).toBe("[media attached: /tmp/clip.mp4 (video/mp4) | https://example.com/clip.mp4]");
+    expect(projection.text).toBe(
+      "[media attached: /tmp/clip.mp4 (video/mp4) | https://example.com/clip.mp4]",
+    );
+    expect(projection.media).toEqual([
+      expect.objectContaining({
+        path: "/tmp/clip.mp4",
+        contentType: "video/mp4",
+        kind: "video",
+        hydrationSuppressed: true,
+      }),
+    ]);
+  });
+
+  it("suppresses only described video facts after transcribed audio is removed", () => {
+    const projection = buildProjection({
+      MediaPaths: ["/tmp/voice.ogg", "/tmp/described.mp4", "/tmp/native.mp4"],
+      MediaTypes: ["audio/ogg", "video/mp4", "video/mp4"],
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "spoken instructions",
+          provider: "whisper",
+        },
+        {
+          kind: "video.description",
+          attachmentIndex: 1,
+          text: "a person walking through a park",
+          provider: "moonshot",
+        },
+      ],
+    });
+
+    expect(projection.media).toEqual([
+      expect.objectContaining({ path: "/tmp/described.mp4", hydrationSuppressed: true }),
+      expect.not.objectContaining({ hydrationSuppressed: true }),
+    ]);
+    expect(projection.media[1]).toEqual(expect.objectContaining({ path: "/tmp/native.mp4" }));
   });
 
   it("strips audio attachments when Transcript is present", () => {

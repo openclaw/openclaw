@@ -60,6 +60,9 @@ function cloneContentPart(
   if (part.type === "image") {
     return { type: "image", data: part.data, mimeType: part.mimeType };
   }
+  if (part.type === "video") {
+    return { type: "video", data: part.data, mimeType: part.mimeType };
+  }
   if (part.type === "thinking") {
     return {
       type: "thinking",

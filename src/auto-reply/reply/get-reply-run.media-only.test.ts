@@ -769,6 +769,79 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
+  it("preserves gateway video facts when they exist only on reply options", async () => {
+    const videoFact = {
+      path: "/tmp/gateway-video.mp4",
+      contentType: "video/mp4",
+      kind: "video" as const,
+      sizeBytes: 4096,
+    };
+    const params = baseParams({ opts: { media: [videoFact] } });
+    params.ctx.ThreadHistoryBody = undefined;
+    params.ctx.media = undefined;
+    params.sessionCtx.ThreadHistoryBody = undefined;
+    params.sessionCtx.media = undefined;
+
+    const result = await runPreparedReply(params);
+
+    expect(result).toEqual({ text: "ok" });
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.media).toEqual([expect.objectContaining(videoFact)]);
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "",
+      __openclaw: { media: [expect.objectContaining(videoFact)] },
+    });
+  });
+
+  it("admits and preserves prehydrated native video-only reply input", async () => {
+    const video = { type: "video" as const, data: "video", mimeType: "video/mp4" };
+    const params = baseParams({ opts: { inputMedia: [video] } });
+    params.ctx.ThreadHistoryBody = undefined;
+    params.ctx.media = undefined;
+    params.sessionCtx.ThreadHistoryBody = undefined;
+    params.sessionCtx.media = undefined;
+
+    const result = await runPreparedReply(params);
+
+    expect(result).toEqual({ text: "ok" });
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.inputMedia).toEqual([video]);
+    expect(call.followupRun.images).toBeUndefined();
+  });
+
+  it("persists video-description hydration suppression for future transcript replay", async () => {
+    const videoFact = {
+      path: "/tmp/described-video.mp4",
+      contentType: "video/mp4",
+      kind: "video" as const,
+    };
+    const params = baseParams();
+    params.ctx.media = [videoFact];
+    params.ctx.MediaUnderstanding = [
+      {
+        kind: "video.description",
+        attachmentIndex: 0,
+        provider: "moonshot",
+        model: "kimi-k3",
+        text: "a person walking through a park",
+      },
+    ];
+    params.sessionCtx.media = [videoFact];
+
+    await runPreparedReply(params);
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.media).toEqual([
+      expect.objectContaining({ ...videoFact, hydrationSuppressed: true }),
+    ]);
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: {
+        media: [expect.objectContaining({ ...videoFact, hydrationSuppressed: true })],
+      },
+    });
+  });
+
   it.each([
     "discord",
     "telegram",

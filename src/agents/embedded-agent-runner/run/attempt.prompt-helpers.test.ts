@@ -223,7 +223,7 @@ describe("resolvePromptSubmissionSkipReason", () => {
     ).toBe("empty_prompt_history_images");
   });
 
-  it("allows text or image prompt submissions", () => {
+  it("allows text, image, or video prompt submissions", () => {
     expect(
       resolvePromptSubmissionSkipReason({
         prompt: "hello",
@@ -238,6 +238,29 @@ describe("resolvePromptSubmissionSkipReason", () => {
         imageCount: 1,
       }),
     ).toBeNull();
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "   ",
+        messages: [],
+        imageCount: 0,
+        videoCount: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("treats a persisted video-only user turn as meaningful replay history", () => {
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "   ",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", data: "dmlkZW8=", mimeType: "video/mp4" }],
+          },
+        ],
+        imageCount: 0,
+      }),
+    ).toBe("blank_user_prompt");
   });
 
   it("skips blank prompt on runtimeOnly turns", () => {

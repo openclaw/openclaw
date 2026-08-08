@@ -42,6 +42,12 @@ always uses native thinking but requires both `thinking` and
 Kimi K3 is the onboarding default.
 See Moonshot's [Kimi K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart).
 
+Kimi K3 and the listed Kimi K2.7 Code variants accept eligible video attachments
+directly in their normal conversation. The Moonshot plugin can also produce a
+separate video description when the selected reply model cannot accept video or
+when `tools.media.models[]` explicitly requests video preprocessing. Both
+Moonshot image and video understanding default to `moonshot/kimi-k3`.
+
 ## Getting started
 
 Both Moonshot and Kimi Coding are external plugins - install one before

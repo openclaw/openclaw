@@ -33,7 +33,10 @@ export async function resolveEmbeddedRunModelSetup(params: {
   const runParams = params.runParams;
   const hookSelection = await resolveHookModelSelection({
     prompt: runParams.prompt,
-    attachments: buildBeforeModelResolveAttachments(runParams.images),
+    attachments: buildBeforeModelResolveAttachments(
+      runParams.inputMedia ?? runParams.images,
+      runParams.media,
+    ),
     provider: params.provider,
     modelId: params.modelId,
     modelSelectionLocked: runParams.modelSelectionLocked,

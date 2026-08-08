@@ -70,6 +70,7 @@ function createManifestPlugin(id: string): PluginManifestRecord {
 function createManifestPluginWithModelCatalog(
   id: string,
   discovery: "static" | "refreshable" | "runtime" = "static",
+  input: Array<"text" | "image" | "video"> = ["text"],
 ): PluginManifestRecord {
   return {
     ...createManifestPluginWithoutDiscovery({ id }),
@@ -83,7 +84,7 @@ function createManifestPluginWithModelCatalog(
               id: "catalog-model",
               name: "Catalog Model",
               reasoning: true,
-              input: ["text"],
+              input,
               contextWindow: 128000,
               maxTokens: 4096,
               thinkingLevelMap: { off: null, minimal: "low", max: "max" },
@@ -729,6 +730,34 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
             }),
           ],
         },
+      },
+    });
+  });
+
+  it("preserves native video in manifest-backed static discovery entries", async () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["multimodal"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPluginWithModelCatalog("multimodal", "static", ["text", "image", "video"]),
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    await expect(
+      providers[0]?.staticCatalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toMatchObject({
+      providers: {
+        multimodal: { models: [{ id: "catalog-model", input: ["text", "image", "video"] }] },
       },
     });
   });

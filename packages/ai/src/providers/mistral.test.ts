@@ -659,6 +659,34 @@ describe("Mistral provider", () => {
     expect(textBlock?.text).not.toContain('{\\"key\\":\\"value\\"}');
   });
 
+  it("never serializes a falsely advertised video capability as a Mistral image", async () => {
+    const misdeclaredModel = {
+      ...makeMistralModel(),
+      input: ["text", "image", "video"],
+    } satisfies Model<"mistral-conversations">;
+    await runMistralFixture(
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+            timestamp: 1,
+          },
+        ],
+      },
+      {},
+      misdeclaredModel,
+    );
+
+    const payload = mistralMockState.payloads[0] as { messages: unknown[] };
+    expect(payload.messages).toContainEqual({
+      role: "user",
+      content: [{ type: "text", text: "(video omitted: model does not support videos)" }],
+    });
+    expect(JSON.stringify(payload)).not.toContain("video_url");
+    expect(JSON.stringify(payload)).not.toContain("dmlkZW8=");
+  });
+
   it("does not emit image chunks or placeholders for payload-less tool media", async () => {
     const testContext = makeMistralToolResultContext(
       "screenshot",

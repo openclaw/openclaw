@@ -11,6 +11,84 @@ import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 describe("plugin harness prompt media", () => {
+  it("materializes native video and images in structured attachment order", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-native-video-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const videoPath = path.join(inboundDir, "clip.mp4");
+    const imagePath = path.join(inboundDir, "frame.png");
+    const videoBytes = Buffer.from("native-video-content");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(videoPath, videoBytes);
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const media = [
+        { kind: "video" as const, contentType: "video/mp4", path: videoPath },
+        { kind: "image" as const, contentType: "image/png", path: imagePath },
+      ];
+      const result = await preparePluginHarnessPromptImages({
+        runParams: {
+          agentId: "main",
+          config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+          imageOrder: ["offloaded"],
+          media,
+          sessionId: "session-native-video",
+          userTurnTranscriptRecorder: {
+            message: { role: "user", content: "inspect", __openclaw: { media } },
+          },
+        },
+        runtime: {
+          model: { input: ["text", "image", "video"] },
+          sessionId: "session-native-video",
+          workspaceDir,
+        },
+        pluginHarnessOwnsTransport: true,
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+
+      expect(result.inputMedia).toEqual([
+        { type: "video", data: videoBytes.toString("base64"), mimeType: "video/mp4" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      expect(readRuntimePromptImageFactIndexes(result.inputMedia)).toEqual([0, 1]);
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      expect(result.media).toEqual([
+        expect.objectContaining({ kind: "video", contentType: "video/mp4" }),
+        expect.objectContaining({ kind: "image", contentType: "image/png" }),
+      ]);
+      expect(result.media?.[0]).not.toHaveProperty("path");
+      expect(result.media?.[1]).not.toHaveProperty("path");
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("never forwards video input to an image-only plugin harness", async () => {
+    const video = { type: "video" as const, data: "dmlkZW8=", mimeType: "video/mp4" };
+    const result = await preparePluginHarnessPromptImages({
+      runParams: {
+        inputMedia: [video],
+        media: [{ kind: "video", contentType: "video/mp4", path: "/tmp/clip.mp4" }],
+        sessionId: "session-image-only-harness",
+      },
+      runtime: {
+        model: { input: ["text", "image"] },
+        sessionId: "session-image-only-harness",
+        workspaceDir: "/tmp",
+      },
+      pluginHarnessOwnsTransport: true,
+    } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+
+    expect(result.inputMedia).toEqual([]);
+    expect(result.images).toBeUndefined();
+  });
+
   it("does not hydrate marker or bare paths from recalled memory context", async () => {
     const recalledMemory = [
       "<relevant-memories>",

@@ -5,13 +5,12 @@ import type {
   ResponseInput,
   ResponseInputItem,
   ResponseInputContent,
-  ResponseInputImage,
   ResponseInputText,
   ResponseOutputMessage,
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import { clampThinkingLevel } from "../model-utils.js";
+import { clampThinkingLevel, supportsNativeVideoInput } from "../model-utils.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
@@ -36,6 +35,11 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
+  buildOpenAICompatibleResponsesMediaPart,
+  type OpenAICompatibleResponsesContentPart,
+  type OpenAICompatibleResponsesFunctionOutputPart,
+} from "./openai-compatible-video-content.js";
+import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
   supportsOpenAITemperature,
@@ -45,6 +49,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
+  isVideoWithMediaPayload,
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -207,6 +212,7 @@ export function convertResponsesMessages<TApi extends Api>(
   options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
   const messages: ResponseInput = [];
+  const supportsVideo = supportsNativeVideoInput(model);
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
 
   const normalizeIdPart = (part: string): string => {
@@ -275,26 +281,32 @@ export function convertResponsesMessages<TApi extends Api>(
           content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
         });
       } else {
-        const content: ResponseInputContent[] = msg.content.map((item): ResponseInputContent => {
-          if (item.type === "text") {
-            return {
-              type: "input_text",
-              text: sanitizeSurrogates(item.text),
-            } satisfies ResponseInputText;
-          }
-          return {
-            type: "input_image",
-            detail: "auto",
-            image_url: `data:${item.mimeType};base64,${item.data}`,
-          } satisfies ResponseInputImage;
-        });
+        const content: OpenAICompatibleResponsesContentPart[] = msg.content.map(
+          (item): OpenAICompatibleResponsesContentPart => {
+            if (item.type === "text") {
+              return {
+                type: "input_text",
+                text: sanitizeSurrogates(item.text),
+              } satisfies ResponseInputText;
+            }
+            if (item.type === "video" && !supportsVideo) {
+              return {
+                type: "input_text",
+                text: "(video omitted: model does not support videos)",
+              } satisfies ResponseInputText;
+            }
+            return buildOpenAICompatibleResponsesMediaPart(item);
+          },
+        );
         if (content.length === 0) {
           continue;
         }
         messages.push({
           type: "message",
           role: "user",
-          content,
+          // input_video is a vendor extension, never emitted without an explicit
+          // model video capability; the first-party SDK intentionally excludes it.
+          content: content as ResponseInputContent[],
         });
       }
     } else if (msg.role === "assistant") {
@@ -376,13 +388,14 @@ export function convertResponsesMessages<TApi extends Api>(
       const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeSurrogates(textResult);
       const hasImages = msg.content.some(isImageWithMediaPayload);
+      const hasVideos = msg.content.some(isVideoWithMediaPayload);
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasText = sanitizedTextResult.trim().length > 0;
       const [callId] = splitResponsesToolCallId(msg.toolCallId);
 
       let output: string | ResponseFunctionCallOutputItemList;
-      if (hasImages && model.input.includes("image")) {
-        const contentParts: ResponseFunctionCallOutputItemList = [];
+      if ((hasImages && model.input.includes("image")) || (hasVideos && supportsVideo)) {
+        const contentParts: OpenAICompatibleResponsesFunctionOutputPart[] = [];
 
         if (hasText) {
           contentParts.push({
@@ -397,16 +410,15 @@ export function convertResponsesMessages<TApi extends Api>(
         }
 
         for (const block of msg.content) {
-          if (isImageWithMediaPayload(block)) {
-            contentParts.push({
-              type: "input_image",
-              detail: "auto",
-              image_url: `data:${block.mimeType};base64,${block.data}`,
-            });
+          if (
+            (isImageWithMediaPayload(block) && model.input.includes("image")) ||
+            (isVideoWithMediaPayload(block) && supportsVideo)
+          ) {
+            contentParts.push(buildOpenAICompatibleResponsesMediaPart(block));
           }
         }
 
-        output = contentParts;
+        output = contentParts as ResponseFunctionCallOutputItemList;
       } else {
         output = sanitizeToolResultText(textResult, mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT);
       }

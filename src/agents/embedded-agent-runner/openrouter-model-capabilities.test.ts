@@ -50,6 +50,55 @@ describe("openrouter-model-capabilities", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves advertised native video from input arrays and directional modality strings", async () => {
+    await withOpenRouterStateDir(async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                data: [
+                  {
+                    id: "acme/video-array",
+                    architecture: {
+                      input_modalities: ["text", "image", "video", "audio"],
+                      modality: "text->text",
+                    },
+                  },
+                  {
+                    id: "acme/video-modality",
+                    architecture: { modality: "text+video->image" },
+                  },
+                  {
+                    id: "acme/output-only-video",
+                    architecture: { modality: "text->video+image" },
+                  },
+                ],
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+        ),
+      );
+
+      const module = await importOpenRouterModelCapabilities("native-video-modalities");
+      await module.loadOpenRouterModelCapabilities("acme/video-array");
+
+      expect(module.getOpenRouterModelCapabilities("acme/video-array")?.input).toEqual([
+        "text",
+        "image",
+        "video",
+      ]);
+      expect(module.getOpenRouterModelCapabilities("acme/video-modality")?.input).toEqual([
+        "text",
+        "video",
+      ]);
+      expect(module.getOpenRouterModelCapabilities("acme/output-only-video")?.input).toEqual([
+        "text",
+      ]);
+    });
+  });
+
   it("uses top-level OpenRouter max token fields when top_provider is absent", async () => {
     await withOpenRouterStateDir(async () => {
       vi.stubGlobal(
@@ -238,7 +287,7 @@ describe("openrouter-model-capabilities", () => {
                 {
                   id: "acme/sqlite-cached-model",
                   name: "SQLite Cached Model",
-                  architecture: { modality: "text+image->text" },
+                  architecture: { modality: "text+image+video->text" },
                   supported_parameters: ["tools"],
                   context_length: 8765,
                   max_completion_tokens: 4321,
@@ -261,7 +310,7 @@ describe("openrouter-model-capabilities", () => {
       const secondModule = await importOpenRouterModelCapabilities("sqlite-cache-reader");
       expect(secondModule.getOpenRouterModelCapabilities("acme/sqlite-cached-model")).toMatchObject(
         {
-          input: ["text", "image"],
+          input: ["text", "image", "video"],
           supportsTools: true,
           contextWindow: 8765,
           maxTokens: 4321,

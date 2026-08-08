@@ -299,7 +299,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     softResetTail.length > 0 ||
     hasInboundHistoryBody(sessionCtx) ||
     hasCurrentReplyTargetContext;
-  const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
+  const hasMediaAttachment =
+    hasInboundMedia(sessionCtx) ||
+    (opts?.inputMedia?.length ?? 0) > 0 ||
+    (opts?.images?.length ?? 0) > 0 ||
+    (opts?.media?.length ?? 0) > 0;
   if (!hasUserBody && !hasMediaAttachment) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
     // otherwise channels that wire onReplyStart to typing indicators leak

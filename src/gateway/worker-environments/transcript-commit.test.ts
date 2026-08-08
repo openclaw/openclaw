@@ -319,6 +319,47 @@ describe("worker transcript commit application", () => {
     expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
   });
 
+  it("preserves bounded native video blocks in user and tool-result commits", async () => {
+    const video = { type: "video" as const, data: "Y2xpcA==", mimeType: "video/mp4" };
+    const messages: WorkerTranscriptMessage[] = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "What happens?" }, video],
+        timestamp: 100,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-video-1",
+        toolName: "read",
+        content: [structuredClone(video)],
+        isError: false,
+        timestamp: 200,
+      },
+    ];
+
+    const outcome = await committer.commit({
+      identity: IDENTITY,
+      request: createRequest({ messages }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    const reopened = SessionManager.open(sessionTarget);
+    expect(reopened.getEntries()).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "What happens?" }, video],
+        }),
+      }),
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "toolResult",
+          content: [video],
+        }),
+      }),
+    ]);
+  });
+
   it("rejects a stale base leaf without appending", async () => {
     const first = await committer.commit({ identity: IDENTITY, request: createRequest() });
     if (!first.ok) {

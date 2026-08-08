@@ -70,4 +70,20 @@ describe("Anthropic inline image request budget", () => {
 
     expect(batchSizes).toEqual([1, 1]);
   });
+
+  it("downgrades unsupported videos without leaking their payload into Anthropic content", async () => {
+    const normalized = await normalizeAnthropicInlineContent(
+      [
+        { type: "text", text: "Inspect the attachment" },
+        { type: "video", data: "c2VjcmV0", mimeType: "video/mp4" },
+      ],
+      createAnthropicInlineImageBudget(),
+    );
+
+    expect(normalized).toEqual([
+      { type: "text", text: "Inspect the attachment" },
+      { type: "text", text: "(video omitted: model does not support videos)" },
+    ]);
+    expect(JSON.stringify(normalized)).not.toContain("c2VjcmV0");
+  });
 });

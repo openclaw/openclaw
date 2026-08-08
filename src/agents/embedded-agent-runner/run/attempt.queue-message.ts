@@ -2,7 +2,7 @@
  * Steers active embedded sessions and waits for transcript commits when needed.
  */
 import { toErrorObject } from "../../../infra/errors.js";
-import type { ImageContent } from "../../../llm/types.js";
+import type { MediaContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
@@ -26,7 +26,7 @@ type EmbeddedAgentActiveSessionSteerTarget = {
   getSteeringMessages?(): readonly string[];
   steer(
     text: string,
-    images?: ImageContent[],
+    inputMedia?: MediaContent[],
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
@@ -48,7 +48,7 @@ class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
 function steerActiveSession(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  images?: ImageContent[],
+  inputMedia?: MediaContent[],
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   media?: MediaFact[],
   imageOrder?: PromptImageOrderEntry[],
@@ -57,7 +57,7 @@ function steerActiveSession(
   if (media?.length || queueIdentity) {
     return activeSession.steer(
       text,
-      images,
+      inputMedia,
       userTurnTranscriptRecorder,
       media,
       imageOrder,
@@ -65,8 +65,8 @@ function steerActiveSession(
     );
   }
   return userTurnTranscriptRecorder
-    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
-    : activeSession.steer(text, images);
+    ? activeSession.steer(text, inputMedia, userTurnTranscriptRecorder)
+    : activeSession.steer(text, inputMedia);
 }
 
 function extractQueuedUserMessageText(message: unknown): string | undefined {
@@ -194,7 +194,7 @@ async function steerAndWaitForTranscriptCommit(
   text: string,
   timeoutMs: number,
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-  images?: ImageContent[],
+  inputMedia?: MediaContent[],
   media?: MediaFact[],
   imageOrder?: PromptImageOrderEntry[],
   queueIdentity?: string,
@@ -309,7 +309,7 @@ async function steerAndWaitForTranscriptCommit(
     const steer = steerActiveSession(
       activeSession,
       text,
-      images,
+      inputMedia,
       userTurnTranscriptRecorder,
       media,
       imageOrder,
@@ -349,12 +349,16 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   sessionKey?: string,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
-  const isPlainTextAnswer = !options?.images?.length;
+  const inputMedia = options?.inputMedia ?? options?.images;
+  const isPlainTextAnswer = !inputMedia?.length;
   if (isInboundUserMessage && !isPlainTextAnswer) {
     try {
-      await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply" });
+      const resolvedBy = inputMedia?.some((media) => media.type === "video")
+        ? "video-reply"
+        : "image-reply";
+      await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy });
     } catch (error) {
-      log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
+      log.warn(`failed to cancel ask_user before media steering: ${String(error)}`);
     }
   }
   if (
@@ -378,7 +382,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       await steerActiveSession(
         activeSession,
         text,
-        options?.images,
+        inputMedia,
         options?.userTurnTranscriptRecorder,
         options?.media,
         options?.imageOrder,
@@ -397,7 +401,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       text,
       options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
       options.userTurnTranscriptRecorder,
-      options.images,
+      inputMedia,
       options.media,
       options.imageOrder,
       options.queueIdentity,

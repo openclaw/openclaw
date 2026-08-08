@@ -572,6 +572,46 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "user", content: "describe this", images: ["base64data"] }]);
   });
 
+  it("makes unsupported user videos visible without forwarding their payloads", () => {
+    const privateVideoPayload = "private-video-payload".repeat(128);
+    const result = convertToOllamaMessages([
+      {
+        role: "user",
+        content: [{ type: "video", data: privateVideoPayload, mimeType: "video/mp4" }],
+      },
+    ]);
+
+    expect(result).toEqual([
+      { role: "user", content: "(video omitted: model does not support videos)" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(privateVideoPayload);
+  });
+
+  it("preserves mixed user text and images while bounding adjacent omitted videos", () => {
+    const result = convertToOllamaMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Describe these attachments:" },
+          { type: "video", data: "private-first-video", mimeType: "video/mp4" },
+          { type: "video", data: "private-second-video", mimeType: "video/webm" },
+          { type: "text", text: "Use this picture too." },
+          { type: "image", data: "public-image-data" },
+        ],
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content:
+          "Describe these attachments:\n(video omitted: model does not support videos)\nUse this picture too.",
+        images: ["public-image-data"],
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("private-");
+  });
+
   it("prepends system message when provided", () => {
     const messages = [{ role: "user", content: "hello" }];
     const result = convertToOllamaMessages(messages, "You are helpful.");
@@ -730,6 +770,57 @@ describe("convertToOllamaMessages", () => {
     const messages = [{ role: "toolResult", content: "command output here" }];
     const result = convertToOllamaMessages(messages);
     expect(result).toEqual([{ role: "tool", content: "command output here" }]);
+  });
+
+  it("keeps omitted user and tool videos visible when replaying another model's transcript", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What changed?" },
+          { type: "video", data: "private-user-video", mimeType: "video/mp4" },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "I will inspect it." }] },
+      {
+        role: "toolResult",
+        toolName: "inspect_video",
+        content: [
+          { type: "video", data: "private-tool-video", mimeType: "video/mp4" },
+          { type: "video", data: "private-second-tool-video", mimeType: "video/mp4" },
+          { type: "text", text: "A transcript is available." },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: "What changed?\n(video omitted: model does not support videos)",
+      },
+      { role: "assistant", content: "I will inspect it." },
+      {
+        role: "tool",
+        tool_name: "inspect_video",
+        content: "(tool video omitted: model does not support videos)\nA transcript is available.",
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("private-");
+  });
+
+  it("makes video-only tool results visible without forwarding binary data", () => {
+    const result = convertToOllamaMessages([
+      {
+        role: "tool",
+        content: [{ type: "video", data: "private-tool-video", mimeType: "video/mp4" }],
+      },
+    ]);
+
+    expect(result).toEqual([
+      { role: "tool", content: "(tool video omitted: model does not support videos)" },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("private-tool-video");
   });
 
   it("includes tool_name from SDK toolResult messages", () => {

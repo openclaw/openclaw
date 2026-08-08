@@ -205,6 +205,12 @@ const WorkerTranscriptImageContentSchema = closedObject({
   mimeType: Type.String({ minLength: 1, maxLength: 256 }),
 });
 
+const WorkerTranscriptVideoContentSchema = closedObject({
+  type: Type.Literal("video"),
+  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  mimeType: Type.String({ minLength: 1, maxLength: 256 }),
+});
+
 const WorkerTranscriptToolCallSchema = closedObject({
   type: Type.Literal("toolCall"),
   id: WorkerIdentifierSchema,
@@ -219,7 +225,11 @@ const WorkerTranscriptToolCallSchema = closedObject({
 const WorkerTranscriptUserMessageSchema = closedObject({
   role: Type.Literal("user"),
   content: Type.Array(
-    Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
+    Type.Union([
+      WorkerTranscriptTextContentSchema,
+      WorkerTranscriptImageContentSchema,
+      WorkerTranscriptVideoContentSchema,
+    ]),
     { minItems: 1, maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
   ),
   timestamp: Type.Integer({ minimum: 0 }),
@@ -265,7 +275,11 @@ const WorkerTranscriptToolResultMessageSchema = closedObject({
   toolCallId: WorkerIdentifierSchema,
   toolName: WorkerIdentifierSchema,
   content: Type.Array(
-    Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
+    Type.Union([
+      WorkerTranscriptTextContentSchema,
+      WorkerTranscriptImageContentSchema,
+      WorkerTranscriptVideoContentSchema,
+    ]),
     { maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
   ),
   details: Type.Optional(Type.Unknown()),

@@ -231,6 +231,35 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
   });
 
+  it("removes unsupported video inherited from a registry-backed Codex model", () => {
+    const provider = buildOpenAIProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      authProfileMode: "oauth",
+      providerConfig: CODEX_PROVIDER_CONFIG,
+      modelRegistry: {
+        find: () => ({
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text", "video"],
+          cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+          contextWindow: 372_000,
+          maxTokens: 128_000,
+        }),
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      api: "openai-chatgpt-responses",
+      input: ["text", "image"],
+    });
+  });
+
   it("keeps default Codex-backed OpenAI catalog models on the Codex Responses transport", () => {
     const provider = buildOpenAIProvider();
 

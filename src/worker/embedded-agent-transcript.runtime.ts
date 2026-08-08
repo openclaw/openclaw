@@ -1,24 +1,40 @@
 import type { WorkerTranscriptMessage } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerInferenceContext } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
+  WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+} from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionWriteLockRunner } from "../agents/sessions/agent-session.js";
-import type { Context, Message } from "../llm/types.js";
+import type { Context, Message, ModelInputContent } from "../llm/types.js";
 import {
-  cloneImageContent,
+  cloneMediaContent,
   cloneTextContent,
   cloneUsage,
   isWorkerTranscriptMessageFrameSafe,
   toWorkerTranscriptMessage,
 } from "./transcript-message.js";
 
+function cloneInferenceContent(part: ModelInputContent) {
+  if (part.type === "text") {
+    return cloneTextContent(part);
+  }
+  if (part.type === "video" && part.data.length >= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) {
+    return {
+      type: "text" as const,
+      text: "(video omitted: attachment exceeds the cloud-worker inference payload limit)",
+    };
+  }
+  return cloneMediaContent(part);
+}
+
 export function toAgentMessage(message: WorkerTranscriptMessage): Message {
   if (message.role === "user") {
     return {
       role: "user",
       content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
+        part.type === "text" ? cloneTextContent(part) : cloneMediaContent(part),
       ),
       timestamp: message.timestamp,
     };
@@ -29,7 +45,7 @@ export function toAgentMessage(message: WorkerTranscriptMessage): Message {
       toolCallId: message.toolCallId,
       toolName: message.toolName,
       content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
+        part.type === "text" ? cloneTextContent(part) : cloneMediaContent(part),
       ),
       ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
       isError: message.isError,
@@ -49,9 +65,7 @@ function toWorkerInferenceMessage(message: Message): WorkerInferenceContext["mes
       content:
         typeof message.content === "string"
           ? message.content
-          : message.content.map((part) =>
-              part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-            ),
+          : message.content.map(cloneInferenceContent),
       timestamp: message.timestamp,
       ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
     };

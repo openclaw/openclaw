@@ -10,7 +10,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
-import type { ImageContent } from "../../llm/types.js";
+import type { ImageContent, MediaContent } from "../../llm/types.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgress,
@@ -43,6 +43,8 @@ export type ReplyBackendQueueMessageOptions = {
   debounceMs?: number;
   /** Ordered current-turn images to inject with the steering text. */
   images?: ImageContent[];
+  /** Ordered native image/video payloads to inject with the steering text. */
+  inputMedia?: MediaContent[];
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in this steering prompt. */
   media?: MediaFact[];
@@ -81,6 +83,8 @@ export type ReplyBackendHandle = {
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
+  /** True only when queueMessage preserves every supported native media modality. */
+  readonly supportsQueueMessageMedia?: boolean;
   cancel(reason?: ReplyBackendCancelReason): void;
   readonly messageInjection?: ReplyBackendMessageInjection;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
@@ -140,11 +144,21 @@ type ReplyBackendQueueMessageMismatch =
 export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
     ReplyBackendHandle,
-    "sourceReplyDeliveryMode" | "supportsQueueMessageImages" | "taskSuggestionDeliveryMode"
+    | "sourceReplyDeliveryMode"
+    | "supportsQueueMessageImages"
+    | "supportsQueueMessageMedia"
+    | "taskSuggestionDeliveryMode"
   >,
   options?: ReplyBackendQueueMessageOptions,
 ): ReplyBackendQueueMessageMismatch | undefined {
-  if (options?.images?.length && backend.supportsQueueMessageImages !== true) {
+  const inputMedia = options?.inputMedia ?? options?.images;
+  const requiresVideoSupport = inputMedia?.some((media) => media.type === "video") === true;
+  if (
+    (requiresVideoSupport && backend.supportsQueueMessageMedia !== true) ||
+    (inputMedia?.length &&
+      backend.supportsQueueMessageMedia !== true &&
+      backend.supportsQueueMessageImages !== true)
+  ) {
     return "image_input_unsupported";
   }
   if (

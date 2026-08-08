@@ -24,8 +24,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthEvaluation, ModelListAuthRef } from "./list.auth-index.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import { normalizeConfiguredProviderListRow } from "./list.model-projection.js";
-import type { ListRowModel } from "./list.model-row.js";
-import { toModelRow } from "./list.model-row.js";
+import { toListRowInput, toModelRow, type ListRowModel } from "./list.model-row.js";
 import type { RowBuilderContext } from "./list.row-context.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
@@ -176,10 +175,7 @@ function projectListRowModel(params: {
     name: projected.name,
     api: projected.api,
     baseUrl: projected.baseUrl,
-    input: projected.input?.filter(
-      (item): item is NonNullable<ListRowModel["input"]>[number] =>
-        item === "text" || item === "image" || item === "document",
-    ),
+    input: projected.input ? toListRowInput(projected.input) : undefined,
     contextWindow: projected.contextWindow,
     contextTokens: projected.contextTokens,
   };
@@ -299,10 +295,11 @@ async function appendVisibleRow(params: {
 
 function resolveConfiguredModelInput(params: {
   model: Partial<ModelDefinitionConfig>;
-}): Array<"text" | "image"> {
+}): Array<"text" | "image" | "video"> {
   const input = Array.isArray(params.model.input)
     ? params.model.input.filter(
-        (item): item is "text" | "image" => item === "text" || item === "image",
+        (item): item is "text" | "image" | "video" =>
+          item === "text" || item === "image" || item === "video",
       )
     : [];
   return input.length > 0 ? input : ["text"];
@@ -323,14 +320,6 @@ function toConfiguredProviderListModel(params: {
     contextWindow: params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: params.model.contextTokens,
   };
-}
-
-function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
-  const parsed = input?.filter(
-    (item): item is NonNullable<ListRowModel["input"]>[number] =>
-      item === "text" || item === "image" || item === "document",
-  );
-  return parsed?.length ? parsed : ["text"];
 }
 
 function toPreparedCatalogListModel(

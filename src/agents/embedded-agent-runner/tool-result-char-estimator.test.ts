@@ -80,6 +80,47 @@ describe("tool-result-char-estimator", () => {
     expect(estimateMessageCharsCached(msg, cache)).toBe(8);
   });
 
+  it.each([
+    { role: "user", expected: 8_000 },
+    { role: "toolResult", expected: 16_000 },
+  ])("charges native $role video as bounded visual input", ({ role, expected }) => {
+    const msg = {
+      role,
+      toolName: "capture",
+      content: [{ type: "video", data: "dmlkZW8=", mimeType: "video/mp4" }],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    expect(estimateMessageCharsCached(msg, createMessageCharEstimateCache())).toBe(expected);
+  });
+
+  it("scales video frame estimates without charging opaque base64 as text", () => {
+    const data = "A".repeat(6_000_000);
+    const msg = {
+      role: "toolResult",
+      toolName: "capture",
+      content: [{ type: "video", data, mimeType: "video/mp4" }],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    const chars = estimateMessageCharsCached(msg, createMessageCharEstimateCache());
+    expect(chars).toBe(Math.ceil((data.length * 3) / 4 / 512) * 2);
+    expect(chars).toBeLessThan(data.length / 200);
+  });
+
+  it("keeps capped native tool-result video below a 128K-context truncation threshold", () => {
+    const msg = {
+      role: "toolResult",
+      toolName: "capture",
+      content: [{ type: "video", data: "A".repeat(24_000_000), mimeType: "video/mp4" }],
+      timestamp: 1,
+    } as unknown as AgentMessage;
+
+    const chars = estimateMessageCharsCached(msg, createMessageCharEstimateCache());
+    expect(chars).toBe(32_768 * 2);
+    expect(chars).toBeLessThan(128_000);
+  });
+
   it("estimates a large bashExecution near its rendered size", () => {
     const bigOutput = "build log line\n".repeat(60000);
     const msg = {

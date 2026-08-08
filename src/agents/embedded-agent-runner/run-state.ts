@@ -43,6 +43,8 @@ export type EmbeddedAgentQueueHandle = {
   supportsTranscriptCommitWait?: boolean;
   /** True only when queueMessage preserves images supplied in its options. */
   supportsQueueMessageImages?: boolean;
+  /** True only when queueMessage preserves every supported native media modality. */
+  supportsQueueMessageMedia?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

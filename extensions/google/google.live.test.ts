@@ -22,6 +22,24 @@ const GOOGLE_API_KEY =
   "";
 const LIVE = isLiveTestEnabled() && GOOGLE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
+// Two 64x64 solid-red H.264 frames keep native-video proof bounded and reproducible.
+const GOOGLE_LIVE_RED_VIDEO_BASE64 = [
+  "AAAAJGZ0eXBpc29tAAACAGlzb21pc282aXNvMmF2YzFtcDQxAAAC5m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAAA",
+  "AAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "AAAAAAAAAAIAAAHodHJhawAAAFx0a2hkAAAAAwAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAA",
+  "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAABAAAAAQAAAAAABhG1kaWEAAAAgbWRoZAAAAAAAAAAAAAAAAAAAQAAAAAAA",
+  "VcQAAAAAAC1oZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAVmlkZW9IYW5kbGVyAAAAAS9taW5mAAAAFHZtaGQAAAABAAAA",
+  "AAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADvc3RibAAAAKNzdHNkAAAAAAAAAAEAAACTYXZj",
+  "MQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAABAAEAASAAAAEgAAAAAAAAAARVMYXZjNjIuMjguMTAyIGxpYngyNjQAAAAAAAAA",
+  "AAAAABj//wAAAC1hdmNDAULACv/hABZnQsAK2hCbARAAAAMAEAAAAwAo8SJqAQAEaM4PyAAAABBwYXNwAAAAAQAAAAEAAAAQ",
+  "c3R0cwAAAAAAAAAAAAAAEHN0c2MAAAAAAAAAAAAAABRzdHN6AAAAAAAAAAAAAAAAAAAAEHN0Y28AAAAAAAAAAAAAAChtdmV4",
+  "AAAAIHRyZXgAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGly",
+  "YXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEyLjEwMgAAAHhtb29mAAAAEG1m",
+  "aGQAAAAAAAAAAQAAAGB0cmFmAAAAJHRmaGQAAAA5AAAAAQAAAAAAAAMKAABAAAAAACMBAQAAAAAAFHRmZHQBAAAAAAAAAAAA",
+  "AAAAAAAgdHJ1bgAAAgUAAAACAAAAgAIAAAAAAAAjAAAACgAAADVtZGF0AAAAH2WIhDoRigACGPHAAED2OAAIeUnJyddddddd",
+  "dddddeAAAAAGQZogF6CMAAAAQ21mcmEAAAArdGZyYQEAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAMKAQEBAAAAEG1m",
+  "cm8AAAAAAAAAQw==",
+].join("");
 
 async function withGoogleApiEnvUnset<T>(fn: () => Promise<T>): Promise<T> {
   const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -150,6 +168,65 @@ describeLive("google plugin live", () => {
     },
     90_000,
   );
+
+  it("understands native video through the registered Google chat transport", async () => {
+    const catalog = await buildGoogleLiveCatalogProvider({
+      apiKey: "GEMINI_API_KEY",
+      discoveryApiKey: GOOGLE_API_KEY,
+    });
+    const definition = catalog.models.find((candidate) => candidate.id === "gemini-3.5-flash-lite");
+    expect(definition?.input).toContain("video");
+
+    const model = {
+      ...definition!,
+      provider: "google",
+      baseUrl: catalog.baseUrl,
+      api: "google-generative-ai",
+    } as Model<"google-generative-ai">;
+    const { providers } = await registerGooglePlugin();
+    const provider = requireRegisteredProvider(providers, "google");
+    const streamFn = provider.createStreamFn?.({
+      provider: "google",
+      modelId: model.id,
+      model,
+    });
+    if (!streamFn) {
+      throw new Error("registered Google provider did not create its native chat transport");
+    }
+
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "What single color fills this video? Reply with exactly RED, BLUE, or GREEN.",
+                },
+                {
+                  type: "video",
+                  mimeType: "video/mp4",
+                  data: GOOGLE_LIVE_RED_VIDEO_BASE64,
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { apiKey: GOOGLE_API_KEY, maxTokens: 16 },
+      ),
+    );
+    const response = await stream.result();
+    expect(response.stopReason, response.errorMessage).not.toBe("error");
+    const answer = response.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join(" ");
+    expect(answer).toMatch(/\bRED\b/iu);
+  }, 90_000);
 
   it("synthesizes speech through the registered provider", async () => {
     const { speechProviders } = await registerGooglePlugin();

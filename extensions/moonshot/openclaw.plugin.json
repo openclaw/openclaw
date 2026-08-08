@@ -71,7 +71,8 @@
             },
             "input": [
               "text",
-              "image"
+              "image",
+              "video"
             ],
             "contextWindow": 1048576,
             "maxTokens": 1048576,
@@ -97,7 +98,8 @@
             "reasoning": true,
             "input": [
               "text",
-              "image"
+              "image",
+              "video"
             ],
             "contextWindow": 262144,
             "maxTokens": 262144,
@@ -114,7 +116,8 @@
             "reasoning": true,
             "input": [
               "text",
-              "image"
+              "image",
+              "video"
             ],
             "contextWindow": 262144,
             "maxTokens": 262144,
@@ -203,8 +206,8 @@
         "video"
       ],
       "defaultModels": {
-        "image": "kimi-k2.6",
-        "video": "kimi-k2.6"
+        "image": "kimi-k3",
+        "video": "kimi-k3"
       },
       "autoPriority": {
         "video": 20

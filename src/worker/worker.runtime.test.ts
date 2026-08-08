@@ -823,6 +823,26 @@ describe("worker runtime", () => {
     ]);
   });
 
+  it("preserves bounded native video from earlier user turns through remote inference", async () => {
+    const { gateway, launch } = await setup();
+    const video = { type: "video" as const, data: "Y2xpcA==", mimeType: "video/mp4" };
+    launch.assignment.initialMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Remember this clip." }, video],
+        timestamp: 1,
+      },
+    ];
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests[0]?.context.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Remember this clip." }, video],
+      timestamp: 1,
+    });
+  });
+
   it("runs with no tools when the Gateway authority is empty", async () => {
     const { gateway, launch } = await setup();
     launch.assignment.toolAuthority.allowedToolNames = [];

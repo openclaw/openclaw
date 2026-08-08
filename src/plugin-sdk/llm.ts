@@ -26,8 +26,10 @@ export type {
   CacheRetention,
   Context,
   ImageContent,
+  MediaContent,
   Message,
   Model,
+  ModelInputContent,
   ModelThinkingLevel,
   ProviderResponse,
   ProviderStreamOptions,
@@ -44,6 +46,7 @@ export type {
   ToolResultMessage,
   Usage,
   UserMessage,
+  VideoContent,
 } from "../llm/types.js";
 export {
   AssistantMessageEventStream,

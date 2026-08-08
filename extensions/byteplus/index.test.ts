@@ -70,4 +70,18 @@ describe("byteplus plugin", () => {
     expect(planKimi?.maxTokens).toBe(32768);
     expect(planKimi?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
+
+  it("advertises native video only for the documented Dola Seed route", () => {
+    expect(
+      BYTEPLUS_MODEL_CATALOG.filter(({ id }) =>
+        ["dola-seed-2-1-turbo-260628", "seed-2-0-code-preview-260328"].includes(id),
+      ).map(({ id, input }) => ({ id, input })),
+    ).toEqual([
+      { id: "dola-seed-2-1-turbo-260628", input: ["text", "image", "video"] },
+      { id: "seed-2-0-code-preview-260328", input: ["text", "image"] },
+    ]);
+    expect(BYTEPLUS_CODING_MODEL_CATALOG).not.toContainEqual(
+      expect.objectContaining({ input: expect.arrayContaining(["video"]) }),
+    );
+  });
 });

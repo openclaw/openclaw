@@ -56,6 +56,24 @@ describe("volcengine plugin", () => {
     ]);
   });
 
+  it("advertises native video on documented direct and coding Seed routes", () => {
+    expect(
+      DOUBAO_MODEL_CATALOG.filter(({ id }) => id.startsWith("doubao-seed")).map(
+        ({ id, input }) => ({ id, input }),
+      ),
+    ).toEqual([
+      { id: "doubao-seed-evolving", input: ["text", "image", "video"] },
+      { id: "doubao-seed-2-1-pro-260628", input: ["text", "image", "video"] },
+      { id: "doubao-seed-2-1-turbo-260628", input: ["text", "image", "video"] },
+    ]);
+    expect(
+      DOUBAO_CODING_MODEL_CATALOG.find(({ id }) => id === "doubao-seed-2.1-turbo")?.input,
+    ).toEqual(["text", "image", "video"]);
+    expect(DOUBAO_CODING_MODEL_CATALOG.find(({ id }) => id === "ark-code-latest")?.input).toEqual([
+      "text",
+    ]);
+  });
+
   it("declares its coding provider auth alias in the manifest", () => {
     const pluginJson = JSON.parse(
       readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),

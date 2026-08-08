@@ -45,9 +45,13 @@ export function printModelTable(
   }
 
   const rich = isRich(opts);
+  const inputPad = Math.max(
+    INPUT_PAD,
+    ...rows.map((row) => (sanitizeTerminalText(row.input) || "-").length),
+  );
   const header = [
     pad("Model", MODEL_PAD),
-    pad("Input", INPUT_PAD),
+    pad("Input", inputPad),
     pad("Ctx", CTX_PAD),
     pad("Local", LOCAL_PAD),
     pad("Auth", AUTH_PAD),
@@ -57,7 +61,7 @@ export function printModelTable(
 
   for (const row of rows) {
     const keyLabel = pad(truncate(sanitizeTerminalText(row.key), MODEL_PAD), MODEL_PAD);
-    const inputLabel = pad(sanitizeTerminalText(row.input) || "-", INPUT_PAD);
+    const inputLabel = pad(sanitizeTerminalText(row.input) || "-", inputPad);
     const ctxLabel = pad(formatContextLabel(row), CTX_PAD);
     const localText = row.local === null ? "-" : row.local ? "yes" : "no";
     const localLabel = pad(localText, LOCAL_PAD);
@@ -73,7 +77,7 @@ export function printModelTable(
 
     const coloredInput = colorize(
       rich,
-      row.input.includes("image") ? theme.accentBright : theme.info,
+      row.input.includes("image") || row.input.includes("video") ? theme.accentBright : theme.info,
       inputLabel,
     );
     const coloredLocal = colorize(

@@ -8,6 +8,7 @@ import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { ImageContent as LlmImageContent, MediaContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
@@ -26,12 +27,8 @@ import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
-/** Image content block for Claude API multimodal messages. */
-export type ImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
+/** Existing public image content alias for image-only command callers. */
+export type ImageContent = LlmImageContent;
 
 /** ACP turn source markers accepted by trusted command callsites. */
 type AcpTurnSource = "manual_spawn";
@@ -64,6 +61,8 @@ export type AgentCommandOpts = {
   transcriptMedia?: UserTurnInput["media"];
   /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
+  /** Hydrated image and video content supplied directly to capable models. */
+  inputMedia?: MediaContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in this prompt. */

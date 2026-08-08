@@ -118,7 +118,7 @@ type TranscriptRecord = {
   byteLength: number;
   id?: string;
   /** Private provenance; synthesized oversized placeholders must never qualify. */
-  recoveredImageData?: true;
+  recoveredInlineMediaData?: true;
   record: Record<string, unknown>;
 };
 
@@ -245,7 +245,7 @@ function extractJsonStringFieldSuffix(source: string, field: string): string | u
 function recoverOversizedMultimodalTranscriptRecord(
   line: string,
 ): Record<string, unknown> | undefined {
-  const markerPrefix = "__openclaw_omitted_image_";
+  const markerPrefix = "__openclaw_omitted_media_";
   if (line.includes(markerPrefix)) {
     return undefined;
   }
@@ -325,7 +325,7 @@ function recoverOversizedMultimodalTranscriptRecord(
       const markers = new Set(selected.map((payload) => payload.marker));
       const parsed = JSON.parse(parts.join(""), (_key: string, value: unknown) => {
         if (typeof value === "string" && value.startsWith(markerPrefix) && !markers.delete(value)) {
-          throw new Error("invalid transcript image recovery marker");
+          throw new Error("invalid transcript media recovery marker");
         }
         return value;
       }) as unknown;
@@ -334,54 +334,64 @@ function recoverOversizedMultimodalTranscriptRecord(
       }
       return parsed as Record<string, unknown>;
     };
-    const imageDataOwners = (block: Record<string, unknown>): Record<string, unknown>[] => {
+    const inlineMediaDataOwners = (block: Record<string, unknown>): Record<string, unknown>[] => {
       const source = block.source as Record<string, unknown> | undefined;
       return source && typeof source === "object" && source.type === "base64"
         ? [block, source]
         : [block];
     };
 
-    // Parse all bounded candidates once, then classify image ownership from real JSON structure.
+    // Classify image/video ownership from parsed structure; unrelated base64 must stay untouched.
     const preview = parseBoundedRedaction(payloads);
     const previewContent = (preview?.message as { content?: unknown } | undefined)?.content;
     if (!Array.isArray(previewContent)) {
       return undefined;
     }
     const payloadByMarker = new Map(payloads.map((payload) => [payload.marker, payload]));
-    const imageMarkers = new Set<string>();
+    const inlineMediaMarkers = new Set<string>();
     for (const candidate of previewContent) {
-      if (!candidate || typeof candidate !== "object" || candidate.type !== "image") {
+      if (
+        !candidate ||
+        typeof candidate !== "object" ||
+        (candidate.type !== "image" && candidate.type !== "video")
+      ) {
         continue;
       }
-      for (const owner of imageDataOwners(candidate as Record<string, unknown>)) {
+      for (const owner of inlineMediaDataOwners(candidate as Record<string, unknown>)) {
         if (typeof owner.data !== "string") {
           continue;
         }
-        if (!payloadByMarker.has(owner.data) || imageMarkers.has(owner.data)) {
+        if (!payloadByMarker.has(owner.data) || inlineMediaMarkers.has(owner.data)) {
           return undefined;
         }
-        imageMarkers.add(owner.data);
+        inlineMediaMarkers.add(owner.data);
       }
     }
-    if (imageMarkers.size === 0) {
+    if (inlineMediaMarkers.size === 0) {
       return undefined;
     }
 
     // Rebuild from the original line so document and metadata bytes remain untouched.
-    const imagePayloads = payloads.filter((payload) => imageMarkers.has(payload.marker));
-    const record = parseBoundedRedaction(imagePayloads);
+    const inlineMediaPayloads = payloads.filter((payload) =>
+      inlineMediaMarkers.has(payload.marker),
+    );
+    const record = parseBoundedRedaction(inlineMediaPayloads);
     const content = (record?.message as { content?: unknown } | undefined)?.content;
     if (!record || !Array.isArray(content)) {
       return undefined;
     }
-    const remaining = new Map(imagePayloads.map((payload) => [payload.marker, payload]));
+    const remaining = new Map(inlineMediaPayloads.map((payload) => [payload.marker, payload]));
     for (const candidate of content) {
-      if (!candidate || typeof candidate !== "object" || candidate.type !== "image") {
+      if (
+        !candidate ||
+        typeof candidate !== "object" ||
+        (candidate.type !== "image" && candidate.type !== "video")
+      ) {
         continue;
       }
       const block = candidate as Record<string, unknown>;
-      let imageBytes: number | undefined;
-      for (const owner of imageDataOwners(block)) {
+      let inlineMediaBytes: number | undefined;
+      for (const owner of inlineMediaDataOwners(block)) {
         if (typeof owner.data !== "string") {
           continue;
         }
@@ -390,12 +400,12 @@ function recoverOversizedMultimodalTranscriptRecord(
           return undefined;
         }
         remaining.delete(payload.marker);
-        imageBytes ??= payload.bytes;
+        inlineMediaBytes ??= payload.bytes;
         delete owner.data;
       }
-      if (imageBytes !== undefined) {
+      if (inlineMediaBytes !== undefined) {
         block.omitted = true;
-        block.bytes = imageBytes;
+        block.bytes = inlineMediaBytes;
       }
     }
     // Parsed numeric spellings can expand, so both archive readers need the final UTF-8 bound.
@@ -421,7 +431,7 @@ function parseTranscriptRecord(line: string): TranscriptRecord | null {
       return {
         byteLength: Buffer.byteLength(line, "utf8"),
         ...(id ? { id } : {}),
-        ...(recoveredRecord ? { recoveredImageData: true as const } : {}),
+        ...(recoveredRecord ? { recoveredInlineMediaData: true as const } : {}),
         record,
       };
     } catch {
@@ -695,10 +705,10 @@ export class ArchivedTranscriptReader {
     if (!entry) {
       return { oversized: false, found: false };
     }
-    // Raw-byte limits still reject placeholders; only bounded, validated image recoveries qualify.
+    // Raw-byte limits reject placeholders; only bounded, validated inline-media recovery qualifies.
     if (
       entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES &&
-      (entry.recoveredImageData !== true ||
+      (entry.recoveredInlineMediaData !== true ||
         jsonUtf8Bytes(entry.record) > MAX_TRANSCRIPT_PARSE_LINE_BYTES)
     ) {
       return { oversized: true, found: true, seq: entry.seq };

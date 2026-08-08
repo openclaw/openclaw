@@ -608,7 +608,11 @@ function convertOpenClawToolToSdkTool(
     const resultIsError = isToolResultError(sanitizedResult);
     // The SDK only marks fulfilled tool results as failures when isError is forwarded.
     const sdkResult = convertMcpCallToolResult({
-      content: result.content,
+      content: result.content.map((part) =>
+        part.type === "video"
+          ? { type: "text" as const, text: "(video omitted: model does not support videos)" }
+          : part,
+      ),
       isError: resultIsError,
     });
     const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;

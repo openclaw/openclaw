@@ -157,6 +157,12 @@ the Gateway already runs inside a managed Google Cloud environment.
 | Thinking/reasoning     | Yes (Gemini 2.5+ / Gemini 3+) |
 | Gemma 4 models         | Yes                           |
 
+Gemini models that advertise video input receive eligible video attachments
+directly in their normal conversation. Google can also run a separate
+video-description request when the selected reply model does not support native
+video or when `tools.media.models[]` explicitly requests video preprocessing.
+These understanding paths are separate from Veo video generation.
+
 ## Web search
 
 The bundled `gemini` web-search provider uses Gemini Google Search grounding.

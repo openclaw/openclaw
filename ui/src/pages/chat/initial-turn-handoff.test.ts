@@ -189,6 +189,48 @@ describe("initial user message handoff", () => {
     ]);
   });
 
+  it("projects an accepted first video without exposing inline payload bytes", () => {
+    const sessionKey = "agent:main:video-session";
+    const client = {};
+    const handoff = createInitialUserMessageHandoff();
+    const payload = "dmlkZW8=";
+    prepareInitialUserMessageHandoff(
+      handoff,
+      sessionKey,
+      {
+        text: "inspect this video",
+        attachments: [
+          {
+            id: "video-1",
+            mimeType: "video/mp4",
+            fileName: "demo.mp4",
+            sizeBytes: 5,
+            previewUrl: "blob:demo-video",
+            dataUrl: `data:video/mp4;base64,${payload}`,
+          },
+        ],
+        createdAt: 123,
+      },
+      client,
+      { messageId: "initial-video-send", messageSeq: 1 },
+    );
+
+    const projectedSession = { chatMessages: [] as unknown[], client };
+    expect(admitInitialUserMessageHandoff(handoff, projectedSession, sessionKey)).toBe(true);
+    expect(projectedSession.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this video" },
+          { type: "text", text: "Attached video: demo.mp4" },
+        ],
+        timestamp: 123,
+        __openclaw: { idempotencyKey: "initial-video-send:user", seq: 1 },
+      },
+    ]);
+    expect(JSON.stringify(projectedSession.chatMessages)).not.toContain(payload);
+  });
+
   it("reconciles an attachment-only first prompt by visible content without a sequence", () => {
     const sessionKey = "agent:main:image-session";
     const client = {};

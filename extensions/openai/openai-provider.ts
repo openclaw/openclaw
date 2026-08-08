@@ -58,7 +58,10 @@ import {
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
+import {
+  isOpenAICompatibleNativeVideoRoute,
+  resolveAuthoredOpenAIProviderConfig,
+} from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -423,9 +426,6 @@ function resolveCodexModelInput(
   if (modalities.has("audio")) {
     input.add("audio");
   }
-  if (modalities.has("video")) {
-    input.add("video");
-  }
   return input.size > 0 ? [...input] : (fallback?.input ?? ["text", "image"]);
 }
 
@@ -713,6 +713,26 @@ function isOpenAIProvider(provider: string | undefined): boolean {
   return normalized === PROVIDER_ID;
 }
 
+function normalizeOpenAINativeVideoInput(params: {
+  model: ProviderRuntimeModel;
+  api?: string | null;
+  baseUrl?: string;
+}): ProviderRuntimeModel {
+  if (
+    !params.model.input?.includes("video") ||
+    isOpenAICompatibleNativeVideoRoute({
+      api: params.api ?? params.model.api,
+      baseUrl: params.baseUrl ?? params.model.baseUrl,
+    })
+  ) {
+    return params.model;
+  }
+  return {
+    ...params.model,
+    input: params.model.input.filter((modality) => modality !== "video"),
+  };
+}
+
 function normalizeOpenAITransport(
   model: ProviderRuntimeModel,
   context?: {
@@ -988,29 +1008,57 @@ export function buildOpenAIProvider(): ProviderPlugin {
       order: "simple",
       run: async () => ({ providers: { [PROVIDER_ID]: OPENAI_MANIFEST_PROVIDER } }),
     },
-    resolveDynamicModel: (ctx) =>
-      shouldResolveDynamicModelThroughCodex(ctx)
+    resolveDynamicModel: (ctx) => {
+      const model = shouldResolveDynamicModelThroughCodex(ctx)
         ? codexHooks.resolveDynamicModel?.(ctx)
-        : resolveOpenAIGptForwardCompatModel(ctx),
+        : resolveOpenAIGptForwardCompatModel(ctx);
+      return model
+        ? normalizeOpenAINativeVideoInput({
+            model,
+            api:
+              model.api === "openai-chatgpt-responses"
+                ? model.api
+                : (ctx.providerConfig?.api ?? model.api),
+            baseUrl: ctx.providerConfig?.baseUrl ?? model.baseUrl,
+          })
+        : model;
+    },
     preferRuntimeResolvedModel: (ctx) => codexHooks.preferRuntimeResolvedModel?.(ctx) ?? false,
     normalizeResolvedModel: (ctx) => {
       if (!isOpenAIProvider(ctx.provider)) {
         return undefined;
       }
       const authoredCompletionsRoute = resolveAuthoredOpenAICompletionsRoute(ctx);
+      let normalized: ProviderRuntimeModel | null | undefined;
       if (authoredCompletionsRoute) {
-        return { ...ctx.model, ...authoredCompletionsRoute };
-      }
-      if (
+        normalized = { ...ctx.model, ...authoredCompletionsRoute };
+      } else if (
         shouldUseCodexResponsesHooks({
           provider: ctx.provider,
           api: ctx.model.api,
           baseUrl: ctx.model.baseUrl,
         })
       ) {
-        return codexHooks.normalizeResolvedModel?.(ctx);
+        normalized = codexHooks.normalizeResolvedModel?.(ctx);
+      } else {
+        normalized = normalizeOpenAITransport(ctx.model, ctx);
       }
-      return normalizeOpenAITransport(ctx.model, ctx);
+      const model = normalized ?? ctx.model;
+      const configuredRoute = resolveAuthoredOpenAIConfigRoute(ctx);
+      const sanitized = normalizeOpenAINativeVideoInput({
+        model,
+        api:
+          model.api === "openai-chatgpt-responses"
+            ? model.api
+            : (configuredRoute?.configuredModel?.api ??
+              configuredRoute?.configuredProvider.api ??
+              model.api),
+        baseUrl:
+          configuredRoute?.configuredModel?.baseUrl ??
+          configuredRoute?.configuredProvider.baseUrl ??
+          model.baseUrl,
+      });
+      return sanitized === model ? normalized : sanitized;
     },
     normalizeTransport: (ctx) => {
       const authoredCompletionsRoute = resolveAuthoredOpenAICompletionsRoute(ctx);

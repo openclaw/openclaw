@@ -69,6 +69,7 @@ type ChatModelProviderOption = ChatModelSelectOption & {
   isDefault: boolean;
   provider: string;
   supportsTools?: boolean;
+  supportsVideo?: boolean;
 };
 
 const CHAT_MODEL_PROVIDER_GROUP_ALIASES: Readonly<Record<string, string>> = {
@@ -223,6 +224,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       ...(typeof catalogEntry?.supportsTools === "boolean"
         ? { supportsTools: catalogEntry.supportsTools }
         : {}),
+      ...(catalogEntry?.input?.includes("video") ? { supportsVideo: true } : {}),
       isDefault,
       value: option.value,
       label: resolveChatModelPickerLabel(option.value, option.label, props.modelCatalog),
@@ -453,9 +455,11 @@ function renderChatModelReasoningSelect(params: {
       : modelOptions.find((option) => option.value === selectedModelValue);
   const selectedModelOption = activeModelOption ?? modelOptions[0];
   const modelToolsUnavailable = activeModelOption?.supportsTools === false;
+  const modelSupportsVideo = activeModelOption?.supportsVideo === true;
   const triggerTitle = [
     triggerStatusLabel ?? triggerModel,
     triggerStatusLabel ? "" : triggerThinking,
+    modelSupportsVideo ? t("chat.modelControls.nativeVideo") : "",
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
   ]
     .filter(Boolean)
@@ -661,6 +665,7 @@ function renderChatModelReasoningSelect(params: {
             count: formatContextTokenCapacity(entry.contextWindow),
           })
         : "",
+      entry.supportsVideo ? t("chat.modelControls.nativeVideo") : "",
       entry.supportsTools === false ? t("chat.modelControls.chatOnly") : "",
     ]
       .filter(Boolean)
@@ -729,6 +734,7 @@ function renderChatModelReasoningSelect(params: {
         data-chat-thinking-value=${selectedThinkingValue}
         data-chat-thinking-disabled=${thinkingDisabled ? "true" : "false"}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
+        data-chat-model-video=${modelSupportsVideo ? "supported" : "unsupported"}
         aria-label="${t("chat.selectors.model")}, ${t(
           "chat.selectors.thinkingLevel",
         )}: ${triggerTitle}"

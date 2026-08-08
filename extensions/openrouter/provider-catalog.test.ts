@@ -71,15 +71,59 @@ describe("OpenRouter provider catalog", () => {
     expect(provider.models.find((model) => model.id === "google/gemini-3.6-flash")).toMatchObject({
       name: "Google: Gemini 3.6 Flash",
       reasoning: true,
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       contextWindow: 1_048_576,
       maxTokens: 65_536,
       cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
     });
     expect(
+      provider.models.find((model) => model.id === "google/gemini-3.6-flash")?.input,
+    ).not.toContain("audio");
+    expect(
       new Headers(vi.mocked(fetchGuard).mock.calls[0]?.[0].init?.headers).get("authorization"),
     ).toBe("Bearer resolved-openrouter-key");
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves video from legacy modality strings without widening audio support", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
+      response: Response.json({
+        data: [
+          {
+            id: "native/video-model",
+            architecture: { modality: "text+video+audio->text" },
+          },
+          {
+            id: "native/audio-model",
+            architecture: { input_modalities: ["text", "audio"] },
+          },
+        ],
+      }),
+      finalUrl: url,
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenrouterLiveProvider({
+      apiKey: "synthetic-openrouter-key",
+      fetchGuard,
+    });
+
+    expect(provider.models.find((model) => model.id === "native/video-model")?.input).toEqual([
+      "text",
+      "video",
+    ]);
+    expect(provider.models.find((model) => model.id === "native/audio-model")?.input).toEqual([
+      "text",
+    ]);
+  });
+
+  it("keeps the bundled Kimi K2.6 route available for native video", () => {
+    expect(
+      buildOpenrouterProvider().models.find((model) => model.id === "moonshotai/kimi-k2.6")?.input,
+    ).toEqual(["text", "image", "video"]);
+    expect(
+      buildOpenrouterProvider().models.find((model) => model.id === "moonshotai/kimi-k2.5")?.input,
+    ).toEqual(["text", "image"]);
   });
 
   it("keeps custom provider credentials and request headers on the configured catalog origin", async () => {

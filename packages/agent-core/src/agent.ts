@@ -1,10 +1,10 @@
 // Agent Core module implements agent behavior.
 import type {
-  ImageContent,
+  MediaContent,
   Message,
   Model,
+  ModelInputContent,
   SimpleStreamOptions,
-  TextContent,
   ThinkingBudgets,
   Transport,
 } from "@openclaw/llm-core";
@@ -392,12 +392,12 @@ export class Agent {
     this.clearSteeringQueue();
   }
 
-  /** Start a new prompt from text, a single message, or a batch of messages. */
+  /** Start a new prompt from text and optional media, a message, or a message batch. */
   async prompt(message: AgentMessage | AgentMessage[]): Promise<void>;
-  async prompt(input: string, images?: ImageContent[]): Promise<void>;
+  async prompt(input: string, media?: MediaContent[]): Promise<void>;
   async prompt(
     input: string | AgentMessage | AgentMessage[],
-    images?: ImageContent[],
+    media?: MediaContent[],
   ): Promise<void> {
     if (this.activeRun) {
       throw new Error(
@@ -405,7 +405,7 @@ export class Agent {
       );
     }
     this.toolLoopRecoveryState.criticalToolLoopSeen = false;
-    const messages = this.normalizePromptInput(input, images);
+    const messages = this.normalizePromptInput(input, media);
     await this.runPromptMessages(messages);
   }
 
@@ -443,7 +443,7 @@ export class Agent {
 
   private normalizePromptInput(
     input: string | AgentMessage | AgentMessage[],
-    images?: ImageContent[],
+    media?: MediaContent[],
   ): AgentMessage[] {
     if (Array.isArray(input)) {
       return input;
@@ -453,9 +453,9 @@ export class Agent {
       return [input];
     }
 
-    const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
-    if (images && images.length > 0) {
-      content.push(...images);
+    const content: ModelInputContent[] = [{ type: "text", text: input }];
+    if (media && media.length > 0) {
+      content.push(...media);
     }
     return [{ role: "user", content, timestamp: Date.now() }];
   }

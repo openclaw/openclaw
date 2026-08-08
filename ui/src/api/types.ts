@@ -1,6 +1,9 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  AgentsListResult as ProtocolAgentsListResult,
+  ModelChoice as ProtocolModelChoice,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
@@ -802,19 +805,7 @@ export type StatusSummary = Record<string, unknown>;
 export type HealthSnapshot = Record<string, unknown>;
 
 /** A model entry returned by the gateway model-catalog endpoint. */
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  alias?: string;
-  available?: boolean;
-  contextWindow?: number;
-  reasoning?: boolean;
-  supportsTools?: boolean;
-  agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
-  input?: Array<"text" | "image" | "document">;
-  apiKeySupported?: boolean;
-};
+export type ModelCatalogEntry = ProtocolModelChoice;
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;

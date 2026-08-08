@@ -23,6 +23,7 @@ import type {
   Api,
   AssistantMessage,
   Context,
+  MediaContent,
   Model,
   SimpleStreamOptions,
   StopReason,
@@ -43,6 +44,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
+  isVideoWithMediaPayload,
 } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -180,13 +182,13 @@ export function convertMessages<T extends GoogleApiType>(
   const requiresToolCallThoughtSignature =
     model.provider !== "google-gemini-cli" &&
     (isGemini3ProModel(model) || isGemini3FlashModel(model));
-  // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
-  // live inside functionResponse, so hold them until the consecutive result run ends.
-  const pendingToolResultImageTurns: Content[] = [];
+  // Parallel calls need one immediate function-response turn. Gemini < 3 media cannot
+  // live inside functionResponse, so hold it until the consecutive result run ends.
+  const pendingToolResultMediaTurns: Content[] = [];
   let activeToolResultParts: Part[] | undefined;
   const flushToolResultRun = (): void => {
-    contents.push(...pendingToolResultImageTurns);
-    pendingToolResultImageTurns.length = 0;
+    contents.push(...pendingToolResultMediaTurns);
+    pendingToolResultMediaTurns.length = 0;
     activeToolResultParts = undefined;
   };
 
@@ -293,37 +295,43 @@ export function convertMessages<T extends GoogleApiType>(
         parts,
       });
     } else if (msg.role === "toolResult") {
-      // Extract text and image content
+      // Extract text plus only the inline media modalities accepted by this model.
       const textResult = extractToolResultText(msg.content);
-      const imageContent = model.input.includes("image")
-        ? msg.content.filter(isImageWithMediaPayload)
-        : [];
+      const mediaContent = msg.content.filter(
+        (block): block is MediaContent =>
+          (isImageWithMediaPayload(block) && model.input.includes("image")) ||
+          (isVideoWithMediaPayload(block) && model.input.includes("video")),
+      );
 
       const hasText = textResult.length > 0;
-      const hasImages = imageContent.length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
 
-      // Gemini 3+ models support multimodal function responses with images nested inside
-      // functionResponse.parts. Claude and other non-Gemini models behind Cloud Code Assist /
-      // Gemini < 3 still needs a separate user image turn.
+      // Gemini function-response parts permit images/documents, never videos.
+      // Keep eligible images nested and replay every video as a later user turn.
       const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
       // Use "output" key for success, "error" key for errors as per SDK documentation
       const responseValue = hasText ? sanitizeSurrogates(textResult) : (mediaPlaceholder ?? "");
 
-      const imageParts: Part[] = imageContent.map((imageBlock) => ({
+      const toInlineMediaPart = (mediaBlock: MediaContent): Part => ({
         inlineData: {
-          mimeType: imageBlock.mimeType,
-          data: imageBlock.data,
+          mimeType: mediaBlock.mimeType,
+          data: mediaBlock.data,
         },
-      }));
+      });
+      const nestedMediaParts = modelSupportsMultimodalFunctionResponse
+        ? mediaContent.filter((block) => block.type === "image").map(toInlineMediaPart)
+        : [];
+      const deferredMedia = modelSupportsMultimodalFunctionResponse
+        ? mediaContent.filter((block) => block.type === "video")
+        : mediaContent;
 
       const includeId = requiresToolCallId(model.id);
       const functionResponsePart: Part = {
         functionResponse: {
           name: msg.toolName,
           response: msg.isError ? { error: responseValue } : { output: responseValue },
-          ...(hasImages && modelSupportsMultimodalFunctionResponse && { parts: imageParts }),
+          ...(nestedMediaParts.length > 0 && { parts: nestedMediaParts }),
           ...(includeId ? { id: msg.toolCallId } : {}),
         },
       };
@@ -339,11 +347,18 @@ export function convertMessages<T extends GoogleApiType>(
         });
       }
 
-      // For Gemini < 3, add images in a separate user message
-      if (hasImages && !modelSupportsMultimodalFunctionResponse) {
-        pendingToolResultImageTurns.push({
+      if (deferredMedia.length > 0) {
+        const hasDeferredImages = deferredMedia.some((block) => block.type === "image");
+        const hasDeferredVideos = deferredMedia.some((block) => block.type === "video");
+        const mediaLabel =
+          hasDeferredImages && hasDeferredVideos
+            ? "Tool result media:"
+            : hasDeferredVideos
+              ? "Tool result video:"
+              : "Tool result image:";
+        pendingToolResultMediaTurns.push({
           role: "user",
-          parts: [{ text: "Tool result image:" }, ...imageParts],
+          parts: [{ text: mediaLabel }, ...deferredMedia.map(toInlineMediaPart)],
         });
       }
     }

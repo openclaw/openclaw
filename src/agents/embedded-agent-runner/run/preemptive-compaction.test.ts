@@ -60,6 +60,29 @@ function makeJsonToolResultMessage(payload: unknown): AgentMessage {
   } as unknown as AgentMessage;
 }
 
+function makeMediaMessage(
+  role: "user" | "toolResult",
+  type: "image" | "video",
+  data: string,
+): AgentMessage {
+  const content = [
+    type === "image"
+      ? { type, data, mimeType: "image/png" }
+      : { type, data, mimeType: "video/mp4" },
+  ];
+  if (role === "user") {
+    return { role, content, timestamp: timestamp++ };
+  }
+  return {
+    role,
+    toolCallId: `call_${timestamp}`,
+    toolName: "capture",
+    content,
+    isError: false,
+    timestamp: timestamp++,
+  };
+}
+
 function makeAssistantToolCall(args: unknown): AgentMessage {
   return {
     role: "assistant",
@@ -101,6 +124,51 @@ describe("preemptive-compaction", () => {
     });
 
     expect(larger).toBeGreaterThan(smaller);
+  });
+
+  it.each(["user", "toolResult"] as const)(
+    "charges native %s video as visual input without tokenizing its base64 payload",
+    (role) => {
+      const data = "a".repeat(1_500_000);
+      const imageTokens = estimateLlmBoundaryTokenPressure({
+        messages: [makeMediaMessage(role, "image", data)],
+        prompt: "describe the attachment",
+      });
+      const videoTokens = estimateLlmBoundaryTokenPressure({
+        messages: [makeMediaMessage(role, "video", data)],
+        prompt: "describe the attachment",
+      });
+
+      expect(videoTokens).toBeGreaterThan(imageTokens);
+      expect(videoTokens).toBeLessThan(4_000);
+    },
+  );
+
+  it("scales video pressure with decoded bytes while retaining the image minimum", () => {
+    const estimateMedia = (type: "image" | "video", data: string) =>
+      estimateLlmBoundaryTokenPressure({
+        messages: [makeMediaMessage("user", type, data)],
+        prompt: "continue",
+      });
+
+    expect(estimateMedia("video", "YQ==")).toBe(estimateMedia("image", "YQ=="));
+    expect(estimateMedia("video", "a".repeat(2_000_000))).toBeGreaterThan(
+      estimateMedia("video", "YQ=="),
+    );
+  });
+
+  it("caps native-video preflight pressure for large provider payloads", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeMediaMessage("user", "video", "a".repeat(24_000_000))],
+      prompt: "describe the recording",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.estimatedPromptTokens).toBeGreaterThan(32_768);
+    expect(result.estimatedPromptTokens).toBeLessThan(40_000);
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
   });
 
   it("requests preemptive compaction when the reserve-based prompt budget would be exceeded", () => {

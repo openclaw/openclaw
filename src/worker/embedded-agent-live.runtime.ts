@@ -1,4 +1,5 @@
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import type { AssistantMessage } from "../llm/types.js";
@@ -275,7 +276,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           phase: "start",
           name: event.toolName,
           toolCallId: event.toolCallId,
-          args: event.args,
+          args: sanitizeDiagnosticPayload(event.args),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -288,7 +289,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           phase: "update",
           name: event.toolName,
           toolCallId: event.toolCallId,
-          partialResult: event.partialResult,
+          partialResult: sanitizeDiagnosticPayload(event.partialResult),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });
@@ -302,7 +303,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
           name: event.toolName,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: event.result,
+          result: sanitizeDiagnosticPayload(event.result),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });

@@ -268,9 +268,16 @@ endpoints only, not the Coding Plan endpoints:
 - **Image and video understanding** via `qwen3.6-plus`
 - **Wan video generation** via `wan2.6-t2v` (default), `wan2.6-i2v`, `wan2.6-r2v`, `wan2.6-r2v-flash`, `wan2.7-r2v`
 
+Compatible Standard models such as `qwen/qwen3.7-plus` and
+`qwen/qwen3.6-plus` receive eligible video attachments directly in the active
+model conversation. The separate Qwen video-description provider defaults to
+`qwen/qwen3.6-plus` and remains available when the reply model cannot accept
+video or when video preprocessing is explicitly configured.
+
 Media understanding is auto-resolved from the configured Qwen auth; no extra
 config is needed. Make sure you are on a Standard (pay-as-you-go) endpoint for
-media understanding to work.
+media understanding to work; a Coding Plan endpoint does not gain video support
+from the Standard plugin.
 
 To make Qwen the default video provider:
 

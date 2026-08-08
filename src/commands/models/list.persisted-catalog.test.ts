@@ -95,4 +95,39 @@ describe("loadPersistedListCatalogEntries", () => {
       }),
     ).toEqual([]);
   });
+
+  it("retains video and existing audio/document metadata from generated provider catalogs", () => {
+    mocks.loadPersistedPluginModelCatalogsReadOnly.mockReturnValueOnce([
+      {
+        pluginId: "moonshot",
+        contents: JSON.stringify({
+          generatedBy: "openclaw-plugin-model-catalog-v1",
+          providers: {
+            moonshot: {
+              api: "openai-completions",
+              models: [
+                {
+                  id: "kimi-k3",
+                  input: ["text", "image", "video", "audio", "document", "invalid"],
+                },
+              ],
+            },
+          },
+        }),
+      },
+    ]);
+
+    expect(
+      loadPersistedListCatalogEntries({
+        agentDir: "/tmp/openclaw-agent",
+        providerIds: new Set(["moonshot"]),
+      }),
+    ).toMatchObject([
+      {
+        provider: "moonshot",
+        id: "kimi-k3",
+        input: ["text", "image", "video", "audio", "document"],
+      },
+    ]);
+  });
 });

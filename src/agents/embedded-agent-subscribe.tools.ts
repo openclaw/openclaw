@@ -233,6 +233,51 @@ function extractAggregatedErrorField(value: unknown): string | undefined {
   return readErrorCandidate(record.aggregated);
 }
 
+function stripInlineMediaPayloads(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === "string") {
+    return redactInlineDataUriValue(value);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const sanitized = value.map((entry) => stripInlineMediaPayloads(entry, seen));
+    seen.delete(value);
+    return sanitized;
+  }
+
+  const record = value as Record<string, unknown>;
+  const type = normalizeOptionalLowercaseString(record.type);
+  const mimeType = normalizeOptionalLowercaseString(
+    record.media_type ?? record.mimeType ?? record.mime_type,
+  );
+  const data = readStringValue(record.data);
+  const carriesInlineMedia =
+    type === "image" ||
+    type === "video" ||
+    mimeType?.startsWith("image/") === true ||
+    mimeType?.startsWith("video/") === true;
+  // Preserve the established image event shape; video references without bytes remain untouched.
+  const omitData = type === "image" || (carriesInlineMedia && data !== undefined);
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (!(omitData && key === "data")) {
+      sanitized[key] = stripInlineMediaPayloads(child, seen);
+    }
+  }
+  if (omitData) {
+    const existingBytes = typeof record.bytes === "number" ? record.bytes : undefined;
+    sanitized.bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
+    sanitized.omitted = true;
+  }
+  seen.delete(value);
+  return sanitized;
+}
+
 function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") {
     return redactToolPayloadText(value);
@@ -262,41 +307,21 @@ function redactStringsDeep(value: unknown, seen = new WeakSet<object>()): unknow
 }
 
 export function sanitizeToolArgs(args: unknown): unknown {
-  return redactStringsDeep(args);
+  return redactStringsDeep(stripInlineMediaPayloads(args));
 }
 
 export function sanitizeToolResult(result: unknown): unknown {
   if (typeof result === "string") {
-    return redactToolPayloadText(result);
+    return redactToolPayloadText(redactInlineDataUriValue(result));
   }
   if (Array.isArray(result)) {
-    return redactSecrets(result);
+    return redactSecrets(stripInlineMediaPayloads(result));
   }
   if (!result || typeof result !== "object") {
     return result;
   }
-  const record = result as Record<string, unknown>;
-  // Strip image data first so the deep redaction pass doesn't waste work
-  // scanning base64 payloads (and so we capture the original byte counts).
-  const preCleaned: Record<string, unknown> = { ...record };
-  const originalContent = Array.isArray(record.content) ? record.content : null;
-  if (originalContent) {
-    preCleaned.content = originalContent.map((item) => {
-      if (!item || typeof item !== "object") {
-        return item;
-      }
-      const entry = item as Record<string, unknown>;
-      if (readStringValue(entry.type) === "image") {
-        const data = readStringValue(entry.data);
-        const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
-        const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
-        const cleaned = { ...entry };
-        delete cleaned.data;
-        return Object.assign({}, cleaned, { bytes, omitted: true });
-      }
-      return entry;
-    });
-  }
+  // Strip every nested media payload before credential redaction scans untrusted base64.
+  const preCleaned = stripInlineMediaPayloads(result) as Record<string, unknown>;
   // Deep-redact the entire result so any top-level or nested string is
   // protected, not just `details` and text content blocks.
   const baseline = redactSecrets(preCleaned);
@@ -330,7 +355,7 @@ function redactInlineDataUriValue(value: string): string {
 
 function carriesBinaryData(record: Record<string, unknown>): boolean {
   const type = normalizeOptionalLowercaseString(record.type);
-  if (type === "audio" || type === "image" || type === "base64") {
+  if (type === "audio" || type === "image" || type === "video" || type === "base64") {
     return true;
   }
   const mediaType = normalizeOptionalLowercaseString(record.media_type ?? record.mimeType);
@@ -393,7 +418,15 @@ function stringifyStructuredToolResultContent(block: unknown): string | undefine
   }
   const record = block as Record<string, unknown>;
   const type = readStringValue(record.type);
-  if (type === "text" || type === "image" || type === "image_url" || type === "audio") {
+  if (
+    type === "text" ||
+    type === "image" ||
+    type === "image_url" ||
+    type === "audio" ||
+    type === "video" ||
+    type === "video_url" ||
+    type === "input_video"
+  ) {
     return undefined;
   }
   try {

@@ -56,8 +56,8 @@ const mediaMetadataPlugins = vi.hoisted(() => [
       },
       moonshot: {
         capabilities: ["image", "video"],
-        defaultModels: { image: "kimi-k2.6", video: "kimi-k2.6" },
-        autoPriority: { video: 30 },
+        defaultModels: { image: "kimi-k3", video: "kimi-k3" },
+        autoPriority: { video: 20 },
       },
       openai: {
         capabilities: ["image", "audio"],
@@ -71,9 +71,17 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         defaultModels: { image: "auto", audio: "openai/whisper-large-v3-turbo" },
         autoPriority: { audio: 35 },
       },
-      qwen: { capabilities: ["video"], autoPriority: { video: 20 } },
+      qwen: {
+        capabilities: ["image", "video"],
+        defaultModels: { image: "qwen3.6-plus", video: "qwen3.6-plus" },
+        autoPriority: { video: 15 },
+      },
       xai: { capabilities: ["audio"], autoPriority: { audio: 25 } },
-      zai: { capabilities: ["image"], autoPriority: { image: 60 } },
+      zai: {
+        capabilities: ["image", "video"],
+        defaultModels: { image: "glm-4.6v", video: "glm-5v-turbo" },
+        autoPriority: { image: 60, video: 30 },
+      },
     },
   },
 ]);
@@ -129,7 +137,7 @@ describe("resolveDefaultMediaModel", () => {
     );
     expect(resolveDefaultMediaModel({ providerId: "openai", capability: "image" })).toBe("gpt-5.5");
     expect(resolveDefaultMediaModel({ providerId: "moonshot", capability: "image" })).toBe(
-      "kimi-k2.6",
+      "kimi-k3",
     );
     expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "image" })).toBe(
       "auto",
@@ -139,6 +147,15 @@ describe("resolveDefaultMediaModel", () => {
     );
     expect(resolveDefaultMediaModel({ providerId: "opencode-go", capability: "image" })).toBe(
       "kimi-k2.6",
+    );
+  });
+
+  it("resolves bundled video defaults from current provider metadata", () => {
+    expect(resolveDefaultMediaModel({ providerId: "moonshot", capability: "video" })).toBe(
+      "kimi-k3",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "zai", capability: "video" })).toBe(
+      "glm-5v-turbo",
     );
   });
 
@@ -224,6 +241,7 @@ describe("resolveAutoMediaKeyProviders", () => {
       "google",
       "qwen",
       "moonshot",
+      "zai",
     ]);
   });
 });

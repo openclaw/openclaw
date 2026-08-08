@@ -1,6 +1,6 @@
 import type { TranscriptEntryAnchor } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
-import type { ImageContent, Message, TextContent } from "../../llm/types.js";
+import type { Message, ModelInputContent } from "../../llm/types.js";
 import {
   buildSessionContext as buildCoreSessionContext,
   type SessionTreeEntry as CoreSessionTreeEntry,
@@ -254,7 +254,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
 
   appendCustomMessageEntry(
     customType: string,
-    content: string | (TextContent | ImageContent)[],
+    content: string | ModelInputContent[],
     display: boolean,
     details?: unknown,
   ): string {

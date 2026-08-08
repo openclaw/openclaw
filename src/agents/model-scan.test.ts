@@ -28,6 +28,40 @@ describe("scanOpenRouterModels", () => {
     vi.useRealTimers();
   });
 
+  it("retains native video from explicit input modalities without treating output as input", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/native-video:free",
+          architecture: {
+            input_modalities: ["text", "image", "video", "audio"],
+            modality: "text->text",
+          },
+          pricing: { prompt: "0", completion: "0" },
+        },
+        {
+          id: "acme/directional-video:free",
+          architecture: { modality: "text+video->image" },
+          pricing: { prompt: "0", completion: "0" },
+        },
+        {
+          id: "acme/output-only-video:free",
+          architecture: { modality: "text->image+video" },
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ],
+    });
+
+    const results = await scanOpenRouterModels({ fetchImpl, probe: false });
+
+    expect(results.map(({ id, input }) => ({ id, input }))).toEqual([
+      { id: "acme/native-video:free", input: ["text", "image", "video"] },
+      { id: "acme/directional-video:free", input: ["text", "video"] },
+      { id: "acme/output-only-video:free", input: ["text"] },
+    ]);
+    expect(results[0]?.modality).toBe("text+image+video+audio->text");
+  });
+
   it("lists free models without probing", async () => {
     const fetchImpl = createFetchFixture({
       data: [

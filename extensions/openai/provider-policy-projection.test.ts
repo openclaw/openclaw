@@ -1,7 +1,7 @@
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
-import type { ModelApi } from "openclaw/plugin-sdk/provider-model-types";
-import { describe, expect, it } from "vitest";
-import { projectConfiguredModelRow } from "./provider-policy-api.js";
+import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeConfig, projectConfiguredModelRow } from "./provider-policy-api.js";
 
 function createProjectionContext(params?: {
   modelId?: string;
@@ -60,6 +60,22 @@ describe("OpenAI configured-row projection", () => {
     expect(projectConfiguredModelRow(createProjectionContext())).toBeNull();
   });
 
+  it("removes falsely advertised video before bypassing first-party runtime normalization", () => {
+    const context = createProjectionContext();
+    context.model.input = ["text", "image", "video"];
+
+    expect(projectConfiguredModelRow(context)).toMatchObject({
+      input: ["text", "image"],
+    });
+  });
+
+  it("keeps declared video on custom OpenAI-compatible Responses routes", () => {
+    const context = createProjectionContext({ rowBaseUrl: "https://video.example.test/v1" });
+    context.model.input = ["text", "image", "video"];
+
+    expect(projectConfiguredModelRow(context)).toBeNull();
+  });
+
   it.each([
     {
       source: "provider",
@@ -104,4 +120,137 @@ describe("OpenAI configured-row projection", () => {
       ).toBeUndefined();
     },
   );
+});
+
+describe("OpenAI configured native-video capabilities", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    {
+      name: "the default OpenAI Platform endpoint",
+      providerApi: "openai-responses" as const,
+      supportsVideo: false,
+    },
+    {
+      name: "an explicit OpenAI Platform endpoint",
+      providerApi: "openai-completions" as const,
+      providerBaseUrl: "https://api.openai.com/v1",
+      supportsVideo: false,
+    },
+    {
+      name: "the ChatGPT endpoint",
+      providerApi: "openai-chatgpt-responses" as const,
+      providerBaseUrl: "https://chatgpt.com/backend-api/codex",
+      supportsVideo: false,
+    },
+    {
+      name: "ChatGPT transport on an explicitly configured relay",
+      providerApi: "openai-chatgpt-responses" as const,
+      providerBaseUrl: "https://video.example.test/v1",
+      supportsVideo: false,
+    },
+    {
+      name: "a custom OpenAI-compatible provider endpoint",
+      providerApi: "openai-completions" as const,
+      providerBaseUrl: "https://video.example.test/v1",
+      supportsVideo: true,
+    },
+    {
+      name: "a custom model endpoint overriding the first-party provider",
+      providerApi: "openai-responses" as const,
+      providerBaseUrl: "https://api.openai.com/v1",
+      modelBaseUrl: "https://video.example.test/v1",
+      supportsVideo: true,
+    },
+    {
+      name: "a first-party model endpoint overriding a custom provider",
+      providerApi: "openai-completions" as const,
+      providerBaseUrl: "https://video.example.test/v1",
+      modelBaseUrl: "https://api.openai.com/v1",
+      supportsVideo: false,
+    },
+    {
+      name: "an environment-only custom OpenAI-compatible endpoint",
+      providerApi: "openai-responses" as const,
+      environmentBaseUrl: "https://video.example.test/v1",
+      supportsVideo: true,
+    },
+    {
+      name: "a first-party model endpoint overriding a custom environment endpoint",
+      providerApi: "openai-responses" as const,
+      environmentBaseUrl: "https://video.example.test/v1",
+      modelBaseUrl: "https://api.openai.com/v1",
+      supportsVideo: false,
+    },
+    {
+      name: "a model-level ChatGPT adapter overriding a custom provider",
+      providerApi: "openai-responses" as const,
+      providerBaseUrl: "https://video.example.test/v1",
+      modelApi: "openai-chatgpt-responses" as const,
+      supportsVideo: false,
+    },
+  ])(
+    "keeps provider-owned capability truth for $name",
+    ({
+      providerApi,
+      providerBaseUrl,
+      modelApi,
+      modelBaseUrl,
+      environmentBaseUrl,
+      supportsVideo,
+    }) => {
+      vi.stubEnv("OPENAI_BASE_URL", environmentBaseUrl ?? "");
+      const configuredProvider = {
+        api: providerApi,
+        baseUrl: providerBaseUrl ?? "",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "Configured model",
+            reasoning: true,
+            input: ["text", "image", "video", "audio"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 96_000,
+            maxTokens: 128_000,
+            ...(modelApi ? { api: modelApi } : {}),
+            ...(modelBaseUrl ? { baseUrl: modelBaseUrl } : {}),
+          },
+        ],
+      } satisfies ModelProviderConfig;
+
+      const normalized = normalizeConfig({
+        provider: "openai",
+        providerConfig: configuredProvider,
+      });
+
+      expect(normalized.models[0]?.input).toEqual(
+        supportsVideo ? ["text", "image", "video", "audio"] : ["text", "image", "audio"],
+      );
+      expect(normalized === configuredProvider).toBe(supportsVideo);
+    },
+  );
+
+  it("does not apply OpenAI policy to another provider", () => {
+    const configuredProvider = {
+      api: "openai-completions",
+      baseUrl: "https://api.moonshot.ai/v1",
+      models: [
+        {
+          id: "kimi-k3",
+          name: "Kimi K3",
+          reasoning: true,
+          input: ["text", "image", "video"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        },
+      ],
+    } satisfies ModelProviderConfig;
+
+    expect(normalizeConfig({ provider: "moonshot", providerConfig: configuredProvider })).toBe(
+      configuredProvider,
+    );
+  });
 });

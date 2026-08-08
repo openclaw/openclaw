@@ -163,7 +163,8 @@ function modelDefinitionFromManifestRow(
     return undefined;
   }
   const input: ModelDefinitionConfig["input"] = row.input.filter(
-    (value): value is "text" | "image" => value === "text" || value === "image",
+    (value): value is "text" | "image" | "video" =>
+      value === "text" || value === "image" || value === "video",
   );
   return {
     id: row.id,

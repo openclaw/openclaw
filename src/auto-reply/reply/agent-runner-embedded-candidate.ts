@@ -79,8 +79,8 @@ export async function runEmbeddedFallbackCandidate(params: {
   fastModeAutoProgressState: FastModeAutoProgressState;
   bootstrapContextRunKind: BootstrapContextRunKind;
   bootstrapPromptWarningSignaturesSeen: string[];
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
+  currentTurnMedia: Awaited<
+    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnInputMedia>
   >;
   signalExecutionPhaseForTyping: NonNullable<
     Parameters<typeof runEmbeddedAgent>[0]["onExecutionPhase"]
@@ -245,8 +245,9 @@ export async function runEmbeddedFallbackCandidate(params: {
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         bootstrapContextMode: turn.opts?.bootstrapContextMode,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
-        images: params.currentTurnImages.images,
-        imageOrder: params.currentTurnImages.imageOrder,
+        inputMedia: params.currentTurnMedia.inputMedia,
+        images: params.currentTurnMedia.images,
+        imageOrder: params.currentTurnMedia.imageOrder,
         abortSignal: params.runAbortSignal,
         replyOperation: turn.replyOperation,
         deferTerminalLifecycle: true,

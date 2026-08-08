@@ -74,6 +74,31 @@ describe("mcp.tools.call.v1", () => {
     });
   });
 
+  it("replaces unsupported video with bounded visible text while preserving supported content", async () => {
+    const videoData = "PRIVATE_VIDEO_BYTES".repeat(1_024);
+    const result = await invokeMcp(
+      managerWith(async () => ({
+        content: [
+          { type: "text", text: "before video" },
+          { type: "video", data: videoData, mimeType: "video/mp4" } as never,
+          { type: "audio", data: "YXVkaW8=", mimeType: "audio/wav" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        ],
+      })),
+      { server: "docs", tool: "mixed-media" },
+    );
+
+    expect(result.payload).toEqual({
+      content: [
+        { type: "text", text: "before video" },
+        { type: "text", text: "[video omitted: MCP does not support native video]" },
+        { type: "text", text: "[audio audio/wav]" },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain(videoData);
+  });
+
   it("maps MCP tool errors and unavailable servers to failed invokes", async () => {
     const toolError = await invokeMcp(
       managerWith(async () => ({ isError: true, content: [{ type: "text", text: "bad query" }] })),

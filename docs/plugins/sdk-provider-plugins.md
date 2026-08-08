@@ -202,6 +202,16 @@ catalog, API-key auth, and dynamic model resolution.
     calls and response mapping in the plugin; OpenClaw owns the shared row
     shape, source labels, and help rendering.
 
+    For native video understanding, publish `input: ["text", "image", "video"]`
+    only when both the model and its selected provider transport accept video.
+    Conversation video uses
+    `{ type: "video", data: "<base64>", mimeType: "video/mp4" }`. Import the
+    canonical `VideoContent`, `MediaContent`, and
+    `ModelInputContent` types from `openclaw/plugin-sdk/plugin-entry`. Provider
+    adapters own conversion to their documented wire format. Models without
+    native video can still receive a separate media-understanding description.
+    Native video input and `video_generation` are independent capabilities.
+
     That is a working provider. Users can now run
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
@@ -236,7 +246,7 @@ catalog, API-key auth, and dynamic model resolution.
     | Endpoint | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor. |
     | Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect. |
     | Cache | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached. |
-    | Filtering | Exact live IDs keep their trusted static metadata. New rows are projected conservatively as text/chat models. Disabled, archived, deprecated, explicitly non-chat, embedding, reranking, moderation, speech, image-only, and video-only rows are excluded. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog. |
+    | Filtering | Exact live IDs keep their trusted static metadata. New chat rows preserve explicitly advertised image and video input; otherwise they remain text-only. Audio does not become a native chat modality. Disabled, archived, deprecated, explicitly non-chat, embedding, reranking, moderation, speech, image-only, and video-only rows are excluded. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog. |
     | Admission | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and fail closed when the row carries no capability data. |
     | Failure | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider. |
 

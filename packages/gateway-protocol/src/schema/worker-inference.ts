@@ -49,6 +49,15 @@ const WorkerInferenceImageContentSchema = workerInferenceObject({
   mimeType: Type.String({ minLength: 1, maxLength: 256 }),
 });
 
+const WorkerInferenceVideoContentSchema = workerInferenceObject({
+  type: Type.Literal("video"),
+  data: Type.String({
+    minLength: 1,
+    maxLength: WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
+  }),
+  mimeType: Type.String({ minLength: 1, maxLength: 256 }),
+});
+
 const WorkerInferenceThinkingContentSchema = workerInferenceObject({
   type: Type.Literal("thinking"),
   thinking: InferenceTextSchema,
@@ -69,10 +78,17 @@ const WorkerInferenceUserMessageSchema = workerInferenceObject({
   role: Type.Literal("user"),
   content: Type.Union([
     InferenceTextSchema,
-    Type.Array(Type.Union([WorkerInferenceTextContentSchema, WorkerInferenceImageContentSchema]), {
-      minItems: 1,
-      maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
-    }),
+    Type.Array(
+      Type.Union([
+        WorkerInferenceTextContentSchema,
+        WorkerInferenceImageContentSchema,
+        WorkerInferenceVideoContentSchema,
+      ]),
+      {
+        minItems: 1,
+        maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+      },
+    ),
   ]),
   timestamp: LiveIntegerSchema,
   runtimeContextCarrier: Type.Optional(Type.Boolean()),
@@ -130,7 +146,11 @@ const WorkerInferenceMessageSchema = Type.Union([
     toolCallId: WorkerIdentifierSchema,
     toolName: WorkerIdentifierSchema,
     content: Type.Array(
-      Type.Union([WorkerInferenceTextContentSchema, WorkerInferenceImageContentSchema]),
+      Type.Union([
+        WorkerInferenceTextContentSchema,
+        WorkerInferenceImageContentSchema,
+        WorkerInferenceVideoContentSchema,
+      ]),
       { maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
     ),
     details: Type.Optional(Type.Unknown()),

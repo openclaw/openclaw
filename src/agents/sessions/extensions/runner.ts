@@ -3,7 +3,7 @@
  */
 
 import type { KeyId } from "@earendil-works/pi-tui";
-import type { ImageContent, Model } from "../../../llm/types.js";
+import type { ImageContent, MediaContent, Model } from "../../../llm/types.js";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
@@ -80,6 +80,41 @@ const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 ] as const;
 
 type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
+
+function projectLegacyImages(media: MediaContent[] | undefined): ImageContent[] | undefined {
+  if (!media?.length) {
+    return undefined;
+  }
+  // Preserve the original image array's non-enumerable provenance for released image-only callers.
+  if (media.every((part): part is ImageContent => part.type === "image")) {
+    return media;
+  }
+  const images = media.filter((part): part is ImageContent => part.type === "image");
+  return images.length > 0 ? images : undefined;
+}
+
+function replaceLegacyImages(
+  media: MediaContent[] | undefined,
+  images: ImageContent[],
+): MediaContent[] {
+  if (!media?.length || media.every((part) => part.type === "image")) {
+    return images;
+  }
+  let imageIndex = 0;
+  const updated: MediaContent[] = [];
+  for (const part of media) {
+    if (part.type === "video") {
+      updated.push(part);
+    } else if (imageIndex < images.length) {
+      const replacement = images[imageIndex];
+      if (replacement) {
+        updated.push(replacement);
+        imageIndex++;
+      }
+    }
+  }
+  return imageIndex === images.length ? updated : [...updated, ...images.slice(imageIndex)];
+}
 
 const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
   const builtinKeybindings = {} as BuiltInKeyBindings;
@@ -987,7 +1022,7 @@ export class ExtensionRunner {
 
   async emitBeforeAgentStart(
     prompt: string,
-    images: ImageContent[] | undefined,
+    media: MediaContent[] | undefined,
     systemPrompt: string,
     systemPromptOptions: BuildSystemPromptOptions,
   ): Promise<BeforeAgentStartCombinedResult | undefined> {
@@ -1014,7 +1049,8 @@ export class ExtensionRunner {
           const event: BeforeAgentStartEvent = {
             type: "before_agent_start",
             prompt,
-            images,
+            media,
+            images: projectLegacyImages(media),
             systemPrompt: currentSystemPrompt,
             systemPromptOptions,
           };
@@ -1112,12 +1148,12 @@ export class ExtensionRunner {
   /** Emit input event. Transforms chain, "handled" short-circuits. */
   async emitInput(
     text: string,
-    images: ImageContent[] | undefined,
+    media: MediaContent[] | undefined,
     source: InputSource,
   ): Promise<InputEventResult> {
     const ctx = this.createContext();
     let currentText = text;
-    let currentImages = images;
+    let currentMedia = media;
 
     for (const ext of this.extensions) {
       for (const handler of ext.handlers.get("input") ?? []) {
@@ -1125,7 +1161,8 @@ export class ExtensionRunner {
           const event: InputEvent = {
             type: "input",
             text: currentText,
-            images: currentImages,
+            media: currentMedia,
+            images: projectLegacyImages(currentMedia),
             source,
           };
           const result = (await handler(event, ctx)) as InputEventResult | undefined;
@@ -1134,7 +1171,12 @@ export class ExtensionRunner {
           }
           if (result?.action === "transform") {
             currentText = result.text;
-            currentImages = result.images ?? currentImages;
+            if (result.media !== undefined) {
+              currentMedia = result.media;
+            } else if (result.images !== undefined) {
+              // Released image-only plugins may replace images without being aware of video blocks.
+              currentMedia = replaceLegacyImages(currentMedia, result.images);
+            }
           }
         } catch (err) {
           this.emitError({
@@ -1146,8 +1188,13 @@ export class ExtensionRunner {
         }
       }
     }
-    return currentText !== text || currentImages !== images
-      ? { action: "transform", text: currentText, images: currentImages }
+    return currentText !== text || currentMedia !== media
+      ? {
+          action: "transform",
+          text: currentText,
+          media: currentMedia,
+          images: projectLegacyImages(currentMedia),
+        }
       : { action: "continue" };
   }
 }

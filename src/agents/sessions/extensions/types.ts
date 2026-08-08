@@ -25,9 +25,10 @@ import type {
   AssistantMessageEventStreamContract,
   Context,
   ImageContent,
+  MediaContent,
   Model,
+  ModelInputContent,
   SimpleStreamOptions,
-  TextContent,
   ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
 import type { Static, TSchema } from "typebox";
@@ -434,7 +435,7 @@ export interface ReplacedSessionContext extends ExtensionCommandContext {
   ): Promise<void>;
 
   sendUserMessage(
-    content: string | (TextContent | ImageContent)[],
+    content: string | ModelInputContent[],
     options?: { deliverAs?: "steer" | "followUp" },
   ): Promise<void>;
 }
@@ -708,7 +709,9 @@ export interface BeforeAgentStartEvent {
   type: "before_agent_start";
   /** The raw user prompt text (after expansion). */
   prompt: string;
-  /** Images attached to the user prompt, if any. */
+  /** Ordered image and video attachments for the user prompt, if any. */
+  media?: MediaContent[];
+  /** @deprecated Use media; retained for the shipped image-only plugin API. */
   images?: ImageContent[];
   /** The fully assembled system prompt string. */
   systemPrompt: string;
@@ -840,7 +843,9 @@ export interface InputEvent {
   type: "input";
   /** The input text */
   text: string;
-  /** Attached images, if any */
+  /** Ordered image and video attachments, if any. */
+  media?: MediaContent[];
+  /** @deprecated Use media; retained for the shipped image-only plugin API. */
   images?: ImageContent[];
   /** Where the input came from */
   source: InputSource;
@@ -849,7 +854,13 @@ export interface InputEvent {
 /** Result from input event handler */
 export type InputEventResult =
   | { action: "continue" }
-  | { action: "transform"; text: string; images?: ImageContent[] }
+  | {
+      action: "transform";
+      text: string;
+      media?: MediaContent[];
+      /** @deprecated Use media; retained for the shipped image-only plugin API. */
+      images?: ImageContent[];
+    }
   | { action: "handled" };
 
 // ============================================================================
@@ -921,7 +932,7 @@ interface ToolResultEventBase {
   type: "tool_result";
   toolCallId: string;
   input: Record<string, unknown>;
-  content: (TextContent | ImageContent)[];
+  content: ModelInputContent[];
   isError: boolean;
 }
 
@@ -1103,7 +1114,7 @@ export interface UserBashEventResult {
 }
 
 export interface ToolResultEventResult {
-  content?: (TextContent | ImageContent)[];
+  content?: ModelInputContent[];
   details?: unknown;
   isError?: boolean;
 }
@@ -1310,7 +1321,7 @@ export interface ExtensionAPI {
    * When the agent is streaming, use deliverAs to specify how to queue the message.
    */
   sendUserMessage(
-    content: string | (TextContent | ImageContent)[],
+    content: string | ModelInputContent[],
     options?: { deliverAs?: "steer" | "followUp" },
   ): void;
 
@@ -1489,7 +1500,7 @@ interface ProviderModelConfig {
   /** Maps OpenClaw thinking levels to provider/model-specific values; null marks a level unsupported. */
   thinkingLevelMap?: Model["thinkingLevelMap"];
   /** Supported input types. */
-  input: ("text" | "image")[];
+  input: Model["input"];
   /** Cost per token (for tracking, can be 0). */
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   /** Maximum context window size in tokens. */
@@ -1537,7 +1548,7 @@ type SendMessageHandler = <T = unknown>(
 ) => void;
 
 type SendUserMessageHandler = (
-  content: string | (TextContent | ImageContent)[],
+  content: string | ModelInputContent[],
   options?: { deliverAs?: "steer" | "followUp" },
 ) => void;
 

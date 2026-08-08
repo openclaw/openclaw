@@ -1,6 +1,6 @@
 import * as os from "node:os";
 import { describe, expect, it } from "vitest";
-import { appendSessionToolTruncationWarning, shortenPath } from "./render-utils.js";
+import { appendSessionToolTruncationWarning, getTextOutput, shortenPath } from "./render-utils.js";
 
 const theme = {
   fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -47,5 +47,32 @@ describe("shortenPath", () => {
 
   it("returns an empty string for non-string input", () => {
     expect(shortenPath(undefined)).toBe("");
+  });
+});
+
+describe("getTextOutput", () => {
+  it("renders video-only results without exposing binary payloads", () => {
+    expect(
+      getTextOutput(
+        {
+          content: [{ type: "video", mimeType: "video/mp4", data: "private-base64-payload" }],
+        },
+        true,
+      ),
+    ).toBe("[video: video/mp4]");
+  });
+
+  it("preserves text alongside video and bounds unsafe MIME metadata", () => {
+    expect(
+      getTextOutput(
+        {
+          content: [
+            { type: "text", text: "captured clip" },
+            { type: "video", mimeType: "video/webm\nprivate", data: "secret" },
+          ],
+        },
+        false,
+      ),
+    ).toBe("captured clip\n[video: video/unknown]");
   });
 });

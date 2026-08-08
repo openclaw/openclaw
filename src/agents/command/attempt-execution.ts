@@ -1216,6 +1216,9 @@ export function runAgentAttempt(params: {
     // CLI-origin retries cannot rely on transcript replay: orphan-user repair
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
+    inputMedia: shouldForwardImagesToEmbedded
+      ? (params.opts.inputMedia ?? params.opts.images)
+      : undefined,
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     media: params.opts.media,
     clientTools: params.opts.clientTools,

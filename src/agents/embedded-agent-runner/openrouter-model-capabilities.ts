@@ -34,7 +34,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 // applied to the sibling pricing-cache endpoint (16 MiB).
 const OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SQLITE_CACHE_OWNER_ID = "core:openrouter-model-capabilities";
-const SQLITE_CACHE_NAMESPACE = "models.v3";
+const SQLITE_CACHE_NAMESPACE = "models.v4";
 const SQLITE_CACHE_MAX_ENTRIES = 10_000;
 
 // ---------------------------------------------------------------------------
@@ -45,8 +45,10 @@ interface OpenRouterApiModel {
   id: string;
   name?: string;
   modality?: string;
+  input_modalities?: string[];
   architecture?: {
     modality?: string;
+    input_modalities?: string[];
   };
   supported_parameters?: string[];
   context_length?: number;
@@ -66,7 +68,7 @@ interface OpenRouterApiModel {
 
 interface OpenRouterModelCapabilities {
   name: string;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "video">;
   reasoning: boolean;
   supportsTools?: boolean;
   contextWindow: number;
@@ -147,11 +149,17 @@ let fetchInFlight: Promise<void> | undefined;
 const skipNextMissRefresh = new Set<string>();
 
 function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
-  const input: Array<"text" | "image"> = ["text"];
+  const input: OpenRouterModelCapabilities["input"] = ["text"];
+  const advertisedModalities = model.architecture?.input_modalities ?? model.input_modalities;
   const modality = model.architecture?.modality ?? model.modality ?? "";
-  const inputModalities = modality.split("->")[0] ?? "";
+  const inputModalities = Array.isArray(advertisedModalities)
+    ? advertisedModalities.filter((value): value is string => typeof value === "string")
+    : (modality.split("->")[0] ?? "").split("+");
   if (inputModalities.includes("image")) {
     input.push("image");
+  }
+  if (inputModalities.includes("video")) {
+    input.push("video");
   }
   const supportedParameters = Array.isArray(model.supported_parameters)
     ? model.supported_parameters

@@ -8,8 +8,13 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
+const WORKER_VIDEO_UNAVAILABLE_TEXT =
+  "(video omitted: attachment is unavailable to the cloud worker)";
+const WORKER_VIDEO_TOO_LARGE_TEXT =
+  "(video omitted: attachment exceeds the cloud-worker transcript payload limit)";
 
 export function cloneTextContent(part: { type: "text"; text: string; textSignature?: string }) {
   return {
@@ -19,8 +24,39 @@ export function cloneTextContent(part: { type: "text"; text: string; textSignatu
   };
 }
 
-export function cloneImageContent(part: { type: "image"; data: string; mimeType: string }) {
-  return { type: "image" as const, data: part.data, mimeType: part.mimeType };
+export function cloneMediaContent(part: {
+  type: "image" | "video";
+  data: string;
+  mimeType: string;
+}) {
+  return part.type === "image"
+    ? { type: "image" as const, data: part.data, mimeType: part.mimeType }
+    : { type: "video" as const, data: part.data, mimeType: part.mimeType };
+}
+
+function boundWorkerTranscriptMedia(message: WorkerTranscriptMessage): WorkerTranscriptMessage {
+  if (message.role === "assistant") {
+    return message;
+  }
+  const hasVideo = message.content.some((part) => part.type === "video");
+  if (!hasVideo) {
+    return message;
+  }
+
+  // Transcript commits remain capped at 64 KiB even though inference accepts
+  // larger frames; never serialize a full clip just to discover it cannot fit.
+  const hasOversizedVideo = message.content.some(
+    (part) => part.type === "video" && part.data.length >= WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  );
+  if (!hasOversizedVideo && isWorkerTranscriptMessageFrameSafe(message)) {
+    return message;
+  }
+  return {
+    ...message,
+    content: message.content.map((part) =>
+      part.type === "video" ? { type: "text", text: WORKER_VIDEO_TOO_LARGE_TEXT } : part,
+    ),
+  } as WorkerTranscriptMessage;
 }
 
 export function cloneUsage(
@@ -104,29 +140,37 @@ export function toWorkerTranscriptMessage(
   message: AgentMessage,
 ): WorkerTranscriptMessage | undefined {
   if (message.role === "user") {
-    const content =
+    const content: Extract<WorkerTranscriptMessage, { role: "user" }>["content"] =
       typeof message.content === "string"
         ? [{ type: "text" as const, text: message.content }]
         : message.content.map((part) =>
-            part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
+            part.type === "text" ? cloneTextContent(part) : cloneMediaContent(part),
           );
-    return { role: "user", content, timestamp: message.timestamp };
+    if (
+      !content.some((part) => part.type === "video") &&
+      readPersistedMediaFacts(message)?.some(
+        (fact) => fact.kind === "video" || fact.contentType?.startsWith("video/") === true,
+      )
+    ) {
+      content.push({ type: "text", text: WORKER_VIDEO_UNAVAILABLE_TEXT });
+    }
+    return boundWorkerTranscriptMedia({ role: "user", content, timestamp: message.timestamp });
   }
   if (message.role === "assistant") {
     return cloneUsage(message);
   }
   if (message.role === "toolResult") {
-    return {
+    return boundWorkerTranscriptMedia({
       role: "toolResult",
       toolCallId: message.toolCallId,
       toolName: message.toolName,
       content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
+        part.type === "text" ? cloneTextContent(part) : cloneMediaContent(part),
       ),
       ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
       isError: message.isError,
       timestamp: message.timestamp,
-    };
+    });
   }
   return undefined;
 }

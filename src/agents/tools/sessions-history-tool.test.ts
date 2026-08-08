@@ -190,8 +190,57 @@ describe("sessions_history redaction", () => {
       content: [{ type: "image", mimeType: "image/png", bytes: 37, omitted: true }],
       expectedBytes: 37,
     },
+    {
+      name: "reports decoded bytes for raw video data",
+      content: [
+        {
+          type: "video",
+          data: Buffer.from([0, 1, 2, 3, 4, 5, 6]).toString("base64"),
+          mimeType: "video/mp4",
+        },
+      ],
+      expectedBytes: 7,
+    },
+    {
+      name: "replaces stale bytes for empty video data",
+      content: [{ type: "video", data: "", mimeType: "video/webm", bytes: 999 }],
+      expectedBytes: 0,
+    },
+    {
+      name: "preserves existing bytes when video data is already omitted",
+      content: [{ type: "video", mimeType: "video/mp4", bytes: 81, omitted: true }],
+      expectedBytes: 81,
+    },
   ])("$name", async ({ content, expectedBytes }) => {
     const tool = createHistoryToolWithMessage(content);
+
+    const result = await tool.execute("call-1", { sessionKey: "main" });
+    const details = readHistoryDetails(result);
+    const media = expectDefined(content[0], "media content test invariant");
+
+    expect(details.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: media.type, mimeType: media.mimeType, bytes: expectedBytes, omitted: true },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps mixed-media history bounded without exposing native video payloads", async () => {
+    const videoData = Buffer.alloc(90_000, 0x7a).toString("base64");
+    const tool = createHistoryToolWithMessage([
+      { type: "text", text: "Describe what happens in the clip." },
+      { type: "image", data: Buffer.from([1, 2, 3]).toString("base64"), mimeType: "image/png" },
+      {
+        type: "video",
+        data: videoData,
+        mimeType: "video/mp4",
+        filename: "release-demo.mp4",
+        durationMs: 1250,
+      },
+    ]);
 
     const result = await tool.execute("call-1", { sessionKey: "main" });
     const details = readHistoryDetails(result);
@@ -199,9 +248,28 @@ describe("sessions_history redaction", () => {
     expect(details.messages).toEqual([
       {
         role: "user",
-        content: [{ type: "image", mimeType: "image/png", bytes: expectedBytes, omitted: true }],
+        content: [
+          { type: "text", text: "Describe what happens in the clip." },
+          { type: "image", mimeType: "image/png", bytes: 3, omitted: true },
+          {
+            type: "video",
+            mimeType: "video/mp4",
+            filename: "release-demo.mp4",
+            durationMs: 1250,
+            bytes: 90_000,
+            omitted: true,
+          },
+        ],
       },
     ]);
+    expect(details).toMatchObject({
+      truncated: true,
+      contentTruncated: true,
+      contentRedacted: false,
+      droppedMessages: false,
+    });
+    expect(details.bytes).toBeLessThan(1024);
+    expect(JSON.stringify(result.details)).not.toContain(videoData);
   });
 
   it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {

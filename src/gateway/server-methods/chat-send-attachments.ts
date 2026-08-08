@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { DEFAULT_MAX_BYTES } from "../../media-understanding/defaults.constants.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { deleteMediaBuffer, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
@@ -23,7 +24,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
-import { resolveGatewayModelSupportsImages } from "../session-utils.js";
+import { resolveGatewayModelInputCapabilities } from "../session-utils.js";
 import {
   explicitOriginTargetsAcpSession,
   explicitOriginTargetsPluginBinding,
@@ -61,18 +62,35 @@ function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolea
   return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
 }
 
+export function canHydrateChatSendVideo(
+  ref: Pick<OffloadedRef, "mimeType" | "sizeBytes">,
+  supportsNativeVideo: boolean,
+): boolean {
+  return (
+    supportsNativeVideo &&
+    ref.mimeType.startsWith("video/") &&
+    ref.sizeBytes <= DEFAULT_MAX_BYTES.video
+  );
+}
+
 // Stage media before ACK so permanent client errors stay 4xx and retryable
 // staging failures stay 5xx. Managed PDFs retain their host-readable fallback.
 async function prestageMediaPathOffloads(params: {
   offloadedRefs: OffloadedRef[];
   includeImageRefs?: boolean;
+  supportsNativeVideo: boolean;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
 }): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
-  const mediaPathRefs = params.offloadedRefs.filter(
-    (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
-  );
+  const mediaPathRefs = params.offloadedRefs.filter((ref) => {
+    // Native model inputs hydrate directly from their managed claim checks;
+    // staging video would apply the unrelated 5 MB sandbox tool-file ceiling.
+    if (canHydrateChatSendVideo(ref, params.supportsNativeVideo)) {
+      return false;
+    }
+    return params.includeImageRefs || !ref.mimeType.startsWith("image/");
+  });
   if (mediaPathRefs.length === 0) {
     return { paths: [], types: [] };
   }
@@ -204,6 +222,7 @@ export async function prepareChatSendAttachments(params: {
   let mediaPathOffloadPaths: string[] = [];
   let mediaPathOffloadTypes: string[] = [];
   let mediaPathOffloadWorkspaceDir: string | undefined;
+  let supportsNativeVideo = false;
   const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(explicitOrigin);
   let prepareAttachmentsMs: number | undefined;
 
@@ -213,7 +232,7 @@ export async function prepareChatSendAttachments(params: {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.prepare_attachments",
         async () => {
-          const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
+          const modelInputCapabilities = await resolveGatewayModelInputCapabilities({
             loadGatewayModelCatalog: context.loadGatewayModelCatalog,
             loadGatewayModelCatalogSnapshot: context.loadGatewayModelCatalogSnapshot,
             agentId,
@@ -221,9 +240,10 @@ export async function prepareChatSendAttachments(params: {
             model: resolvedSessionModel.model,
           });
           const supportsImages =
-            supportsSessionModelImages ||
+            modelInputCapabilities.supportsImages ||
             explicitOriginTargetsAcpSession(explicitOrigin) ||
             explicitOriginTargetsPlugin;
+          supportsNativeVideo = modelInputCapabilities.supportsVideo;
           const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: context.logGateway,
@@ -243,6 +263,7 @@ export async function prepareChatSendAttachments(params: {
           } = await prestageMediaPathOffloads({
             offloadedRefs,
             includeImageRefs: !supportsImages,
+            supportsNativeVideo,
             cfg,
             sessionKey,
             agentId,
@@ -294,6 +315,7 @@ export async function prepareChatSendAttachments(params: {
       parsedImages,
       parsedMessage,
       prepareAttachmentsMs,
+      supportsNativeVideo,
     },
   };
 }

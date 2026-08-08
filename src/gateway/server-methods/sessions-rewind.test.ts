@@ -438,6 +438,67 @@ describe("session message-cut methods", () => {
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
   });
 
+  it("restores bounded inline and claim-check videos without enlarging rewind payloads", async () => {
+    const storedVideoId = "stored-video.mp4";
+    const storedVideoData = Buffer.from("stored-video");
+    mocks.readMediaBuffer.mockImplementation(async (id: string) => {
+      if (id !== storedVideoId) {
+        throw new Error(`missing or oversized media: ${id}`);
+      }
+      return {
+        id,
+        path: `/state/media/inbound/${id}`,
+        buffer: storedVideoData,
+        size: storedVideoData.byteLength,
+      };
+    });
+    const scope = { agentId: "main", sessionId: sourceSessionId, sessionKey };
+    await appendTranscriptMessage(scope, {
+      eventId: "video-entry",
+      parentId: "assistant-entry",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "edit this clip" },
+          // Direct SDK video has no durable claim check; managed MP4 bytes do.
+          { type: "video", data: "dmlkZW8=", mimeType: "video/webm" },
+        ],
+        __openclaw: {
+          media: [
+            { path: `/state/media/inbound/${storedVideoId}`, contentType: "video/mp4" },
+            { path: "/state/media/inbound/oversized-video.mp4", contentType: "video/mp4" },
+          ],
+        },
+      },
+    });
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "active-video-leaf",
+      parentId: "assistant-entry",
+      targetId: "video-entry",
+    });
+
+    const rewind = await invoke("sessions.rewind", "video-entry");
+
+    expect(rewind).toHaveBeenCalledWith(
+      true,
+      {
+        editorText: "edit this clip",
+        editorAttachments: [
+          { mimeType: "video/webm", data: "dmlkZW8=" },
+          { mimeType: "video/mp4", data: storedVideoData.toString("base64") },
+        ],
+      },
+      undefined,
+    );
+    expect(mocks.readMediaBuffer).toHaveBeenCalledWith(storedVideoId, "inbound", 5 * 1024 * 1024);
+    expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
+      "oversized-video.mp4",
+      "inbound",
+      5 * 1024 * 1024,
+    );
+  });
+
   it.each([
     ["missing", "message entry not found"],
     ["assistant-entry", "entry is not a user message"],

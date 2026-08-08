@@ -493,7 +493,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
   });
 
-  it("steers ordered current-turn images with the active prompt", async () => {
+  it("steers ordered native video and images with the active prompt", async () => {
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -504,9 +504,15 @@ describe("runReplyAgent media path normalization", () => {
       { type: "image" as const, data: "first", mimeType: "image/jpeg" },
       { type: "image" as const, data: "second", mimeType: "image/png" },
     ];
+    const inputMedia = [
+      { type: "video" as const, data: "video", mimeType: "video/mp4" },
+      ...images,
+    ];
     const followupRun = createMockFollowupRun({ prompt: "compare these" });
+    followupRun.inputMedia = inputMedia;
     followupRun.images = images;
     followupRun.media = [
+      { path: "/tmp/clip.mp4", contentType: "video/mp4" },
       { path: "/tmp/first.jpg", contentType: "image/jpeg" },
       { path: "/tmp/second.png", contentType: "image/png" },
     ];
@@ -531,6 +537,7 @@ describe("runReplyAgent media path normalization", () => {
         waitForTranscriptCommit: true,
         queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
         onQueueAccepted: parkedSteerAcceptedMock,
+        inputMedia,
         images,
         media: followupRun.media,
         taskSuggestionDeliveryMode: undefined,

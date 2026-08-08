@@ -68,8 +68,8 @@ export function prepareInitialUserMessageHandoff(
   const hasMetadata = Boolean(messageId) || identity.messageSeq !== undefined;
   const message: ApplicationInitialUserMessage = {
     role: "user",
-    // This bounded process-local handoff owns the durable bytes until
-    // authoritative history adopts messageSeq, so the first row can render now.
+    // Bounded image bytes can render inline until history adopts messageSeq;
+    // video payloads project as filename-only placeholders, never transcript data.
     content: buildUserChatMessageContentBlocks(item.text, durableAttachments, {
       renderInlineImageDataUrls: true,
     }),

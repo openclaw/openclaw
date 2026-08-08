@@ -905,7 +905,12 @@ function normalizeMcpContentBlock(block: unknown): McpInvokeContentBlock | null 
   if (!isRecord(block)) {
     return null;
   }
-  return mcpContentBlockToAgentContent(block as ContentBlock);
+  // MCP has no video content block; never stringify its private binary payload into fallback text.
+  const normalized =
+    block.type === "video" ? null : mcpContentBlockToAgentContent(block as ContentBlock);
+  return normalized === null || normalized.type === "video"
+    ? { type: "text", text: "[video omitted: MCP does not support native video]" }
+    : normalized;
 }
 
 function serializedJsonBytes(value: unknown): number {

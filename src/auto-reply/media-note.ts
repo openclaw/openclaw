@@ -116,10 +116,12 @@ function collectTranscribedAudioAttachmentIndices(
   return transcribedAudioIndices;
 }
 
-function collectDescribedImageAttachmentIndices(ctx: MsgContext): Set<number> {
+function collectDescribedVisualAttachmentIndices(ctx: MsgContext): Set<number> {
   return new Set(
     ctx.MediaUnderstanding?.flatMap((output) =>
-      output.kind === "image.description" ? [output.attachmentIndex] : [],
+      output.kind === "image.description" || output.kind === "video.description"
+        ? [output.attachmentIndex]
+        : [],
     ) ?? [],
   );
 }
@@ -129,9 +131,19 @@ type InboundMediaNoteProjection = {
   media: MediaFact[];
 };
 
+/** Records lossy visual descriptions on the authoritative facts before projection or persistence. */
+export function resolveInboundMediaHydrationFacts(ctx: MsgContext): MediaFact[] {
+  const describedVisualIndices = collectDescribedVisualAttachmentIndices(ctx);
+  return normalizeMediaFacts(ctx.media).map((fact, index) =>
+    describedVisualIndices.has(index)
+      ? Object.assign({}, fact, { hydrationSuppressed: true })
+      : fact,
+  );
+}
+
 /** Formats prompt-visible attachment text and retains facts that still need native hydration. */
 export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNoteProjection {
-  const facts = normalizeMediaFacts(ctx.media);
+  const facts = resolveInboundMediaHydrationFacts(ctx);
   const entries = facts.flatMap((fact, index) => {
     const mediaPath = fact.path?.trim() ?? "";
     return mediaPath || fact.url?.trim()
@@ -177,11 +189,7 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
   if (visibleEntries.length === 0) {
     return { media: [] };
   }
-  const describedImageIndices = collectDescribedImageAttachmentIndices(ctx);
-  const media = visibleEntries.map((entry) => ({
-    ...entry.fact,
-    ...(describedImageIndices.has(entry.index) ? { hydrationSuppressed: true } : {}),
-  }));
+  const media = visibleEntries.map((entry) => entry.fact);
   if (visibleEntries.length === 1) {
     return {
       text: formatMediaAttachedLine({

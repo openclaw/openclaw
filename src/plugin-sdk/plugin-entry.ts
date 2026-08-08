@@ -1,5 +1,10 @@
 // Plugin entry contracts define the manifest-facing hooks implemented by plugin packages.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  MediaContent as _MediaContent,
+  ModelInputContent as _ModelInputContent,
+  VideoContent as _VideoContent,
+} from "../llm/types.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
   AgentHarness as _AgentHarness,
@@ -141,6 +146,7 @@ export type AgentPromptGuidance = _AgentPromptGuidance;
 export type AgentPromptGuidanceEntry = _AgentPromptGuidanceEntry;
 export type AgentPromptSurfaceKind = _AgentPromptSurfaceKind;
 export type AnyAgentTool = _AnyAgentTool;
+export type MediaContent = _MediaContent;
 export type MediaUnderstandingProviderPlugin = _MediaUnderstandingProviderPlugin;
 export type MigrationApplyResult = _MigrationApplyResult;
 export type MigrationDetection = _MigrationDetection;
@@ -151,6 +157,7 @@ export type MigrationProviderPlugin = _MigrationProviderPlugin;
 // The plugin-authoring scaffold generates code importing ProviderPlugin from this entrypoint.
 export type ProviderPlugin = _ProviderPlugin;
 export type MigrationSummary = _MigrationSummary;
+export type ModelInputContent = _ModelInputContent;
 export type OpenClawGatewayDiscoveryAdvertiseContext = _OpenClawGatewayDiscoveryAdvertiseContext;
 export type OpenClawGatewayDiscoveryService = _OpenClawGatewayDiscoveryService;
 export type OpenClawPluginApi = _OpenClawPluginApi;
@@ -261,6 +268,7 @@ export type SpeechProviderPlugin = _SpeechProviderPlugin;
 export type TranscriptSourceProvider = _TranscriptSourceProvider;
 export type UnifiedModelCatalogProviderContext = _UnifiedModelCatalogProviderContext;
 export type UnifiedModelCatalogProviderPlugin = _UnifiedModelCatalogProviderPlugin;
+export type VideoContent = _VideoContent;
 export type WorkerLease = _WorkerLease;
 export type WorkerLeaseStatus = _WorkerLeaseStatus;
 export type WorkerProfile = _WorkerProfile;

@@ -434,6 +434,7 @@ export function prepareEmbeddedAttemptStream(input: {
     isCompacting: () => subscription.isCompacting(),
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
+    supportsQueueMessageMedia: true,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
     cancel: abortActiveRunExternally,

@@ -1,7 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { AgentPlanStep } from "../channels/streaming.js";
-import type { ImageContent } from "../llm/types.js";
+import type { ImageContent, MediaContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
@@ -116,6 +116,8 @@ export type GetReplyOptions = {
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
+  /** Ordered native image/video payloads already prepared for this user turn. */
+  inputMedia?: MediaContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered media facts whose model-facing text projection is already present in the prompt. */

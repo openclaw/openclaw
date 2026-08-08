@@ -71,6 +71,19 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
   );
 }
 
+/** Google exposes native video on Gemini, while Gemma supports at most images. */
+export function resolveGoogleModelInput(modelId: string): ProviderRuntimeModel["input"] {
+  const id = normalizeOptionalLowercaseString(googleFamilyModelId(modelId)) ?? "";
+  if (!id.startsWith(GEMMA_PREFIX)) {
+    return ["text", "image", "video"];
+  }
+  const supportsImages =
+    /^gemma-3-(?:4b|12b|27b)(?:-|$)/.test(id) ||
+    id.startsWith("gemma-3n-") ||
+    id.startsWith("gemma-4-");
+  return supportsImages ? ["text", "image"] : ["text"];
+}
+
 type GoogleForwardCompatFamily = readonly [
   googleTemplateIds: readonly string[],
   cliTemplateIds: readonly string[],
@@ -241,7 +254,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
   const lower = normalizeOptionalLowercaseString(googleFamilyModelId(trimmed)) ?? "";
 
-  return resolveFamilyForwardCompatModel({
+  const model = resolveFamilyForwardCompatModel({
     providerId: params.providerId,
     modelId: trimmed,
     normalizedModelId: isGoogleTextGenerationModelId(lower) ? lower : "",
@@ -257,6 +270,21 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       patch,
     })),
   });
+  if (!model) {
+    return undefined;
+  }
+  // Gemma borrows Gemini templates, but must never inherit Gemini-only video.
+  // Capability follows both provider ownership and the chosen transport API.
+  const hasNativeGoogleVideoTransport =
+    (params.providerId === "google" || params.providerId === "google-vertex") &&
+    (model.api === "google-generative-ai" ||
+      model.api === "google-vertex" ||
+      model.api === "openclaw-google-generative-ai-transport");
+  const input =
+    lower.startsWith(GEMMA_PREFIX) || hasNativeGoogleVideoTransport
+      ? resolveGoogleModelInput(lower)
+      : model.input.filter((capability) => capability !== "video");
+  return { ...model, input };
 }
 
 export function isModernGoogleModel(modelId: string): boolean {

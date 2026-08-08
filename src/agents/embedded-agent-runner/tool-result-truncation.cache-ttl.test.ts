@@ -28,6 +28,7 @@ function tool(params: {
   text?: unknown;
   toolName?: string;
   image?: boolean;
+  video?: boolean;
 }): AgentMessage {
   return {
     role: "toolResult",
@@ -35,6 +36,7 @@ function tool(params: {
     toolName: params.toolName ?? "read",
     content: [
       ...(params.image ? [{ type: "image", data: "AA==", mimeType: "image/png" }] : []),
+      ...(params.video ? [{ type: "video", data: "dmlkZW8=", mimeType: "video/mp4" }] : []),
       { type: "text", text: params.text ?? "result" },
     ],
     details: { source: params.id },
@@ -158,6 +160,30 @@ describe("cache-TTL tool-result projection", () => {
     const text = toolText(result, "image");
     expect(text).toContain("[image removed during context pruning]");
     expect(text).toContain("[Tool result trimmed:");
+  });
+
+  it("counts and prunes expired video without serializing its binary payload", () => {
+    const result = project(prunableHistory([tool({ id: "video", video: true })]), {
+      contextWindowTokens: 4_000,
+    });
+
+    expect(toolText(result, "video")).toBe("[video removed during context pruning]\nresult");
+    expect(toolText(result, "video")).not.toContain("dmlkZW8=");
+  });
+
+  it("prunes mixed visual media while preserving recent video results", () => {
+    const old = tool({ id: "mixed", image: true, video: true });
+    const recent = tool({ id: "recent-video", video: true });
+    const result = project(prunableHistory([old], [recent]), { contextWindowTokens: 8_000 });
+
+    expect(toolText(result, "mixed")).toBe(
+      "[image removed during context pruning]\n[video removed during context pruning]\nresult",
+    );
+    expect(
+      result.find(
+        (message) => message.role === "toolResult" && message.toolCallId === "recent-video",
+      ),
+    ).toBe(recent);
   });
 
   it("uses CJK weighting when deciding whether to enter the soft pass", () => {

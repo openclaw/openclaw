@@ -49,6 +49,18 @@ const BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING = Buffer.from(
   "BMsk-abcdef1234567890xyz",
   "ascii",
 ).toString("base64");
+const VIDEO_BASE64_WITH_SECRET_TOKEN_SUBSTRING = `${Buffer.from(
+  "0000001c6674797069736f6d0000000069736f6d00000000",
+  "hex",
+).toString("base64")}AKIDABCDEFGHIJKLMNOP`;
+const WEBM_BASE64_WITH_SECRET_TOKEN_SUBSTRING = `${Buffer.from(
+  "1a45dfa3874282847765626d",
+  "hex",
+).toString("base64")}AKIDABCDEFGHIJKLMNOP`;
+const WMV_BASE64_WITH_SECRET_TOKEN_SUBSTRING = `${Buffer.from(
+  "3026b2758e66cf11a6d900aa0062ce6c0000000000000000",
+  "hex",
+).toString("base64")}AKIDABCDEFGHIJKLMNOP`;
 const CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES =
   "gAAAAABpQnQrXzzZqcAfo3unbAY-ku84xgsvB0fpLkbDvSh3WS5qzfSCmcgwr8_abcdefghijvK2RyV2GQ4ohzcfYwhRwTvY76TvR7Tvr_";
 const GOOGLE_THOUGHT_SIGNATURE = Buffer.from(`thought-${"x".repeat(32)}`).toString("base64");
@@ -1283,6 +1295,131 @@ describe("redactTranscriptMessage", () => {
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const content = msgContent(result) as Array<{ data: string }>;
     expect(expectDefined(content[0], "content[0] test invariant").data).toBe("sk-abc…0xyz");
+  });
+
+  it.each([
+    { format: "MP4", data: VIDEO_BASE64_WITH_SECRET_TOKEN_SUBSTRING, mimeType: "video/mp4" },
+    { format: "WebM", data: WEBM_BASE64_WITH_SECRET_TOKEN_SUBSTRING, mimeType: "video/webm" },
+    { format: "WMV", data: WMV_BASE64_WITH_SECRET_TOKEN_SUBSTRING, mimeType: "video/x-ms-wmv" },
+  ])(
+    "preserves native $format video bytes while redacting adjacent text and structured secrets",
+    ({ data, mimeType }) => {
+      const msg = {
+        role: "user",
+        content: [
+          { type: "text", text: "my key is sk-abcdef1234567890xyz" },
+          {
+            type: "video",
+            data,
+            mimeType,
+            apiKey: "plainsecretvalue123",
+          },
+        ],
+      } as unknown as AgentMessage;
+
+      const result = redactTranscriptMessage(msg, cfg("tools"));
+      const content = msgContent(result) as Array<{
+        type: string;
+        text?: string;
+        data?: string;
+        apiKey?: string;
+      }>;
+      expect(expectDefined(content[0], "content[0] test invariant").text).not.toContain(
+        "sk-abcdef1234567890xyz",
+      );
+      expect(expectDefined(content[1], "content[1] test invariant")).toMatchObject({
+        data,
+        apiKey: "plains…e123",
+      });
+    },
+  );
+
+  it("redacts fake video payloads that do not contain a real video signature", () => {
+    const msg = {
+      role: "user",
+      content: [
+        { type: "video", data: "AKIDABCDEFGHIJKLMNOP", mimeType: "video/mp4" },
+        { type: "video", data: IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING, mimeType: "video/mp4" },
+      ],
+    } as unknown as AgentMessage;
+
+    const content = msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+      data: string;
+    }>;
+    expect(expectDefined(content[0], "content[0] test invariant").data).toBe("AKIDAB…MNOP");
+    expect(expectDefined(content[1], "content[1] test invariant").data).not.toContain(
+      "AKIDABCDEFGHIJKLMNOP",
+    );
+  });
+
+  it("canonicalizes provider-style video payloads while redacting adjacent secrets", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "gatewayCustom",
+          source: {
+            type: "base64",
+            media_type: " VIDEO/MP4 ",
+            data: ` ${VIDEO_BASE64_WITH_SECRET_TOKEN_SUBSTRING}\n`,
+          },
+          apiKey: "plainsecretvalue123",
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const block = expectDefined(
+      (
+        msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+          source: { data: string; media_type: string };
+          apiKey: string;
+        }>
+      )[0],
+      "provider-style video content test invariant",
+    );
+    expect(block.source).toEqual({
+      type: "base64",
+      media_type: "video/mp4",
+      data: VIDEO_BASE64_WITH_SECRET_TOKEN_SUBSTRING,
+    });
+    expect(block.apiKey).toBe("plains…e123");
+  });
+
+  it("preserves direct and nested provider video data URLs without exempting other fields", () => {
+    const dataUrl = `data:video/mp4;base64,${VIDEO_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
+    const msg = {
+      role: "assistant",
+      content: [
+        { type: "input_video", video_url: dataUrl, data: "AKIDABCDEFGHIJKLMNOP" },
+        { type: "video_url", video_url: { url: dataUrl, apiKey: "plainsecretvalue123" } },
+      ],
+    } as unknown as AgentMessage;
+
+    const content = msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+      video_url: string | { url: string; apiKey: string };
+      data?: string;
+    }>;
+    expect(expectDefined(content[0], "content[0] test invariant")).toMatchObject({
+      video_url: dataUrl,
+      data: "AKIDAB…MNOP",
+    });
+    expect(expectDefined(content[1], "content[1] test invariant").video_url).toEqual({
+      url: dataUrl,
+      apiKey: "plains…e123",
+    });
+  });
+
+  it("redacts fake video data URLs instead of trusting MIME metadata", () => {
+    const msg = {
+      role: "assistant",
+      content: [{ type: "input_video", video_url: "data:video/mp4;base64,AKIDABCDEFGHIJKLMNOP" }],
+    } as unknown as AgentMessage;
+
+    const block = expectDefined(
+      (msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{ video_url: string }>)[0],
+      "fake video data URL content test invariant",
+    );
+    expect(block.video_url).toBe("data:video/mp4;base64,AKIDAB…MNOP");
   });
 
   it("preserves valid BMP image base64 while redacting adjacent text", () => {

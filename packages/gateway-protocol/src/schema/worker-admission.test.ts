@@ -13,6 +13,7 @@ import {
   WorkerTranscriptCommitResponseFrameSchema,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
+  WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_RPC_SET_VERSION,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
   validateWorkerAdmissionHandshake,
@@ -274,6 +275,44 @@ describe("worker protocol schemas", () => {
     expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
   });
 
+  it("accepts bounded native video in user and tool-result transcript messages", () => {
+    const video = { type: "video" as const, data: "Y2xpcA==", mimeType: "video/mp4" };
+    const messages = [
+      {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "Describe this clip." }, video],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult" as const,
+        toolCallId: "call-1",
+        toolName: "probe",
+        content: [structuredClone(video)],
+        isError: false,
+        timestamp: 2,
+      },
+    ];
+
+    expect(validateWorkerTranscriptCommitParams(transcriptCommit({ messages }))).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams(
+        transcriptCommit({
+          messages: [
+            {
+              ...messages[0],
+              content: [
+                {
+                  ...video,
+                  data: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1),
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("validates the additive live-event protocol", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
@@ -368,6 +407,45 @@ describe("worker protocol schemas", () => {
     ]) {
       expect(validateWorkerInferenceStartParams(candidate)).toBe(false);
     }
+  });
+
+  it("accepts native video for inference without widening assistant output", () => {
+    const video = { type: "video" as const, data: "Y2xpcA==", mimeType: "video/mp4" };
+    const videoMessages = [
+      {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "Describe this clip." }, video],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult" as const,
+        toolCallId: "call-1",
+        toolName: "probe",
+        content: [structuredClone(video)],
+        isError: false,
+        timestamp: 2,
+      },
+    ];
+
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        context: { messages: videoMessages },
+      }),
+    ).toBe(true);
+    expect(
+      validateWorkerInferenceStartParams({
+        ...inferenceStart,
+        context: {
+          messages: [
+            {
+              ...transcriptMessages[1],
+              content: [video],
+            },
+          ],
+        },
+      }),
+    ).toBe(false);
   });
 
   it.each([

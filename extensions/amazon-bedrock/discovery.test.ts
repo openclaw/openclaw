@@ -110,6 +110,122 @@ describe("bedrock discovery", () => {
     expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("restores documented Nova video capabilities omitted by Bedrock model discovery", async () => {
+    const videoModelIds = [
+      "amazon.nova-premier-v1:0",
+      "amazon.nova-pro-v1:0",
+      "amazon.nova-lite-v1:0",
+      "amazon.nova-2-lite-v1:0",
+    ];
+    const microModelId = "amazon.nova-micro-v1:0";
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [...videoModelIds, microModelId].map((modelId) => ({
+          modelId,
+          modelName: modelId,
+          providerName: "amazon",
+          inputModalities: modelId === microModelId ? ["TEXT"] : ["TEXT", "IMAGE"],
+          outputModalities: ["TEXT"],
+          responseStreamingSupported: true,
+          modelLifecycle: { status: "ACTIVE" },
+        })),
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.amazon.nova-pro-v1:0",
+            inferenceProfileName: "US Nova Pro",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0",
+              },
+            ],
+          },
+          {
+            inferenceProfileId: "company-nova-lite",
+            inferenceProfileName: "Company Nova Lite",
+            status: "ACTIVE",
+            type: "APPLICATION",
+            models: [
+              {
+                modelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    for (const modelId of [...videoModelIds, "us.amazon.nova-pro-v1:0", "company-nova-lite"]) {
+      expectModelFields(
+        models.find((model) => model.id === modelId),
+        {
+          input: ["text", "image", "video"],
+        },
+      );
+    }
+    expectModelFields(
+      models.find((model) => model.id === microModelId),
+      { input: ["text"] },
+    );
+  });
+
+  it("preserves Nova video support for profiles without a discoverable foundation model", async () => {
+    sendMock.mockResolvedValueOnce({ modelSummaries: [] }).mockResolvedValueOnce({
+      inferenceProfileSummaries: [
+        {
+          inferenceProfileId: "global.amazon.nova-premier-v1:0",
+          inferenceProfileName: "Global Nova Premier",
+          status: "ACTIVE",
+          type: "SYSTEM_DEFINED",
+          models: [],
+        },
+        {
+          inferenceProfileId: "company-nova-2",
+          inferenceProfileName: "Company Nova 2 Lite",
+          status: "ACTIVE",
+          type: "APPLICATION",
+          models: [
+            {
+              modelArn: "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0",
+            },
+          ],
+        },
+        {
+          inferenceProfileId: "us.amazon.nova-micro-v1:0",
+          inferenceProfileName: "US Nova Micro",
+          status: "ACTIVE",
+          type: "SYSTEM_DEFINED",
+          models: [],
+        },
+      ],
+    });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expectModelFields(
+      models.find((model) => model.id === "global.amazon.nova-premier-v1:0"),
+      {
+        input: ["text", "image", "video"],
+      },
+    );
+    expectModelFields(
+      models.find((model) => model.id === "company-nova-2"),
+      {
+        input: ["text", "image", "video"],
+      },
+    );
+    expectModelFields(
+      models.find((model) => model.id === "us.amazon.nova-micro-v1:0"),
+      {
+        input: ["text"],
+      },
+    );
+  });
+
   it("applies provider filter", async () => {
     mockSingleActiveSummary();
 

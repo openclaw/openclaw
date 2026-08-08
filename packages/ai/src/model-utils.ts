@@ -5,6 +5,17 @@ import {
 } from "@openclaw/llm-core";
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
+/** Model declarations cannot expand wire protocols that never accept native video. */
+export function supportsNativeVideoInput(model: Pick<Model, "api" | "input">): boolean {
+  return (
+    model.input.includes("video") &&
+    model.api !== "openai-chatgpt-responses" &&
+    model.api !== "azure-openai-responses" &&
+    model.api !== "anthropic-messages" &&
+    model.api !== "mistral-conversations"
+  );
+}
+
 /** Calculates and stores model cost fields from token usage and per-million pricing. */
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
   const cacheWrite1h = Math.min(usage.cacheWrite, Math.max(0, usage.cacheWrite1h ?? 0));

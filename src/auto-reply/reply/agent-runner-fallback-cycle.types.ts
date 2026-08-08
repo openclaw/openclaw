@@ -54,8 +54,8 @@ export type AgentFallbackCycleParams = {
   >;
   runId: string;
   runAbortSignal?: AbortSignal;
-  currentTurnImages: Awaited<
-    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnImages>
+  currentTurnMedia: Awaited<
+    ReturnType<typeof import("./current-turn-images.js").resolveCurrentTurnInputMedia>
   >;
   state: AgentFallbackCycleState;
   presentation: ReturnType<typeof createAgentTurnPresentation>;

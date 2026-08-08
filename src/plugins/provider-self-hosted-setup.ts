@@ -64,6 +64,8 @@ type LlamaCppPropsResponse = {
   n_ctx?: unknown;
 };
 
+type SelfHostedModelInput = Array<"text" | "image" | "video">;
+
 function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
@@ -111,6 +113,30 @@ function readOpenAICompatibleContextWindow(
     }
   }
   return undefined;
+}
+
+function readOpenAICompatibleModelInput(model: Record<string, unknown>): SelfHostedModelInput {
+  const architecture = asObject(model.architecture);
+  const capabilities = asObject(model.capabilities);
+  const modelInfo = asObject(model.model_info);
+  const explicit = [model, architecture, capabilities, modelInfo]
+    .flatMap((record) =>
+      record ? [record.input_modalities, record.inputModalities, record.input] : [],
+    )
+    .find(Array.isArray);
+  const modality =
+    normalizeOptionalString(architecture?.modality) ?? normalizeOptionalString(model.modality);
+  const advertised = explicit
+    ? explicit.filter((value): value is string => typeof value === "string")
+    : (modality?.split("->", 1)[0] ?? "").split("+");
+  const input: SelfHostedModelInput = ["text"];
+  if (advertised.includes("image")) {
+    input.push("image");
+  }
+  if (advertised.includes("video")) {
+    input.push("video");
+  }
+  return input;
 }
 
 async function readSelfHostedDiscoveryJson<T>(response: Response, label: string): Promise<T> {
@@ -229,7 +255,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
       const discoveredModels = models.flatMap((rawModel) => {
         const model = asObject(rawModel);
         const modelId = normalizeOptionalString(model?.id);
-        if (!modelId) {
+        if (!model || !modelId) {
           return [];
         }
         return [
@@ -237,6 +263,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
             id: modelId,
             meta: asObject(model?.meta),
             advertisedContextWindow: readOpenAICompatibleContextWindow(model),
+            input: readOpenAICompatibleModelInput(model),
           },
         ];
       });
@@ -277,7 +304,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
           id: model.id,
           name: model.id,
           reasoning: isReasoningModelHeuristic(model.id),
-          input: ["text"],
+          input: model.input,
           cost: SELF_HOSTED_DEFAULT_COST,
           contextWindow:
             params.contextWindow ??
@@ -329,7 +356,7 @@ function buildOpenAICompatibleSelfHostedProviderConfig(params: {
   baseUrl: string;
   providerApiKey: string;
   modelId: string;
-  input?: Array<"text" | "image">;
+  input?: SelfHostedModelInput;
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
@@ -377,7 +404,7 @@ type OpenAICompatibleSelfHostedProviderSetupParams = {
   defaultBaseUrl: string;
   defaultApiKeyEnvVar: string;
   modelPlaceholder: string;
-  input?: Array<"text" | "image">;
+  input?: SelfHostedModelInput;
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
@@ -541,7 +568,7 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
   defaultBaseUrl: string;
   defaultApiKeyEnvVar: string;
   modelPlaceholder: string;
-  input?: Array<"text" | "image">;
+  input?: SelfHostedModelInput;
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;

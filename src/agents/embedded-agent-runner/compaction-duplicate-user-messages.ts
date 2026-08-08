@@ -29,7 +29,8 @@ function normalizeUserMessageContent(content: unknown): string | undefined {
     if (!isRecord(block)) {
       return undefined;
     }
-    if (block.type === "image") {
+    // Matching captions do not identify the underlying visual media, so never dedupe these turns.
+    if (block.type === "image" || block.type === "video") {
       return undefined;
     }
     if (block.type === "text" && typeof block.text === "string") {

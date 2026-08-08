@@ -24,7 +24,10 @@ export { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store
 export { resolveGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 export { resolveGatewaySessionThinkingProjection } from "./session-utils-model.js";
 export { getSessionDefaults } from "./session-utils-model.js";
-export { resolveGatewayModelSupportsImages } from "./session-utils-model.js";
+export {
+  resolveGatewayModelInputCapabilities,
+  resolveGatewayModelSupportsImages,
+} from "./session-utils-model.js";
 export { resolveSessionDisplayModelIdentityRef } from "./session-utils-model.js";
 export { buildGatewaySessionRow } from "./session-utils-row.js";
 export { loadGatewaySessionRow } from "./session-utils-search.js";

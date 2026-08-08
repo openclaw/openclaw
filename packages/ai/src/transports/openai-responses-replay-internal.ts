@@ -5,11 +5,18 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import { supportsNativeVideoInput } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import {
+  buildOpenAICompatibleResponsesMediaPart,
+  type OpenAICompatibleResponsesContentPart,
+  type OpenAICompatibleResponsesFunctionOutputPart,
+} from "../providers/openai-compatible-video-content.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
+  isVideoWithMediaPayload,
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -331,6 +338,7 @@ export function convertResponsesMessages(
   },
 ): ResponseInput {
   const messages: ResponseInput = [];
+  const supportsVideo = supportsNativeVideoInput(model);
   const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildOpenAIResponsesReplayContext(model, {
@@ -411,19 +419,24 @@ export function convertResponsesMessages(
           ]),
         );
       } else {
-        const content = (
-          msg.content.map((item) =>
-            item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
-          ) as ResponseInputMessageContentList
-        ).filter((item) => model.input.includes("image") || item.type !== "input_image");
+        const content: OpenAICompatibleResponsesContentPart[] = msg.content
+          .map((item): OpenAICompatibleResponsesContentPart => {
+            if (item.type === "text") {
+              return { type: "input_text", text: sanitizeTransportPayloadText(item.text) };
+            }
+            if (item.type === "video" && !supportsVideo) {
+              return {
+                type: "input_text",
+                text: "(video omitted: model does not support videos)",
+              };
+            }
+            return buildOpenAICompatibleResponsesMediaPart(item);
+          })
+          .filter((item) => model.input.includes("image") || item.type !== "input_image");
         if (content.length > 0) {
-          messages.push(buildResponsesInputMessage("user", content));
+          messages.push(
+            buildResponsesInputMessage("user", content as ResponseInputMessageContentList),
+          );
         }
       }
     } else if (msg.role === "assistant") {
@@ -526,6 +539,7 @@ export function convertResponsesMessages(
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
+      const hasVideos = msg.content.some(isVideoWithMediaPayload);
       const separatorIndex = msg.toolCallId.indexOf("|");
       const callId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
@@ -533,18 +547,19 @@ export function convertResponsesMessages(
         type: "function_call_output",
         call_id: callId,
         output:
-          hasImages && model.input.includes("image")
+          (hasImages && model.input.includes("image")) || (hasVideos && supportsVideo)
             ? ([
                 ...(hasText
                   ? [{ type: "input_text", text: sanitizedTextResult }]
                   : mediaPlaceholder === "(see attached media)"
                     ? [{ type: "input_text", text: mediaPlaceholder }]
                     : []),
-                ...msg.content.filter(isImageWithMediaPayload).map((item) => ({
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                })),
+                ...msg.content.flatMap((item): OpenAICompatibleResponsesFunctionOutputPart[] =>
+                  (isImageWithMediaPayload(item) && model.input.includes("image")) ||
+                  (isVideoWithMediaPayload(item) && supportsVideo)
+                    ? [buildOpenAICompatibleResponsesMediaPart(item)]
+                    : [],
+                ),
               ] as ResponseFunctionCallOutputItemList)
             : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
       });

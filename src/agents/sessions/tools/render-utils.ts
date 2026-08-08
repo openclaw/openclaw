@@ -47,7 +47,7 @@ export function normalizeDisplayText(text: string): string {
   return text.replace(/\r/g, "");
 }
 
-/** Extracts text output and image placeholders from a tool result. */
+/** Extracts text output and visual-media placeholders from a tool result. */
 export function getTextOutput(
   result:
     | { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }
@@ -60,6 +60,7 @@ export function getTextOutput(
 
   const textBlocks = result.content.filter((c) => c.type === "text");
   const imageBlocks = result.content.filter((c) => c.type === "image");
+  const videoBlocks = result.content.filter((c) => c.type === "video");
 
   let output = textBlocks
     .map((c) => sanitizeBinaryOutput(c.text || "", { ansiMode: "compat" }).replace(/\r/g, ""))
@@ -79,6 +80,22 @@ export function getTextOutput(
       })
       .join("\n");
     output = output ? `${output}\n${imageIndicators}` : imageIndicators;
+  }
+
+  if (videoBlocks.length > 0) {
+    // Terminals cannot render native video; expose bounded metadata, never inline base64.
+    const videoIndicators = videoBlocks
+      .map((video) => {
+        const mimeType =
+          video.mimeType &&
+          video.mimeType.length <= 100 &&
+          /^video\/[a-z0-9][a-z0-9.+-]*$/iu.test(video.mimeType)
+            ? video.mimeType
+            : "video/unknown";
+        return `[video: ${mimeType}]`;
+      })
+      .join("\n");
+    output = output ? `${output}\n${videoIndicators}` : videoIndicators;
   }
 
   return output;

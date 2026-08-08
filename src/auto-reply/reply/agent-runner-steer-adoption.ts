@@ -183,6 +183,7 @@ export async function runActiveReplySteer(params: ActiveReplySteerParams): Promi
       {
         steeringMode: "all",
         isInboundUserMessage: true,
+        ...(followupRun.inputMedia?.length ? { inputMedia: followupRun.inputMedia } : {}),
         ...(followupRun.images?.length ? { images: followupRun.images } : {}),
         ...(followupRun.imageOrder?.length ? { imageOrder: followupRun.imageOrder } : {}),
         ...(followupRun.media?.length ? { media: followupRun.media } : {}),

@@ -1,4 +1,4 @@
-/** Runs prompt-local image preparation, observability, preflight, and provider dispatch. */
+/** Runs prompt-local media preparation, observability, preflight, and provider dispatch. */
 import type { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-execution-prepare.js";
 import { observeEmbeddedAttemptPrompt } from "./attempt-prompt-observability.js";
@@ -30,6 +30,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
     | "effectivePrompt"
     | "hookMessagesForCurrentPrompt"
     | "imageCount"
+    | "videoCount"
     | "llmBoundaryPromptForPrecheck"
     | "promptForModel"
     | "promptSubmissionRuntimeOnly"
@@ -56,7 +57,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
     | "attempt"
     | "activeSession"
     | "contextTokenBudget"
-    | "images"
+    | "inputMedia"
     | "modelPrompt"
     | "runtimeContextMessage"
     | "runtimeOnly"
@@ -67,7 +68,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
   >;
 }): Promise<PromptDispatchState> {
   const { activeSession, attempt, promptContext } = input;
-  const imageResult = await prepareEmbeddedAttemptPromptExecution({
+  const mediaResult = await prepareEmbeddedAttemptPromptExecution({
     ...input.execution,
     attempt,
     prompt: promptContext.promptSubmission.prompt,
@@ -84,7 +85,8 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
       contextTokenBudget: promptContext.contextTokenBudget,
       effectivePrompt: promptContext.effectivePrompt,
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
-      imageCount: imageResult.images.length,
+      imageCount: mediaResult.images.length,
+      videoCount: mediaResult.media.length - mediaResult.images.length,
       llmBoundaryPromptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
       promptForModel: promptContext.promptForModel,
       promptSubmissionRuntimeOnly: promptContext.promptSubmission.runtimeOnly,
@@ -118,7 +120,7 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
       attempt,
       activeSession,
       contextTokenBudget: promptContext.contextTokenBudget,
-      images: imageResult.images,
+      inputMedia: mediaResult.media,
       modelPrompt: promptContext.promptForModel,
       ...(promptContext.runtimeContextMessageForCurrentTurn
         ? { runtimeContextMessage: promptContext.runtimeContextMessageForCurrentTurn }

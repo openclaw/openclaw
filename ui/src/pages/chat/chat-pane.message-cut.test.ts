@@ -92,7 +92,10 @@ describe("chat pane message cuts", () => {
       forkAtMessage: vi.fn().mockResolvedValue({
         sessionKey: "agent:main:forked",
         editorText: "edit me",
-        editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+        editorAttachments: [
+          { mimeType: "image/png", data: "aW1hZ2U=" },
+          { mimeType: "video/mp4", data: "dmlkZW8=" },
+        ],
       }),
     } as unknown as SessionCapability;
     const client = {} as GatewayBrowserClient;
@@ -111,6 +114,11 @@ describe("chat pane message cuts", () => {
         id: expect.stringMatching(/^att-/),
         mimeType: "image/png",
         dataUrl: "data:image/png;base64,aW1hZ2U=",
+      },
+      {
+        id: expect.stringMatching(/^att-/),
+        mimeType: "video/mp4",
+        dataUrl: "data:video/mp4;base64,dmlkZW8=",
       },
     ]);
   });

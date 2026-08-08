@@ -63,6 +63,36 @@ describe("read tool", () => {
     decodeWindowsTextFileBufferMock.mockReset();
   });
 
+  it("renders native video tool results without exposing their binary payload", () => {
+    const tool = createReadToolDefinition("/workspace");
+    const component = tool.renderResult?.(
+      {
+        content: [{ type: "video", mimeType: "video/mp4", data: "private-video-payload" }],
+        details: { kind: "text", content: "" },
+      },
+      { expanded: true, isPartial: false },
+      plainTheme,
+      {
+        args: { path: "clip.mp4" },
+        argsComplete: true,
+        cwd: "/workspace",
+        executionStarted: true,
+        expanded: true,
+        invalidate: () => {},
+        isError: false,
+        isPartial: false,
+        lastComponent: undefined,
+        showImages: false,
+        state: {},
+        toolCallId: "call-video",
+      },
+    );
+    const rendered = component?.render(120).join("\n") ?? "";
+
+    expect(rendered).toContain("[video: video/mp4]");
+    expect(rendered).not.toContain("private-video-payload");
+  });
+
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-"));
     const mediaId = `read-tool-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;

@@ -380,6 +380,142 @@ describe("convertResponsesMessages", () => {
     });
   });
 
+  it("serializes vendor input_video only for explicitly video-capable Responses models", () => {
+    const videoModel = {
+      ...proxyOpenAIModel,
+      provider: "custom-video-provider",
+      input: ["text", "image", "video"],
+    } satisfies Model<"openai-responses">;
+    const input = convertResponsesMessages(
+      videoModel,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe this clip" },
+              { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
+            ],
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    );
+
+    expect(input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Describe this clip" },
+          { type: "input_video", video_url: "data:video/mp4;base64,dmlkZW8=" },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves video for an OpenAI provider configured with a third-party Responses endpoint", () => {
+    const customEndpointModel = {
+      ...proxyOpenAIModel,
+      input: ["text", "image", "video"],
+    } satisfies Model<"openai-responses">;
+    const input = convertResponsesMessages(
+      customEndpointModel,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    );
+
+    expect(input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_video", video_url: "data:video/mp4;base64,dmlkZW8=" }],
+      },
+    ]);
+  });
+
+  it("never fabricates video input for first-party OpenAI models", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    );
+
+    expect(input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "(video omitted: model does not support videos)" }],
+      },
+    ]);
+    expect(JSON.stringify(input)).not.toContain("input_video");
+    expect(JSON.stringify(input)).not.toContain("dmlkZW8=");
+  });
+
+  it.each([
+    {
+      protocol: "Codex",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    },
+    {
+      protocol: "Azure OpenAI",
+      api: "azure-openai-responses",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    },
+  ] as const)("rejects falsely advertised video on the $protocol protocol", ({ api, baseUrl }) => {
+    const misdeclaredModel = {
+      ...nativeOpenAIModel,
+      api,
+      input: ["text", "image", "video"],
+      baseUrl,
+    } satisfies Model;
+    const input = convertResponsesMessages(
+      misdeclaredModel,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    );
+
+    expect(input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "(video omitted: model does not support videos)" }],
+      },
+    ]);
+    expect(JSON.stringify(input)).not.toContain("input_video");
+    expect(JSON.stringify(input)).not.toContain("dmlkZW8=");
+  });
+
   it("uses the system role when a Responses-compatible provider opts out of developer", () => {
     const compatModel = {
       ...nativeOpenAIModel,
@@ -705,6 +841,67 @@ describe("convertResponsesMessages", () => {
         image_url: "data:image/png;base64,aW1n",
       },
     ]);
+  });
+
+  it("preserves video-bearing tool results for video-capable compatible Responses models", () => {
+    const videoModel = {
+      ...proxyOpenAIModel,
+      provider: "custom-video-provider",
+      input: ["text", "image", "video"],
+    } satisfies Model<"openai-responses">;
+    const input = convertResponsesMessages(
+      videoModel,
+      {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_video",
+            toolName: "record_clip",
+            content: [
+              { type: "text", text: "Recorded clip" },
+              { type: "video", mimeType: "video/webm", data: "dmlkZW8=" },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<{ type?: string; output?: unknown }>;
+
+    expect(input.find((item) => item.type === "function_call_output")?.output).toEqual([
+      { type: "input_text", text: "Recorded clip" },
+      { type: "input_video", video_url: "data:video/webm;base64,dmlkZW8=" },
+    ]);
+  });
+
+  it("downgrades historical video tool results for non-video OpenAI models", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_video",
+            toolName: "record_clip",
+            content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    );
+
+    expect(input).toContainEqual({
+      type: "function_call_output",
+      call_id: "call_video",
+      output: "(tool video omitted: model does not support videos)",
+    });
+    expect(JSON.stringify(input)).not.toContain("input_video");
+    expect(JSON.stringify(input)).not.toContain("dmlkZW8=");
   });
 
   it("uses audio placeholder for audio-only tool results instead of image or no-output text", () => {

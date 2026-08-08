@@ -27,7 +27,7 @@
             "id": "dola-seed-2-1-turbo-260628",
             "name": "Dola Seed 2.1 Turbo",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text", "image", "video"],
             "contextWindow": 256000,
             "maxTokens": 256000,
             "cost": {

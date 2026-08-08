@@ -40,8 +40,7 @@ export {
 } from "../tool-result-limits.js";
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
 const AGGREGATE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-const CACHE_TTL_IMAGE_CHARS = 8_000;
-const CACHE_TTL_IMAGE_MARKER = "[image removed during context pruning]";
+const CACHE_TTL_VISUAL_MEDIA_CHARS = 8_000;
 const CACHE_TTL_DEFAULT_PLACEHOLDER = "[Old tool result content cleared]";
 
 type CacheTtlPruningSettings = {
@@ -114,8 +113,8 @@ function cacheTtlMessageChars(message: AgentMessage): number {
     if (text !== undefined) {
       return chars + estimateStringChars(text);
     }
-    if (block.type === "image") {
-      return chars + CACHE_TTL_IMAGE_CHARS;
+    if (block.type === "image" || block.type === "video") {
+      return chars + CACHE_TTL_VISUAL_MEDIA_CHARS;
     }
     if (message.role !== "assistant") {
       return chars;
@@ -147,15 +146,19 @@ function softPruneCacheTtlToolResult(
   message: CacheTtlToolResultMessage,
 ): CacheTtlToolResultMessage {
   const content = Array.isArray(message.content) ? message.content : [];
-  const hasImage = content.some((block) => isRecord(block) && block.type === "image");
+  const hasVisualMedia = content.some(
+    (block) => isRecord(block) && (block.type === "image" || block.type === "video"),
+  );
   const text = content
     .flatMap(
       (block) =>
         cacheTtlText(block) ??
-        (isRecord(block) && block.type === "image" ? CACHE_TTL_IMAGE_MARKER : []),
+        (isRecord(block) && (block.type === "image" || block.type === "video")
+          ? `[${block.type} removed during context pruning]`
+          : []),
     )
     .join("\n");
-  if (!hasImage && text.length <= 4_000) {
+  if (!hasVisualMedia && text.length <= 4_000) {
     return message;
   }
   const projected =

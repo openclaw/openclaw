@@ -101,7 +101,29 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google-vertex",
       id: "gemini-3.1-pro-preview",
       api: "google-gemini-cli",
+      input: ["text", "image"],
       reasoning: false,
+    });
+  });
+
+  it("advertises video for Gemini models using the native Vertex transport", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google-vertex",
+      ctx: createContext({
+        provider: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+        models: [
+          createTemplateModel("google-vertex", "gemini-3.1-pro-preview", {
+            api: "google-vertex",
+          }),
+        ],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google-vertex",
+      api: "google-vertex",
+      input: ["text", "image", "video"],
     });
   });
 
@@ -258,7 +280,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google",
       id: "gemini-3-flash-preview",
       api: "google-generative-ai",
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       contextWindow: 1_048_576,
       reasoning: true,
     });
@@ -273,6 +295,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
         models: [
           createTemplateModel("google", "gemini-2.5-flash", {
             contextWindow: 1_048_576,
+            input: ["text", "image", "video"],
           }),
         ],
       }),
@@ -488,7 +511,12 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       ctx: createContext({
         provider: "google",
         modelId: "gemma-4-26b-a4b-it",
-        models: [createTemplateModel("google", "gemini-3-flash-preview", { reasoning: false })],
+        models: [
+          createTemplateModel("google", "gemini-3-flash-preview", {
+            reasoning: false,
+            input: ["text", "image", "video"],
+          }),
+        ],
       }),
     });
 
@@ -496,6 +524,28 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       provider: "google",
       id: "gemma-4-26b-a4b-it",
       reasoning: true,
+      input: ["text", "image"],
+    });
+  });
+
+  it("does not inherit image or video support for text-only Gemma templates", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemma-3-1b-it",
+        models: [
+          createTemplateModel("google", "gemini-3-flash-preview", {
+            input: ["text", "image", "video"],
+          }),
+        ],
+      }),
+    });
+
+    expectModelFields(model, {
+      provider: "google",
+      id: "gemma-3-1b-it",
+      input: ["text"],
     });
   });
 

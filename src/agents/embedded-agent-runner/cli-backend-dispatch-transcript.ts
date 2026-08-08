@@ -234,6 +234,12 @@ function normalizeToolResultContent(result: unknown): ToolResultContent[] {
     const mimeType = (block as { mimeType?: unknown }).mimeType;
     if (type === "image" && typeof data === "string" && typeof mimeType === "string") {
       blocks.push({ type: "image", data, mimeType });
+      continue;
+    }
+    if (type === "video") {
+      // CLI backends cannot consume native video; persist the visible outcome,
+      // never the potentially large/private base64 payload.
+      blocks.push({ type: "text", text: "(tool video omitted: model does not support videos)" });
     }
   }
   return blocks;

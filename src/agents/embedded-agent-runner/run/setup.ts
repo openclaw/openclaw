@@ -3,6 +3,7 @@
  */
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isImageMediaFact, type MediaFact } from "../../../media/media-facts.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type {
   PluginHookBeforeModelResolveAttachment,
@@ -141,19 +142,35 @@ export async function resolveHookModelSelection(params: {
 }
 
 /**
- * Converts prompt image refs into the minimal attachment shape exposed to
- * before-model-resolve hooks. Empty image lists stay undefined so hook payloads
+ * Converts ordered attachment facts into the minimal shape exposed to
+ * before-model-resolve hooks. Empty lists stay undefined so hook payloads
  * do not grow a meaningless attachments field.
  */
 export function buildBeforeModelResolveAttachments(
-  images: readonly { mimeType?: string }[] | undefined,
+  inputMedia: readonly { type?: "image" | "video"; mimeType?: string }[] | undefined,
+  mediaFacts?: readonly MediaFact[],
 ): PluginHookBeforeModelResolveAttachment[] | undefined {
-  if (!images?.length) {
+  if (mediaFacts?.length) {
+    return mediaFacts.map((fact) => {
+      const kind =
+        fact.kind === "video" || fact.contentType?.startsWith("video/")
+          ? "video"
+          : isImageMediaFact(fact)
+            ? "image"
+            : fact.kind === "audio" || fact.contentType?.startsWith("audio/")
+              ? "audio"
+              : fact.kind === "document"
+                ? "document"
+                : "other";
+      return { kind, mimeType: fact.contentType };
+    });
+  }
+  if (!inputMedia?.length) {
     return undefined;
   }
-  return images.map((img) => ({
-    kind: "image",
-    mimeType: img.mimeType,
+  return inputMedia.map((media) => ({
+    kind: media.type ?? "image",
+    mimeType: media.mimeType,
   }));
 }
 

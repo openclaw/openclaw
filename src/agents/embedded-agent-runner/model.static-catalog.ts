@@ -57,7 +57,8 @@ function normalizeStaticCatalogInput(
   input: readonly unknown[] | undefined,
 ): ProviderRuntimeModel["input"] {
   const normalizedInput = (input ?? []).filter(
-    (item): item is "text" | "image" => item === "text" || item === "image",
+    (item): item is "text" | "image" | "video" =>
+      item === "text" || item === "image" || item === "video",
   );
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }

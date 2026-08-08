@@ -124,10 +124,13 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
         content: [
           { type: "text", text: "second prompt" },
           { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+          { type: "video", data: "dmlkZW8=", mimeType: "video/mp4" },
+          { type: "video", data: "ZGlyZWN0LXZpZGVv", mimeType: "video/webm" },
         ],
         __openclaw: {
           media: [
             { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+            { path: "/state/media/inbound/stored-video.mp4", contentType: "video/mp4" },
             { path: "/state/media/inbound/notes.txt", contentType: "text/plain" },
           ],
         },
@@ -378,7 +381,7 @@ describe("SQLite session message cuts", () => {
     ).resolves.toMatchObject({ status });
   });
 
-  it("rewinds by repointing the active leaf and returns the editor text", async () => {
+  it("rewinds by repointing the active leaf and restores inline and durable media", async () => {
     const { env } = await createSession();
 
     const result = await rewindSessionToMessage({
@@ -392,9 +395,13 @@ describe("SQLite session message cuts", () => {
       status: "created",
       key: sessionKey,
       editorText: "second prompt",
-      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorAttachments: [
+        { mimeType: "image/png", data: "aW1hZ2U=" },
+        { mimeType: "video/webm", data: "ZGlyZWN0LXZpZGVv" },
+      ],
       editorMediaRefs: [
         { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+        { path: "/state/media/inbound/stored-video.mp4", contentType: "video/mp4" },
       ],
     });
     if (result.status !== "created") {
@@ -477,9 +484,13 @@ describe("SQLite session message cuts", () => {
       status: "created",
       key: targetKey,
       editorText: "second prompt",
-      editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
+      editorAttachments: [
+        { mimeType: "image/png", data: "aW1hZ2U=" },
+        { mimeType: "video/webm", data: "ZGlyZWN0LXZpZGVv" },
+      ],
       editorMediaRefs: [
         { path: "/state/media/inbound/stored-image.png", contentType: "image/png" },
+        { path: "/state/media/inbound/stored-video.mp4", contentType: "video/mp4" },
       ],
     });
     if (result.status !== "created") {

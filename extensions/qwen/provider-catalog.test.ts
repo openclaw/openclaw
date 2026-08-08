@@ -2,10 +2,12 @@
 import { describe, expect, it } from "vitest";
 import {
   applyQwenNativeStreamingUsageCompat,
+  buildQwenModelDefinition,
   buildQwenProvider,
   buildQwenTokenPlanProvider,
   QWEN_BASE_URL,
   QWEN_36_FLASH_MODEL_ID,
+  QWEN_36_PLUS_MODEL_ID,
   QWEN_37_MAX_MODEL_ID,
   QWEN_37_PLUS_MODEL_ID,
   QWEN_STANDARD_GLOBAL_BASE_URL,
@@ -56,7 +58,7 @@ describe("qwen provider catalog", () => {
 
     expect(standard.models.find((model) => model.id === QWEN_36_FLASH_MODEL_ID)).toMatchObject({
       reasoning: true,
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       contextWindow: 1_000_000,
       maxTokens: 65_536,
     });
@@ -68,10 +70,34 @@ describe("qwen provider catalog", () => {
     });
     expect(standard.models.find((model) => model.id === QWEN_37_PLUS_MODEL_ID)).toMatchObject({
       reasoning: true,
-      input: ["text", "image"],
+      input: ["text", "image", "video"],
       contextWindow: 1_000_000,
       maxTokens: 65_536,
     });
+  });
+
+  it("advertises video only for documented Qwen multimodal models", () => {
+    const standard = buildQwenProvider({ baseUrl: QWEN_STANDARD_GLOBAL_BASE_URL });
+
+    const videoModels = standard.models
+      .filter((model) => model.input.includes("video"))
+      .map(({ id }) => id);
+
+    expect(videoModels).toEqual([
+      QWEN_DEFAULT_MODEL_ID,
+      QWEN_36_FLASH_MODEL_ID,
+      QWEN_36_PLUS_MODEL_ID,
+      QWEN_37_PLUS_MODEL_ID,
+    ]);
+    expect(buildQwenModelDefinition({ id: QWEN_DEFAULT_MODEL_ID }).input).toEqual([
+      "text",
+      "image",
+      "video",
+    ]);
+    expect(
+      buildQwenModelDefinition({ id: "custom-qwen-video", input: ["text", "image", "video"] })
+        .input,
+    ).toEqual(["text", "image", "video"]);
   });
 
   it("opts native Qwen baseUrls into streaming usage only inside the extension", () => {
@@ -123,6 +149,13 @@ describe("qwen token plan provider catalog", () => {
     });
     expect(models.every((model) => model.reasoning)).toBe(true);
     expect(manifestModels.map((model) => model.id)).toEqual(modelIds);
+    expect(manifestModels.map(({ id, input }) => ({ id, input }))).toEqual(
+      models.map(({ id, input }) => ({ id, input })),
+    );
+    expect(models.filter((model) => model.input.includes("video")).map(({ id }) => id)).toEqual([
+      QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
+      QWEN_36_PLUS_MODEL_ID,
+    ]);
     expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
   });
 

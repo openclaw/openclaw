@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@openclaw/llm-core";
+import type { ModelInputContent } from "@openclaw/llm-core";
 import type { AgentMessage } from "../types.js";
 
 export { err, ok } from "@openclaw/normalization-core/result";
@@ -93,7 +93,7 @@ interface CustomEntry<T = unknown> extends SessionTreeEntryBase {
 interface CustomMessageEntry<T = unknown> extends SessionTreeEntryBase {
   type: "custom_message";
   customType: string;
-  content: string | (TextContent | ImageContent)[];
+  content: string | ModelInputContent[];
   details?: T;
   display: boolean;
 }

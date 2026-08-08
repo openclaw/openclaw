@@ -148,7 +148,11 @@ function projectContentBlock(
   }
   const record = block as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : "";
-  if (type === "image" && typeof record.data === "string" && record.data.length > 0) {
+  if (
+    (type === "image" || type === "video") &&
+    typeof record.data === "string" &&
+    record.data.length > 0
+  ) {
     return {
       block: { ...record, data: "" },
       omittedChars: 0,

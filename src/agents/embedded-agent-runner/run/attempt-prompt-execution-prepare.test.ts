@@ -21,6 +21,7 @@ vi.mock("../../image-sanitization.js", () => ({
 }));
 vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: hoisted.detectAndLoadPromptImages,
+  detectAndLoadPromptMedia: hoisted.detectAndLoadPromptImages,
 }));
 vi.mock("./attempt.session-lock.js", () => ({
   installPromptSubmissionLockRelease: hoisted.installPromptSubmissionLockRelease,
@@ -71,6 +72,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
     vi.clearAllMocks();
     hoisted.resolveImageSanitizationLimits.mockReturnValue({ maxDimensionPx: 2048 });
     hoisted.detectAndLoadPromptImages.mockResolvedValue({
+      media: [{ type: "image", data: "loaded", mimeType: "image/png" }],
       images: [{ type: "image", data: "loaded", mimeType: "image/png" }],
       imageFactIndexes: [null],
       detectedRefs: [],
@@ -90,6 +92,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
     );
 
     expect(second).toEqual({
+      media: [],
       images: [],
       imageFactIndexes: [],
       detectedRefs: [],
@@ -127,7 +130,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       prompt: "inspect image.png",
       workspaceDir: "/tmp/workspace",
       model: input.attempt.model,
-      existingImages: input.attempt.images,
+      existingMedia: input.attempt.images,
       imageOrder: ["inline"],
       maxBytes: 1_234,
       maxDimensionPx: 2048,
@@ -138,6 +141,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       },
     });
     expect(result).toEqual({
+      media: [{ type: "image", data: "loaded", mimeType: "image/png" }],
       images: [{ type: "image", data: "loaded", mimeType: "image/png" }],
       imageFactIndexes: [null],
       detectedRefs: [],
@@ -145,6 +149,38 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       loadedCount: 1,
       skippedCount: 0,
     });
+  });
+
+  it("uses canonical mixed input media instead of the legacy image alias", async () => {
+    const base = createInput();
+    const video = { type: "video" as const, data: "dmlkZW8=", mimeType: "video/mp4" };
+    const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+    const inputMedia = [video, image];
+    const input = createInput({
+      attempt: {
+        ...base.attempt,
+        inputMedia,
+        images: [{ type: "image", data: "bGVnYWN5", mimeType: "image/png" }],
+        model: { ...base.attempt.model, input: ["text", "image", "video"] },
+      },
+    });
+    hoisted.detectAndLoadPromptImages.mockResolvedValueOnce({
+      media: inputMedia,
+      images: [image],
+      imageFactIndexes: [null],
+      detectedRefs: [],
+      failedMediaCount: 0,
+      loadedCount: 0,
+      skippedCount: 0,
+    });
+
+    const result = await prepareEmbeddedAttemptPromptExecution(input);
+
+    expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
+      expect.objectContaining({ existingMedia: inputMedia }),
+    );
+    expect(result.media).toEqual([video, image]);
+    expect(result.images).toEqual([image]);
   });
 
   it("omits sandbox constraints when no sandbox bridge is active", async () => {
@@ -163,6 +199,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
     const media = [{ path: "/tmp/missing.png", contentType: "image/png" }];
     const input = createInput({ attempt: { ...base.attempt, media } });
     hoisted.detectAndLoadPromptImages.mockResolvedValueOnce({
+      media: [],
       images: [],
       imageFactIndexes: [],
       detectedRefs: [],

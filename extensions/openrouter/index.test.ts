@@ -167,6 +167,11 @@ describe("openrouter provider hooks", () => {
     });
     expect(speechProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
+    expect(mediaProviders[0]).toMatchObject({
+      capabilities: ["image", "audio", "video"],
+      defaultModels: { video: "moonshotai/kimi-k2.6" },
+      describeVideo: expect.any(Function),
+    });
     expect(imageProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(musicProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(videoProviders.map((provider) => provider.id)).toEqual(["openrouter"]);

@@ -4,6 +4,7 @@ import {
   extractToolResultText,
   hasMediaPayload,
   isImageWithMediaPayload,
+  isVideoWithMediaPayload,
 } from "./tool-result-text.js";
 
 describe("hasMediaPayload", () => {
@@ -29,6 +30,18 @@ describe("isImageWithMediaPayload", () => {
   });
 });
 
+describe("isVideoWithMediaPayload", () => {
+  it("requires both the video type and inline payload bytes", () => {
+    expect(
+      isVideoWithMediaPayload({ type: "video", data: "dmlkZW8=", mimeType: "video/mp4" }),
+    ).toBe(true);
+    expect(isVideoWithMediaPayload({ type: "video", data: "", mimeType: "video/mp4" })).toBe(false);
+    expect(isVideoWithMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(
+      false,
+    );
+  });
+});
+
 describe("extractToolResultText", () => {
   it("keeps media-only blocks out of provider replay text", () => {
     const text = extractToolResultText([
@@ -37,6 +50,9 @@ describe("extractToolResultText", () => {
       { type: "image_url", image_url: { url: "data:image/png;base64,abc123" } },
       { type: "input_image", image_url: "data:image/png;base64,def456" },
       { type: "audio", data: "audio-binary", mimeType: "audio/mpeg" },
+      { type: "video", data: "video-binary", mimeType: "video/mp4" },
+      { type: "video_url", video_url: { url: "data:video/mp4;base64,ghi789" } },
+      { type: "input_video", video_url: "data:video/mp4;base64,jkl012" },
     ]);
 
     expect(text).toBe("summary");
@@ -44,6 +60,9 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("abc123");
     expect(text).not.toContain("def456");
     expect(text).not.toContain("audio-binary");
+    expect(text).not.toContain("video-binary");
+    expect(text).not.toContain("ghi789");
+    expect(text).not.toContain("jkl012");
   });
 
   it("omits MIME-tagged binary data while preserving textual resource data", () => {
@@ -135,11 +154,26 @@ describe("describeToolResultMediaPlaceholder", () => {
     ).toBe("(see attached audio)");
   });
 
+  it("describes video-only tool result media", () => {
+    expect(
+      describeToolResultMediaPlaceholder([{ type: "video", mimeType: "video/mp4", data: "video" }]),
+    ).toBe("(see attached video)");
+  });
+
   it("describes mixed image and audio tool result media", () => {
     expect(
       describeToolResultMediaPlaceholder([
         { type: "image", mimeType: "image/png", data: "img" },
         { type: "audio", mimeType: "audio/mpeg", data: "audio" },
+      ]),
+    ).toBe("(see attached media)");
+  });
+
+  it("describes mixed image and video tool result media", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "image", mimeType: "image/png", data: "img" },
+        { type: "video", mimeType: "video/mp4", data: "video" },
       ]),
     ).toBe("(see attached media)");
   });

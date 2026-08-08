@@ -67,7 +67,7 @@
             "id": "glm-5v-turbo",
             "name": "GLM-5V-Turbo",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text", "image", "video"],
             "contextWindow": 200000,
             "maxTokens": 131072,
             "cost": {
@@ -203,12 +203,14 @@
   },
   "mediaUnderstandingProviderMetadata": {
     "zai": {
-      "capabilities": ["image"],
+      "capabilities": ["image", "video"],
       "defaultModels": {
-        "image": "glm-4.6v"
+        "image": "glm-4.6v",
+        "video": "glm-5v-turbo"
       },
       "autoPriority": {
-        "image": 60
+        "image": 60,
+        "video": 30
       }
     }
   },

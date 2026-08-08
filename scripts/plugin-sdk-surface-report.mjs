@@ -223,7 +223,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
       // +1: simple channel secret contract factory replacing repeated collectors.
-      4835,
+      // +3: canonical native-video content, mixed-media, and model-input contracts for provider plugins.
+      4838,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

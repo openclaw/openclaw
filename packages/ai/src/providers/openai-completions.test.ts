@@ -2,6 +2,7 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -830,6 +831,57 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     expect(capturedMaxTokens).toBe(32_000);
+  });
+
+  it("does not count inline vendor video bytes as prompt text when budgeting output", async () => {
+    const videoModel = {
+      ...createModel(4_096),
+      input: ["text", "video"],
+      contextWindow: 32_768,
+    } satisfies Model<"openai-completions">;
+    configureAiTransportHost({
+      resolveProviderRequestCapabilities: () => ({
+        endpointClass: "custom",
+        knownProviderFamily: "",
+        supportsNativeStreamingUsageCompat: false,
+        supportsOpenAICompletionsStreamingUsageCompat: false,
+        usesExplicitProxyLikeEndpoint: true,
+        allowsAnthropicServiceTier: false,
+      }),
+    });
+    try {
+      let capturedMaxTokens: unknown;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        videoModel,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "video", mimeType: "video/mp4", data: "dmlk".repeat(300_000) }],
+              timestamp: 1,
+            },
+          ],
+        },
+        {
+          apiKey: "sk-test",
+          onPayload(payload) {
+            capturedMaxTokens = (payload as { max_completion_tokens?: unknown })
+              .max_completion_tokens;
+            throw new Error("stop before network");
+          },
+        },
+      );
+      if (stream instanceof Promise) {
+        throw new Error("OpenAI Chat Completions transport must return its stream synchronously");
+      }
+      const result = await stream.result();
+
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain("stop before network");
+      expect(capturedMaxTokens).toBe(4_096);
+    } finally {
+      configureAiTransportHost({});
+    }
   });
 
   it("uses Z.AI max_tokens and disables thinking by default", async () => {

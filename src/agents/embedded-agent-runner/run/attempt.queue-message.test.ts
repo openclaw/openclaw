@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
+import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import { setSteeringMessageIdentity } from "../../sessions/steering-message-identity.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 
@@ -55,6 +56,64 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     await steerActiveSessionWithOptionalDeliveryWait(activeSession, "compare these", { images });
 
     expect(steer).toHaveBeenCalledWith("compare these", images);
+  });
+
+  it("forwards ordered native media without duplicating the legacy image projection", async () => {
+    const steer = vi.fn(async () => undefined);
+    const onQueueAccepted = vi.fn();
+    const image = { type: "image" as const, data: "png", mimeType: "image/png" };
+    const video = { type: "video" as const, data: "mp4", mimeType: "video/mp4" };
+    const inputMedia = [video, image];
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "compare these", {
+      images: [image],
+      inputMedia,
+      onQueueAccepted,
+    });
+
+    expect(steer).toHaveBeenCalledWith("compare these", inputMedia);
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(onQueueAccepted).toHaveBeenCalledWith(true);
+  });
+
+  it("cancels a pending plain-text question before steering an inbound video reply", async () => {
+    const steer = vi.fn(async () => undefined);
+    const gatewayCall = vi.fn(async () => ({ status: "cancelled" }));
+    const sessionKey = "agent:main:queued-video-reply";
+    const reservation = registerPendingAgentQuestion({
+      questionId: "ask_queued_video_reply",
+      sessionKey,
+      questions: [{ id: "answer", header: "Answer", question: "What should happen?", options: [] }],
+      gatewayCall,
+    });
+    reservation.attachRegistration(Promise.resolve({ id: "ask_queued_video_reply" }));
+    const inputMedia = [{ type: "video" as const, data: "mp4", mimeType: "video/mp4" }];
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: () => () => {},
+    };
+
+    try {
+      await steerActiveSessionWithOptionalDeliveryWait(
+        activeSession,
+        "watch this",
+        { inputMedia, isInboundUserMessage: true },
+        sessionKey,
+      );
+
+      expect(gatewayCall).toHaveBeenCalledWith(
+        "question.resolve",
+        { timeoutMs: 10_000 },
+        { id: "ask_queued_video_reply", cancel: true, resolvedBy: "video-reply" },
+      );
+      expect(steer).toHaveBeenCalledWith("watch this", inputMedia);
+    } finally {
+      reservation.dispose();
+    }
   });
 
   it("forwards ordered prompt facts with a queued steering message", async () => {
@@ -122,6 +181,48 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
     await expect(wait).resolves.toBeUndefined();
     expect(settled).toBe(true);
+  });
+
+  it("preserves native video while waiting for queued transcript commitment", async () => {
+    let emit!: (event: unknown) => void;
+    const steer = vi.fn(async () => undefined);
+    const onQueueAccepted = vi.fn();
+    const queueIdentity = "queued-native-video";
+    const inputMedia = [{ type: "video" as const, data: "mp4", mimeType: "video/mp4" }];
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer,
+      subscribe: (listener) => {
+        emit = listener;
+        return () => {};
+      },
+    };
+
+    const wait = steerActiveSessionWithOptionalDeliveryWait(activeSession, "watch this", {
+      inputMedia,
+      onQueueAccepted,
+      queueIdentity,
+      waitForTranscriptCommit: true,
+    });
+    expect(steer).toHaveBeenCalledWith(
+      "watch this",
+      inputMedia,
+      undefined,
+      undefined,
+      undefined,
+      queueIdentity,
+    );
+    await Promise.resolve();
+    expect(onQueueAccepted).toHaveBeenCalledWith(true);
+
+    const message = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "watch this" }, ...inputMedia],
+      timestamp: 1,
+    };
+    setSteeringMessageIdentity(message, queueIdentity);
+    emit({ type: "message_end", message });
+
+    await expect(wait).resolves.toBeUndefined();
   });
 
   it("removes only the timed-out steering message and preserves unrelated payloads", async () => {

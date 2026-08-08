@@ -27,6 +27,24 @@ describe("buildUserChatMessageContentBlocks", () => {
     ]);
   });
 
+  it("projects inline video payloads as filename-only text", () => {
+    const payload = "dmlkZW8=";
+    const blocks = buildUserChatMessageContentBlocks("Watch this", [
+      {
+        id: "video-1",
+        mimeType: "video/mp4",
+        fileName: "demo.mp4",
+        dataUrl: `data:video/mp4;base64,${payload}`,
+      },
+    ]);
+
+    expect(blocks).toEqual([
+      { type: "text", text: "Watch this" },
+      { type: "text", text: "Attached video: demo.mp4" },
+    ]);
+    expect(JSON.stringify(blocks)).not.toContain(payload);
+  });
+
   it.each([
     ["clip.avi", ""],
     ["clip.mp4", ""],

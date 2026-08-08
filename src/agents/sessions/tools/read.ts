@@ -5,7 +5,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
-import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
+import type { ImageContent, Model, ModelInputContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -299,7 +299,7 @@ function formatCompactReadCall(
 
 function formatReadResult(
   args: ReadRenderArgs | undefined,
-  result: { content: (TextContent | ImageContent)[]; details?: ReadToolDetails },
+  result: { content: ModelInputContent[]; details?: ReadToolDetails },
   options: ToolRenderResultOptions,
   theme: Theme,
   showImages: boolean,

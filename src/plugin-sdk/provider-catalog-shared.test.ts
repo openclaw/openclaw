@@ -306,7 +306,7 @@ describe("provider-catalog-shared manifest provider configs", () => {
         {
           id: "example-model",
           name: "Example Model",
-          input: ["text", "image"],
+          input: ["text", "image", "video"],
           reasoning: true,
           contextWindow: 128_000,
           contextTokens: 64_000,
@@ -344,7 +344,7 @@ describe("provider-catalog-shared manifest provider configs", () => {
           id: "example-model",
           name: "Example Model",
           reasoning: true,
-          input: ["text", "image"],
+          input: ["text", "image", "video"],
           cost: {
             input: 1,
             output: 2,

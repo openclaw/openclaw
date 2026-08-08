@@ -1,9 +1,9 @@
-// Tracks image attachments that belong to the current reply turn.
+// Resolves native visual attachments that belong to the current reply turn.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { ImageContent } from "../../llm/types.js";
+import type { ImageContent, MediaContent } from "../../llm/types.js";
 import {
   isImageAttachment,
   normalizeAttachments,
@@ -95,14 +95,15 @@ function appendOrderedImages(params: {
   }
 }
 
-function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
+function resolveMergedTurnInputMedia(
+  entries: OrderedTurnImage[],
+  preparedMedia?: readonly MediaContent[],
+): {
+  inputMedia?: MediaContent[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   imageSourceIndexes?: Array<number | undefined>;
 } {
-  if (entries.length === 0) {
-    return {};
-  }
   const merged = entries.toSorted((left, right) => {
     if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
       return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
@@ -113,9 +114,18 @@ function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
     return left.sequence - right.sequence;
   });
   const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
+  const pendingImages = [...images];
+  const inputMedia = (preparedMedia ?? []).map((media) =>
+    media.type === "image" ? (pendingImages.shift() ?? media) : media,
+  );
+  inputMedia.push(...pendingImages);
+  if (merged.length === 0 && inputMedia.length === 0) {
+    return {};
+  }
   const result = {
+    ...(inputMedia.length > 0 ? { inputMedia } : {}),
     ...(images.length > 0 ? { images } : {}),
-    imageOrder: merged.map((entry) => entry.imageOrder),
+    ...(merged.length > 0 ? { imageOrder: merged.map((entry) => entry.imageOrder) } : {}),
   };
   Object.defineProperty(result, "imageSourceIndexes", {
     value: merged.map((entry) => entry.sourceIndex),
@@ -123,22 +133,26 @@ function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
   return result;
 }
 
-/** Resolves current-turn image attachments that were not already described by media understanding. */
-export async function resolveCurrentTurnImages(params: {
+/** Resolves native current-turn media while preserving image-only compatibility projections. */
+export async function resolveCurrentTurnInputMedia(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  inputMedia?: MediaContent[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   extractedFileImages?: ExtractedFileImage[];
 }): Promise<{
+  inputMedia?: MediaContent[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   imageSourceIndexes?: Array<number | undefined>;
 }> {
+  // Native media owns mixed-modality ordering; legacy images remain an ingress alias only.
+  const preparedMedia = params.inputMedia ?? params.images;
   const entries: OrderedTurnImage[] = [];
   appendOrderedImages({
     entries,
-    images: params.images,
+    images: preparedMedia?.filter((media): media is ImageContent => media.type === "image"),
     imageOrder: params.imageOrder,
   });
   for (const image of params.extractedFileImages ?? []) {
@@ -151,14 +165,14 @@ export async function resolveCurrentTurnImages(params: {
 
   const currentImageAttachments = collectCurrentImageAttachments(params.ctx);
   if (currentImageAttachments.length === 0) {
-    return resolveMergedTurnImages(entries);
+    return resolveMergedTurnInputMedia(entries, preparedMedia);
   }
   const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
   const undescribedImageAttachments = currentImageAttachments.filter(
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
   if (undescribedImageAttachments.length === 0) {
-    return resolveMergedTurnImages(entries);
+    return resolveMergedTurnInputMedia(entries, preparedMedia);
   }
 
   try {
@@ -179,7 +193,7 @@ export async function resolveCurrentTurnImages(params: {
       logVerbose(
         `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
       );
-      return resolveMergedTurnImages(entries);
+      return resolveMergedTurnInputMedia(entries, preparedMedia);
     }
     for (const [index, image] of images.entries()) {
       appendOrderedImages({
@@ -188,11 +202,11 @@ export async function resolveCurrentTurnImages(params: {
         sourceIndex: undescribedImageAttachments[index]?.index,
       });
     }
-    return resolveMergedTurnImages(entries);
+    return resolveMergedTurnInputMedia(entries, preparedMedia);
   } catch (error) {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,
     );
-    return resolveMergedTurnImages(entries);
+    return resolveMergedTurnInputMedia(entries, preparedMedia);
   }
 }

@@ -25,9 +25,13 @@ function isInlineDataUrl(value: string): boolean {
   return /^\s*data:/iu.test(value);
 }
 
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
+function formatInlineMediaAttachmentPlaceholder(
+  attachment: ChatAttachment,
+  kind: "image" | "video",
+): string {
   const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
+  const placeholder = kind === "image" ? "Attached image" : "Attached video";
+  return label ? `${placeholder}: ${label}` : placeholder;
 }
 
 export function buildUserChatMessageContentBlocks(
@@ -47,7 +51,10 @@ export function buildUserChatMessageContentBlocks(
     }
     if (attachment.mimeType.startsWith("image/")) {
       if (isInlineDataUrl(previewUrl) && !options.renderInlineImageDataUrls) {
-        blocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(attachment) });
+        blocks.push({
+          type: "text",
+          text: formatInlineMediaAttachmentPlaceholder(attachment, "image"),
+        });
         continue;
       }
       blocks.push({
@@ -62,6 +69,15 @@ export function buildUserChatMessageContentBlocks(
       normalizedMimeType.startsWith("video/") ||
       ((normalizedMimeType === "" || normalizedMimeType === "application/octet-stream") &&
         hasVideoMediaFileExtension(attachment.fileName ?? ""));
+    if (isVideo && isInlineDataUrl(previewUrl)) {
+      // Video payloads can dwarf the transcript; keep inline bytes in the
+      // attachment owner and project only their filename into chat history.
+      blocks.push({
+        type: "text",
+        text: formatInlineMediaAttachmentPlaceholder(attachment, "video"),
+      });
+      continue;
+    }
     blocks.push({
       type: "attachment",
       attachment: {

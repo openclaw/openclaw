@@ -62,8 +62,7 @@ export function buildZaiModelDefinition(params: {
     id: params.id,
     name: params.name ?? catalog?.name ?? `GLM ${params.id}`,
     reasoning: params.reasoning ?? catalog?.reasoning ?? true,
-    input:
-      params.input ?? (catalog?.input ? ([...catalog.input] as ("text" | "image")[]) : ["text"]),
+    input: params.input ?? (catalog?.input ? [...catalog.input] : ["text"]),
     cost: params.cost ?? catalog?.cost ?? ZAI_DEFAULT_COST,
     contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 202800,
     maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 131100,

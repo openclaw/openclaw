@@ -7,7 +7,7 @@ title: "Media understanding"
 sidebarTitle: "Media understanding"
 ---
 
-OpenClaw can summarize inbound media (image/audio/video) before the reply pipeline runs, so command parsing and routing work off short text instead of raw bytes. Understanding auto-detects local tools or provider keys, or you can configure explicit models. Original media is always delivered to the model as usual; when understanding fails or is disabled, the reply flow continues unchanged.
+OpenClaw can summarize inbound media (image/audio/video) before the reply pipeline runs, so command parsing and routing work off short text instead of raw bytes. Understanding auto-detects local tools or provider keys, or you can configure explicit models. Compatible reply models receive eligible images and videos directly; other models can use a provider-generated description instead. When understanding fails or is disabled, the reply flow continues without inventing native media support.
 
 Vendor plugins register capability metadata (which provider supports which media type, default model, priority). OpenClaw core owns the shared `tools.media` config, fallback order, and reply-pipeline integration.
 
@@ -137,6 +137,10 @@ See [Tools and custom providers](/gateway/config-tools) for profiles, env vars, 
 - Media exceeding `maxBytes` skips that model and tries the next one.
 - Audio files under 1024 bytes are treated as empty/corrupt and skipped before transcription; the agent gets a deterministic placeholder transcript instead.
 - If the active primary image model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image into the model directly. MiniMax is an exception: `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` always route image understanding through the plugin-owned `MiniMax-VL-01` media provider, even if legacy MiniMax M2.x chat metadata claims image input (only `MiniMax-M3` and later are treated as natively vision-capable).
+- If the selected reply model advertises native video input, eligible videos are delivered as first-class model input and the `[Video]` summary is skipped. Suppressed attachments, videos above the 50 MB native-input bound, and models without video input retain provider-based captioning when a video-understanding provider is available. Channel, Gateway, and provider limits can be smaller.
+- Native channel and Gateway videos persist as managed attachment references rather than inline video bytes. Follow-up turns rehydrate the video while its attachment remains available; after the configured `attachments.ttlHours` retention expires, missing media produces a visible unavailable notice instead of disappearing silently.
+- URL-only HTTP(S) videos cannot be hydrated directly and retain the video-caption fallback when a suitable understanding provider is available.
+- Explicit `tools.media.models[]` entries with the `video` capability preserve their configured captioning behavior even when the selected reply model also supports native video.
 - If a Gateway/WebChat primary model is text-only, image attachments are preserved as offloaded `media://inbound/*` refs so image/PDF tools or a configured image model can still inspect them instead of losing the attachment.
 - Explicit `openclaw infer image describe --file <path> --model <provider/model>` (alias: `openclaw capability image describe`) runs that image-capable provider/model directly, including Ollama refs such as `ollama/qwen2.5vl:7b` when a matching image-capable model is configured under `models.providers.ollama.models[]`.
 - If `<capability>.enabled` is not `false` but no models are configured, OpenClaw tries the active reply model when its provider supports the capability.
@@ -171,7 +175,7 @@ When `tools.media.<capability>.enabled` is not `false` and no models are configu
 
     Bundled provider priority order (ties break alphabetically by provider id):
     - Image: Anthropic/OpenAI &rarr; Google &rarr; MiniMax &rarr; Deepinfra &rarr; MiniMax Portal &rarr; Z.AI
-    - Video: Google &rarr; Qwen &rarr; Moonshot
+    - Video: Google &rarr; Qwen &rarr; Moonshot &rarr; Z.AI
 
   </Step>
 </Steps>
@@ -212,7 +216,7 @@ Set `capabilities` on a `models[]` entry to restrict it to specific media types.
 | `qwen`                                                                   | image + video         |
 | `deepinfra`                                                              | image + audio         |
 | `mistral`                                                                | audio                 |
-| `zai`                                                                    | image                 |
+| `zai`                                                                    | image + video         |
 | `groq`, `xai`, `deepgram`, `senseaudio`                                  | audio                 |
 | Any `models.providers.<id>.models[]` catalog with an image-capable model | image                 |
 
@@ -224,7 +228,7 @@ For CLI entries, set `capabilities` explicitly to avoid surprising matches; if o
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Image      | Anthropic, Codex app-server, Deepinfra, Google, MiniMax, MiniMax Portal, Moonshot, OpenAI, OpenAI Codex OAuth, OpenRouter, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai/*` can use API-key or Codex OAuth routing; `codex/*` uses a bounded Codex app-server turn; image-capable config providers auto-register. |
 | Audio      | Deepgram, Deepinfra, ElevenLabs, Google, Groq, Mistral, OpenAI, OpenRouter, SenseAudio, xAI                                                             | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                                     |
-| Video      | Google, Moonshot, Qwen                                                                                                                                  | Provider video understanding via vendor plugins; Qwen video understanding uses the standard DashScope endpoints.                                                                        |
+| Video      | Google, Moonshot, Qwen, Z.AI                                                                                                                            | Provider-generated video descriptions; Qwen uses standard DashScope endpoints. Native video input is selected separately from the active model's advertised capabilities.               |
 
 <Note>
 **MiniMax note**: `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` image understanding always comes from the plugin-owned `MiniMax-VL-01` media provider, even if legacy MiniMax M2.x chat metadata claims image input.
@@ -426,7 +430,7 @@ openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-mi
 ## Notes
 
 - Understanding is best-effort. Errors do not block replies.
-- Attachments are still passed to models even when understanding is disabled.
+- Disabling preprocessing does not disable native delivery to a compatible model, but it also does not make an incompatible model capable of reading the attachment.
 - Use `scope` to limit where understanding runs (for example, only DMs).
 
 ## Related

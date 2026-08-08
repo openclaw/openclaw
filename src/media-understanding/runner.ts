@@ -30,12 +30,15 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { normalizeMediaFacts } from "../media/media-facts.js";
+import { normalizeMediaFacts, type MediaFact } from "../media/media-facts.js";
+import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
+import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { matchesMediaEntryCapability } from "./entry-capabilities.js";
 import {
   clearLocalAudioInspectionCacheForTests,
@@ -502,15 +505,16 @@ function resolveImageModelFromAgentDefaults(params: {
   return entries;
 }
 
-function hasExplicitImageUnderstandingConfig(params: {
+function hasExplicitMediaUnderstandingConfig(params: {
   cfg: OpenClawConfig;
+  capability: "image" | "video";
   providerRegistry: ProviderRegistry;
 }): boolean {
   return (params.cfg.tools?.media?.models ?? []).some((entry) =>
     matchesMediaEntryCapability({
       entry,
       source: "shared",
-      capability: "image",
+      capability: params.capability,
       providerRegistry: params.providerRegistry,
     }),
   );
@@ -525,7 +529,8 @@ function isMinimaxNativeVisionModel(params: { provider: string; model?: string }
   );
 }
 
-async function activeModelSupportsNativeVision(params: {
+async function activeModelSupportsNativeMedia(params: {
+  capability: "image" | "video";
   cfg: OpenClawConfig;
   agentId?: string;
   activeModel?: ActiveMediaModel;
@@ -533,10 +538,11 @@ async function activeModelSupportsNativeVision(params: {
   workspaceDir?: string;
 }): Promise<boolean> {
   const activeProvider = params.activeModel?.provider?.trim();
-  if (!activeProvider) {
+  if (!activeProvider || (params.capability === "video" && !params.activeModel?.model?.trim())) {
     return false;
   }
   if (
+    params.capability === "image" &&
     isMinimaxVlmProvider(activeProvider) &&
     !isMinimaxNativeVisionModel({
       provider: activeProvider,
@@ -554,7 +560,43 @@ async function activeModelSupportsNativeVision(params: {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
-  return modelSupportsVision(entry);
+  return params.capability === "image"
+    ? modelSupportsVision(entry)
+    : entry?.input?.includes("video") === true;
+}
+
+function isHydratableNativeVideoFact(fact: MediaFact | undefined): boolean {
+  if (
+    !fact ||
+    fact.hydrationSuppressed === true ||
+    (fact.sizeBytes !== undefined && fact.sizeBytes > DEFAULT_MAX_BYTES.video)
+  ) {
+    return false;
+  }
+  // Match the native hydrator: remote videos can still be captioned safely,
+  // but skipping that fallback would silently lose URL-only channel media.
+  const inboundUri = [fact.url, fact.path].find((source) => source?.startsWith("media://inbound/"));
+  const source = inboundUri ?? fact.path ?? fact.url;
+  if (!source) {
+    return false;
+  }
+  const classification = classifyMediaReferenceSource(source);
+  if (
+    classification.isHttpUrl ||
+    classification.isDataUrl ||
+    classification.hasUnsupportedScheme ||
+    (classification.isMediaStoreUrl && !inboundUri)
+  ) {
+    return false;
+  }
+  if (classification.isFileUrl) {
+    try {
+      safeFileURLToPath(source);
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function resolveAutoEntries(params: {
@@ -567,7 +609,8 @@ async function resolveAutoEntries(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig[]> {
   if (params.capability === "image") {
-    const activeSupportsVision = await activeModelSupportsNativeVision({
+    const activeSupportsVision = await activeModelSupportsNativeMedia({
+      capability: "image",
       cfg: params.cfg,
       agentId: params.agentId,
       activeModel: params.activeModel,
@@ -863,7 +906,7 @@ export async function runCapability(params: {
   }
 
   const attachmentPolicy = config?.attachments;
-  const selected = selectAttachments({
+  let selected = selectAttachments({
     capability,
     attachments: params.media,
     policy: attachmentPolicy,
@@ -874,6 +917,7 @@ export async function runCapability(params: {
       decision: { capability, outcome: "no-attachment", attachments: [] },
     };
   }
+  const attachmentOrder = new Map(selected.map((attachment, index) => [attachment.index, index]));
 
   const scopeDecision = resolveScopeDecision({ scope: config?.scope, ctx });
   if (scopeDecision === "deny") {
@@ -890,19 +934,22 @@ export async function runCapability(params: {
     };
   }
 
-  // Skip image understanding when the primary model supports vision natively.
-  // The image will be injected directly into the model context instead.
+  const nativeSkippedAttachments: MediaUnderstandingDecision["attachments"] = [];
+  // Native-capable models receive eligible media directly; explicit media
+  // models and suppressed/oversized videos must retain the caption fallback.
   const activeProvider = params.activeModel?.provider?.trim();
   if (
-    capability === "image" &&
+    (capability === "image" || capability === "video") &&
     activeProvider &&
-    !hasExplicitImageUnderstandingConfig({
+    !hasExplicitMediaUnderstandingConfig({
       cfg,
+      capability,
       providerRegistry: params.providerRegistry,
     })
   ) {
     if (
-      await activeModelSupportsNativeVision({
+      await activeModelSupportsNativeMedia({
+        capability,
         cfg,
         agentId: params.agentId,
         activeModel: params.activeModel,
@@ -910,32 +957,42 @@ export async function runCapability(params: {
         workspaceDir: params.workspaceDir,
       })
     ) {
-      if (shouldLogVerbose()) {
-        logVerbose("Skipping image understanding: primary model supports vision natively");
-      }
       const model = params.activeModel?.model?.trim();
-      const reason = "primary model supports vision natively";
-      return {
-        outputs: [],
-        decision: {
-          capability,
-          outcome: "skipped",
-          attachments: selected.map((item) => {
-            const attempt = {
-              type: "provider" as const,
-              provider: activeProvider,
-              model: model || undefined,
-              outcome: "skipped" as const,
-              reason,
-            };
-            return {
-              attachmentIndex: item.index,
-              attempts: [attempt],
-              chosen: attempt,
-            };
-          }),
-        },
-      };
+      const reason = `primary model supports ${capability === "image" ? "vision" : "video"} natively`;
+      const mediaFacts = capability === "video" ? normalizeMediaFacts(ctx.media) : undefined;
+      const nativeAttachments = selected.filter((item) => {
+        if (!mediaFacts) {
+          return true;
+        }
+        return isHydratableNativeVideoFact(mediaFacts[item.index]);
+      });
+      if (nativeAttachments.length > 0) {
+        if (shouldLogVerbose()) {
+          logVerbose(`Skipping ${capability} understanding: ${reason}`);
+        }
+        for (const item of nativeAttachments) {
+          const attempt = {
+            type: "provider" as const,
+            provider: activeProvider,
+            model: model || undefined,
+            outcome: "skipped" as const,
+            reason,
+          };
+          nativeSkippedAttachments.push({
+            attachmentIndex: item.index,
+            attempts: [attempt],
+            chosen: attempt,
+          });
+        }
+        const nativeIndexes = new Set(nativeAttachments.map((item) => item.index));
+        selected = selected.filter((item) => !nativeIndexes.has(item.index));
+        if (selected.length === 0) {
+          return {
+            outputs: [],
+            decision: { capability, outcome: "skipped", attachments: nativeSkippedAttachments },
+          };
+        }
+      }
     }
   }
 
@@ -965,13 +1022,22 @@ export async function runCapability(params: {
       decision: {
         capability,
         outcome: "skipped",
-        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
+        attachments: [
+          ...nativeSkippedAttachments,
+          ...selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
+        ].toSorted(
+          (left, right) =>
+            (attachmentOrder.get(left.attachmentIndex) ?? 0) -
+            (attachmentOrder.get(right.attachmentIndex) ?? 0),
+        ),
       },
     };
   }
 
   const outputs: MediaUnderstandingOutput[] = [];
-  const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
+  const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [
+    ...nativeSkippedAttachments,
+  ];
   for (const attachment of selected) {
     const { output, attempts } = await runAttachmentEntries({
       capability,
@@ -1003,7 +1069,11 @@ export async function runCapability(params: {
         : hasFailedMediaAttempt(attachmentDecisions)
           ? "failed"
           : "skipped",
-    attachments: attachmentDecisions,
+    attachments: attachmentDecisions.toSorted(
+      (left, right) =>
+        (attachmentOrder.get(left.attachmentIndex) ?? 0) -
+        (attachmentOrder.get(right.attachmentIndex) ?? 0),
+    ),
   };
   if (decision.outcome === "failed") {
     logWarn(`media-understanding: ${formatDecisionSummary(decision)}`);

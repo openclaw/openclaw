@@ -113,17 +113,20 @@ export function resolveProviderModelInput(params: {
   modelName?: string;
   input?: unknown;
   fallbackInput?: unknown;
-}): Array<"text" | "image"> {
+}): Array<"text" | "image" | "video"> {
   const resolvedInput = Array.isArray(params.input) ? params.input : params.fallbackInput;
   const normalizedInput = Array.isArray(resolvedInput)
-    ? resolvedInput.filter((item): item is "text" | "image" => item === "text" || item === "image")
+    ? resolvedInput.filter(
+        (item): item is "text" | "image" | "video" =>
+          item === "text" || item === "image" || item === "video",
+      )
     : [];
   if (
     normalizedInput.length > 0 &&
     !normalizedInput.includes("image") &&
     isLegacyFoundryVisionModelCandidate(params)
   ) {
-    return ["text", "image"];
+    return [...normalizedInput, "image"];
   }
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }

@@ -1752,6 +1752,114 @@ describe("oversized transcript line guards", () => {
     });
   });
 
+  test.each([
+    {
+      name: "native video data",
+      video: (data: string) => ({ type: "video", mimeType: "video/mp4", data }),
+    },
+    {
+      name: "native video data before type",
+      video: (data: string) => ({ data, mimeType: "video/webm", type: "video" }),
+    },
+    {
+      name: "base64 video source",
+      video: (data: string) => ({
+        type: "video",
+        source: { type: "base64", media_type: "video/mp4", data },
+      }),
+    },
+    {
+      name: "base64 video source before type",
+      video: (data: string) => ({
+        source: { type: "base64", media_type: "video/mp4", data },
+        cache_control: { type: "ephemeral" },
+        type: "video",
+      }),
+    },
+  ])("preserves recoverable reset-archive text around oversized $name", async ({ name, video }) => {
+    const sessionId = `test-oversized-archive-${name.replaceAll(" ", "-")}`;
+    const clip = Buffer.alloc(300 * 1024, "native-video-payload");
+    const encoded = clip.toString("base64");
+    writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("archived-video", null, "user", [
+        { type: "text", text: "keep video question" },
+        video(encoded),
+        { type: "text", text: "keep video follow-up" },
+      ]),
+    ]);
+
+    const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+
+    expect(messages).toMatchObject([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "keep video question" },
+          { type: "video", omitted: true, bytes: clip.length },
+          { type: "text", text: "keep video follow-up" },
+        ],
+        __openclaw: { id: "archived-video" },
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(encoded);
+
+    const singleMessage = await filesystemReader(sessionId, storePath).readById("archived-video", {
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+    expect(singleMessage).toMatchObject({
+      found: true,
+      oversized: false,
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "keep video question" },
+          { type: "video", omitted: true, bytes: clip.length },
+          { type: "text", text: "keep video follow-up" },
+        ],
+      },
+    });
+  });
+
+  test("omits mixed image and video payloads without dropping their shared question", async () => {
+    const sessionId = "test-oversized-mixed-native-media";
+    const image = Buffer.from("private-image-payload");
+    const clip = Buffer.alloc(300 * 1024, "private-video-payload");
+    const imageData = image.toString("base64");
+    const videoData = clip.toString("base64");
+    writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("mixed-native-media", null, "user", [
+        { type: "text", text: "compare both attachments" },
+        { type: "image", mimeType: "image/png", data: imageData },
+        { type: "video", mimeType: "video/mp4", data: videoData },
+      ]),
+    ]);
+
+    const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+
+    expect(messages).toMatchObject([
+      {
+        content: [
+          { type: "text", text: "compare both attachments" },
+          { type: "image", omitted: true, bytes: image.length },
+          { type: "video", omitted: true, bytes: clip.length },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(imageData);
+    expect(JSON.stringify(messages)).not.toContain(videoData);
+  });
+
   test("omits every image even when its data is distant from its type", async () => {
     const sessionId = "test-oversized-distant-image";
     const privateImage = Buffer.from("private-image-payload");
@@ -1940,7 +2048,7 @@ describe("oversized transcript line guards", () => {
     const archive = fs.readFileSync(archivePath, "utf8");
     fs.writeFileSync(
       archivePath,
-      archive.replace('"__MARKER_SPOOF__"', '"\\u005f_openclaw_omitted_image_0__"'),
+      archive.replace('"__MARKER_SPOOF__"', '"\\u005f_openclaw_omitted_media_0__"'),
       "utf8",
     );
 
@@ -1980,8 +2088,18 @@ describe("oversized transcript line guards", () => {
       ],
     },
     {
+      name: "URL video source with oversized data",
+      content: (data: string) => [
+        { type: "video", source: { type: "url", url: "https://example.invalid/video", data } },
+      ],
+    },
+    {
       name: "malformed image base64",
       content: (data: string) => [{ type: "image", data: `${data.slice(0, -1)}!` }],
+    },
+    {
+      name: "malformed video base64",
+      content: (data: string) => [{ type: "video", data: `${data.slice(0, -1)}!` }],
     },
     {
       name: "oversized non-image residual",

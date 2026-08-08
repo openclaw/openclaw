@@ -1,6 +1,6 @@
 /**
  * Amazon Bedrock Converse streaming runtime. It maps OpenClaw messages/tools,
- * thinking, cache points, images, and usage into Bedrock Converse Stream calls.
+ * thinking, cache points, media, and usage into Bedrock Converse Stream calls.
  */
 import {
   CachePointType,
@@ -24,6 +24,8 @@ import {
   type ToolConfiguration,
   type ToolResultContentBlock,
   ToolResultStatus,
+  type VideoBlock,
+  VideoFormat,
 } from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
@@ -121,7 +123,19 @@ function normalizeAdaptiveClaudeToolChoice(
 // OpenClaw synthesizes these caps when the provider's real output limit is unknown.
 // Keep them out of Bedrock adaptive requests so Bedrock can use its native default.
 const OPENCLAW_FALLBACK_MODEL_MAX_TOKENS = new Set([4096, 8192, 16_384]);
-
+const BEDROCK_MAX_INLINE_VIDEO_ENCODED_BYTES = 25 * 1024 * 1024;
+const BEDROCK_VIDEO_FORMATS: Readonly<Record<string, VideoFormat>> = {
+  "video/mp4": VideoFormat.MP4,
+  "video/quicktime": VideoFormat.MOV,
+  "video/x-matroska": VideoFormat.MKV,
+  "video/webm": VideoFormat.WEBM,
+  "video/x-flv": VideoFormat.FLV,
+  "video/mpeg": VideoFormat.MPEG,
+  "video/mpg": VideoFormat.MPG,
+  "video/wmv": VideoFormat.WMV,
+  "video/x-ms-wmv": VideoFormat.WMV,
+  "video/3gpp": VideoFormat.THREE_GP,
+};
 function resolveAdaptiveBedrockMaxTokens(
   model: Model<"bedrock-converse-stream">,
   baseMaxTokens: number | undefined,
@@ -877,7 +891,10 @@ function normalizeToolCallId(id: string): string {
   return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
 }
 
-function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
+function createBedrockToolResult(
+  message: ToolResultMessage,
+  model: Model<"bedrock-converse-stream">,
+): ContentBlock.ToolResultMember {
   const content: ToolResultContentBlock[] = [];
   for (const block of message.content) {
     if (block.type === "text") {
@@ -886,6 +903,10 @@ function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolR
     }
     if (block.type === "image" && describeToolResultMediaPlaceholder([block])) {
       content.push({ image: createImageBlock(block.mimeType, block.data) });
+      continue;
+    }
+    if (block.type === "video" && block.data.trim().length > 0) {
+      content.push({ video: createVideoBlock(block.mimeType, block.data, model) });
     }
   }
 
@@ -901,6 +922,65 @@ function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolR
   };
 }
 
+function retainLatestBedrockVideo(messages: Context["messages"]): Context["messages"] {
+  let latestVideo: { messageIndex: number; contentIndex: number } | undefined;
+
+  for (let messageIndex = messages.length - 1; messageIndex >= 0 && !latestVideo; messageIndex--) {
+    const message = messages[messageIndex];
+    if (
+      !message ||
+      (message.role !== "user" && message.role !== "toolResult") ||
+      typeof message.content === "string"
+    ) {
+      continue;
+    }
+    for (let contentIndex = message.content.length - 1; contentIndex >= 0; contentIndex--) {
+      const block = message.content[contentIndex];
+      if (block?.type === "video" && (message.role === "user" || block.data.trim().length > 0)) {
+        latestVideo = { messageIndex, contentIndex };
+        break;
+      }
+    }
+  }
+
+  if (!latestVideo) {
+    return messages;
+  }
+  const retainedVideo = latestVideo;
+
+  // Nova permits one video in the whole request, including replayed history.
+  // Preserve the newest clip and make each older omission visible to the model.
+  return messages.map((message, messageIndex) => {
+    if (
+      (message.role !== "user" && message.role !== "toolResult") ||
+      typeof message.content === "string" ||
+      messageIndex > retainedVideo.messageIndex
+    ) {
+      return message;
+    }
+
+    let changed = false;
+    const content = message.content.map((block, contentIndex) => {
+      if (
+        block.type !== "video" ||
+        (message.role === "toolResult" && block.data.trim().length === 0) ||
+        (messageIndex === retainedVideo.messageIndex && contentIndex === retainedVideo.contentIndex)
+      ) {
+        return block;
+      }
+      changed = true;
+      return {
+        type: "text" as const,
+        text:
+          message.role === "toolResult"
+            ? "(tool video omitted: Amazon Bedrock accepts one video per request)"
+            : "(video omitted: Amazon Bedrock accepts one video per request)",
+      };
+    });
+    return changed ? { ...message, content } : message;
+  });
+}
+
 function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
@@ -908,7 +988,9 @@ function convertMessages(
 ): Message[] {
   const result: Message[] = [];
   let firstVolatileMessageIndex: number | undefined;
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+  const transformedMessages = retainLatestBedrockVideo(
+    transformMessages(context.messages, model, normalizeToolCallId),
+  );
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const m = expectDefined(transformedMessages[i], "message conversion index is in bounds");
@@ -926,6 +1008,9 @@ function convertMessages(
                 break;
               case "image":
                 content.push({ image: createImageBlock(c.mimeType, c.data) });
+                break;
+              case "video":
+                content.push({ video: createVideoBlock(c.mimeType, c.data, model) });
                 break;
               default:
                 continue;
@@ -1044,7 +1129,7 @@ function convertMessages(
         const toolResults: ContentBlock.ToolResultMember[] = [];
 
         // Add current tool result with all content blocks combined
-        toolResults.push(createBedrockToolResult(m));
+        toolResults.push(createBedrockToolResult(m, model));
 
         // Look ahead for consecutive toolResult messages
         let j = i + 1;
@@ -1053,7 +1138,7 @@ function convertMessages(
           if (nextMsg?.role !== "toolResult") {
             break;
           }
-          toolResults.push(createBedrockToolResult(nextMsg));
+          toolResults.push(createBedrockToolResult(nextMsg, model));
           j++;
         }
 
@@ -1315,6 +1400,35 @@ function createImageBlock(mimeType: string, data: string) {
       bytes: decodeBedrockBase64(data, "Amazon Bedrock image content has malformed base64"),
     },
     format,
+  };
+}
+
+function createVideoBlock(
+  mimeType: string,
+  data: string,
+  model: Model<"bedrock-converse-stream">,
+): VideoBlock {
+  if (!model.input.includes("video")) {
+    throw new Error(`Amazon Bedrock model does not support video input: ${model.id}`);
+  }
+
+  const normalizedMimeType = mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const format = BEDROCK_VIDEO_FORMATS[normalizedMimeType];
+  if (!format) {
+    throw new Error(`Unsupported Amazon Bedrock video type: ${mimeType}`);
+  }
+  // AWS caps the encoded inline video below 25 MB; check before allocating decoded bytes.
+  if (data.length >= BEDROCK_MAX_INLINE_VIDEO_ENCODED_BYTES) {
+    throw new Error(
+      "Amazon Bedrock inline video must be smaller than 25 MB after base64 encoding.",
+    );
+  }
+
+  return {
+    format,
+    source: {
+      bytes: decodeBedrockBase64(data, "Amazon Bedrock video content has malformed base64"),
+    },
   };
 }
 

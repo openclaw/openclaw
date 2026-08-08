@@ -1981,6 +1981,38 @@ describe("createCopilotToolBridge tool conversion", () => {
     });
   });
 
+  it("replaces unsupported video content without exposing its payload or dropping images", async () => {
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
+      makeTool(
+        {},
+        {
+          content: [
+            { text: "preview", type: "text" },
+            { data: "private-video-payload", mimeType: "video/mp4", type: "video" },
+            { data: "base64-image", mimeType: "image/png", type: "image" },
+          ],
+          details: null,
+        },
+      ),
+      {},
+    );
+
+    const result = await runSdkTool(sdkTool, {});
+
+    expect(result).toEqual({
+      binaryResultsForLlm: [
+        {
+          data: "base64-image",
+          mimeType: "image/png",
+          type: "image",
+        },
+      ],
+      resultType: "success",
+      textResultForLlm: "preview\n(video omitted: model does not support videos)",
+    });
+    expect(JSON.stringify(result)).not.toContain("private-video-payload");
+  });
+
   it("returns a failure result when execute throws and preserves the error", async () => {
     const error = new Error("tool exploded");
     const sourceTool = makeTool({

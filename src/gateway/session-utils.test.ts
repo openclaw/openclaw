@@ -39,6 +39,7 @@ import {
   loadSessionEntryReadOnly,
   resolveCanonicalGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
+  resolveGatewayModelInputCapabilities,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
@@ -3599,6 +3600,162 @@ describe("resolveGatewayModelSupportsImages", () => {
     entries: params.entries ?? [],
     routeVariants: [],
     ...(params.staticEntries ? { staticEntries: params.staticEntries } : {}),
+  });
+
+  test("resolves native image and video support from one authoritative catalog lookup", async () => {
+    const loadGatewayModelCatalog = vi.fn(
+      async (): Promise<GatewayModelCatalogSnapshot["entries"]> => [
+        {
+          id: "kimi-k3",
+          name: "Kimi K3",
+          provider: "moonshot",
+          input: ["text", "image", "video"],
+        },
+      ],
+    );
+
+    await expect(
+      resolveGatewayModelInputCapabilities({
+        agentId: "qa",
+        model: "kimi-k3",
+        provider: "moonshot",
+        loadGatewayModelCatalog,
+      }),
+    ).resolves.toEqual({ supportsImages: true, supportsVideo: true });
+    expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  test("repairs stale visible video capability from same-agent provider-static facts", async () => {
+    await expect(
+      resolveGatewayModelInputCapabilities({
+        agentId: "qa",
+        model: "kimi-k3",
+        provider: "moonshot",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            entries: [
+              {
+                id: "kimi-k3",
+                name: "Stale vision model",
+                provider: "moonshot",
+                input: ["text", "image"],
+              },
+            ],
+            staticEntries: [
+              {
+                id: "kimi-k3",
+                name: "Kimi K3",
+                provider: "moonshot",
+                input: ["text", "image", "video"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toEqual({ supportsImages: true, supportsVideo: true });
+  });
+
+  test("does not override an explicitly configured model without video input", async () => {
+    await expect(
+      resolveGatewayModelInputCapabilities({
+        agentId: "qa",
+        model: "kimi-k3",
+        provider: "moonshot",
+        loadGatewayModelCatalog: async () => [],
+        loadGatewayModelCatalogSnapshot: async () =>
+          createModelCatalogSnapshot({
+            agentId: "qa",
+            config: {
+              models: {
+                providers: {
+                  moonshot: {
+                    baseUrl: "https://api.moonshot.ai/v1",
+                    models: [
+                      {
+                        id: "kimi-k3",
+                        name: "Images only",
+                        reasoning: false,
+                        input: ["text", "image"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 128_000,
+                        maxTokens: 4_096,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+            entries: [
+              {
+                id: "kimi-k3",
+                name: "Images only",
+                provider: "moonshot",
+                baseUrl: "https://api.moonshot.ai/v1",
+                input: ["text", "image"],
+              },
+            ],
+            staticEntries: [
+              {
+                id: "kimi-k3",
+                name: "Kimi K3",
+                provider: "moonshot",
+                baseUrl: "https://api.moonshot.ai/v1",
+                input: ["text", "image", "video"],
+              },
+            ],
+          }),
+      }),
+    ).resolves.toEqual({ supportsImages: true, supportsVideo: false });
+  });
+
+  test("never infers native video for image-capability legacy shims or unresolved models", async () => {
+    await expect(
+      resolveGatewayModelInputCapabilities({
+        model: "gpt-5.4",
+        provider: "microsoft-foundry",
+        loadGatewayModelCatalog: async () => [
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "microsoft-foundry", input: ["text"] },
+        ],
+      }),
+    ).resolves.toEqual({ supportsImages: true, supportsVideo: false });
+
+    await expect(
+      resolveGatewayModelInputCapabilities({
+        loadGatewayModelCatalog: async () => [],
+      }),
+    ).resolves.toEqual({ supportsImages: true, supportsVideo: false });
+  });
+
+  test.each([
+    {
+      route: "sanitized official first-party route",
+      baseUrl: "https://api.openai.com/v1",
+      input: ["text", "image"] as const,
+      supportsVideo: false,
+    },
+    {
+      route: "custom OpenAI-compatible route",
+      baseUrl: "https://video.example.test/v1",
+      input: ["text", "image", "video"] as const,
+      supportsVideo: true,
+    },
+  ])("uses provider-owned capabilities for a $route", async ({ baseUrl, input, supportsVideo }) => {
+    await expect(
+      resolveGatewayModelInputCapabilities({
+        model: "custom-model",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "custom-model",
+            name: "Custom model",
+            provider: "openai",
+            baseUrl,
+            input: [...input],
+          },
+        ],
+      }),
+    ).resolves.toEqual({ supportsImages: true, supportsVideo });
   });
 
   test("uses same-agent provider-static image capabilities missing from the visible catalog", async () => {

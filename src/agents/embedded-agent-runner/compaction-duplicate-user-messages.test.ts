@@ -62,6 +62,30 @@ describe("compaction duplicate user message pruning", () => {
     expect(dedupeDuplicateUserMessagesForCompaction([long, longLater])).toEqual([long, longLater]);
   });
 
+  it.each(["image", "video"] as const)(
+    "preserves distinct %s attachments when their captions are identical",
+    (type) => {
+      const first = {
+        role: "user" as const,
+        content: [
+          { type: "text", text: LONG_PROMPT },
+          { type, data: "first-attachment", mimeType: `${type}/test` },
+        ],
+        timestamp: 1_000,
+      };
+      const second = {
+        role: "user" as const,
+        content: [
+          { type: "text", text: LONG_PROMPT },
+          { type, data: "second-attachment", mimeType: `${type}/test` },
+        ],
+        timestamp: 2_000,
+      };
+
+      expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+    },
+  );
+
   it("keys duplicate retries by sender identity (#98310)", () => {
     const alice = userMessage({ timestamp: 1_000, senderId: "user-alice" });
     const bob = userMessage({ timestamp: 2_000, senderId: "user-bob" });

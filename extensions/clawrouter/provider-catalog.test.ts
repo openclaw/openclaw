@@ -184,6 +184,34 @@ describe("ClawRouter provider catalog", () => {
     expect(provider.models.map((model) => model.id)).not.toContain("cohere/command-a-plus-05-2026");
   });
 
+  it("uses explicit model input metadata without inferring video from provider families", async () => {
+    const catalog = structuredClone(CATALOG);
+    Object.assign(expectDefined(catalog.providers[0]?.models[0], "OpenAI ClawRouter model"), {
+      input_modalities: ["text"],
+    });
+    Object.assign(expectDefined(catalog.providers[1]?.models[0], "DeepSeek ClawRouter model"), {
+      architecture: { modality: "text->video+image" },
+    });
+    Object.assign(expectDefined(catalog.providers[3]?.models[0], "Gemini ClawRouter model"), {
+      input_modalities: ["text", "image", "video", "audio"],
+    });
+
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "clawrouter-test-key",
+      fetchGuard: buildFetchGuard(catalog).fetchGuard,
+    });
+
+    expect(provider.models.find((model) => model.id === "openai/gpt-5.5")?.input).toEqual(["text"]);
+    expect(
+      provider.models.find((model) => model.id === "deepseek/deepseek-v4-flash")?.input,
+    ).toEqual(["text"]);
+    expect(provider.models.find((model) => model.id === "google/gemini-3.5-flash")?.input).toEqual([
+      "text",
+      "image",
+      "video",
+    ]);
+  });
+
   it("rewrites only native protocol model ids at the request boundary", async () => {
     const provider = await buildClawRouterProviderConfig({
       apiKey: "clawrouter-test-key",

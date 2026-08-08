@@ -43,6 +43,7 @@ type CatalogModel = {
   id: string;
   upstream: string;
   capabilities: string[];
+  input?: Array<"text" | "image" | "video">;
   pricing?: CatalogPricing;
 };
 
@@ -123,6 +124,36 @@ function parseCatalogPricing(value: unknown): CatalogPricing | undefined {
   };
 }
 
+function readAdvertisedModelInput(row: Record<string, unknown> | undefined): CatalogModel["input"] {
+  if (!row) {
+    return undefined;
+  }
+  const architecture = readRecord(row.architecture);
+  const explicit = [
+    row.input_modalities,
+    row.inputModalities,
+    row.input,
+    architecture?.input_modalities,
+    architecture?.inputModalities,
+    architecture?.input,
+  ].find(Array.isArray);
+  const modality = readString(architecture?.modality) ?? readString(row.modality);
+  if (!explicit && !modality) {
+    return undefined;
+  }
+  const advertised = explicit
+    ? explicit.filter((value): value is string => typeof value === "string")
+    : (modality?.split("->", 1)[0] ?? "").split("+");
+  const input: NonNullable<CatalogModel["input"]> = ["text"];
+  if (advertised.includes("image")) {
+    input.push("image");
+  }
+  if (advertised.includes("video")) {
+    input.push("video");
+  }
+  return input;
+}
+
 function parseCatalogModel(value: unknown): CatalogModel | undefined {
   const row = readRecord(value);
   const id = readString(row?.id);
@@ -134,6 +165,7 @@ function parseCatalogModel(value: unknown): CatalogModel | undefined {
     id,
     upstream,
     capabilities: readStringArray(row?.capabilities),
+    input: readAdvertisedModelInput(row),
     pricing: parseCatalogPricing(row?.pricing),
   };
 }
@@ -269,7 +301,7 @@ function buildRoutedModel(
     api,
     baseUrl,
     reasoning: inferReasoning(provider.id, model.id),
-    input: inferInput(provider.id, model.id),
+    input: model.input ?? inferInput(provider.id, model.id),
     cost: modelCost(model.pricing),
     contextWindow: model.pricing?.maxInputTokens ?? DEFAULT_CONTEXT_WINDOW,
     maxTokens: model.pricing?.defaultMaxOutputTokens ?? DEFAULT_MAX_TOKENS,

@@ -2,15 +2,20 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ChatCompletionAssistantMessageParam,
   ChatCompletionContentPart,
-  ChatCompletionContentPartImage,
   ChatCompletionContentPartText,
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { supportsNativeVideoInput } from "./model-utils.js";
+import {
+  buildOpenAICompatibleChatMediaPart,
+  type OpenAICompatibleChatContentPart,
+} from "./providers/openai-compatible-video-content.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
+  isVideoWithMediaPayload,
 } from "./providers/tool-result-text.js";
 import { transformMessages } from "./transcript-transform.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
@@ -48,6 +53,7 @@ export function convertMessages(
   } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
+  const supportsVideo = supportsNativeVideoInput(model);
 
   const normalizeToolCallId = (id: string): string => {
     // Responses ids can contain a pipe plus a long provider item id. Chat
@@ -103,24 +109,32 @@ export function convertMessages(
         }
         params.push(userParam);
       } else {
-        const content: ChatCompletionContentPart[] = msg.content.map(
-          (item): ChatCompletionContentPart => {
+        const content: OpenAICompatibleChatContentPart[] = msg.content.map(
+          (item): OpenAICompatibleChatContentPart => {
             if (item.type === "text") {
               return {
                 type: "text",
                 text: sanitizeSurrogates(item.text),
               } satisfies ChatCompletionContentPartText;
             }
-            return {
-              type: "image_url",
-              image_url: { url: `data:${item.mimeType};base64,${item.data}` },
-            } satisfies ChatCompletionContentPartImage;
+            if (item.type === "video" && !supportsVideo) {
+              return {
+                type: "text",
+                text: "(video omitted: model does not support videos)",
+              } satisfies ChatCompletionContentPartText;
+            }
+            return buildOpenAICompatibleChatMediaPart(item);
           },
         );
         if (content.length === 0) {
           continue;
         }
-        const userParam: ChatCompletionMessageParam = { role: "user", content };
+        // The official SDK omits vendor video_url parts; capability gating keeps the
+        // extension off unsupported first-party OpenAI requests.
+        const userParam: ChatCompletionMessageParam = {
+          role: "user",
+          content: content as ChatCompletionContentPart[],
+        };
         if (isRuntimeContextCarrier) {
           options.cacheOptOutIndexes?.add(params.length);
         }
@@ -219,7 +233,7 @@ export function convertMessages(
       }
       params.push(assistantMsg);
     } else if (msg.role === "toolResult") {
-      const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+      const mediaBlocks: OpenAICompatibleChatContentPart[] = [];
       let j = i;
 
       while (j < transformedMessages.length) {
@@ -230,7 +244,6 @@ export function convertMessages(
 
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some(isImageWithMediaPayload);
         const content = sanitizeToolResultText(
           textResult,
           mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
@@ -245,14 +258,12 @@ export function convertMessages(
         }
         params.push(toolResultMsg);
 
-        if (hasImages && model.input.includes("image")) {
-          for (const block of toolMsg.content) {
-            if (isImageWithMediaPayload(block)) {
-              imageBlocks.push({
-                type: "image_url",
-                image_url: { url: `data:${block.mimeType};base64,${block.data}` },
-              });
-            }
+        for (const block of toolMsg.content) {
+          if (
+            (isImageWithMediaPayload(block) && model.input.includes("image")) ||
+            (isVideoWithMediaPayload(block) && supportsVideo)
+          ) {
+            mediaBlocks.push(buildOpenAICompatibleChatMediaPart(block));
           }
         }
         j += 1;
@@ -260,13 +271,24 @@ export function convertMessages(
 
       i = j - 1;
 
-      if (imageBlocks.length > 0) {
+      if (mediaBlocks.length > 0) {
         if (compat.requiresAssistantAfterToolResult) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
+        const hasImages = mediaBlocks.some((block) => block.type === "image_url");
+        const hasVideos = mediaBlocks.some((block) => block.type === "video_url");
+        const mediaLabel =
+          hasImages && hasVideos
+            ? "Attached media from tool result:"
+            : hasVideos
+              ? "Attached video(s) from tool result:"
+              : "Attached image(s) from tool result:";
         params.push({
           role: "user",
-          content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...imageBlocks],
+          content: [
+            { type: "text", text: mediaLabel },
+            ...mediaBlocks,
+          ] as ChatCompletionContentPart[],
         });
         lastRole = "user";
       } else {

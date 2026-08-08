@@ -89,13 +89,15 @@
   },
   "mediaUnderstandingProviderMetadata": {
     "openrouter": {
-      "capabilities": ["image", "audio"],
+      "capabilities": ["image", "audio", "video"],
       "defaultModels": {
         "image": "auto",
-        "audio": "openai/whisper-large-v3-turbo"
+        "audio": "openai/whisper-large-v3-turbo",
+        "video": "moonshotai/kimi-k2.6"
       },
       "autoPriority": {
-        "audio": 35
+        "audio": 35,
+        "video": 30
       }
     }
   },

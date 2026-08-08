@@ -1,6 +1,6 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ImageContent } from "../../../llm/types.js";
+import type { ImageContent, MediaContent, VideoContent } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -39,7 +39,7 @@ function createBaseInput() {
     attempt: { sessionId },
     appendContext: "append context",
     contextTokenBudget: 8_000,
-    images: [] as ImageContent[],
+    inputMedia: [] as MediaContent[],
     modelPrompt: "model prompt",
     onFinalPromptText: vi.fn(),
     onSteeringAcknowledged: vi.fn(),
@@ -61,16 +61,16 @@ afterEach(() => {
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
-  it("submits runtime-only prompts without images and acknowledges steering", async () => {
+  it("submits runtime-only prompts without media and acknowledges steering", async () => {
     const { activeSession, baseStreamFn, originalTransformContext } = createSession();
     const input = createBaseInput();
     const promptActiveSession = vi.fn(
       async (
         prompt: string,
-        options?: { images?: ImageContent[]; preflightResult?: (submitted: boolean) => void },
+        options?: { media?: MediaContent[]; preflightResult?: (submitted: boolean) => void },
       ) => {
         expect(prompt).toBe("transcript prompt");
-        expect(options).not.toHaveProperty("images");
+        expect(options).not.toHaveProperty("media");
         expect(input.onFinalPromptText).toHaveBeenCalledWith("transcript prompt");
         expect(activeSession.agent.streamFn).not.toBe(baseStreamFn);
         expect(activeSession.agent.transformContext).not.toBe(originalTransformContext);
@@ -81,7 +81,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     await submitEmbeddedAttemptPrompt({
       ...input,
       activeSession,
-      images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      inputMedia: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
       leasedSteering: { leaseId: "lease-1", runIds: ["missing-run"] },
       promptActiveSession,
       runtimeOnly: true,
@@ -107,10 +107,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const promptActiveSession = vi.fn(
       async (
         _prompt: string,
-        options?: { images?: ImageContent[]; preflightResult?: (submitted: boolean) => void },
+        options?: { media?: MediaContent[]; preflightResult?: (submitted: boolean) => void },
       ) => {
         expect(activeSession.messages).toContain(runtimeContextMessage);
-        expect(options?.images).toEqual([image]);
+        expect(options?.media).toEqual([image]);
         options?.preflightResult?.(true);
         throw new Error("provider failed");
       },
@@ -120,7 +120,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       submitEmbeddedAttemptPrompt({
         ...input,
         activeSession,
-        images: [image],
+        inputMedia: [image],
         promptActiveSession,
         runtimeContextMessage,
       }),
@@ -131,6 +131,32 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(activeSession.messages).not.toContain(runtimeContextMessage);
     expect(activeSession.agent.streamFn).toBe(baseStreamFn);
     expect(activeSession.agent.transformContext).toBe(originalTransformContext);
+  });
+
+  it("submits images and native video together through canonical session media", async () => {
+    const { activeSession } = createSession();
+    const input = createBaseInput();
+    const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
+    const video: VideoContent = { type: "video", data: "dmlkZW8=", mimeType: "video/mp4" };
+    const promptActiveSession = vi.fn(
+      async (
+        _prompt: string,
+        options?: { media?: MediaContent[]; preflightResult?: (submitted: boolean) => void },
+      ) => {
+        expect(options?.media).toEqual([video, image]);
+        expect(options).not.toHaveProperty("images");
+        options?.preflightResult?.(true);
+      },
+    );
+
+    await submitEmbeddedAttemptPrompt({
+      ...input,
+      activeSession,
+      inputMedia: [video, image],
+      promptActiveSession,
+    });
+
+    expect(promptActiveSession).toHaveBeenCalledOnce();
   });
 
   it("caps oversized MCP tool results at the provider boundary", async () => {

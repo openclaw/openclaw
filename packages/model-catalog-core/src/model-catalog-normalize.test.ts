@@ -211,6 +211,32 @@ describe("model catalog normalization", () => {
     });
   });
 
+  it("preserves native video without promoting unsupported audio into catalog metadata", () => {
+    const catalog = normalizeModelCatalog(
+      {
+        providers: {
+          multimodal: {
+            models: [{ id: "video-model", input: ["text", "image", "video", "audio", "document"] }],
+          },
+        },
+      },
+      { ownedProviders: new Set(["multimodal"]) },
+    );
+    const provider = catalog?.providers?.multimodal;
+    expect(provider?.models[0]?.input).toEqual(["text", "image", "video", "document"]);
+    if (!provider) {
+      throw new Error("expected multimodal provider");
+    }
+
+    expect(
+      normalizeModelCatalogProviderRows({
+        provider: "multimodal",
+        providerCatalog: provider,
+        source: "manifest",
+      })[0]?.input,
+    ).toEqual(["text", "image", "video", "document"]);
+  });
+
   it("builds normalized rows with provider defaults and stable refs", () => {
     const rows = normalizeModelCatalogProviderRows({
       provider: "OpenAI",

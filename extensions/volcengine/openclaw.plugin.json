@@ -57,7 +57,8 @@
             "reasoning": true,
             "input": [
               "text",
-              "image"
+              "image",
+              "video"
             ],
             "contextWindow": 1024000,
             "maxTokens": 256000,
@@ -74,7 +75,8 @@
             "reasoning": true,
             "input": [
               "text",
-              "image"
+              "image",
+              "video"
             ],
             "contextWindow": 256000,
             "maxTokens": 256000,
@@ -91,7 +93,8 @@
             "reasoning": true,
             "input": [
               "text",
-              "image"
+              "image",
+              "video"
             ],
             "contextWindow": 256000,
             "maxTokens": 256000,
@@ -253,7 +256,8 @@
             "reasoning": true,
             "input": [
               "text",
-              "image"
+              "image",
+              "video"
             ],
             "contextWindow": 256000,
             "maxTokens": 256000,

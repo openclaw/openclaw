@@ -300,17 +300,30 @@ describe("sanitizeToolResult", () => {
     expect(text).not.toContain("abcdef0123456789QWERTY=");
   });
 
-  it("reports decoded byte size when stripping image content", () => {
+  it.each([
+    { type: "image", mimeType: "image/png" },
+    { type: "video", mimeType: "video/mp4" },
+  ])("reports decoded byte size when stripping $type content", ({ type, mimeType }) => {
     const data = Buffer.from([0, 1, 2, 3, 4]).toString("base64");
     const result = {
-      content: [{ type: "image", data, mimeType: "image/png" }],
+      content: [{ type, data, mimeType, durationSeconds: 12 }],
     };
 
     const sanitized = sanitizeToolResult(result) as {
-      content: Array<{ data?: string; bytes?: number; omitted?: boolean }>;
+      content: Array<{
+        type: string;
+        mimeType: string;
+        data?: string;
+        bytes?: number;
+        omitted?: boolean;
+        durationSeconds: number;
+      }>;
     };
 
     expect(data).toHaveLength(8);
+    expect(
+      expectDefined(sanitized.content[0], "sanitized.content[0] test invariant"),
+    ).toMatchObject({ type, mimeType, durationSeconds: 12 });
     expect(
       expectDefined(sanitized.content[0], "sanitized.content[0] test invariant").data,
     ).toBeUndefined();
@@ -320,6 +333,58 @@ describe("sanitizeToolResult", () => {
     expect(expectDefined(sanitized.content[0], "sanitized.content[0] test invariant").bytes).toBe(
       5,
     );
+  });
+
+  it("strips nested native and provider-encoded video while preserving metadata and URLs", () => {
+    const data = Buffer.from("private video bytes").toString("base64");
+    const videoUrl = `data:video/mp4;base64,${data}`;
+    const result = {
+      content: [{ type: "text", text: "Video analyzed" }],
+      details: {
+        source: { type: "base64", media_type: "video/mp4", data, durationSeconds: 12 },
+        completion: { type: "video_url", video_url: { url: videoUrl, detail: "high" } },
+        response: { type: "input_video", video_url: videoUrl },
+        attachment: { type: "video", url: "https://example.test/video.mp4" },
+      },
+    };
+
+    const sanitized = sanitizeToolResult(result) as {
+      content: Array<{ type: string; text: string }>;
+      details: {
+        source: {
+          type: string;
+          media_type: string;
+          data?: string;
+          bytes: number;
+          omitted: boolean;
+          durationSeconds: number;
+        };
+        completion: { video_url: { url: string; detail: string } };
+        response: { video_url: string };
+        attachment: { type: string; url: string };
+      };
+    };
+
+    expect(JSON.stringify(sanitized)).not.toContain(data);
+    expect(sanitized.content).toEqual([{ type: "text", text: "Video analyzed" }]);
+    expect(sanitized.details.source).toEqual({
+      type: "base64",
+      media_type: "video/mp4",
+      bytes: 19,
+      omitted: true,
+      durationSeconds: 12,
+    });
+    expect(sanitized.details.completion.video_url).toEqual({
+      url: `[inline data URI: ${videoUrl.length} chars]`,
+      detail: "high",
+    });
+    expect(sanitized.details.response.video_url).toBe(
+      `[inline data URI: ${videoUrl.length} chars]`,
+    );
+    expect(sanitized.details.attachment).toEqual({
+      type: "video",
+      url: "https://example.test/video.mp4",
+    });
   });
 
   it("preserves an existing image byte size when data is already omitted", () => {
@@ -464,6 +529,51 @@ describe("sanitizeToolArgs", () => {
     expect(sanitized.nested.GITHUB_TOKEN).toBe("${GITHUB_TOKEN:-liter…890}");
   });
 
+  it("omits native video bytes and inline video URLs from nested tool arguments", () => {
+    const data = Buffer.from("private tool video").toString("base64");
+    const videoUrl = `data:video/webm;base64,${data}`;
+    const sanitized = sanitizeToolArgs({
+      prompt: "Describe the video",
+      messages: [
+        {
+          content: [
+            { type: "video", mimeType: "video/webm", data, durationSeconds: 8 },
+            { type: "video_url", video_url: { url: videoUrl } },
+          ],
+        },
+      ],
+      metadata: { data: "ordinary application data" },
+    }) as {
+      prompt: string;
+      messages: Array<{
+        content: Array<{
+          type: string;
+          mimeType?: string;
+          data?: string;
+          bytes?: number;
+          omitted?: boolean;
+          durationSeconds?: number;
+          video_url?: { url: string };
+        }>;
+      }>;
+      metadata: { data: string };
+    };
+
+    expect(JSON.stringify(sanitized)).not.toContain(data);
+    expect(sanitized.messages[0]?.content[0]).toEqual({
+      type: "video",
+      mimeType: "video/webm",
+      bytes: 18,
+      omitted: true,
+      durationSeconds: 8,
+    });
+    expect(sanitized.messages[0]?.content[1]?.video_url?.url).toBe(
+      `[inline data URI: ${videoUrl.length} chars]`,
+    );
+    expect(sanitized.prompt).toBe("Describe the video");
+    expect(sanitized.metadata.data).toBe("ordinary application data");
+  });
+
   it("passes through null/undefined and non-string primitives unchanged", () => {
     expect(sanitizeToolArgs(undefined)).toBeUndefined();
     expect(sanitizeToolArgs(null)).toBeNull();
@@ -525,15 +635,24 @@ describe("extractToolResultText", () => {
     ).toContain('"stdout":"command output"');
   });
 
-  it("keeps existing text blocks and skips image blocks", () => {
+  it("keeps existing text blocks and skips image and video blocks", () => {
     const text = extractToolResultText({
       content: [
         { type: "text", text: "hello" },
         { type: "image", data: "abc", mimeType: "image/png" },
+        { type: "video", data: "private-video-bytes", mimeType: "video/mp4" },
       ],
     });
 
     expect(text).toBe("hello");
+  });
+
+  it.each([
+    { type: "video", data: "private-video-bytes" },
+    { type: "video_url", video_url: { url: "data:video/mp4;base64,private-video-bytes" } },
+    { type: "input_video", video_url: "data:video/mp4;base64,private-video-bytes" },
+  ])("does not stringify $type media blocks as visible tool output", (content) => {
+    expect(extractToolResultText({ content: [content] })).toBeUndefined();
   });
 
   it("keeps existing text output before structured fallback", () => {
@@ -591,6 +710,10 @@ describe("extractToolResultText", () => {
             mimeType: "application/pdf",
           },
         },
+        {
+          type: "json",
+          video: { type: "video", data: "nested-video-base64-secret", durationSeconds: 12 },
+        },
       ],
     });
 
@@ -599,6 +722,8 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("audio-base64-secret");
     expect(text).not.toContain("document-base64-secret");
     expect(text).not.toContain("resource-base64-secret");
+    expect(text).not.toContain("nested-video-base64-secret");
+    expect(text).toContain('"durationSeconds":12');
     expect(text).not.toContain("sk-structured-secret-1234567890");
   });
 

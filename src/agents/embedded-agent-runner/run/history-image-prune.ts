@@ -7,7 +7,7 @@ import {
   type MediaFact,
 } from "../../../media/media-facts.js";
 /**
- * Prunes already-processed image payloads from replayed prompt history.
+ * Prunes already-processed visual media payloads from replayed prompt history.
  */
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -16,6 +16,9 @@ import { hydratePromptMediaMessages } from "./images.js";
 
 /** Replacement text for old image blocks that were already available to the model. */
 const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+
+/** Replacement text for old video blocks that were already available to the model. */
+const PRUNED_HISTORY_VIDEO_MARKER = "[video data removed - already processed by model]";
 
 /** Replacement text for fact-owned late-media projections already processed by the model. */
 const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
@@ -35,8 +38,8 @@ type PrunableContextAgent = {
 };
 
 /**
- * Number of most-recent completed turns whose preceding user/toolResult image
- * blocks are kept intact. Counts all completed turns, not just image-bearing
+ * Number of most-recent completed turns whose preceding user/toolResult media
+ * blocks are kept intact. Counts all completed turns, not just media-bearing
  * ones, so text-only turns consume the window.
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
@@ -191,14 +194,14 @@ function cloneMessageWithContent(
   message: Extract<AgentMessage, { role: "user" | "toolResult" }>,
   content: typeof message.content,
   dropMedia = false,
-  dropImageMetadata = dropMedia,
+  dropMediaMetadata = dropMedia,
 ): AgentMessage {
   const clone = { ...message, content } as AgentMessage & Record<string, unknown>;
   if (dropMedia) {
     delete clone.media;
     stripLegacyMediaContextFields(clone);
   }
-  if (dropImageMetadata) {
+  if (dropMediaMetadata) {
     const meta = clone["__openclaw"];
     const nextMeta =
       meta && typeof meta === "object" && !Array.isArray(meta)
@@ -219,7 +222,7 @@ function cloneMessageWithContent(
   return clone;
 }
 
-/** Prunes old image payloads and references before later LLM-boundary synthesis. */
+/** Prunes old visual media payloads and references before later LLM-boundary synthesis. */
 export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMessage[] | null {
   const pruneBeforeIndex = resolvePruneBeforeIndex(messages);
   if (pruneBeforeIndex < 0) {
@@ -279,13 +282,18 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
           return { ...block, text } as (typeof content)[number];
         }
       }
-      return typed?.type === "image"
-        ? ({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER } as (typeof content)[number])
-        : block;
+      if (typed?.type === "image" || typed?.type === "video") {
+        return {
+          type: "text",
+          text: typed.type === "image" ? PRUNED_HISTORY_IMAGE_MARKER : PRUNED_HISTORY_VIDEO_MARKER,
+        } as (typeof content)[number];
+      }
+      return block;
     });
-    const prunedImageBlock = content.some(
-      (block) => (block as { type?: unknown } | null | undefined)?.type === "image",
-    );
+    const prunedMediaBlock = content.some((block) => {
+      const type = (block as { type?: unknown } | null | undefined)?.type;
+      return type === "image" || type === "video";
+    });
     if (
       hasOwnedMedia ||
       lateMediaText ||
@@ -296,7 +304,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
         message,
         nextContent,
         hasOwnedMedia,
-        hasOwnedMedia || prunedImageBlock,
+        hasOwnedMedia || prunedMediaBlock,
       );
     }
   }

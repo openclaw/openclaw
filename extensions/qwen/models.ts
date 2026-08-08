@@ -92,8 +92,8 @@ function buildQwenCatalogModels(rows: readonly QwenCatalogModelRow[]): ModelDefi
 // This curated picker catalog keeps current recommendations plus one selectable compatibility row.
 export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> =
   buildQwenCatalogModels([
-    [QWEN_37_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
-    [QWEN_36_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+    [QWEN_37_PLUS_MODEL_ID, true, ["text", "image", "video"], 1_000_000, 65_536],
+    [QWEN_36_PLUS_MODEL_ID, true, ["text", "image", "video"], 1_000_000, 65_536],
     ["qwen3-coder-next", true, ["text"], 262_144, 65_536],
     ["kimi-k2.5", true, ["text", "image"], 262_144, 98_304],
     ["glm-5", true, ["text"], 202_752, 16_384],
@@ -101,11 +101,11 @@ export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig>
   ]);
 
 export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = buildQwenCatalogModels([
-  [QWEN_DEFAULT_MODEL_ID, false, ["text", "image"], 1_000_000, 65_536],
-  [QWEN_36_FLASH_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
-  [QWEN_36_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+  [QWEN_DEFAULT_MODEL_ID, false, ["text", "image", "video"], 1_000_000, 65_536],
+  [QWEN_36_FLASH_MODEL_ID, true, ["text", "image", "video"], 1_000_000, 65_536],
+  [QWEN_36_PLUS_MODEL_ID, true, ["text", "image", "video"], 1_000_000, 65_536],
   [QWEN_37_MAX_MODEL_ID, true, ["text"], 1_000_000, 65_536],
-  [QWEN_37_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
+  [QWEN_37_PLUS_MODEL_ID, true, ["text", "image", "video"], 1_000_000, 65_536],
   ["qwen3-max-2026-01-23", false, ["text"], 262_144, 65_536],
   ["qwen3-coder-next", false, ["text"], 262_144, 65_536],
   ["qwen3-coder-plus", false, ["text"], 1_000_000, 65_536],
@@ -182,8 +182,7 @@ export function buildQwenModelDefinition(params: {
     id: params.id,
     name: params.name ?? catalog?.name ?? params.id,
     reasoning: params.reasoning ?? catalog?.reasoning ?? false,
-    input:
-      (params.input as ("text" | "image")[]) ?? (catalog?.input ? [...catalog.input] : ["text"]),
+    input: (params.input as ModelDefinitionConfig["input"]) ?? catalog?.input?.slice() ?? ["text"],
     cost: params.cost ?? catalog?.cost ?? QWEN_DEFAULT_COST,
     contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 262_144,
     maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 65_536,

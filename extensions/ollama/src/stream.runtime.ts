@@ -525,20 +525,33 @@ function resolveUsageCount(value: number | undefined, fallback: number | undefin
 type InputContentPart =
   | { type: "text"; text: string }
   | { type: "image"; data: string }
+  | { type: "video"; data: string }
   | { type: "toolCall"; id: string; name: string; arguments: unknown }
   | { type: "tool_use"; id: string; name: string; input: unknown };
 
-function extractTextContent(content: unknown): string {
+function extractTextContent(content: unknown, unsupportedVideoPlaceholder?: string): string {
   if (typeof content === "string") {
     return content;
   }
   if (!Array.isArray(content)) {
     return "";
   }
-  return (content as InputContentPart[])
-    .filter((part): part is { type: "text"; text: string } => part.type === "text")
-    .map((part) => part.text)
-    .join("");
+  let text = "";
+  let previousPartWasVideo = false;
+  for (const part of content as InputContentPart[]) {
+    if (part.type === "text") {
+      if (previousPartWasVideo && part.text) {
+        text += "\n";
+      }
+      text += part.text;
+      previousPartWasVideo = false;
+    } else if (part.type === "video" && unsupportedVideoPlaceholder && !previousPartWasVideo) {
+      // Native Ollama accepts images but not video; make fallback/replay loss explicit.
+      text += `${text ? "\n" : ""}${unsupportedVideoPlaceholder}`;
+      previousPartWasVideo = true;
+    }
+  }
+  return text;
 }
 
 function extractOllamaImages(content: unknown): string[] {
@@ -752,7 +765,10 @@ export function convertToOllamaMessages(
 
   for (const msg of messages) {
     if (msg.role === "user") {
-      const text = extractTextContent(msg.content);
+      const text = extractTextContent(
+        msg.content,
+        "(video omitted: model does not support videos)",
+      );
       const images = extractOllamaImages(msg.content);
       result.push({
         role: "user",
@@ -774,7 +790,10 @@ export function convertToOllamaMessages(
     }
 
     if (msg.role === "tool" || msg.role === "toolResult") {
-      const text = extractTextContent(msg.content);
+      const text = extractTextContent(
+        msg.content,
+        "(tool video omitted: model does not support videos)",
+      );
       const toolName =
         typeof (msg as { toolName?: unknown }).toolName === "string"
           ? (msg as { toolName?: string }).toolName

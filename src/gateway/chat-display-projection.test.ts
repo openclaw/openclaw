@@ -24,14 +24,26 @@ describe("oversized multimodal chat history", () => {
         source: { type: "base64", media_type: "image/png", data },
       }),
     },
+    {
+      name: "native video data",
+      image: (data: string) => ({ type: "video", mimeType: "video/mp4", data }),
+    },
+    {
+      name: "nested base64 video source",
+      image: (data: string) => ({
+        type: "video",
+        source: { type: "base64", media_type: "video/mp4", data },
+      }),
+    },
   ])("keeps text while omitting $name from WebSocket and SSE history", ({ image }) => {
-    const png = createNoisyPngBuffer(320, 320);
-    const encoded = png.toString("base64");
+    const payload = createNoisyPngBuffer(320, 320);
+    const encoded = payload.toString("base64");
+    const media = image(encoded);
     const message = {
       role: "user",
       content: [
         { type: "text", text: "keep prefix text" },
-        image(encoded),
+        media,
         { type: "text", text: "keep suffix text" },
       ],
     };
@@ -48,7 +60,7 @@ describe("oversized multimodal chat history", () => {
           role: "user",
           content: [
             { type: "text", text: "keep prefix text" },
-            { type: "image", omitted: true, bytes: png.length },
+            { type: media.type, omitted: true, bytes: payload.length },
             { type: "text", text: "keep suffix text" },
           ],
         },
@@ -60,11 +72,11 @@ describe("oversized multimodal chat history", () => {
     }
   });
 
-  it("preserves URL-backed images without changing their sources", () => {
-    const source = { type: "url", url: "https://example.invalid/picture.png" };
-    expect(
-      projectChatDisplayMessages([{ role: "user", content: [{ type: "image", source }] }]),
-    ).toEqual([{ role: "user", content: [{ type: "image", source }] }]);
+  it.each(["image", "video"])("preserves URL-backed %ss without changing their sources", (type) => {
+    const source = { type: "url", url: `https://example.invalid/media.${type}` };
+    expect(projectChatDisplayMessages([{ role: "user", content: [{ type, source }] }])).toEqual([
+      { role: "user", content: [{ type, source }] },
+    ]);
   });
 });
 

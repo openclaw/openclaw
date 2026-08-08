@@ -67,3 +67,39 @@ describe("convertToLlm runtime-context carrier marking", () => {
     expect((message as { runtimeContextCarrier?: boolean }).runtimeContextCarrier).toBeUndefined();
   });
 });
+
+describe("convertToLlm multimodal content", () => {
+  const video = { type: "video" as const, data: "dmlkZW8=", mimeType: "video/mp4" };
+
+  it("preserves video blocks when custom messages become provider-facing user turns", () => {
+    const [message] = convertToLlm([
+      createCustomMessage(
+        "media-note",
+        [{ type: "text", text: "watch this" }, video],
+        true,
+        {},
+        "2026-05-30T17:00:00.000Z",
+      ),
+    ]);
+
+    expect(message).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "watch this" }, video],
+    });
+  });
+
+  it("preserves video blocks in tool-result replay", () => {
+    const [message] = convertToLlm([
+      {
+        role: "toolResult",
+        toolCallId: "call-video",
+        toolName: "record",
+        content: [video],
+        isError: false,
+        timestamp: 1,
+      },
+    ]);
+
+    expect(message).toMatchObject({ role: "toolResult", content: [video] });
+  });
+});

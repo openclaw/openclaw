@@ -4,6 +4,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_VIDEO_MAX_BASE64_BYTES,
+} from "../../media-understanding/defaults.constants.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareContext,
@@ -30,7 +34,11 @@ const MAX_MIDDLEWARE_DETAILS_KEYS = 1_000;
 const NESTED_TOOL_RESULT_BLOCK_TYPES = new Set(["toolresult", "tool_result"]);
 
 type MiddlewareContentBlock = OpenClawAgentToolResult["content"][number];
-type MiddlewareContentCoerceState = { depth: number; seen: Set<object> };
+type MiddlewareContentCoerceState = {
+  depth: number;
+  seen: Set<object>;
+  invalidVideo: { value: boolean };
+};
 type MiddlewareToolResultCoerceOptions = {
   sanitizeContent?: boolean;
   sanitizeDetails?: boolean;
@@ -49,6 +57,25 @@ function isValidMiddlewareContentBlock(value: unknown): boolean {
       value.mimeType.trim().length > 0 &&
       typeof value.data === "string" &&
       value.data.length <= MAX_MIDDLEWARE_IMAGE_DATA_CHARS
+    );
+  }
+  if (value.type === "video") {
+    if (
+      typeof value.mimeType !== "string" ||
+      value.mimeType.length > 100 ||
+      !/^video\/[a-z0-9][a-z0-9.+-]*$/iu.test(value.mimeType) ||
+      typeof value.data !== "string" ||
+      value.data.length === 0 ||
+      value.data.length > DEFAULT_VIDEO_MAX_BASE64_BYTES ||
+      value.data.length % 4 === 1 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/u.test(value.data)
+    ) {
+      return false;
+    }
+    const padding = value.data.endsWith("==") ? 2 : value.data.endsWith("=") ? 1 : 0;
+    return (
+      (padding === 0 || value.data.length % 4 === 0) &&
+      Math.floor((value.data.length * 3) / 4) - padding <= DEFAULT_MAX_BYTES.video
     );
   }
   return false;
@@ -111,11 +138,11 @@ function descendMiddlewareContentCoerceState(
     return undefined;
   }
   if (value === null || typeof value !== "object") {
-    return { depth: state.depth + 1, seen: state.seen };
+    return { ...state, depth: state.depth + 1 };
   }
   return state.seen.has(value)
     ? undefined
-    : { depth: state.depth + 1, seen: new Set([...state.seen, value]) };
+    : { ...state, depth: state.depth + 1, seen: new Set([...state.seen, value]) };
 }
 
 function serializeMiddlewareValue(value: unknown): string | undefined {
@@ -213,6 +240,11 @@ function coerceMiddlewareContentArray(
       break;
     }
     const coerced = coerceMiddlewareContentBlocks(entry, state, options);
+    // Invalid nested video must fail closed instead of leaking its base64 through JSON text.
+    if (coerced.length === 0 && isRecord(entry) && entry.type === "video") {
+      state.invalidVideo.value = true;
+      return [];
+    }
     const text = coerced.length === 0 ? coerceMiddlewareText(entry, state, options) : undefined;
     for (const block of text
       ? [{ type: "text" as const, text: truncateUtf16Safe(text, MAX_MIDDLEWARE_TEXT_CHARS) }]
@@ -277,10 +309,22 @@ function coerceMiddlewareToolResult(
   if (!isRecord(value) || !Array.isArray(value.content)) {
     return undefined;
   }
-  const state: MiddlewareContentCoerceState = { depth: 0, seen: new Set() };
+  const state: MiddlewareContentCoerceState = {
+    depth: 0,
+    seen: new Set(),
+    invalidVideo: { value: false },
+  };
   const content: OpenClawAgentToolResult["content"] = [];
   for (const block of value.content.slice(0, MAX_MIDDLEWARE_CONTENT_BLOCKS)) {
-    for (const coerced of coerceMiddlewareContentBlocks(block, state, options)) {
+    const coercedBlocks = coerceMiddlewareContentBlocks(block, state, options);
+    // A valid neighboring caption must never silently legitimize an invalid video payload.
+    if (
+      state.invalidVideo.value ||
+      (coercedBlocks.length === 0 && isRecord(block) && block.type === "video")
+    ) {
+      return undefined;
+    }
+    for (const coerced of coercedBlocks) {
       if (content.length >= MAX_MIDDLEWARE_CONTENT_BLOCKS) {
         break;
       }

@@ -272,9 +272,11 @@ function buildOpenAICompatibleLiveModel(
     (featureNames.some((feature) => /reason|think/.test(feature)) ||
       template?.reasoning === true ||
       inferLiveModelReasoning(id));
-  const input: ModelDefinitionConfig["input"] = inputModalities.includes("image")
-    ? ["text", "image"]
-    : (template?.input ?? ["text"]);
+  const mediaInputs = (["image", "video"] as const).filter((modality) =>
+    inputModalities.includes(modality),
+  );
+  const input: ModelDefinitionConfig["input"] =
+    mediaInputs.length > 0 ? ["text", ...mediaInputs] : (template?.input ?? ["text"]);
 
   return {
     id,

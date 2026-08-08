@@ -542,13 +542,13 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
     },
   );
-  // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
-  // live inside functionResponse, so hold them until the consecutive result run ends.
-  const pendingToolResultImageTurns: Array<Record<string, unknown>> = [];
+  // Parallel calls need one immediate function-response turn. Gemini < 3 media cannot
+  // live inside functionResponse, so hold it until the consecutive result run ends.
+  const pendingToolResultMediaTurns: Array<Record<string, unknown>> = [];
   let activeToolResultParts: Array<Record<string, unknown>> | undefined;
   const flushToolResultRun = (): void => {
-    contents.push(...pendingToolResultImageTurns);
-    pendingToolResultImageTurns.length = 0;
+    contents.push(...pendingToolResultMediaTurns);
+    pendingToolResultMediaTurns.length = 0;
     activeToolResultParts = undefined;
   };
 
@@ -564,18 +564,22 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
         });
         continue;
       }
-      const parts = msg.content
-        .map((item) =>
-          item.type === "text"
-            ? { text: sanitizeTransportPayloadText(item.text) || " " }
-            : {
-                inlineData: {
-                  mimeType: item.mimeType,
-                  data: item.data,
-                },
-              },
-        )
-        .filter((item) => model.input.includes("image") || !("inlineData" in item));
+      const parts = msg.content.flatMap<Record<string, unknown>>((item) => {
+        if (item.type === "text") {
+          return [{ text: sanitizeTransportPayloadText(item.text) || " " }];
+        }
+        if (!model.input.includes(item.type)) {
+          return [];
+        }
+        return [
+          {
+            inlineData: {
+              mimeType: item.mimeType,
+              data: item.data,
+            },
+          },
+        ];
+      });
       if (parts.length === 0) {
         parts.push({ text: " " });
       }
@@ -664,30 +668,36 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
 
     if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
-      const imageContent = model.input.includes("image")
-        ? msg.content.filter(
-            (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
-              item.type === "image" && describeToolResultMediaPlaceholder([item]) !== undefined,
-          )
-        : [];
+      const mediaContent = msg.content.filter(
+        (item): item is Extract<(typeof msg.content)[number], { type: "image" | "video" }> =>
+          (item.type === "image" || item.type === "video") &&
+          model.input.includes(item.type) &&
+          describeToolResultMediaPlaceholder([item]) !== undefined,
+      );
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
         ? sanitizeTransportPayloadText(textResult)
         : (mediaPlaceholder ?? "");
-      const imageParts = imageContent.map((imageBlock) => ({
+      const toInlineMediaPart = (mediaBlock: (typeof mediaContent)[number]) => ({
         inlineData: {
-          mimeType: imageBlock.mimeType,
-          data: imageBlock.data,
+          mimeType: mediaBlock.mimeType,
+          data: mediaBlock.data,
         },
-      }));
+      });
       const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
+      // Gemini functionResponse.parts accepts images/documents, never video.
+      // Deliver video in a following user turn even when images can stay inline.
+      const functionResponseMediaParts = modelSupportsMultimodalFunctionResponse
+        ? mediaContent.filter((item) => item.type === "image").map(toInlineMediaPart)
+        : [];
+      const deferredMediaContent = modelSupportsMultimodalFunctionResponse
+        ? mediaContent.filter((item) => item.type === "video")
+        : mediaContent;
       const functionResponse = {
         functionResponse: {
           name: msg.toolName,
           response: msg.isError ? { error: responseValue } : { output: responseValue },
-          ...(modelSupportsMultimodalFunctionResponse && imageParts.length > 0
-            ? { parts: imageParts }
-            : {}),
+          ...(functionResponseMediaParts.length > 0 ? { parts: functionResponseMediaParts } : {}),
           ...(requiresToolCallId(model.id) ? { id: msg.toolCallId } : {}),
         },
       };
@@ -697,10 +707,18 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
         activeToolResultParts = [functionResponse];
         contents.push({ role: "user", parts: activeToolResultParts });
       }
-      if (imageParts.length > 0 && !modelSupportsMultimodalFunctionResponse) {
-        pendingToolResultImageTurns.push({
+      if (deferredMediaContent.length > 0) {
+        const mediaLabel = deferredMediaContent.every((item) => item.type === "image")
+          ? "image"
+          : deferredMediaContent.every((item) => item.type === "video")
+            ? "video"
+            : "media";
+        pendingToolResultMediaTurns.push({
           role: "user",
-          parts: [{ text: "Tool result image:" }, ...imageParts],
+          parts: [
+            { text: `Tool result ${mediaLabel}:` },
+            ...deferredMediaContent.map(toInlineMediaPart),
+          ],
         });
       }
     }

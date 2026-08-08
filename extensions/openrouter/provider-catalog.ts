@@ -121,7 +121,7 @@ export function buildOpenrouterProvider(): ModelProviderConfig {
         id: "moonshotai/kimi-k2.6",
         name: "MoonshotAI: Kimi K2.6",
         reasoning: true,
-        input: ["text", "image"],
+        input: ["text", "image", "video"],
         cost: OPENROUTER_KIMI_K2_6_COST,
         contextWindow: 262144,
         maxTokens: 262144,
@@ -178,6 +178,14 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
     return undefined;
   }
   const inputModalities = readOpenRouterModalities(architecture, "input");
+  // Audio currently has a separate transcription owner, not an executable chat input path.
+  const input: ModelDefinitionConfig["input"] = ["text"];
+  if (inputModalities.includes("image")) {
+    input.push("image");
+  }
+  if (inputModalities.includes("video")) {
+    input.push("video");
+  }
   const supportedParameters = readStringArray(record, "supported_parameters");
   const topProvider = asOptionalRecord(record?.top_provider);
   const pricing = asOptionalRecord(record?.pricing);
@@ -187,7 +195,7 @@ function buildOpenRouterLiveModel(row: unknown): ModelDefinitionConfig | undefin
     reasoning:
       supportedParameters.includes("reasoning") ||
       supportedParameters.includes("include_reasoning"),
-    input: inputModalities.includes("image") ? ["text", "image"] : ["text"],
+    input,
     cost: {
       input: readTokenPrice(pricing, "prompt"),
       output: readTokenPrice(pricing, "completion"),

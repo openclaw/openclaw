@@ -64,6 +64,7 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.prepareEmbeddedAttemptPromptExecution.mockResolvedValue({
+      media: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
       images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
       imageFactIndexes: [null],
       detectedRefs: [],
@@ -83,6 +84,7 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
     hoisted.prepareEmbeddedAttemptPromptExecution.mockImplementationOnce(async () => {
       order.push("images");
       return {
+        media: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
         images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
         imageFactIndexes: [null],
         detectedRefs: [],
@@ -120,7 +122,7 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
     );
     expect(hoisted.submitEmbeddedAttemptPrompt).toHaveBeenCalledWith(
       expect.objectContaining({
-        images: [expect.objectContaining({ type: "image" })],
+        inputMedia: [expect.objectContaining({ type: "image" })],
         modelPrompt: "model prompt",
         runtimeContextMessage: expect.objectContaining({ content: "runtime" }),
         transcriptPrompt: "session prompt",
@@ -145,6 +147,28 @@ describe("dispatchEmbeddedAttemptPrompt", () => {
     expect(result.promptError).toBe(promptError);
     expect(releaseLeasedSteering).toHaveBeenCalledWith(promptError);
     expect(hoisted.submitEmbeddedAttemptPrompt).not.toHaveBeenCalled();
+  });
+
+  it("counts video independently and submits it through canonical input media", async () => {
+    const video = { type: "video", data: "dmlkZW8=", mimeType: "video/mp4" };
+    hoisted.prepareEmbeddedAttemptPromptExecution.mockResolvedValueOnce({
+      media: [video],
+      images: [],
+      imageFactIndexes: [],
+      detectedRefs: [],
+      failedMediaCount: 0,
+      loadedCount: 1,
+      skippedCount: 0,
+    });
+
+    await dispatchEmbeddedAttemptPrompt(createInput());
+
+    expect(hoisted.observeEmbeddedAttemptPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ imageCount: 0, videoCount: 1 }),
+    );
+    expect(hoisted.submitEmbeddedAttemptPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ inputMedia: [video] }),
+    );
   });
 
   it("publishes preflight state before a submission failure", async () => {

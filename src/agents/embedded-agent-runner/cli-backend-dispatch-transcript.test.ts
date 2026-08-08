@@ -154,6 +154,32 @@ describe("createCliDispatchTranscriptRecorder", () => {
     });
   });
 
+  it("records an explicit tool-video omission without retaining native payload bytes", async () => {
+    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
+    const privateVideoData = "bm90LWZvci1jbGktdHJhbnNjcmlwdA==";
+    recorder.noteToolEvent({
+      phase: "result",
+      toolName: "read_video",
+      toolCallId: "video-call",
+      result: {
+        content: [
+          { type: "text", text: "video returned" },
+          { type: "video", data: privateVideoData, mimeType: "video/mp4" },
+        ],
+      },
+    });
+    await recorder.finalize();
+
+    const toolResult = appendedRecords().find(
+      (record) => record.message.role === "toolResult",
+    )?.message;
+    expect(toolResult?.content).toEqual([
+      { type: "text", text: "video returned" },
+      { type: "text", text: "(tool video omitted: model does not support videos)" },
+    ]);
+    expect(JSON.stringify(toolResult)).not.toContain(privateVideoData);
+  });
+
   it("appends tool records incrementally for the live terminal-search watcher", async () => {
     const recorder = createCliDispatchTranscriptRecorder(recorderParams());
     recorder.noteToolEvent({

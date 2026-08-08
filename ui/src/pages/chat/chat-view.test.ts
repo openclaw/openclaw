@@ -5111,6 +5111,42 @@ describe("chat model controls", () => {
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
 
+  it("shows native video capability in the active control and model picker", () => {
+    const { state } = createChatHeaderState({
+      model: "kimi-k3",
+      modelProvider: "moonshot",
+      models: [
+        {
+          id: "kimi-k3",
+          name: "Kimi K3",
+          provider: "moonshot",
+          contextWindow: 1_050_000,
+          input: ["text", "image", "video"],
+        },
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          input: ["text", "image", "audio", "document"],
+        },
+      ],
+    });
+    const container = renderModelControls(state);
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.dataset.chatModelVideo).toBe("supported");
+    expect(trigger.getAttribute("aria-label")).toContain("Native video");
+    expect(
+      container
+        .querySelector('[data-chat-model-option="moonshot/kimi-k3"]')
+        ?.querySelector(".chat-controls__model-option-meta")
+        ?.textContent?.trim(),
+    ).toBe("1M context · Native video");
+    expect(
+      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
+    ).not.toContain("Native video");
+  });
+
   it("marks chat-only models in the active control and picker", () => {
     const { state } = createChatHeaderState({
       model: "qwen3-8b",

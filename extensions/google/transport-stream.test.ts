@@ -2815,6 +2815,79 @@ describe("google transport stream", () => {
     expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
   });
 
+  it.each([
+    ["Google AI Studio", () => buildGeminiModel({ input: ["text", "image", "video"] })],
+    ["Vertex AI", () => buildGoogleVertexModel({ input: ["text", "image", "video"] })],
+  ] as const)("serializes native conversation video for %s", (_label, createModel) => {
+    const params = buildGoogleGenerativeAiParams(createModel(), {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this clip." },
+            { type: "image", mimeType: "image/png", data: "png-bytes" },
+            { type: "video", mimeType: "video/mp4", data: "video-bytes" },
+          ],
+          timestamp: 0,
+        },
+      ],
+    });
+
+    expect(params.contents).toEqual([
+      {
+        role: "user",
+        parts: [
+          { text: "Describe this clip." },
+          { inlineData: { mimeType: "image/png", data: "png-bytes" } },
+          { inlineData: { mimeType: "video/mp4", data: "video-bytes" } },
+        ],
+      },
+    ]);
+  });
+
+  it("gates native conversation video separately from image support", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel({ input: ["text", "video"] }), {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image", mimeType: "image/png", data: "png-bytes" },
+            { type: "video", mimeType: "video/mp4", data: "video-bytes" },
+          ],
+          timestamp: 0,
+        },
+      ],
+    });
+
+    expect(params.contents[0]).toMatchObject({
+      role: "user",
+      parts: expect.arrayContaining([
+        { inlineData: { mimeType: "video/mp4", data: "video-bytes" } },
+      ]),
+    });
+    expect(JSON.stringify(params.contents)).not.toContain("png-bytes");
+  });
+
+  it("never sends unsupported video bytes to an image-only model", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel({ input: ["text", "image"] }), {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image", mimeType: "image/png", data: "png-bytes" },
+            { type: "video", mimeType: "video/mp4", data: "video-bytes" },
+          ],
+          timestamp: 0,
+        },
+      ],
+    });
+
+    const serialized = JSON.stringify(params.contents);
+    expect(serialized).toContain("png-bytes");
+    expect(serialized).not.toContain("video-bytes");
+    expect(serialized).not.toContain("video/mp4");
+  });
+
   it("uses a user placeholder when converted Gemini contents would otherwise be empty", () => {
     const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
       messages: [
@@ -3001,6 +3074,173 @@ describe("google transport stream", () => {
     expect(params.contents[1]).toMatchObject({
       parts: [{ functionResponse: { response: { output: "(see attached audio)" } } }],
     });
+  });
+
+  it("defers native tool-result video after Gemini 3 function responses", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3.1-pro-preview", input: ["text", "image", "video"] }),
+      {
+        messages: [
+          googleToolCallAssistantTurn(),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "video", mimeType: "video/mp4", data: "video-bytes" }],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as never,
+    );
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [
+        {
+          functionResponse: {
+            response: { output: "(see attached video)" },
+          },
+        },
+      ],
+    });
+    expect(
+      (params.contents[1] as GoogleTestContentTurn).parts[0]?.functionResponse,
+    ).not.toHaveProperty("parts");
+    expect(params.contents[2]).toEqual({
+      role: "user",
+      parts: [
+        { text: "Tool result video:" },
+        { inlineData: { mimeType: "video/mp4", data: "video-bytes" } },
+      ],
+    });
+  });
+
+  it("keeps image tool-result parts nested and defers video for Gemini 3", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3.1-pro-preview", input: ["text", "image", "video"] }),
+      {
+        messages: [
+          googleToolCallAssistantTurn(),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [
+              { type: "image", mimeType: "image/png", data: "png-bytes" },
+              { type: "video", mimeType: "video/mp4", data: "video-bytes" },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as never,
+    );
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [
+        {
+          functionResponse: {
+            response: { output: "(see attached media)" },
+            parts: [{ inlineData: { mimeType: "image/png", data: "png-bytes" } }],
+          },
+        },
+      ],
+    });
+    expect(params.contents[2]).toEqual({
+      role: "user",
+      parts: [
+        { text: "Tool result video:" },
+        { inlineData: { mimeType: "video/mp4", data: "video-bytes" } },
+      ],
+    });
+  });
+
+  it("defers native tool-result video to a user media turn for Gemini 2.5", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-2.5-flash", input: ["text", "video"] }),
+      {
+        messages: [
+          googleToolCallAssistantTurn({ model: "gemini-2.5-flash" }),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "video", mimeType: "video/mp4", data: "video-bytes" }],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as never,
+    );
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [{ functionResponse: { response: { output: "(see attached video)" } } }],
+    });
+    expect(params.contents[2]).toEqual({
+      role: "user",
+      parts: [
+        { text: "Tool result video:" },
+        { inlineData: { mimeType: "video/mp4", data: "video-bytes" } },
+      ],
+    });
+  });
+
+  it("defers mixed image and video tool results together for Gemini 2.5", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-2.5-flash", input: ["text", "image", "video"] }),
+      {
+        messages: [
+          googleToolCallAssistantTurn({ model: "gemini-2.5-flash" }),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [
+              { type: "image", mimeType: "image/png", data: "png-bytes" },
+              { type: "video", mimeType: "video/mp4", data: "video-bytes" },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as never,
+    );
+
+    expect(
+      (params.contents[1] as GoogleTestContentTurn).parts[0]?.functionResponse,
+    ).not.toHaveProperty("parts");
+    expect(params.contents[2]).toEqual({
+      role: "user",
+      parts: [
+        { text: "Tool result media:" },
+        { inlineData: { mimeType: "image/png", data: "png-bytes" } },
+        { inlineData: { mimeType: "video/mp4", data: "video-bytes" } },
+      ],
+    });
+  });
+
+  it("does not emit inline data or media placeholders for payload-less tool videos", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id: "gemini-3-flash", input: ["text", "video"] }),
+      {
+        messages: [
+          googleToolCallAssistantTurn(),
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "record",
+            content: [{ type: "video", mimeType: "video/mp4", data: "" }],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as never,
+    );
+
+    const serialized = JSON.stringify(params.contents);
+    expect(serialized).toContain('"output":""');
+    expect(serialized).not.toContain("inlineData");
+    expect(serialized).not.toContain("see attached video");
   });
 
   it("does not emit inline data or media placeholders for payload-less tool images", () => {

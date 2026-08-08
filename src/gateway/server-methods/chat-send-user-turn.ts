@@ -8,13 +8,17 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import {
+  type ChatAttachment,
   type ChatImageContent,
   type OffloadedRef,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
-import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import {
+  canHydrateChatSendVideo,
+  type prepareChatSendAttachments,
+} from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
@@ -53,13 +57,6 @@ async function persistChatSendImages(params: {
   });
 }
 
-function resolveChatSendManagedMedia(savedImages: SavedMedia[]): MediaFact[] {
-  return savedImages.map((entry) => ({
-    path: entry.path,
-    contentType: entry.contentType ?? "application/octet-stream",
-  }));
-}
-
 export function applyChatSendManagedMedia(ctx: MsgContext, media: MediaFact[]): void {
   if ((!ctx.media || ctx.media.length === 0) && media.length > 0) {
     ctx.media = media;
@@ -69,16 +66,18 @@ export function applyChatSendManagedMedia(ctx: MsgContext, media: MediaFact[]): 
 function buildChatSendUserTurnMedia(
   savedMedia: SavedMedia[],
   offloadedRefs: OffloadedRef[],
+  supportsNativeVideo: boolean,
+  attachmentOrder: readonly ChatAttachment[],
 ): MediaFact[] {
   const offloadedRefsById = new Map(offloadedRefs.map((ref) => [ref.id, ref] as const));
-  return savedMedia.map((entry) => {
+  const media = savedMedia.map((entry) => {
     const offloadedRef = offloadedRefsById.get(entry.id);
     return {
       path: entry.path,
       ...(offloadedRef
         ? {
-            // Every offload keeps its claim-check alias so persisted marker
-            // ownership survives; only non-images skip native image hydration.
+            // Claim checks survive persistence without their bytes. Only
+            // image and model-supported bounded video may hydrate natively.
             url: offloadedRef.mediaRef,
             kind: offloadedRef.kind,
             fileName: offloadedRef.label,
@@ -88,7 +87,10 @@ function buildChatSendUserTurnMedia(
               : {}),
             ...(offloadedRef.width !== undefined ? { width: offloadedRef.width } : {}),
             ...(offloadedRef.height !== undefined ? { height: offloadedRef.height } : {}),
-            ...(offloadedRef.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
+            ...(offloadedRef.mimeType.startsWith("image/") ||
+            canHydrateChatSendVideo(offloadedRef, supportsNativeVideo)
+              ? {}
+              : { hydrationSuppressed: true }),
           }
         : {}),
       contentType: entry.contentType,
@@ -97,17 +99,53 @@ function buildChatSendUserTurnMedia(
       ...(offloadedRef?.height ? { height: offloadedRef.height } : {}),
     };
   });
+  if (
+    media.length !== attachmentOrder.length ||
+    !media.some((fact) => fact.contentType?.startsWith("image/")) ||
+    !media.some((fact) => fact.contentType?.startsWith("video/"))
+  ) {
+    return media;
+  }
+
+  // Image persistence groups images first for legacy layouts; restore original
+  // mixed visual order only when every request MIME has one unambiguous fact.
+  const pending = media.slice();
+  const ordered: MediaFact[] = [];
+  for (const attachment of attachmentOrder) {
+    const contentType = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase();
+    const index = contentType
+      ? pending.findIndex((fact) => fact.contentType?.toLowerCase() === contentType)
+      : -1;
+    if (index < 0) {
+      return media;
+    }
+    ordered.push(...pending.splice(index, 1));
+  }
+  return ordered;
 }
 
 function buildChatSendPromptMedia(
   attachments: PreparedChatSendAttachments,
 ): MediaFact[] | undefined {
-  if (!attachments.imageOrder.includes("offloaded")) {
-    return undefined;
+  const includeOffloadedImages = attachments.imageOrder.includes("offloaded");
+  const media: MediaFact[] = [];
+  for (const ref of attachments.offloadedRefs) {
+    const isNativeVideo = canHydrateChatSendVideo(ref, attachments.supportsNativeVideo);
+    if (!isNativeVideo && !(includeOffloadedImages && ref.mimeType.startsWith("image/"))) {
+      continue;
+    }
+    const fact: MediaFact = {
+      path: ref.path,
+      url: ref.mediaRef,
+      contentType: ref.mimeType,
+    };
+    if (isNativeVideo) {
+      fact.kind = ref.kind;
+      fact.fileName = ref.label;
+      fact.sizeBytes = ref.sizeBytes;
+    }
+    media.push(fact);
   }
-  const media = attachments.offloadedRefs
-    .filter((ref) => ref.mimeType.startsWith("image/"))
-    .map((ref) => ({ path: ref.path, url: ref.mediaRef, contentType: ref.mimeType }));
   return media.length > 0 ? media : undefined;
 }
 
@@ -119,9 +157,11 @@ function buildChatSendMessageContext(params: {
   mediaPathOffloadPaths: string[];
   mediaPathOffloadTypes: string[];
   mediaPathOffloadWorkspaceDir?: string;
+  offloadedRefs: OffloadedRef[];
   originatingRoute: AdmittedChatSend["originatingRoute"];
   parsedMessage: string;
   sessionKey: string;
+  supportsNativeVideo: boolean;
   suppressCommandInterpretation: boolean;
   systemInputProvenance?: InputProvenance;
   systemProvenanceReceipt?: string;
@@ -194,13 +234,33 @@ function buildChatSendMessageContext(params: {
     GatewayRunToolBindings: params.toolBindings,
   };
   if (params.mediaPathOffloadPaths.length > 0) {
+    const fallbackVideoRefs = params.offloadedRefs.filter(
+      (ref) =>
+        ref.mimeType.startsWith("video/") &&
+        !canHydrateChatSendVideo(ref, params.supportsNativeVideo),
+    );
+    let fallbackVideoIndex = 0;
     // Pre-staged offloads must use structured facts and marker text so the
     // dispatch path renders their prompt note without staging them a second time.
-    ctx.media = params.mediaPathOffloadPaths.map((pathValue, index) => ({
-      path: pathValue,
-      contentType: params.mediaPathOffloadTypes[index],
-      workspaceDir: params.mediaPathOffloadWorkspaceDir ?? path.dirname(pathValue),
-    }));
+    ctx.media = params.mediaPathOffloadPaths.map((pathValue, index) => {
+      const contentType = params.mediaPathOffloadTypes[index];
+      const fallbackVideoRef = contentType?.startsWith("video/")
+        ? fallbackVideoRefs[fallbackVideoIndex++]
+        : undefined;
+      return {
+        path: pathValue,
+        contentType,
+        workspaceDir: params.mediaPathOffloadWorkspaceDir ?? path.dirname(pathValue),
+        ...(fallbackVideoRef
+          ? {
+              kind: fallbackVideoRef.kind,
+              fileName: fallbackVideoRef.label,
+              sizeBytes: fallbackVideoRef.sizeBytes,
+              hydrationSuppressed: true,
+            }
+          : {}),
+      };
+    });
   }
   return {
     accountId,
@@ -239,27 +299,44 @@ export function prepareChatSendUserTurn(params: {
   const preparedUserTurnMediaPromise: Promise<MediaFact[]> =
     request.normalizedAttachments.length > 0
       ? persistedMediaForTranscriptPromise.then((media) =>
-          buildChatSendUserTurnMedia(media, attachments.offloadedRefs),
+          buildChatSendUserTurnMedia(
+            media,
+            attachments.offloadedRefs,
+            attachments.supportsNativeVideo,
+            request.normalizedAttachments,
+          ),
         )
       : Promise.resolve([]);
   userTurn.setInputPromise(
-    preparedUserTurnMediaPromise.then((media) => ({
-      ...userTurn.baseInput,
-      ...(media.length > 0 ? { media } : {}),
-      ...(media.length > 0 && attachments.imageOrder.length > 0
-        ? {
-            mediaImageLayout: {
-              // persistInboundImagesForTranscript emits image facts in this exact order,
-              // then appends non-images, so image slot ordinals are fact ordinals.
-              slots: attachments.imageOrder.map((kind, factIndex) => ({ kind, factIndex })),
-            },
-          }
-        : {}),
-    })),
+    preparedUserTurnMediaPromise.then((media) => {
+      const imageFactIndexes = media.flatMap((fact, index) =>
+        fact.contentType?.startsWith("image/") ? [index] : [],
+      );
+      return {
+        ...userTurn.baseInput,
+        ...(media.length > 0 ? { media } : {}),
+        ...(media.length > 0 && attachments.imageOrder.length > 0
+          ? {
+              mediaImageLayout: {
+                // Native video may precede images, so image slots follow actual
+                // persisted fact positions rather than their image-only ordinal.
+                slots: attachments.imageOrder.map((kind, imageIndex) => ({
+                  kind,
+                  factIndex: imageFactIndexes[imageIndex] ?? imageIndex,
+                })),
+              },
+            }
+          : {}),
+      };
+    }),
   );
   const pluginBoundMediaPromise =
-    attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
-      ? persistedMediaForTranscriptPromise.then(resolveChatSendManagedMedia)
+    attachments.explicitOriginTargetsPlugin &&
+    (attachments.parsedImages.length > 0 ||
+      attachments.offloadedRefs.some((ref) =>
+        canHydrateChatSendVideo(ref, attachments.supportsNativeVideo),
+      ))
+      ? preparedUserTurnMediaPromise
       : Promise.resolve([]);
   const messageContext = buildChatSendMessageContext({
     agentId: session.agentId,
@@ -269,9 +346,11 @@ export function prepareChatSendUserTurn(params: {
     mediaPathOffloadPaths: attachments.mediaPathOffloadPaths,
     mediaPathOffloadTypes: attachments.mediaPathOffloadTypes,
     mediaPathOffloadWorkspaceDir: attachments.mediaPathOffloadWorkspaceDir,
+    offloadedRefs: attachments.offloadedRefs,
     originatingRoute: admission.originatingRoute,
     parsedMessage: attachments.parsedMessage,
     sessionKey: session.sessionKey,
+    supportsNativeVideo: attachments.supportsNativeVideo,
     suppressCommandInterpretation: request.suppressCommandInterpretation,
     systemInputProvenance: request.systemInputProvenance,
     systemProvenanceReceipt: request.systemProvenanceReceipt,

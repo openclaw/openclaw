@@ -31,4 +31,24 @@ describe("assertSupportedTurn", () => {
       } as SessionPlacementTurnParams),
     ).toEqual({ provider: "openai", model: "gpt-5.4" });
   });
+
+  it("rejects current-turn native video instead of silently dropping it", () => {
+    expect(() =>
+      assertSupportedTurn({
+        provider: "moonshot",
+        model: "kimi-k3",
+        inputMedia: [{ type: "video", data: "Y2xpcA==", mimeType: "video/mp4" }],
+      } as SessionPlacementTurnParams),
+    ).toThrow("Cloud worker turns do not yet support current-turn video input");
+  });
+
+  it("preserves the existing image-only worker rejection for canonical media", () => {
+    expect(() =>
+      assertSupportedTurn({
+        provider: "google",
+        model: "gemini-3-pro",
+        inputMedia: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      } as SessionPlacementTurnParams),
+    ).toThrow("Cloud worker turns do not yet support current-turn image input");
+  });
 });

@@ -328,7 +328,7 @@ Many of the bundled provider plugins below already publish a default catalog. Us
 
 Bundled and catalog-known routes take their `compat` capabilities from the owning provider plugin. A config `compat` block is for a custom provider/model or a different `api`/`baseUrl` route whose endpoint contract you have verified; see the [custom-provider capability guide](/gateway/config-tools#custom-provider-capability-declarations). Doctor removes legacy values that merely repeat the catalog and leaves divergent values visible for operator review.
 
-Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
+Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs. Use `input: ["text", "image", "video"]` only when the model and its selected provider transport both support native video; otherwise videos remain eligible for media-understanding descriptions.
 
 `agents.defaults.models["provider/model"]` controls aliases and per-model metadata for agents. It neither restricts overrides nor registers a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`; use `agents.defaults.modelPolicy.allow` separately when you want an override restriction.
 

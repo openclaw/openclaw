@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@openclaw/llm-core";
+import type { ImageContent, ModelInputContent, TextContent } from "@openclaw/llm-core";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { getAiTransportHost } from "../host.js";
 
@@ -23,13 +23,19 @@ export function resolveAnthropicImageMediaType(value: string): AnthropicImageMed
 }
 
 export async function normalizeAnthropicInlineContent(
-  content: readonly (TextContent | ImageContent)[],
+  content: readonly ModelInputContent[],
   budget: AnthropicInlineImageBudget,
 ): Promise<Array<TextContent | ImageContent>> {
-  if (!content.some((block) => block.type === "image")) {
-    return content.filter((block): block is TextContent => block.type === "text");
+  // Anthropic's wire schema has no video block, even if a custom catalog falsely claims one.
+  const supportedContent: Array<TextContent | ImageContent> = content.map((block) =>
+    block.type === "video"
+      ? { type: "text", text: "(video omitted: model does not support videos)" }
+      : block,
+  );
+  if (!supportedContent.some((block) => block.type === "image")) {
+    return supportedContent.filter((block): block is TextContent => block.type === "text");
   }
-  const inputBytes = content.reduce(
+  const inputBytes = supportedContent.reduce(
     (total, block) =>
       block.type === "image" ? total + estimateBase64DecodedBytes(block.data) : total,
     0,
@@ -38,7 +44,7 @@ export async function normalizeAnthropicInlineContent(
     throw new Error("Anthropic inline images exceed the 64 MB aggregate decoded safety limit.");
   }
   const normalized: Array<TextContent | ImageContent> = [];
-  for (const block of content) {
+  for (const block of supportedContent) {
     if (block.type !== "image") {
       normalized.push(block);
       continue;

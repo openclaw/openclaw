@@ -80,4 +80,39 @@ describe("printModelTable", () => {
       visibleWidth((header as string).slice(0, headerInputIndex)),
     );
   });
+
+  it("expands the input column for native video without shifting later columns", () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const rows: ModelRow[] = [
+      {
+        key: "moonshot/kimi-k3",
+        name: "Kimi K3",
+        input: "text+image+video",
+        contextWindow: 128_000,
+        local: false,
+        available: true,
+        tags: [],
+        missing: false,
+      },
+      {
+        key: "acme/text-model",
+        name: "Text Model",
+        input: "text",
+        contextWindow: 128_000,
+        local: false,
+        available: true,
+        tags: [],
+        missing: false,
+      },
+    ];
+
+    printModelTable(rows, runtime as never);
+
+    const [header = "", videoRow = "", textRow = ""] = runtime.log.mock.calls.map(
+      ([line]) => line as string,
+    );
+    expect(videoRow).toContain("text+image+video");
+    expect(videoRow.indexOf("128k")).toBe(header.indexOf("Ctx"));
+    expect(textRow.indexOf("128k")).toBe(header.indexOf("Ctx"));
+  });
 });

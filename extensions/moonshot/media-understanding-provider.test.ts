@@ -20,6 +20,13 @@ async function describeVideo(
 }
 
 describe("describeMoonshotVideo", () => {
+  it("uses Kimi K3 for image and video understanding by default", () => {
+    expect(moonshotMediaUnderstandingProvider.defaultModels).toEqual({
+      image: "kimi-k3",
+      video: "kimi-k3",
+    });
+  });
+
   it("builds an OpenAI-compatible video request", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
       choices: [{ message: { content: "video ok" } }],
@@ -31,14 +38,13 @@ describe("describeMoonshotVideo", () => {
       apiKey: "moonshot-test",
       timeoutMs: 1500,
       baseUrl: "https://api.moonshot.ai/v1/",
-      model: "kimi-k2.6",
       headers: { "X-Trace": "1" },
       fetchFn,
     });
     const { url, init } = getRequest();
 
     expect(result.text).toBe("video ok");
-    expect(result.model).toBe("kimi-k2.6");
+    expect(result.model).toBe("kimi-k3");
     expect(url).toBe("https://api.moonshot.ai/v1/chat/completions");
     if (!init) {
       throw new Error("expected Moonshot request init");
@@ -61,7 +67,7 @@ describe("describeMoonshotVideo", () => {
         content?: Array<{ type?: string; text?: string; video_url?: { url?: string } }>;
       }>;
     };
-    expect(body.model).toBe("kimi-k2.6");
+    expect(body.model).toBe("kimi-k3");
     const content = body.messages?.[0]?.content;
     if (!content) {
       throw new Error("expected Moonshot user content");
@@ -99,7 +105,7 @@ describe("describeMoonshotVideo", () => {
     });
 
     expect(result.text).toBe("reasoned answer");
-    expect(result.model).toBe("kimi-k2.6");
+    expect(result.model).toBe("kimi-k3");
   });
 
   it("bounds successful Moonshot video JSON bodies instead of buffering the whole response", async () => {

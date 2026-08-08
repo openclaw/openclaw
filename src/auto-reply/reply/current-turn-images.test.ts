@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import type { MsgContext } from "../templating.js";
-import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { resolveCurrentTurnInputMedia } from "./current-turn-images.js";
 
 const originalStateDirEnv = process.env.OPENCLAW_STATE_DIR;
 const PNG_IMAGE_BYTES = Buffer.from(
@@ -25,7 +25,7 @@ function restoreProcessState() {
   }
 }
 
-describe("resolveCurrentTurnImages", () => {
+describe("resolveCurrentTurnInputMedia", () => {
   afterEach(() => {
     restoreProcessState();
     vi.restoreAllMocks();
@@ -44,7 +44,7 @@ describe("resolveCurrentTurnImages", () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       vi.spyOn(process, "cwd").mockReturnValue(cwd);
 
-      const result = await resolveCurrentTurnImages({
+      const result = await resolveCurrentTurnInputMedia({
         ctx: {
           Body: "caption",
           media: [{ path: relativePath, contentType: "image/jpeg" }],
@@ -53,6 +53,13 @@ describe("resolveCurrentTurnImages", () => {
       });
 
       expect(result).toStrictEqual({
+        inputMedia: [
+          {
+            type: "image",
+            data: imageBytes.toString("base64"),
+            mimeType: "image/jpeg",
+          },
+        ],
         images: [
           {
             type: "image",
@@ -95,7 +102,7 @@ describe("resolveCurrentTurnImages", () => {
       const imagePath = path.join(base, testCase.fileName);
       await fs.writeFile(imagePath, testCase.imageBytes);
 
-      const result = await resolveCurrentTurnImages({
+      const result = await resolveCurrentTurnInputMedia({
         ctx: {
           Body: "describe this image",
           media: [
@@ -111,6 +118,13 @@ describe("resolveCurrentTurnImages", () => {
       });
 
       expect(result).toEqual({
+        inputMedia: [
+          {
+            type: "image",
+            data: testCase.imageBytes.toString("base64"),
+            mimeType: testCase.expectedMime,
+          },
+        ],
         images: [
           {
             type: "image",
@@ -130,7 +144,7 @@ describe("resolveCurrentTurnImages", () => {
         const documentPath = path.join(base, "report.png");
         await fs.writeFile(documentPath, PNG_IMAGE_BYTES);
 
-        const result = await resolveCurrentTurnImages({
+        const result = await resolveCurrentTurnInputMedia({
           ctx: {
             Body: "summarize this document",
             media: [{ path: documentPath, contentType, kind: "document", workspaceDir: base }],
@@ -150,7 +164,7 @@ describe("resolveCurrentTurnImages", () => {
         const imagePath = path.join(base, "upload.png");
         await fs.writeFile(imagePath, PNG_IMAGE_BYTES);
 
-        const result = await resolveCurrentTurnImages({
+        const result = await resolveCurrentTurnInputMedia({
           ctx: {
             Body: "describe this upload",
             media: [{ path: imagePath, contentType, kind: "unknown", workspaceDir: base }],
@@ -176,7 +190,7 @@ describe("resolveCurrentTurnImages", () => {
         const documentPath = path.join(base, "report.png");
         await fs.writeFile(documentPath, PNG_IMAGE_BYTES);
 
-        const result = await resolveCurrentTurnImages({
+        const result = await resolveCurrentTurnInputMedia({
           ctx: {
             Body: "summarize this upload",
             media: [{ path: documentPath, contentType, kind: "unknown", workspaceDir: base }],
@@ -197,7 +211,7 @@ describe("resolveCurrentTurnImages", () => {
       const imagePath = path.join(base, "spoofed.png");
       await fs.writeFile(imagePath, testCase.bytes);
 
-      const result = await resolveCurrentTurnImages({
+      const result = await resolveCurrentTurnInputMedia({
         ctx: {
           Body: "describe this image",
           media: [
@@ -222,7 +236,7 @@ describe("resolveCurrentTurnImages", () => {
       const imageBytes = Buffer.from("avif-image");
       await fs.writeFile(imagePath, imageBytes);
 
-      const result = await resolveCurrentTurnImages({
+      const result = await resolveCurrentTurnInputMedia({
         ctx: {
           Body: "caption",
           media: [{ path: imagePath, contentType: "application/octet-stream", workspaceDir: base }],
@@ -253,14 +267,14 @@ describe("resolveCurrentTurnImages", () => {
         media: [{ path: imagePath, contentType: "image/png" }],
       } satisfies MsgContext;
 
-      const prepared = await resolveCurrentTurnImages({
+      const prepared = await resolveCurrentTurnInputMedia({
         ctx: {
           ...sharedContext,
           media: [{ path: imagePath, contentType: "image/png", workspaceDir: stagingRoot }],
         },
         cfg: {} as OpenClawConfig,
       });
-      const runner = await resolveCurrentTurnImages({
+      const runner = await resolveCurrentTurnInputMedia({
         ctx: sharedContext,
         cfg: {} as OpenClawConfig,
         images: prepared.images,
@@ -280,7 +294,7 @@ describe("resolveCurrentTurnImages", () => {
       await fs.mkdir(stagingRoot, { recursive: true });
       await fs.writeFile(rejectedPath, "private-workspace-image");
 
-      const result = await resolveCurrentTurnImages({
+      const result = await resolveCurrentTurnInputMedia({
         ctx: {
           Body: "caption",
           media: [{ path: rejectedPath, contentType: "image/png", workspaceDir: stagingRoot }],
@@ -299,7 +313,7 @@ describe("resolveCurrentTurnImages", () => {
       mimeType: "image/png",
     };
 
-    const result = await resolveCurrentTurnImages({
+    const result = await resolveCurrentTurnInputMedia({
       ctx: { Body: "compare these" } satisfies MsgContext,
       cfg: {} as OpenClawConfig,
       images: [inlineImage],
@@ -307,13 +321,14 @@ describe("resolveCurrentTurnImages", () => {
     });
 
     expect(result).toEqual({
+      inputMedia: [inlineImage],
       images: [inlineImage],
       imageOrder: ["offloaded", "inline", "offloaded"],
     });
   });
 
   it("preserves all-offloaded image order without inline payloads", async () => {
-    const result = await resolveCurrentTurnImages({
+    const result = await resolveCurrentTurnInputMedia({
       ctx: { Body: "compare these" } satisfies MsgContext,
       cfg: {} as OpenClawConfig,
       images: [],
@@ -332,7 +347,7 @@ describe("resolveCurrentTurnImages", () => {
       mimeType: "image/png",
     }));
 
-    const result = await resolveCurrentTurnImages({
+    const result = await resolveCurrentTurnInputMedia({
       ctx: { Body: "compare these" } satisfies MsgContext,
       cfg: {} as OpenClawConfig,
       images: inlineImages,
@@ -340,9 +355,53 @@ describe("resolveCurrentTurnImages", () => {
     });
 
     expect(result).toEqual({
+      inputMedia: inlineImages,
       images: inlineImages,
       imageOrder: ["inline", "offloaded", "inline"],
     });
+  });
+
+  it("preserves interleaved native video and images while projecting legacy image order", async () => {
+    const video = {
+      type: "video" as const,
+      data: Buffer.from("native-video").toString("base64"),
+      mimeType: "video/mp4",
+    };
+    const image = {
+      type: "image" as const,
+      data: Buffer.from("native-image").toString("base64"),
+      mimeType: "image/png",
+    };
+
+    const result = await resolveCurrentTurnInputMedia({
+      ctx: { Body: "compare these" } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      inputMedia: [video, image],
+      images: [image],
+      imageOrder: ["inline"],
+    });
+
+    expect(result).toEqual({
+      inputMedia: [video, image],
+      images: [image],
+      imageOrder: ["inline"],
+    });
+  });
+
+  it("retains video-only native input without manufacturing an image projection", async () => {
+    const video = {
+      type: "video" as const,
+      data: Buffer.from("native-video").toString("base64"),
+      mimeType: "video/mp4",
+    };
+
+    const result = await resolveCurrentTurnInputMedia({
+      ctx: { Body: "describe this clip" } satisfies MsgContext,
+      cfg: {} as OpenClawConfig,
+      inputMedia: [video],
+    });
+
+    expect(result).toEqual({ inputMedia: [video] });
   });
 
   it("appends extracted PDF page images without dropping current image attachments", async () => {
@@ -358,7 +417,7 @@ describe("resolveCurrentTurnImages", () => {
         attachmentIndex: 1,
       };
 
-      const result = await resolveCurrentTurnImages({
+      const result = await resolveCurrentTurnInputMedia({
         ctx: {
           Body: "caption",
           media: [
@@ -401,7 +460,7 @@ describe("resolveCurrentTurnImages", () => {
         attachmentIndex: 0,
       };
 
-      const result = await resolveCurrentTurnImages({
+      const result = await resolveCurrentTurnInputMedia({
         ctx: {
           Body: "caption",
           media: [

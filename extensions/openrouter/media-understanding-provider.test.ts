@@ -10,6 +10,10 @@ const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcrib
 if (!transcribeOpenRouterAudio) {
   throw new Error("expected OpenRouter audio transcription provider");
 }
+const describeOpenRouterVideo = openrouterMediaUnderstandingProvider.describeVideo;
+if (!describeOpenRouterVideo) {
+  throw new Error("expected OpenRouter video understanding provider");
+}
 
 const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
   vi.hoisted(() => ({
@@ -53,19 +57,186 @@ describe("openrouter media understanding provider", () => {
     resolveProviderHttpRequestConfigMock.mockClear();
   });
 
-  it("declares image and audio capabilities with defaults", () => {
+  it("declares image, audio, and video capabilities with defaults", () => {
     expect(openrouterMediaUnderstandingProvider).toEqual({
       id: "openrouter",
-      capabilities: ["image", "audio"],
+      capabilities: ["image", "audio", "video"],
       defaultModels: {
         image: "auto",
         audio: "openai/whisper-large-v3-turbo",
+        video: "moonshotai/kimi-k2.6",
       },
-      autoPriority: { audio: 35 },
+      autoPriority: { audio: 35, video: 30 },
       describeImage: describeImageWithModel,
       describeImages: describeImagesWithModel,
       transcribeAudio: transcribeOpenRouterAudio,
+      describeVideo: describeOpenRouterVideo,
     });
+  });
+
+  it("sends native video content to the OpenRouter chat completions endpoint", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({ choices: [{ message: { content: "A lobster crosses the beach." } }] }),
+        { status: 200 },
+      ),
+      release,
+    });
+
+    const result = await describeOpenRouterVideo({
+      buffer: Buffer.from("video-bytes"),
+      fileName: "clip.mp4",
+      apiKey: "sk-openrouter",
+      timeoutMs: 12_000,
+      fetchFn: fetch,
+    });
+
+    expect(result).toEqual({
+      text: "A lobster crosses the beach.",
+      model: "moonshotai/kimi-k2.6",
+    });
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith({
+      baseUrl: undefined,
+      defaultBaseUrl: "https://openrouter.ai/api/v1",
+      headers: undefined,
+      request: undefined,
+      defaultHeaders: {
+        Authorization: "Bearer sk-openrouter",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+      },
+      provider: "openrouter",
+      api: "openai-completions",
+      capability: "video",
+      transport: "media-understanding",
+    });
+    expect(postJsonRequestMock).toHaveBeenCalledWith({
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      headers: expect.any(Headers),
+      body: {
+        model: "moonshotai/kimi-k2.6",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe the video." },
+              {
+                type: "video_url",
+                video_url: {
+                  url: `data:video/mp4;base64,${Buffer.from("video-bytes").toString("base64")}`,
+                },
+              },
+            ],
+          },
+        ],
+      },
+      timeoutMs: 12_000,
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+      auditContext: "openrouter video",
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves configured video model, MIME type, prompt, destination, and cancellation", async () => {
+    const release = vi.fn(async () => {});
+    const controller = new AbortController();
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({ choices: [{ message: { content: "A screen recording." } }] }),
+        { status: 200 },
+      ),
+      release,
+    });
+
+    const result = await describeOpenRouterVideo({
+      buffer: Buffer.from("custom-video"),
+      fileName: "recording.webm",
+      mime: "video/webm",
+      apiKey: "sk-openrouter",
+      timeoutMs: 5_000,
+      baseUrl: "https://proxy.example.test/router/v1",
+      model: "google/gemini-3.6-flash",
+      prompt: "Describe the interaction.",
+      signal: controller.signal,
+      fetchFn: fetch,
+    });
+
+    expect(result).toEqual({
+      text: "A screen recording.",
+      model: "google/gemini-3.6-flash",
+    });
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://proxy.example.test/router/v1/chat/completions",
+        signal: controller.signal,
+        body: {
+          model: "google/gemini-3.6-flash",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "Describe the interaction." },
+                {
+                  type: "video_url",
+                  video_url: {
+                    url: `data:video/webm;base64,${Buffer.from("custom-video").toString("base64")}`,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("accepts reasoning-only video descriptions and releases failed responses", async () => {
+    const reasoningRelease = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "", reasoning_content: "reasoned description" } }],
+        }),
+        { status: 200 },
+      ),
+      release: reasoningRelease,
+    });
+
+    await expect(
+      describeOpenRouterVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        apiKey: "sk-openrouter",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toEqual({
+      text: "reasoned description",
+      model: "moonshotai/kimi-k2.6",
+    });
+    expect(reasoningRelease).toHaveBeenCalledOnce();
+
+    const emptyRelease = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), {
+        status: 200,
+      }),
+      release: emptyRelease,
+    });
+
+    await expect(
+      describeOpenRouterVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        apiKey: "sk-openrouter",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("OpenRouter video description response missing content");
+    expect(emptyRelease).toHaveBeenCalledOnce();
   });
 
   it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {

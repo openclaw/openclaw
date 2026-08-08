@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import type { Context, Tool } from "../types.js";
+import type { Context, Model, Tool } from "../types.js";
 import { convertMessages, convertTools } from "./google-shared.js";
 import {
   asRecord,
@@ -659,6 +659,176 @@ describe("google-shared convertMessages", () => {
     expect(asRecord(toolResponse.response).output).toBe(
       '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
     );
+  });
+
+  it("preserves native video in Gemini user turns", () => {
+    const model = {
+      ...makeModel("gemini-3-flash"),
+      input: ["text", "image", "video"],
+    } satisfies Model<"google-generative-ai">;
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this clip" },
+            { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
+          ],
+          timestamp: 1,
+        },
+      ],
+    } satisfies Context);
+
+    expect(contents).toEqual([
+      {
+        role: "user",
+        parts: [
+          { text: "Describe this clip" },
+          { inlineData: { mimeType: "video/mp4", data: "dmlkZW8=" } },
+        ],
+      },
+    ]);
+  });
+
+  it("downgrades historical video for Gemini routes without video capability", () => {
+    const contents = convertMessagesForTest(makeModel("gemini-3-flash"), {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+          timestamp: 1,
+        },
+      ],
+    } satisfies Context);
+
+    expect(contents).toEqual([
+      { role: "user", parts: [{ text: "(video omitted: model does not support videos)" }] },
+    ]);
+    expect(JSON.stringify(contents)).not.toContain("dmlkZW8=");
+  });
+
+  it("defers Gemini 3 tool-result video because function responses cannot contain video", () => {
+    const model = {
+      ...makeModel("gemini-3-flash"),
+      input: ["text", "image", "video"],
+    } satisfies Model<"google-generative-ai">;
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_video",
+          toolName: "capture_clip",
+          content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } satisfies Context);
+
+    expect(contents).toEqual([
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              name: "capture_clip",
+              response: { output: "(see attached video)" },
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        parts: [
+          { text: "Tool result video:" },
+          { inlineData: { mimeType: "video/mp4", data: "dmlkZW8=" } },
+        ],
+      },
+    ]);
+  });
+
+  it("nests Gemini 3 tool-result images while deferring accompanying video", () => {
+    const model = {
+      ...makeModel("gemini-3-flash"),
+      input: ["text", "image", "video"],
+    } satisfies Model<"google-generative-ai">;
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_media",
+          toolName: "capture_media",
+          content: [
+            { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+            { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } satisfies Context);
+
+    expect(contents).toEqual([
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              name: "capture_media",
+              response: { output: "(see attached media)" },
+              parts: [{ inlineData: { mimeType: "image/png", data: "aW1hZ2U=" } }],
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        parts: [
+          { text: "Tool result video:" },
+          { inlineData: { mimeType: "video/mp4", data: "dmlkZW8=" } },
+        ],
+      },
+    ]);
+  });
+
+  it("defers tool-result video to a separate user turn for Gemini 2.5", () => {
+    const model = {
+      ...makeModel("gemini-2.5-flash"),
+      input: ["text", "image", "video"],
+    } satisfies Model<"google-generative-ai">;
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_video",
+          toolName: "capture_clip",
+          content: [{ type: "video", mimeType: "video/webm", data: "dmlkZW8=" }],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } satisfies Context);
+
+    expect(contents).toEqual([
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              name: "capture_clip",
+              response: { output: "(see attached video)" },
+            },
+          },
+        ],
+      },
+      {
+        role: "user",
+        parts: [
+          { text: "Tool result video:" },
+          { inlineData: { mimeType: "video/webm", data: "dmlkZW8=" } },
+        ],
+      },
+    ]);
   });
 
   it("does not emit inline data or media placeholders for payload-less tool images", () => {

@@ -1361,6 +1361,8 @@ function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number 
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
+const OPENAI_COMPLETIONS_VIDEO_BYTES_PER_TOKEN = 512;
+const OPENAI_COMPLETIONS_VIDEO_MAX_TOKEN_ESTIMATE = 32_768;
 
 // Used only to bound `max_completion_tokens` below the effective context cap
 // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
@@ -1434,6 +1436,30 @@ function estimateOpenAICompletionsContentChars(value: unknown): number {
     const record = block as Record<string, unknown>;
     if (record.type === "image_url" || record.type === "input_image") {
       adjustedChars += OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE;
+      continue;
+    }
+    if (record.type === "video_url" || record.type === "input_video") {
+      const videoUrl = record.video_url;
+      const serializedUrl =
+        typeof videoUrl === "string"
+          ? videoUrl
+          : isRecord(videoUrl) && typeof videoUrl.url === "string"
+            ? videoUrl.url
+            : "";
+      const base64Start = serializedUrl.indexOf(";base64,");
+      const encodedLength = base64Start < 0 ? 0 : serializedUrl.length - base64Start - 8;
+      const padding = serializedUrl.endsWith("==") ? 2 : serializedUrl.endsWith("=") ? 1 : 0;
+      const decodedBytes = Math.max(0, Math.floor((encodedLength * 3) / 4) - padding);
+      // Match transcript/compaction estimates: sampled visual frames consume
+      // bounded context, but opaque base64 container bytes are not prompt text.
+      adjustedChars += Math.min(
+        OPENAI_COMPLETIONS_VIDEO_MAX_TOKEN_ESTIMATE * CHARS_PER_TOKEN_ESTIMATE,
+        Math.max(
+          OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE,
+          Math.ceil(decodedBytes / OPENAI_COMPLETIONS_VIDEO_BYTES_PER_TOKEN) *
+            CHARS_PER_TOKEN_ESTIMATE,
+        ),
+      );
       continue;
     }
     const text = record.text;

@@ -65,10 +65,48 @@ describe("followup prompt media carrier", () => {
       prompt: "[media attached: /tmp/retry.png (image/png)]\nretry me",
     });
     source.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
+    source.images = [{ type: "image", data: "image", mimeType: "image/png" }];
+    source.inputMedia = [{ type: "video", data: "video", mimeType: "video/mp4" }, ...source.images];
+    source.imageOrder = ["inline"];
 
     const retry = createOverflowSummaryRetrySource(source);
 
     expect(retry.prompt).toBe(source.prompt);
     expect(retry.media).toEqual(source.media);
+    expect(retry.inputMedia).toEqual(source.inputMedia);
+    expect(retry.images).toEqual(source.images);
+    expect(retry.imageOrder).toEqual(source.imageOrder);
+  });
+
+  it("preserves native video order and facts across collected follow-up turns", async () => {
+    const key = `native-video-collect-${Date.now()}`;
+    queueKeys.add(key);
+    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
+    const done = createDeferred<void>();
+    let collected: FollowupRun | undefined;
+    const video = { type: "video" as const, data: "video", mimeType: "video/mp4" };
+    const image = { type: "image" as const, data: "image", mimeType: "image/png" };
+
+    const videoTurn = createQueueTestRun({ prompt: "first clip" });
+    videoTurn.inputMedia = [video];
+    videoTurn.media = [{ path: "/tmp/clip.mp4", kind: "video", contentType: "video/mp4" }];
+    enqueueFollowupRun(key, videoTurn, settings);
+
+    const imageTurn = createQueueTestRun({ prompt: "second image" });
+    imageTurn.images = [image];
+    imageTurn.imageOrder = ["inline"];
+    imageTurn.media = [{ path: "/tmp/photo.png", kind: "image", contentType: "image/png" }];
+    enqueueFollowupRun(key, imageTurn, settings);
+
+    scheduleFollowupDrain(key, async (run) => {
+      collected = run;
+      done.resolve();
+    });
+    await done.promise;
+
+    expect(collected?.inputMedia).toEqual([video, image]);
+    expect(collected?.images).toEqual([image]);
+    expect(collected?.imageOrder).toEqual(["inline"]);
+    expect(collected?.media).toEqual([...videoTurn.media, ...imageTurn.media]);
   });
 });

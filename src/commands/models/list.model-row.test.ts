@@ -1,6 +1,6 @@
 // Model row tests cover per-model row normalization and capability labels.
 import { describe, expect, it } from "vitest";
-import { toModelRow } from "./list.model-row.js";
+import { toListRowInput, toModelRow } from "./list.model-row.js";
 
 const OPENROUTER_MODEL = {
   provider: "openrouter",
@@ -15,6 +15,28 @@ const OPENROUTER_MODEL = {
 } as const;
 
 describe("toModelRow", () => {
+  it("preserves video and document capabilities without promoting audio", () => {
+    expect(toListRowInput(["text", "image", "video", "audio", "document", "unknown"])).toEqual([
+      "text",
+      "image",
+      "video",
+      "document",
+    ]);
+    expect(toListRowInput(["audio"])).toEqual(["text"]);
+
+    const row = toModelRow({
+      model: {
+        ...OPENROUTER_MODEL,
+        input: ["text", "image", "video", "document"],
+      },
+      key: "openrouter/acme/video-model",
+      tags: [],
+      authAvailability: true,
+    });
+
+    expect(row.input).toBe("text+image+video+document");
+  });
+
   it("keeps native context metadata and effective runtime context tokens distinct", () => {
     const row = toModelRow({
       model: {

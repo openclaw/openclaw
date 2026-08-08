@@ -103,6 +103,13 @@ Both providers are configured from a single API key. Setup registers both automa
 
 Both catalogs are static (no `/models` discovery call) and support OpenAI-compatible streamed usage accounting. Tool schemas for both providers automatically drop `minLength`, `maxLength`, `minItems`, `maxItems`, `minContains`, and `maxContains` keywords, since the Volcengine tool-call API rejects them.
 
+The Doubao models marked with video input receive eligible attachments directly
+in the active model conversation. Volcengine does not register a separate
+video-description provider, so captioning fallback requires another configured
+video-understanding provider such as Google, Moonshot, Qwen, or Z.AI. Videos
+remain subject to the inbound attachment limit and any stricter channel or
+provider limits.
+
 ## Text-to-speech
 
 Volcengine TTS uses the BytePlus Seed Speech HTTP API (`voice.ap-southeast-1.bytepluses.com`) and is configured separately from the OpenAI-compatible Doubao model API key. In the BytePlus console, open Seed Speech > Settings > API Keys, copy the API key, then set:

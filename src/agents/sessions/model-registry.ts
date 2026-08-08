@@ -695,10 +695,11 @@ export class ModelRegistry {
           continue;
         }
 
-        // Project richer persisted metadata to runtime's text/image contract.
+        // Project richer persisted metadata to runtime's text/image/video contract.
         // Unsupported-only rows are not runnable; explicit empty input stays valid.
         const runtimeInput = (modelDef.input ?? ["text"]).filter(
-          (input): input is "text" | "image" => input === "text" || input === "image",
+          (input): input is "text" | "image" | "video" =>
+            input === "text" || input === "image" || input === "video",
         );
         if ((modelDef.input?.length ?? 0) > 0 && runtimeInput.length === 0) {
           continue;
@@ -1082,7 +1083,7 @@ export interface ProviderConfigInput {
     baseUrl?: string;
     reasoning: boolean;
     thinkingLevelMap?: Model["thinkingLevelMap"];
-    input: ("text" | "image")[];
+    input: Model["input"];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
     maxTokens: number;

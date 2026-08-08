@@ -48,7 +48,7 @@ type MessageCutAction = "fork" | "rewind" | "switch";
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
 
-// A message realistically carries a handful of images; a corrupt transcript must
+// A message realistically carries a handful of media; a corrupt transcript must
 // not turn rewind into a bulk media read.
 const EDITOR_MEDIA_REF_LIMIT = 10;
 

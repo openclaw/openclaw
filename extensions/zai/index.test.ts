@@ -137,7 +137,7 @@ describe("zai provider plugin", () => {
         providerBaseUrl: "https://api.z.ai/api/paas/v4",
         expected: {
           baseUrl: "https://api.z.ai/api/paas/v4",
-          input: ["text", "image"],
+          input: ["text", "image", "video"],
           reasoning: true,
           contextWindow: 200_000,
           maxTokens: 131_072,

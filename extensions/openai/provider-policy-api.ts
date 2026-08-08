@@ -86,6 +86,19 @@ export function resolveAuthoredOpenAIProviderConfig(params: {
   return providerConfig;
 }
 
+/** Custom OpenAI-compatible endpoints own video input; first-party transports do not. */
+export function isOpenAICompatibleNativeVideoRoute(params: {
+  api?: string | null;
+  baseUrl?: string;
+}): boolean {
+  return (
+    params.api !== OPENAI_CHATGPT_RESPONSES_API &&
+    classifyOpenAIBaseUrl(
+      normalizeOptionalRouteBaseUrl(params.baseUrl) ?? process.env.OPENAI_BASE_URL,
+    ) === "custom"
+  );
+}
+
 /**
  * Skips full runtime loading only when OpenAI normalization is provably a no-op.
  * Transport-sensitive routes and legacy model aliases still use the runtime hook.
@@ -107,6 +120,15 @@ export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelCon
     canonicalRouteId !== ctx.modelId
   ) {
     return undefined;
+  }
+  if (
+    ctx.model.input?.includes("video") &&
+    !isOpenAICompatibleNativeVideoRoute({ api: ctx.model.api, baseUrl: ctx.model.baseUrl })
+  ) {
+    return {
+      ...ctx.model,
+      input: ctx.model.input.filter((modality) => modality !== "video"),
+    };
   }
   return null;
 }
@@ -594,7 +616,30 @@ export function resolveModelRoutes(
 }
 
 export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
-  return params.providerConfig;
+  const provider = params.providerConfig;
+  if (params.provider.trim().toLowerCase() !== OPENAI_PROVIDER_ID) {
+    return provider;
+  }
+  let changed = false;
+  const models = provider.models.map((model) => {
+    if (
+      !model.input?.includes("video") ||
+      isOpenAICompatibleNativeVideoRoute({
+        api: model.api ?? provider.api,
+        baseUrl:
+          normalizeOptionalRouteBaseUrl(model.baseUrl) ??
+          normalizeOptionalRouteBaseUrl(provider.baseUrl),
+      })
+    ) {
+      return model;
+    }
+    changed = true;
+    return {
+      ...model,
+      input: model.input.filter((modality) => modality !== "video"),
+    };
+  });
+  return changed ? { ...provider, models } : provider;
 }
 
 export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyContext) {

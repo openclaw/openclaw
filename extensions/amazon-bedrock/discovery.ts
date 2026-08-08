@@ -140,6 +140,15 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "qwen.qwen3-vl-235b-a22b": 128_000,
 };
 
+// Bedrock's discovery ModelModality enum has no VIDEO member, so documented
+// Nova video capabilities must be restored by their owning provider.
+const KNOWN_NOVA_VIDEO_MODELS = new Set([
+  "amazon.nova-premier-v1:0",
+  "amazon.nova-pro-v1:0",
+  "amazon.nova-lite-v1:0",
+  "amazon.nova-2-lite-v1:0",
+]);
+
 /**
  * Resolve the real context window for a Bedrock model ID.
  * Strips inference profile prefixes (us., eu., ap., global.) before lookup.
@@ -196,6 +205,10 @@ function resolveKnownMaxTokens(modelId: string): number | undefined {
 }
 
 function resolveKnownInput(modelId: string): ModelDefinitionConfig["input"] | undefined {
+  const normalizedModelId = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+  if (KNOWN_NOVA_VIDEO_MODELS.has(normalizedModelId)) {
+    return ["text", "image", "video"];
+  }
   return resolveClaudeFable5ModelIdentity({ id: modelId }) ||
     resolveClaudeMythos5ModelIdentity({ id: modelId }) ||
     resolveClaudeSonnet5ModelIdentity({ id: modelId }) ||
@@ -261,9 +274,9 @@ function isActive(summary: BedrockModelSummary): boolean {
   return typeof status === "string" ? status.toUpperCase() === "ACTIVE" : false;
 }
 
-function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image"> {
+function mapInputModalities(summary: BedrockModelSummary): ModelDefinitionConfig["input"] {
   const inputs = summary.inputModalities ?? [];
-  const mapped = new Set<"text" | "image">();
+  const mapped = new Set<ModelDefinitionConfig["input"][number]>();
   for (const modality of inputs) {
     const lower = normalizeOptionalLowercaseString(modality);
     if (lower === "text") {
@@ -275,6 +288,9 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
   }
   if (mapped.size === 0) {
     mapped.add("text");
+  }
+  if (resolveKnownInput(summary.modelId ?? "")?.includes("video")) {
+    mapped.add("video");
   }
   return Array.from(mapped);
 }

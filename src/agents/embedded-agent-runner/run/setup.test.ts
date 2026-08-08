@@ -131,6 +131,30 @@ describe("buildBeforeModelResolveAttachments", () => {
     expect(buildBeforeModelResolveAttachments(undefined)).toBeUndefined();
     expect(buildBeforeModelResolveAttachments([])).toBeUndefined();
   });
+
+  it("preserves native video and image block order", () => {
+    expect(
+      buildBeforeModelResolveAttachments([
+        { type: "video", mimeType: "video/mp4" },
+        { type: "image", mimeType: "image/png" },
+      ]),
+    ).toEqual([
+      { kind: "video", mimeType: "video/mp4" },
+      { kind: "image", mimeType: "image/png" },
+    ]);
+  });
+
+  it("exposes offloaded video facts before selecting the model", () => {
+    expect(
+      buildBeforeModelResolveAttachments(undefined, [
+        { kind: "video", contentType: "video/mp4", path: "/tmp/clip.mp4" },
+        { kind: "image", contentType: "image/png", path: "/tmp/frame.png" },
+      ]),
+    ).toEqual([
+      { kind: "video", mimeType: "video/mp4" },
+      { kind: "image", mimeType: "image/png" },
+    ]);
+  });
 });
 
 describe("resolveHookModelSelection", () => {

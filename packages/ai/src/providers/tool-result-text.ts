@@ -6,9 +6,11 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 const PROVIDER_TOOL_RESULT_MAX_CHARS = 8000;
 const IMAGE_TOOL_RESULT_TYPES = new Set(["image", "image_url", "input_image"]);
 const AUDIO_TOOL_RESULT_TYPES = new Set(["audio", "input_audio", "output_audio"]);
+const VIDEO_TOOL_RESULT_TYPES = new Set(["video", "video_url", "input_video"]);
 const MEDIA_ONLY_TOOL_RESULT_TYPES = new Set([
   ...IMAGE_TOOL_RESULT_TYPES,
   ...AUDIO_TOOL_RESULT_TYPES,
+  ...VIDEO_TOOL_RESULT_TYPES,
 ]);
 const INLINE_DATA_URI_PATTERN =
   /(^|[^A-Za-z0-9_])data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+(?:;[a-z0-9.+-]+=[^,;"'\s]+|;base64)*,[^\s"'<>)]+)/gi;
@@ -133,9 +135,15 @@ export function isImageWithMediaPayload<T>(block: T): block is T & { type: "imag
   return isRecord(block) && block.type === "image" && hasMediaPayload(block);
 }
 
+/** Video metadata alone is not an attachment; provider emitters need inline bytes. */
+export function isVideoWithMediaPayload<T>(block: T): block is T & { type: "video"; data: string } {
+  return isRecord(block) && block.type === "video" && hasMediaPayload(block);
+}
+
 export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
   let hasImage = false;
   let hasAudio = false;
+  let hasVideo = false;
 
   for (const block of blocks) {
     if (!hasMediaPayload(block)) {
@@ -157,10 +165,19 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
     ) {
       hasAudio = true;
     }
+    if (
+      (type && VIDEO_TOOL_RESULT_TYPES.has(type)) ||
+      mimeType?.toLowerCase().startsWith("video/")
+    ) {
+      hasVideo = true;
+    }
   }
 
-  if (hasImage && hasAudio) {
+  if (Number(hasImage) + Number(hasAudio) + Number(hasVideo) > 1) {
     return "(see attached media)";
+  }
+  if (hasVideo) {
+    return "(see attached video)";
   }
   if (hasAudio) {
     return "(see attached audio)";

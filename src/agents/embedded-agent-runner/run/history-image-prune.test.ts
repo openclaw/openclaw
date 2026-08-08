@@ -1,10 +1,10 @@
 // History image prune tests keep provider replay compact by replacing stale
-// image bytes and fact-owned projections while preserving recent user context.
+// visual media bytes and fact-owned projections while preserving recent user context.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type { ImageContent } from "openclaw/plugin-sdk/llm";
+import type { ImageContent, VideoContent } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   attachRuntimePromptMediaFacts,
@@ -19,6 +19,7 @@ import {
 } from "./history-image-prune.js";
 
 const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+const PRUNED_HISTORY_VIDEO_MARKER = "[video data removed - already processed by model]";
 const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
   "[media reference removed - already processed by model]";
 const TINY_PNG_BASE64 =
@@ -94,6 +95,7 @@ function oldEnoughTail(): AgentMessage[] {
 
 describe("pruneProcessedHistoryImages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
+  const video: VideoContent = { type: "video", data: "video-bytes", mimeType: "video/mp4" };
   const assistantTurn = () => castAgentMessage({ role: "assistant", content: "ack" });
   const userText = () => castAgentMessage({ role: "user", content: "more" });
 
@@ -114,6 +116,52 @@ describe("pruneProcessedHistoryImages", () => {
 
     const content = expectPrunedImageMessage(messages, "expected user array content");
     expect(content[0]?.type).toBe("text");
+  });
+
+  it.each(["user", "toolResult"] as const)(
+    "prunes video blocks from %s messages older than three completed turns",
+    (role) => {
+      const messages = [
+        castAgentMessage({
+          role,
+          ...(role === "toolResult"
+            ? { toolCallId: "call_video", toolName: "record_screen", isError: false }
+            : {}),
+          content: [{ type: "text", text: "recorded clip" }, { ...video }],
+        }),
+        ...oldEnoughTail(),
+      ];
+
+      const pruned = expectPrunedMessages(messages);
+      const content = expectArrayMessageContent(pruned[0], "expected visual media content");
+
+      expectContentBlock(content[0], { type: "text", text: "recorded clip" });
+      expectContentBlock(content[1], { type: "text", text: PRUNED_HISTORY_VIDEO_MARKER });
+      expectContentBlock(
+        expectArrayMessageContent(messages[0], "expected original visual media content")[1],
+        { type: "video", data: "video-bytes" },
+      );
+    },
+  );
+
+  it("drops old video facts after replacing their hydrated payload", () => {
+    const videoPath = "/tmp/old-recording.mp4";
+    const message = castAgentMessage({
+      role: "user",
+      content: [{ type: "text", text: `[media attached: ${videoPath} (video/mp4)]` }, { ...video }],
+      __openclaw: { media: [{ path: videoPath, contentType: "video/mp4" }] },
+    });
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const first = pruned[0] as unknown as Record<string, unknown>;
+    const metadata = first["__openclaw"] as Record<string, unknown> | undefined;
+
+    expect(expectArrayMessageContent(pruned[0], "expected old video content")).toEqual([
+      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
+      { type: "text", text: PRUNED_HISTORY_VIDEO_MARKER },
+    ]);
+    expect(metadata?.media).toBeUndefined();
+    expect(metadata?.mediaImagePruned).toBe(true);
   });
 
   it("strips explicit-image provenance when its old image block is pruned", () => {
@@ -570,6 +618,55 @@ describe("pruneProcessedHistoryImages", () => {
     expectContentBlock(originalOldContent[1], { type: "image", data: "abc" });
   });
 
+  it("prunes old mixed visual media while preserving recent and pending videos", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "user",
+        content: [{ type: "text", text: "old" }, { ...image }, { ...video }],
+      }),
+      assistantTurn(),
+      userText(),
+      assistantTurn(),
+      userText(),
+      assistantTurn(),
+      castAgentMessage({
+        role: "user",
+        content: [
+          { type: "text", text: "recent" },
+          { ...video, data: "recent-video" },
+        ],
+      }),
+      assistantTurn(),
+      castAgentMessage({
+        role: "user",
+        content: [
+          { type: "text", text: "pending" },
+          { ...video, data: "pending-video" },
+        ],
+      }),
+    ];
+
+    const pruned = expectPrunedMessages(messages);
+
+    expect(expectArrayMessageContent(pruned[0], "expected old mixed visual content")).toEqual([
+      { type: "text", text: "old" },
+      { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER },
+      { type: "text", text: PRUNED_HISTORY_VIDEO_MARKER },
+    ]);
+    expectContentBlock(expectArrayMessageContent(pruned[6], "expected recent video")[1], {
+      type: "video",
+      data: "recent-video",
+    });
+    expectContentBlock(expectArrayMessageContent(pruned[8], "expected pending video")[1], {
+      type: "video",
+      data: "pending-video",
+    });
+    expectContentBlock(expectArrayMessageContent(messages[0], "expected original old video")[2], {
+      type: "video",
+      data: "video-bytes",
+    });
+  });
+
   it("does not change messages when no assistant turn exists", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
@@ -588,6 +685,7 @@ describe("pruneProcessedHistoryImages", () => {
 
 describe("installHistoryImagePruneContextTransform", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
+  const video: VideoContent = { type: "video", data: "video-bytes", mimeType: "video/mp4" };
 
   it("prunes the provider replay view after an existing context transform", async () => {
     // The transform wrapper prunes only the replay view returned to providers,
@@ -605,6 +703,7 @@ describe("installHistoryImagePruneContextTransform", () => {
             text: "stale [media attached: media://inbound/old.png]",
           },
           { ...image },
+          { ...video },
         ],
       }),
       ...oldEnoughTail(),
@@ -631,12 +730,17 @@ describe("installHistoryImagePruneContextTransform", () => {
       type: "text",
       text: PRUNED_HISTORY_IMAGE_MARKER,
     });
+    expectContentBlock(replayContent[2], {
+      type: "text",
+      text: PRUNED_HISTORY_VIDEO_MARKER,
+    });
     const originalContent = expectArrayMessageContent(
       transformedMessages[0],
       "expected original transformed content",
     );
     expect(originalContent[0]?.text).toContain("media://inbound/old.png");
     expectContentBlock(originalContent[1], { type: "image", data: "abc" });
+    expectContentBlock(originalContent[2], { type: "video", data: "video-bytes" });
 
     restore();
     expect(agent.transformContext).toBe(originalTransformContext);
