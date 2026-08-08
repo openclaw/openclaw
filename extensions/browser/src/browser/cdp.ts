@@ -323,6 +323,13 @@ export type AriaSnapshotNode = {
 const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
 
+/**
+ * Hard depth bound for rendering pathologically deep accessibility trees.
+ * Generous for real pages, but keeps recursive rendering from overflowing
+ * the stack and indent output from growing quadratically with depth.
+ */
+const ROLE_TREE_RENDER_MAX_DEPTH = 100;
+
 /** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
 export type RawAXNode = {
   nodeId?: string;
@@ -578,8 +585,12 @@ function renderRoleTree(
   if (!node) {
     return;
   }
+  const effectiveDepth = Math.max(0, node.depth + indentOffset);
+  if (effectiveDepth > ROLE_TREE_RENDER_MAX_DEPTH) {
+    return;
+  }
   if (shouldIncludeRoleNode(node, options)) {
-    const indent = "  ".repeat(Math.max(0, node.depth + indentOffset));
+    const indent = "  ".repeat(effectiveDepth);
     const name = node.name ? ` "${escapeRoleSnapshotValue(node.name)}"` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";

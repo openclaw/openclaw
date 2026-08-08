@@ -20,6 +20,13 @@ export type ChromeMcpSnapshotNode = {
   children?: ChromeMcpSnapshotNode[];
 };
 
+/**
+ * Hard traversal depth bound for pathologically nested pages. Generous for
+ * real pages, but keeps recursive rendering from overflowing the stack and
+ * indent output from growing quadratically with depth.
+ */
+const SNAPSHOT_TREE_MAX_DEPTH = 100;
+
 function normalizeRole(node: ChromeMcpSnapshotNode): string {
   const role = normalizeLowercaseStringOrEmpty(node.role);
   return role || "generic";
@@ -91,7 +98,7 @@ export function flattenChromeMcpSnapshotToAriaNodes(
   const out: SnapshotAriaNode[] = [];
 
   const visit = (node: ChromeMcpSnapshotNode, depth: number) => {
-    if (out.length >= boundedLimit) {
+    if (out.length >= boundedLimit || depth > SNAPSHOT_TREE_MAX_DEPTH) {
       return;
     }
     const ref = normalizeString(node.id);
@@ -134,8 +141,8 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
     const name = normalizeString(node.name);
     const value = normalizeString(node.value);
     const description = normalizeString(node.description);
-    const maxDepth = params.options?.maxDepth;
-    if (maxDepth !== undefined && depth > maxDepth) {
+    const maxDepth = params.options?.maxDepth ?? SNAPSHOT_TREE_MAX_DEPTH;
+    if (depth > maxDepth) {
       return;
     }
 

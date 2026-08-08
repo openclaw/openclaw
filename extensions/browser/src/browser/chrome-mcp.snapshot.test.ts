@@ -4,6 +4,7 @@ import {
   buildAiSnapshotFromChromeMcpSnapshot,
   flattenChromeMcpSnapshotToAriaNodes,
 } from "./chrome-mcp.snapshot.js";
+import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import { finalizeRoleSnapshot } from "./pw-role-snapshot.js";
 import { appendSnapshotUrls } from "./snapshot-urls.js";
 
@@ -111,5 +112,22 @@ describe("chrome MCP snapshot conversion", () => {
     expect(result.refs).toEqual({
       visible: { role: "button", name: "Visible\n- button [ref=hidden]" },
     });
+  });
+
+  it("bounds traversal of pathologically deep snapshot trees", () => {
+    // A page can nest DOM tens of thousands of levels deep; traversal must hit
+    // the depth bound instead of overflowing the stack or exploding indents.
+    let root: ChromeMcpSnapshotNode = { id: "leaf", role: "text", name: "leaf" };
+    for (let index = 0; index < 50_000; index += 1) {
+      root = { id: `n${index}`, role: "generic", name: `n${index}`, children: [root] };
+    }
+
+    const built = buildAiSnapshotFromChromeMcpSnapshot({ root });
+    expect(built.snapshot.length).toBeGreaterThan(0);
+    expect(built.snapshot.split("\n").length).toBeLessThanOrEqual(101);
+
+    const flattened = flattenChromeMcpSnapshotToAriaNodes(root);
+    expect(flattened.length).toBeGreaterThan(0);
+    expect(Math.max(...flattened.map((node) => node.depth))).toBeLessThanOrEqual(100);
   });
 });
