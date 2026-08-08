@@ -24,6 +24,7 @@ vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
+  getRuntimeConfigForInspection: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
 }));
 vi.mock("../terminal/links.js", () => ({ formatDocsLink: () => "docs.openclaw.ai/cli/skills" }));

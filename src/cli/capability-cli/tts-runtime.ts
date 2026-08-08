@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigForInspection } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
@@ -417,7 +417,7 @@ function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string)
 }
 
 export async function runTtsProviders(transport: CapabilityTransport) {
-  const cfg = getRuntimeConfig();
+  const cfg = getRuntimeConfigForInspection();
   if (transport === "gateway") {
     const payload: {
       providers?: Array<Record<string, unknown>>;
@@ -469,7 +469,7 @@ export async function runTtsPersonas(transport: CapabilityTransport) {
       timeoutMs: 30_000,
     });
   }
-  const cfg = getRuntimeConfig();
+  const cfg = getRuntimeConfigForInspection();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const active = getTtsPersona(config, prefsPath);
@@ -490,6 +490,7 @@ export async function runTtsVoices(providerRaw?: string) {
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer tts voices",
     targetIds: getTtsCommandSecretTargetIds(),
+    config: getRuntimeConfigForInspection(),
   });
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);

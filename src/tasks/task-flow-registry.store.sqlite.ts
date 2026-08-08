@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { withExistingCurrentOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -194,7 +195,7 @@ function upsertFlowRow(db: DatabaseSync, row: Insertable<FlowRunsTable>): void {
   );
 }
 
-function openFlowRegistryDatabase(): FlowRegistryDatabase {
+function openFlowRegistryWriteDatabase(): FlowRegistryDatabase {
   const database = openOpenClawStateDatabase();
   const pathname = database.path;
   if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
@@ -211,18 +212,29 @@ function openFlowRegistryDatabase(): FlowRegistryDatabase {
 }
 
 function withWriteTransaction(write: (database: FlowRegistryDatabase) => void) {
-  const database = openFlowRegistryDatabase();
+  const database = openFlowRegistryWriteDatabase();
   runOpenClawStateWriteTransaction(() => {
     write(database);
   });
 }
 
 export function loadTaskFlowRegistryStateFromSqlite(): TaskFlowRegistryStoreSnapshot {
-  const { db } = openFlowRegistryDatabase();
+  const { db } = openFlowRegistryWriteDatabase();
   const rows = selectFlowRows(db);
   return {
     flows: new Map(rows.map((row) => [row.flow_id, rowToFlowRecord(row)])),
   };
+}
+
+export function loadTaskFlowRegistryStateFromSqliteReadOnly(): TaskFlowRegistryStoreSnapshot {
+  return (
+    withExistingCurrentOpenClawStateDatabaseReadOnly(({ db }) => {
+      const rows = selectFlowRows(db);
+      return {
+        flows: new Map(rows.map((row) => [row.flow_id, rowToFlowRecord(row)])),
+      };
+    }) ?? { flows: new Map() }
+  );
 }
 
 export function saveTaskFlowRegistryStateToSqlite(snapshot: TaskFlowRegistryStoreSnapshot) {

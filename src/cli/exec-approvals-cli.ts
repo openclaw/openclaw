@@ -721,7 +721,7 @@ async function loadConfigForApprovalsTarget(params: {
 }): Promise<ConfigLoadResult> {
   try {
     if (params.source === "local") {
-      return { config: await readBestEffortConfig(), timedOut: false };
+      return { config: await readBestEffortConfig({ observe: false }), timedOut: false };
     }
     const snapshot = (await callGatewayFromCli(
       "config.get",

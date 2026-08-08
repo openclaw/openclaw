@@ -151,7 +151,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
+  const shouldMigrateState = shouldRepair || params.options.nonInteractive === true;
   const preflight = await runDoctorConfigPreflight({
+    migrateState: shouldMigrateState,
+    observe: shouldMigrateState,
     repairPrefixedConfig: shouldRepair,
     recoverCorruptTargetStore: shouldRepair,
     doctorOnlyStateMigrations: shouldRepair,

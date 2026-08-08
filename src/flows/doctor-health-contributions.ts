@@ -228,14 +228,10 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     return;
   }
   note(legacyState.preview.join("\n"), "Legacy state detected");
-  const migrate =
-    ctx.options.nonInteractive === true
-      ? true
-      : await ctx.prompter.confirm({
-          message: "Migrate detected legacy state now?",
-          initialValue: true,
-        });
-  if (!migrate) {
+  const shouldMigrateState =
+    ctx.options.repair === true || ctx.options.yes === true || ctx.options.nonInteractive === true;
+  if (!shouldMigrateState) {
+    note("Run openclaw doctor --fix to migrate detected legacy state.", "Legacy state migration");
     return;
   }
   const migrated = await runLegacyStateMigrations({

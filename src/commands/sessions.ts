@@ -18,7 +18,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfigForInspection } from "../config/config.js";
 import { resolveSessionTotalTokens } from "../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -333,7 +333,7 @@ export async function sessionsCommand(
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
-  const cfg = getRuntimeConfig();
+  const cfg = getRuntimeConfigForInspection();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =

@@ -79,6 +79,7 @@ describe("agentsListCommand", () => {
 
     await agentsListCommand({ json: true }, runtime);
 
+    expect(requireValidConfigMock).toHaveBeenCalledWith(runtime, { observe: false });
     expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
     const summary = (runtime.json[0] as Array<Record<string, unknown>>)[0];
     expect(summary?.id).toBe("main");

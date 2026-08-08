@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { Command } from "commander";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigForInspection } from "../../config/config.js";
 import { createEmbeddingProvider } from "../../plugin-sdk/memory-core-bundled-runtime.js";
 import { listEmbeddingProviders } from "../../plugins/embedding-provider-runtime.js";
 import { listMemoryEmbeddingProviders } from "../../plugins/memory-embedding-providers.js";
@@ -125,7 +125,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
+        const cfg = getRuntimeConfigForInspection();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
         const selectedProvider = resolvedMemory?.provider;

@@ -208,7 +208,7 @@ async function resolveGatewayRpcOptionsWithLocalPort(
     throw new Error("Use either --url or --port, not both.");
   }
   const { readBestEffortConfig } = await loadConfigModule();
-  const config = await readBestEffortConfig();
+  const config = await readBestEffortConfig({ observe: false });
   return {
     ...rpcOpts,
     localPortOverride: port,
@@ -653,7 +653,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
                 ]);
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
-                config: rpcOpts.config ?? (await readBestEffortConfig()),
+                config: rpcOpts.config ?? (await readBestEffortConfig({ observe: false })),
                 runtime: defaultRuntime,
                 timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
                 token: rpcOpts.token,

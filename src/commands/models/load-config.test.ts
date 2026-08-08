@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
+  getRuntimeConfigForInspection: vi.fn(),
   getRuntimeConfigSourceSnapshot: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  getRuntimeConfigForInspection: mocks.getRuntimeConfigForInspection,
   getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
 }));
@@ -36,6 +38,7 @@ describe("models load-config", () => {
 
   function mockResolvedConfigFlow(params: { sourceConfig: unknown; diagnostics: string[] }) {
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+    mocks.getRuntimeConfigForInspection.mockReturnValue(runtimeConfig);
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(params.sourceConfig);
     mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
@@ -95,6 +98,16 @@ describe("models load-config", () => {
     await loadModelsConfig({ commandName: "models status", skipPluginValidation: true });
 
     expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+  });
+
+  it("uses the core-only inspection config loader for read-only commands", async () => {
+    const sourceConfig = { models: { providers: {} } };
+    mockResolvedConfigFlow({ sourceConfig, diagnostics: [] });
+
+    await loadModelsConfig({ commandName: "models list", observe: false });
+
+    expect(mocks.getRuntimeConfigForInspection).toHaveBeenCalledWith(undefined);
+    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
   });
 
   it("does not reread config when no source snapshot is pinned", async () => {

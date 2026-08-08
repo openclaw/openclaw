@@ -13,7 +13,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigForInspection } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
@@ -140,12 +140,12 @@ const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
-  config: ReturnType<typeof getRuntimeConfig>;
+  config: ReturnType<typeof getRuntimeConfigForInspection>;
   workspaceDir: string;
   agentId: string;
 } {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
-  const config = getRuntimeConfig(
+  const config = getRuntimeConfigForInspection(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
   );
   const explicitAgentId = normalizeOptionalString(options?.agentId);
@@ -238,7 +238,7 @@ function resolveClawHubTargetWorkspace(
     return undefined;
   }
   if (opts.global) {
-    return { config: getRuntimeConfig(), workspaceDir: CONFIG_DIR };
+    return { config: getRuntimeConfigForInspection(), workspaceDir: CONFIG_DIR };
   }
   return resolveSkillsWorkspace({ agentId });
 }
@@ -413,7 +413,7 @@ async function loadGatewaySkillCuratorStatus(
 }
 
 async function loadSkillCuratorStatus(): Promise<SkillCuratorStatus> {
-  const config = getRuntimeConfig();
+  const config = getRuntimeConfigForInspection();
   return (await loadGatewaySkillCuratorStatus(config)) ?? getSkillCuratorStatus();
 }
 

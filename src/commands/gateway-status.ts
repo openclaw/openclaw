@@ -60,7 +60,7 @@ export async function gatewayStatusCommand(
     errorHint: "Fix: pass --token or --password with --url.",
   });
   const startedAt = Date.now();
-  const cfg = await readBestEffortConfig();
+  const cfg = await readBestEffortConfig({ observe: false });
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, defaultTimeoutMs);

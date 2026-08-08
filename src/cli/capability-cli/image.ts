@@ -7,7 +7,7 @@ import {
 import type { Command } from "commander";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { runWithImageModelFallback } from "../../agents/model-fallback-image.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigForInspection } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import {
   generateImage,
@@ -410,7 +410,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
+        const cfg = getRuntimeConfigForInspection();
         const selectedProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
         );

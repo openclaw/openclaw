@@ -13,7 +13,7 @@ type GatewayHealthJsonRouteArgs = {
 
 type GatewayHealthRouteDependencies = {
   callGateway?: typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport;
-  readBestEffortConfig?: () => Promise<OpenClawConfig>;
+  readBestEffortConfig?: (options?: { observe?: boolean }) => Promise<OpenClawConfig>;
   emitReachableGatewayAuthDiagnostic?: typeof import("../../commands/health.js").emitReachableGatewayAuthDiagnostic;
   formatGatewayAuthErrorJson?: typeof import("../../gateway/call.js").formatGatewayAuthErrorJson;
   formatGatewayClientRequestErrorJson?: typeof import("../../gateway/call.js").formatGatewayClientRequestErrorJson;
@@ -30,7 +30,7 @@ async function resolveRouteRpcOptions(
   const readBestEffortConfig =
     deps.readBestEffortConfig ??
     (await import("../../config/read-best-effort-config.runtime.js")).readBestEffortConfig;
-  const config = await readBestEffortConfig();
+  const config = await readBestEffortConfig({ observe: false });
   return {
     ...args.rpc,
     localPortOverride: args.localPortOverride,
@@ -85,7 +85,7 @@ export async function runGatewayHealthJsonRoute(
     }
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
-      config: rpc.config ?? (await readBestEffortConfig()),
+      config: rpc.config ?? (await readBestEffortConfig({ observe: false })),
       runtime,
       timeoutMs: Number(rpc.timeout ?? "10000"),
       token: rpc.token,

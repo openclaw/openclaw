@@ -83,6 +83,7 @@ export async function modelsListCommand(
   ]);
   const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
     commandName: "models list",
+    observe: false,
     runtime,
   });
   const agentId = resolveDefaultAgentId(cfg);

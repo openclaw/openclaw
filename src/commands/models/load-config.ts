@@ -3,6 +3,7 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   getRuntimeConfig,
+  getRuntimeConfigForInspection,
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
@@ -19,10 +20,13 @@ type LoadedModelsConfig = {
 /** Loads config, resolves model command secrets, and preserves the source snapshot. */
 export async function loadModelsConfigWithSource(params: {
   commandName: string;
+  observe?: boolean;
   runtime?: RuntimeEnv;
   skipPluginValidation?: boolean;
 }): Promise<LoadedModelsConfig> {
-  const runtimeConfig = getRuntimeConfig(
+  const loadRuntimeConfig =
+    params.observe === false ? getRuntimeConfigForInspection : getRuntimeConfig;
+  const runtimeConfig = loadRuntimeConfig(
     params.skipPluginValidation ? { skipPluginValidation: true } : undefined,
   );
   const pinnedSourceConfig = getRuntimeConfigSourceSnapshot();
@@ -46,6 +50,7 @@ export async function loadModelsConfigWithSource(params: {
 /** Loads the resolved model command config when callers do not need source metadata. */
 export async function loadModelsConfig(params: {
   commandName: string;
+  observe?: boolean;
   runtime?: RuntimeEnv;
   skipPluginValidation?: boolean;
 }): Promise<OpenClawConfig> {

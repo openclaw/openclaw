@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   buildWorkspaceHookStatus: vi.fn(),
   getRuntimeConfig: vi.fn(),
+  getRuntimeConfigForInspection: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
   requestExitAfterOneShotOutput: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
+  getRuntimeConfigForInspection: mocks.getRuntimeConfigForInspection,
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   replaceConfigFile: mocks.replaceConfigFile,
 }));
@@ -126,6 +128,7 @@ describe("hooks CLI metadata config keys", () => {
     mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
     mocks.buildWorkspaceHookStatus.mockReturnValue(report);
     mocks.getRuntimeConfig.mockReturnValue(sourceConfig);
+    mocks.getRuntimeConfigForInspection.mockReturnValue(sourceConfig);
     mocks.readConfigFileSnapshot.mockResolvedValue({ sourceConfig, hash: "config-hash" });
     mocks.replaceConfigFile.mockResolvedValue(undefined);
   });
@@ -271,7 +274,9 @@ describe("hooks CLI metadata config keys", () => {
 
     await createHooksProgram().parseAsync(argv, { from: "user" });
 
-    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(mocks.getRuntimeConfigForInspection).toHaveBeenCalledWith({
+      skipPluginValidation: true,
+    });
     expect(mocks.callGateway).toHaveBeenCalledWith({
       config: sourceConfig,
       method: "hooks.status",

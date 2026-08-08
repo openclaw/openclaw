@@ -179,7 +179,10 @@ export async function agentsBindingsCommand(
   opts: AgentsBindingsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const cfg = await requireValidConfig(runtime, { skipPluginValidation: true });
+  const cfg = await requireValidConfig(runtime, {
+    observe: false,
+    skipPluginValidation: true,
+  });
   if (!cfg) {
     return;
   }

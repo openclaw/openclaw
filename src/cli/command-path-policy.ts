@@ -39,12 +39,15 @@ function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]):
   return pattern.every((segment, index) => commandPath[index] === segment);
 }
 
-function resolveCliCatalogCommandPath(argv: string[]): string[] {
+export function resolveCliCatalogCommandPath(argv: string[]): string[] {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
   const startupPath = resolveCliStartupCommandPath(argv);
-  const tokens =
+  const rawTokens =
     resolveGatewayCatalogCommandPath(argv) ??
     (startupPath[0] === "agent" ? startupPath : getCommandPathWithRootOptions(argv, argv.length));
+  // Commander canonicalizes the public `capability` alias to `infer`; do the same for the
+  // pre-registration config read so aliases inherit the catalog's exact inspection policy.
+  const tokens = rawTokens[0] === "capability" ? ["infer", ...rawTokens.slice(1)] : rawTokens;
   if (tokens.length === 0) {
     return [];
   }

@@ -754,6 +754,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "registry"]);
 
+    expect(loadConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(inspectPluginRegistry).toHaveBeenCalledWith({ config: {} });
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(runtimeLogs.join("\n")).toContain("State:");
@@ -772,6 +773,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "registry", "--refresh"]);
 
+    expect(loadConfig).toHaveBeenCalledWith();
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: {},
       reason: "manual",
@@ -838,6 +840,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "inspect", "openclaw-mem0"]);
 
+    expect(loadConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeLogs.join("\n")).toContain("Policy");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
@@ -888,6 +891,7 @@ describe("plugins cli list", () => {
 
     await runPluginsCommand(["plugins", "inspect", "openclaw-mem0", "--runtime"]);
 
+    expect(loadConfig).toHaveBeenCalledWith();
     expect(buildPluginDiagnosticsReport).toHaveBeenCalledWith({
       config: {},
       onlyPluginIds: ["openclaw-mem0"],

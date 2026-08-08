@@ -41,6 +41,7 @@ vi.mock("../infra/gateway-lock.js", () => ({
 }));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
+  getRuntimeConfigForInspection: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
 }));
 vi.mock("../agents/agent-scope.js", () => ({

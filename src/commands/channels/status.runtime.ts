@@ -217,7 +217,7 @@ export async function renderChannelsStatusFallback(params: {
   runtime.error(
     `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
   );
-  const cfg = await requireValidConfigSnapshot(runtime);
+  const cfg = await requireValidConfigSnapshot(runtime, { observe: false });
   if (!cfg) {
     return;
   }
@@ -228,7 +228,7 @@ export async function renderChannelsStatusFallback(params: {
     mode: "read_only_status",
     runtime,
   });
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readConfigFileSnapshot({ observe: false });
   const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
   const requestedChannel = opts.channel
     ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))

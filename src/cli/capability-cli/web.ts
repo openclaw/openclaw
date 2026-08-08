@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigForInspection } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isWebFetchProviderConfigured,
@@ -181,7 +181,7 @@ export function registerWebCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
+        const cfg = getRuntimeConfigForInspection();
         const selectedSearchProvider =
           typeof cfg.tools?.web?.search?.provider === "string"
             ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)

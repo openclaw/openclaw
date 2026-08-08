@@ -54,6 +54,7 @@ vi.mock("../utils.js", async (importOriginal) => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.loadConfigMock(),
+  getRuntimeConfigForInspection: () => mocks.loadConfigMock(),
   loadConfig: () => mocks.loadConfigMock(),
 }));
 
