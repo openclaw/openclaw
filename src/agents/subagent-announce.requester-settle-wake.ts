@@ -254,16 +254,23 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   let settledBatch: SubagentRunRecord[];
   if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
-    settledBatch = frozenBatchRunIds
-      .map((runId) => runsById.get(runId))
-      .filter(
-        (entry): entry is SubagentRunRecord =>
-          Boolean(entry?.requesterSettleWake) &&
-          entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
-      );
+    const frozenBatch = frozenBatchRunIds.map((runId) => runsById.get(runId));
+    if (
+      frozenBatch.some(
+        (entry) => !entry || entry.requesterSettleWake?.rearmGeneration !== currentRearmGeneration,
+      )
+    ) {
+      return false;
+    }
+    settledBatch = frozenBatch as SubagentRunRecord[];
   } else {
     settledBatch = buildConnectedSettledWave(
-      requesterRuns.filter((entry) => entry.requesterSettleWake && hasSubagentRunEnded(entry)),
+      requesterRuns.filter(
+        (entry) =>
+          entry.requesterSettleWake &&
+          entry.execution.status !== "running" &&
+          hasSubagentRunEnded(entry),
+      ),
       currentSettledEntry,
     );
   }
@@ -272,6 +279,26 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   }
 
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
+  const currentRunsById = new Map(
+    registryRuntime
+      .listSubagentRunsForRequester(requesterSessionKey)
+      .map((entry) => [entry.runId, entry]),
+  );
+  const revalidatedBatch = batchRunIds.map((runId) => currentRunsById.get(runId));
+  // Frozen membership is not terminal proof. Re-read every durable execution
+  // fact so a live child cannot become an unknown completion.
+  if (
+    revalidatedBatch.some(
+      (entry) =>
+        !entry ||
+        entry.requesterSettleWake?.rearmGeneration !== currentRearmGeneration ||
+        entry.execution.status === "running" ||
+        !hasSubagentRunEnded(entry),
+    )
+  ) {
+    return false;
+  }
+  settledBatch = revalidatedBatch as SubagentRunRecord[];
   const selectedState = readSharedBatchState(settledBatch);
   if (hasUnsettledDescendants) {
     if (frozenBatchRunIds && frozenBatchRunIds.length > 0) {

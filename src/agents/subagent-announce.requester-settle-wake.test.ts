@@ -437,6 +437,69 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
   });
 
+  it.each([
+    ["is running without an end timestamp", { status: "running", startedAt: 2_000 }],
+    [
+      "is still marked running with an end timestamp",
+      { status: "running", startedAt: 2_000, endedAt: 3_000 },
+    ],
+    ["has no end timestamp", { status: "terminal", startedAt: 2_000 }],
+  ] as const)(
+    "does not wake a yielded requester while its only frozen child %s",
+    async (_description, execution) => {
+      const activeChild = makeSettledChild({
+        runId: "run-b",
+        execution,
+        delivery: { status: "pending" },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-b"],
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+        },
+      });
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([activeChild]);
+
+      const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+        wakeParams({ settledEntry: activeChild }),
+      );
+
+      expect(woke).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("revalidates the frozen child registry row before declaring the yielded batch settled", async () => {
+    const settledChild = makeSettledChild({
+      runId: "run-b",
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: ["run-b"],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      },
+    });
+    const currentRunningChild = {
+      ...settledChild,
+      execution: { status: "running" as const, startedAt: 2_000 },
+    };
+    registryRuntimeMock.listSubagentRunsForRequester
+      .mockReturnValueOnce([settledChild])
+      .mockReturnValue([currentRunningChild]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: settledChild }),
+    );
+
+    expect(woke).toBe(false);
+    expect(registryRuntimeMock.listSubagentRunsForRequester).toHaveBeenCalledTimes(2);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+  });
+
   it("wakes after a requester yields with one already-delivered completion", async () => {
     const child = makeSettledChild({
       runId: "run-b",
