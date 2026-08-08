@@ -359,6 +359,17 @@ describe("splitMediaFromOutput", () => {
       expect(onFencedMediaTokenSkipped).not.toHaveBeenCalled();
     });
 
+    it("notifies for fenced bare filenames accepted by the normal parser (#41966)", () => {
+      const onFencedMediaTokenSkipped = vi.fn();
+      splitMediaFromOutput(
+        '```\nMEDIA:image.png\nMEDIA:"render final.png"\nMEDIA:render final.png\n```',
+        {
+          onFencedMediaTokenSkipped,
+        },
+      );
+      expect(onFencedMediaTokenSkipped).toHaveBeenCalledTimes(3);
+    });
+
     it("does not notify when extractMediaDirectives is false", () => {
       const onFencedMediaTokenSkipped = vi.fn();
       splitMediaFromOutput(
