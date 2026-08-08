@@ -1013,12 +1013,12 @@ describe("doctor legacy state migrations", () => {
       env: {} as NodeJS.ProcessEnv,
       homedir: () => root,
     });
-    const result = await runLegacyStateMigrations({ detected });
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain(
-      `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
-    );
+    await expect(runLegacyStateMigrations({ detected })).rejects.toMatchObject({
+      name: "SqliteSchemaVersionError",
+      message: expect.stringContaining(
+        `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+      ),
+    });
 
     const db = new DatabaseSync(stateDatabasePath);
     try {

@@ -1271,12 +1271,23 @@ export async function autoMigrateLegacyState(params: {
     log: params.log,
   });
   const stateDir = resolveStateDir(env, homedir);
-  autoMigrateChecked.add(`${path.resolve(stateDir)}\0${migrationMode}`);
+  const resolvedStateDirKey = `${path.resolve(stateDir)}\0${migrationMode}`;
+  autoMigrateChecked.add(resolvedStateDirKey);
   const stateSchemaOptions = { env: { ...env, OPENCLAW_STATE_DIR: stateDir } };
-  const stateSchema =
-    params.doctorOnlyStateMigrations === true
-      ? repairOpenClawStateDatabaseSchema(stateSchemaOptions)
-      : repairOpenClawStateDatabaseSchemaIfNeeded(stateSchemaOptions);
+  let stateSchema: ReturnType<typeof repairOpenClawStateDatabaseSchema>;
+  try {
+    stateSchema =
+      params.doctorOnlyStateMigrations === true
+        ? repairOpenClawStateDatabaseSchema(stateSchemaOptions)
+        : repairOpenClawStateDatabaseSchemaIfNeeded(stateSchemaOptions);
+  } catch (error) {
+    // Newer-schema / terminal repair failures must remain retryable in-process.
+    // Callers that catch the first throw and retry would otherwise hit the latch
+    // and receive a misleading skipped result instead of the same refusal.
+    autoMigrateChecked.delete(checkKey);
+    autoMigrateChecked.delete(resolvedStateDirKey);
+    throw error;
+  }
   if (stateSchema.warnings.length > 0) {
     return {
       migrated: stateDirResult.migrated || stateSchema.changes.length > 0,

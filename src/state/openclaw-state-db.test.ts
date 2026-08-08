@@ -4190,6 +4190,34 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
   });
 
+  it("refuses newer schema without moving or replacing the state database (#115421)", () => {
+    // Historical builds left openclaw.sqlite.bak-schemaN-* / .moved-schemaN-* and then
+    // created an empty DB — wiping cron. Current open must refuse in place.
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const markerPath = path.join(path.dirname(databasePath), "cron-marker.txt");
+    fs.writeFileSync(markerPath, "preserve-me", "utf8");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+    db.close();
+    const before = fs.readFileSync(databasePath);
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/newer schema version/i);
+    expect(() => repairOpenClawStateDatabaseSchema(options)).toThrow(/newer schema version/i);
+
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+    expect(fs.readFileSync(markerPath, "utf8")).toBe("preserve-me");
+    const siblings = fs.readdirSync(path.dirname(databasePath));
+    expect(siblings.filter((name) => /bak-schema|moved-schema/i.test(name))).toEqual([]);
+    expect(siblings).toContain(path.basename(databasePath));
+
+    clearOpenClawStateDatabaseOpenFailure(databasePath);
+  });
+
   it("does not chmod shared parent directories for explicit database paths", () => {
     const databasePath = path.join(
       os.tmpdir(),

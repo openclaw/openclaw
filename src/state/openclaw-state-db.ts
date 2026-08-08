@@ -353,6 +353,15 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
           ],
     };
   } catch (err) {
+    // Newer-than-supported schema must fail closed for doctor too (#115421).
+    // Swallowing it as a warning historically allowed recovery paths to continue
+    // and risk replacing an intact DB with an empty one (cron wipe).
+    if (
+      err instanceof Error &&
+      (err.name === "SqliteSchemaVersionError" || /newer schema version/i.test(err.message))
+    ) {
+      throw err;
+    }
     // Reaching this catch inside doctor means repair itself refused or failed,
     // so the runtime asserts' "run openclaw doctor --fix" advice is circular here.
     const reason = String(err).replace(
