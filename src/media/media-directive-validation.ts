@@ -129,7 +129,7 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
   return !isCanonicalDottedDecimalIPv4(normalized) && isLegacyIpv4Literal(normalized);
 }
 
-export function isAllowedRemoteMediaUrl(candidate: string): boolean {
+function isAllowedRemoteMediaUrl(candidate: string): boolean {
   try {
     const parsed = new URL(candidate);
     return (

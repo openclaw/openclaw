@@ -1,14 +1,4 @@
 // Media parse helpers normalize media references from user and channel input.
-import {
-  extractEmbeddedIpv4FromIpv6,
-  isBlockedSpecialUseIpv4Address,
-  isBlockedSpecialUseIpv6Address,
-  isCanonicalDottedDecimalIPv4,
-  isIpv4Address,
-  isLegacyIpv4Literal,
-  parseCanonicalIpAddress,
-  parseLooseIpAddress,
-} from "@openclaw/net-policy/ip";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
