@@ -10,6 +10,10 @@ import {
 import { getRuntimeConfig } from "../config/io.js";
 import { callGateway } from "../gateway/call.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import {
+  shouldDetachChildForProcessTree,
+  signalChildProcessTree,
+} from "../process/child-process-tree.js";
 import { defaultRuntime } from "../runtime.js";
 
 type AttachGrant = {
@@ -132,33 +136,94 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
       defaultRuntime.log(
         `Attaching Claude Code to session ${grant.sessionKey} (grant expires ${expiresAt})…`,
       );
+      const detached = shouldDetachChildForProcessTree();
       const child = spawn(opts.bin, claudeArgs, {
         stdio: "inherit",
         env: { ...process.env, ...grant.env },
+        detached,
       });
 
-      const onSigint = () => {};
-      const onSigterm = () => child.kill("SIGTERM");
-      const finish = (code: number) => {
+      let forceKillTimer: NodeJS.Timeout | undefined;
+      let childExitCode: number | null = null;
+      let childExitSignal: NodeJS.Signals | null = null;
+      let childHasExited = false;
+      let isFinished = false;
+      const disarm = () => {
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = undefined;
+        }
+      };
+      const killTree = (signal: NodeJS.Signals) => {
+        signalChildProcessTree(child, signal);
+      };
+      const finish = () => {
+        if (isFinished) {
+          return;
+        }
+        isFinished = true;
         process.off("SIGINT", onSigint);
         process.off("SIGTERM", onSigterm);
-        defaultRuntime.exit(code);
+        const signalCode = childExitSignal
+          ? 128 + ((osConstants.signals as Record<string, number>)[childExitSignal] ?? 0)
+          : null;
+        defaultRuntime.exit(signalCode ?? childExitCode ?? 0);
       };
+      const onSigint = () => {
+        // Guard against repeated Ctrl+C: clear any previous escalation
+        // timer so stale timers do not fire on an exited or reused PID.
+        disarm();
+        // Forward SIGINT to the launched process tree so wrappers that
+        // spawn descendant workloads receive the signal and can shut down
+        // their entire tree before the grant is revoked.
+        killTree("SIGINT");
+        // Escalate to SIGKILL after a grace period so a stuck descendant
+        // cannot keep the parent alive indefinitely by ignoring SIGINT.
+        forceKillTimer = setTimeout(() => {
+          forceKillTimer = undefined;
+          killTree("SIGKILL");
+          // Forced cleanup was attempted; finish if the child already exited
+          // so a detached wrapper exiting before its descendants does not
+          // leave this CLI hanging.
+          void (async () => {
+            await revokeOnce();
+            if (childHasExited) {
+              finish();
+            }
+          })();
+        }, 5_000);
+      };
+      const onSigterm = () => killTree("SIGTERM");
 
       child.on("error", (error) => {
+        // The child failed to launch; no descendants exist. Disarm any
+        // pending escalation before cleanup so a timer cannot signal a
+        // reused PID after this CLI exits.
+        disarm();
         void (async () => {
           defaultRuntime.error(`Failed to launch '${opts.bin}': ${String(error)}`);
           await revokeOnce();
-          finish(1);
+          defaultRuntime.exit(1);
         })();
       });
       child.on("exit", (code, signal) => {
+        // A detached POSIX child owns a process group; even if the original
+        // leader exits, the group ID stays alive as long as any descendant
+        // remains, so we can safely escalate SIGKILL to the whole tree later.
+        // On Windows the child is not detached and `taskkill /T` targets the
+        // wrapper PID; once that PID exits, it is no longer a stable tree
+        // identity and may be reused, so disarm the timer immediately.
+        if (!detached) {
+          disarm();
+        }
+        childHasExited = true;
+        childExitCode = code;
+        childExitSignal = signal;
         void (async () => {
           await revokeOnce();
-          const signalCode = signal
-            ? 128 + ((osConstants.signals as Record<string, number>)[signal] ?? 0)
-            : null;
-          finish(signalCode ?? code ?? 0);
+          if (forceKillTimer === undefined) {
+            finish();
+          }
         })();
       });
       process.on("SIGINT", onSigint);

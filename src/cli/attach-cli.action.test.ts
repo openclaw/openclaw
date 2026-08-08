@@ -1,8 +1,17 @@
 import { EventEmitter } from "node:events";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
-const spawnedChild = Object.assign(new EventEmitter(), { kill: vi.fn() });
+const { signalChildProcessTreeMock } = vi.hoisted(() => ({
+  signalChildProcessTreeMock: vi.fn(),
+}));
+vi.mock("../process/child-process-tree.js", () => ({
+  signalChildProcessTree: signalChildProcessTreeMock,
+  shouldDetachChildForProcessTree: () => process.platform !== "win32",
+}));
+
+const spawnedChild = Object.assign(new EventEmitter(), { kill: vi.fn(), pid: 12345 });
 vi.mock("node:child_process", () => ({ spawn: vi.fn(() => spawnedChild) }));
 
 const gatewayCalls: Array<{
@@ -84,6 +93,7 @@ describe("openclaw attach (action)", () => {
     exitCode = undefined;
     spawnedChild.removeAllListeners();
     spawnedChild.kill.mockClear();
+    signalChildProcessTreeMock.mockClear();
   });
 
   it("--print-config: mints + writes config + prints launch, does NOT revoke or name a nonexistent command", async () => {
@@ -141,20 +151,26 @@ describe("openclaw attach (action)", () => {
     expect(exitCode).toBe(1);
   });
 
-  it("spawns Claude Code and revokes the grant when the child exits", async () => {
-    await runAttach("--session", "agent:main:spawn");
-    expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeTruthy();
-    const { spawn } = await import("node:child_process");
-    expect(vi.mocked(spawn).mock.calls[0]?.[1]).toEqual([
-      "--strict-mcp-config",
-      "--mcp-config",
-      expect.stringContaining(".mcp.json"),
-    ]);
-    spawnedChild.emit("exit", 0, null);
-    await tick();
-    await tick();
-    expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
-    expect(exitCode).toBe(0);
+  it("spawns Claude Code detached so the process tree can be signaled and revokes the grant when the child exits", async () => {
+    await withMockedPlatform("linux", async () => {
+      await runAttach("--session", "agent:main:spawn");
+      expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeTruthy();
+      const { spawn } = await import("node:child_process");
+      expect(vi.mocked(spawn).mock.calls[0]?.[1]).toEqual([
+        "--strict-mcp-config",
+        "--mcp-config",
+        expect.stringContaining(".mcp.json"),
+      ]);
+      expect(vi.mocked(spawn).mock.calls[0]?.[2]).toMatchObject({
+        stdio: "inherit",
+        detached: true,
+      });
+      spawnedChild.emit("exit", 0, null);
+      await tick();
+      await tick();
+      expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
+      expect(exitCode).toBe(0);
+    });
   });
 
   it("revokes once and surfaces a launch failure when the child errors", async () => {
@@ -212,6 +228,135 @@ describe("openclaw attach (action)", () => {
     await tick();
     expect(process.listenerCount("SIGINT")).toBe(baseInt);
     expect(process.listenerCount("SIGTERM")).toBe(baseTerm);
+  });
+
+  it("forwards SIGINT to the launched process tree", async () => {
+    await runAttach("--session", "agent:main:spawn");
+    const sigintListeners = process.listeners("SIGINT");
+    const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+    handler();
+    expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGINT");
+    // Cleanup: a healthy child would exit on SIGINT
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
+  });
+
+  it("forwards SIGTERM to the launched process tree", async () => {
+    await runAttach("--session", "agent:main:spawn");
+    const sigtermListeners = process.listeners("SIGTERM");
+    const handler = sigtermListeners[sigtermListeners.length - 1] as () => void;
+    handler();
+    expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGTERM");
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
+  });
+
+  it("force-kills the process tree after a grace period when it ignores SIGINT", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      handler();
+      expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGINT");
+      // Process tree survives SIGINT — timer should escalate to SIGKILL
+      vi.advanceTimersByTime(5_000);
+      expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGKILL");
+      // The SIGKILL triggers child exit → revoke + finish
+      spawnedChild.emit("exit", null, "SIGKILL");
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("guards against repeated Ctrl+C by clearing the previous escalation timer", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      // First Ctrl+C
+      handler();
+      expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGINT");
+      // Second Ctrl+C before escalation fires: must clear the first timer
+      handler();
+      // Advance well past the first timer's deadline; only the second
+      // timer should still be alive.
+      vi.advanceTimersByTime(5_000);
+      expect(signalChildProcessTreeMock).toHaveBeenCalledTimes(3); // SIGINT ×2 + SIGKILL
+      spawnedChild.emit("exit", null, "SIGKILL");
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps escalation armed after the child exits so descendants can still be force-killed", async () => {
+    // A detached wrapper may exit while an inherited-group descendant ignores
+    // SIGINT. The escalation timer must stay armed so the whole tree still
+    // receives SIGKILL after the grace period.
+    vi.useFakeTimers();
+    try {
+      await withMockedPlatform("linux", async () => {
+        await runAttach("--session", "agent:main:spawn");
+        const sigintListeners = process.listeners("SIGINT");
+        const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+        handler();
+        // Process tree exits *during* the grace period (before SIGKILL fires)
+        spawnedChild.emit("exit", 0, null);
+        await vi.runAllTimersAsync();
+        // Timer should still fire and escalate to SIGKILL.
+        expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGKILL");
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disarms escalation when the child exits on platforms without a stable tree owner (Windows)", async () => {
+    // On Windows the child is not detached; once the wrapper exits, its PID
+    // is no longer a stable tree identity and may be reused. The force-kill
+    // timer must be cancelled instead of targeting a stale PID.
+    vi.useFakeTimers();
+    try {
+      await withMockedPlatform("win32", async () => {
+        await runAttach("--session", "agent:main:spawn");
+        const sigintListeners = process.listeners("SIGINT");
+        const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+        handler();
+        expect(signalChildProcessTreeMock).toHaveBeenCalledWith(spawnedChild, "SIGINT");
+        // Wrapper exits before the SIGKILL escalation fires.
+        spawnedChild.emit("exit", 0, null);
+        await vi.runAllTimersAsync();
+        expect(signalChildProcessTreeMock).not.toHaveBeenCalledWith(spawnedChild, "SIGKILL");
+        expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe(
+          "tok-123",
+        );
+        expect(exitCode).toBe(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("revokes the grant after the force-kill timer triggers", async () => {
+    vi.useFakeTimers();
+    try {
+      await runAttach("--session", "agent:main:spawn");
+      const sigintListeners = process.listeners("SIGINT");
+      const handler = sigintListeners[sigintListeners.length - 1] as () => void;
+      handler();
+      vi.advanceTimersByTime(5_000);
+      spawnedChild.emit("exit", null, "SIGKILL");
+      await vi.runAllTimersAsync();
+      expect(gatewayCalls.find((c) => c.method === "attach.revoke")?.params.token).toBe("tok-123");
+      expect(exitCode).toBe(128 + 9); // SIGKILL
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("errors on a grant with a non-numeric expiresAtMs instead of crashing on toISOString", async () => {

@@ -392,6 +392,14 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Windows does not route SIGINT through taskkill", async () => {
+    await withMockedPlatform("win32", async () => {
+      signalProcessTree(8888, "SIGINT");
+
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("on Windows maps requested tree signals to taskkill force mode", async () => {
     await withMockedPlatform("win32", async () => {
       signalProcessTree(8888, "SIGTERM");
