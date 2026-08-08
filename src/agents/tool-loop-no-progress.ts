@@ -22,6 +22,8 @@ function countNoProgressStreak(
 ): { count: number; latestResultHash?: string } {
   let streak = 0;
   let latestResultHash: string | undefined;
+  let latestArgsHash: string | undefined;
+  let latestFailureIdentityHash: string | undefined;
   // Vetoes are provisional until an older concrete outcome anchors them; a newer
   // changed outcome must reset vetoes from the previous no-progress streak.
   let pendingLoopVetoes = 0;
@@ -52,12 +54,27 @@ function countNoProgressStreak(
     }
     if (!latestResultHash) {
       latestResultHash = record.resultHash;
+      latestArgsHash = record.argsHash;
+      latestFailureIdentityHash = record.failureIdentityHash;
       streak = pendingLoopVetoes + 1;
       pendingLoopVetoes = 0;
       continue;
     }
     if (record.resultHash !== latestResultHash) {
-      break;
+      // A distinct terminal failure still resets the tail. Only one case is
+      // exempt: the same command failing the same structured way (status, exit
+      // code, timeout) while its diagnostics text drifts across attempts, which
+      // is not progress. Both comparisons anchor on the newest recorded call
+      // rather than the prospective one, so an intervening command or a new
+      // failure cause still resets the tail.
+      const repeatsSameFailure =
+        terminalExecFailuresOnly &&
+        record.argsHash === latestArgsHash &&
+        record.failureIdentityHash !== undefined &&
+        record.failureIdentityHash === latestFailureIdentityHash;
+      if (!repeatsSameFailure) {
+        break;
+      }
     }
     streak += pendingLoopVetoes + 1;
     pendingLoopVetoes = 0;

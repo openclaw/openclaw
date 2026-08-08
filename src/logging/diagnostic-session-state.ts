@@ -26,6 +26,12 @@ export type ToolCallRecord = {
   runId?: string;
   outcomeKind?: "tool-loop-veto" | "terminal-exec-failure";
   resultHash?: string;
+  /**
+   * Structured identity of a terminal exec failure (status, exit code, timeout)
+   * with the free-text diagnostics left out, so a repeat of the same failure is
+   * recognizable even when its message drifts.
+   */
+  failureIdentityHash?: string;
   noProgress?: true;
   unknownToolName?: string;
   timestamp: number;

@@ -1022,6 +1022,217 @@ describe("tool-loop-detection", () => {
       });
     });
 
+    it("blocks repeated terminal exec failures whose output text keeps changing", () => {
+      const state = createState();
+      const params = { command: "ssh -q host 'curl -s http://127.0.0.1:9233/json/version'" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        // Real terminal failures rarely repeat byte-for-byte: timestamps and
+        // connection ids drift between attempts even though nothing progresses.
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 255,
+            output: `ssh: connect to host port 22: Connection timed out (attempt ${index} at 12:0${index % 10}:33)`,
+          }),
+          index,
+        );
+      }
+
+      expect(
+        state.toolCallHistory?.every((record) => record.outcomeKind === "terminal-exec-failure"),
+      ).toBe(true);
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it("resets the terminal-failure tail when a different command fails in between", () => {
+      const state = createState();
+      const probe = { command: "ssh -q host 'curl -s http://127.0.0.1:9233/json/version'" };
+      const other = { command: "docker compose up -d" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          probe,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 255,
+            output: `ssh: connect to host port 22: Connection timed out (attempt ${index})`,
+          }),
+          index,
+        );
+      }
+      // A distinct failure under different arguments is the documented reset.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        other,
+        createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "docker: network sandbox not ready",
+        }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", probe, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("resets the terminal-failure tail when the same command fails a different way", () => {
+      const state = createState();
+      const probe = { command: "ssh -q host 'curl -s http://127.0.0.1:9233/json/version'" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          probe,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 255,
+            output: `ssh: connect to host port 22: Connection timed out (attempt ${index})`,
+          }),
+          index,
+        );
+      }
+      // Same command, but a genuinely different failure cause: the host answered
+      // and the command itself failed. That is new information, not drift.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        probe,
+        createExecLoopResult({
+          status: "failed",
+          exitCode: 7,
+          output: "curl: (7) Failed to connect to 127.0.0.1 port 9233",
+        }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", probe, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("resets the terminal-failure tail when the same exit code reports a new cause", () => {
+      const state = createState();
+      const job = { command: "python job.py" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          job,
+          createExecLoopResult({
+            status: "completed",
+            exitCode: 1,
+            output: `Traceback: missing package (attempt ${index})\n\n(Command exited with code 1)`,
+          }),
+          index,
+        );
+      }
+      // Same command and same exit code, but a materially different diagnostic:
+      // that is new information, not drifting text.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        job,
+        createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "Traceback: syntax error in job.py\n\n(Command exited with code 1)",
+        }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", job, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("resets the terminal-failure tail when only a diagnostic number changes meaning", () => {
+      const state = createState();
+      const probe = { command: "curl -sf http://127.0.0.1:9233/json/version" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          probe,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 22,
+            output: `curl: server replied with errno 111 at 12:0${index % 10}:33`,
+          }),
+          index,
+        );
+      }
+      // Same command, same exit code, and only a number changed - but that
+      // number names the failure cause, so it is new information.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        probe,
+        createExecLoopResult({
+          status: "failed",
+          exitCode: 22,
+          output: "curl: server replied with errno 113 at 12:09:33",
+        }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", probe, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("keeps a succeeding exec command out of the terminal-failure streak", () => {
+      const state = createState();
+      const params = { command: "docker exec alist /opt/alist/alist admin set admin123" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({
+            status: "failed",
+            exitCode: 1,
+            output: `Error: container not ready (attempt ${index})`,
+          }),
+          index,
+        );
+      }
+      // A real success is progress and must anchor a fresh streak.
+      recordSuccessfulCall(
+        state,
+        "exec",
+        params,
+        createExecLoopResult({ status: "completed", exitCode: 0, output: "password updated" }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
     it("anchors changing-argument exec vetoes until the global circuit breaker", () => {
       const state = createState();
       const result = createExecLoopResult({

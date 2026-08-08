@@ -19,6 +19,7 @@ import {
   getArgumentChurnNoProgressStreak,
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
+import { execFailureIdentityInput } from "./tool-loop-exec-identity.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
@@ -287,7 +288,10 @@ function hashToolOutcome(
   params: unknown,
   result: unknown,
   error: unknown,
-): Pick<ToolCallRecord, "outcomeKind" | "resultHash" | "noProgress" | "unknownToolName"> {
+): Pick<
+  ToolCallRecord,
+  "outcomeKind" | "resultHash" | "noProgress" | "unknownToolName" | "failureIdentityHash"
+> {
   if (error !== undefined) {
     const unknownToolName = extractUnknownToolName(error);
     return {
@@ -322,7 +326,13 @@ function hashToolOutcome(
         output !== "" &&
         output !== `(Command exited with code ${exitCode})`;
       return terminalFailure
-        ? { resultHash: execHash, outcomeKind: "terminal-exec-failure" }
+        ? {
+            resultHash: execHash,
+            outcomeKind: "terminal-exec-failure",
+            // Same structured outcome and message shape is the same failure
+            // even when its numbers drift; a new cause changes the shape.
+            failureIdentityHash: digestStable(execFailureIdentityInput(details, exitCode, output)),
+          }
         : { resultHash: execHash };
     }
   }
@@ -752,6 +762,7 @@ export function recordToolCallOutcome(
     }
     call.outcomeKind = outcome.outcomeKind;
     call.resultHash = outcome.resultHash;
+    call.failureIdentityHash = outcome.failureIdentityHash;
     if (outcome.noProgress) {
       call.noProgress = true;
     } else {
@@ -771,6 +782,7 @@ export function recordToolCallOutcome(
       ...(runId && { runId }),
       outcomeKind: outcome.outcomeKind,
       resultHash: outcome.resultHash,
+      failureIdentityHash: outcome.failureIdentityHash,
       ...(outcome.noProgress ? { noProgress: true as const } : {}),
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
