@@ -66,6 +66,8 @@ const MAX_ADAPTIVE_READ_PAGES = 4;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  /** Root the read resolves relative paths against; enables the leading-`@` disambiguation. */
+  cwd?: string;
 };
 
 type SkillReadContent = {
@@ -825,7 +827,7 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof rawFilePath !== "string" || !rawFilePath.trim()) {
           continue;
         }
-        const filePath = normalizeFileToolPathParam(rawFilePath);
+        const filePath = normalizeFileToolPathParam(rawFilePath, root);
         if (!filePath.trim()) {
           throw malformedXmlArgValuePathError(key);
         }
@@ -899,6 +901,7 @@ export function createSandboxedReadTool(
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
+    cwd: params.root,
   });
 }
 
@@ -909,7 +912,7 @@ export function createSandboxedWriteTool(
   const base = (params.createTool ?? createWriteTool)(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, params.root);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
@@ -919,7 +922,7 @@ export function createSandboxedEditTool(
   const base = (params.createTool ?? createEditTool)(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, params.root);
 }
 
 /** Create a host workspace write tool using guarded filesystem operations. */
@@ -934,7 +937,7 @@ export function createHostWorkspaceWriteTool(
   const base = (options?.createTool ?? createWriteTool)(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write, root);
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
@@ -949,7 +952,7 @@ export function createHostWorkspaceEditTool(
   const base = (options?.createTool ?? createEditTool)(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit, root);
 }
 
 /** Wrap the base read tool with OpenClaw paging, MIME, and image handling. */
@@ -962,7 +965,7 @@ export function createOpenClawReadTool(
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       const normalizedRecord = record
-        ? normalizeFileToolPathParamsFromKeys(record, ["path"])
+        ? normalizeFileToolPathParamsFromKeys(record, ["path"], options?.cwd)
         : undefined;
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const result = await executeReadWithAdaptivePaging({

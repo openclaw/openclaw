@@ -133,6 +133,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             {
               modelContextWindowTokens: options.modelContextWindowTokens,
               imageSanitization: options.imageSanitization,
+              cwd: options.codingRoot,
             },
           );
       const guarded = options.workspaceOnly
