@@ -56,7 +56,7 @@ import {
   type OpenClawConfig,
 } from "./channel-api.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
-import { createSlackWebClient } from "./client.js";
+import { getSlackWriteClient } from "./client.js";
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
@@ -227,8 +227,8 @@ async function setSlackHeartbeatThreadStatus(params: {
   }
   try {
     const client = target.teamId
-      ? createSlackWebClient(botToken, { teamId: target.teamId })
-      : createSlackWebClient(botToken);
+      ? getSlackWriteClient(botToken, { teamId: target.teamId })
+      : getSlackWriteClient(botToken);
     const apiTargetId = canonicalizeSlackApiTargetId(target.kind, target.id, params.to);
     const channelId =
       target.kind === "channel"

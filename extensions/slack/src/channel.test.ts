@@ -15,13 +15,17 @@ const { resolveSlackDmChannelIdMock, sendMessageSlackMock } = vi.hoisted(() => (
   resolveSlackDmChannelIdMock: vi.fn(),
   sendMessageSlackMock: vi.fn(),
 }));
-const { assistantThreadsSetStatusMock, conversationsInfoMock, conversationsOpenMock } = vi.hoisted(
-  () => ({
-    assistantThreadsSetStatusMock: vi.fn(),
-    conversationsInfoMock: vi.fn(),
-    conversationsOpenMock: vi.fn(),
-  }),
-);
+const {
+  assistantThreadsSetStatusMock,
+  conversationsInfoMock,
+  conversationsOpenMock,
+  getSlackWriteClientMock,
+} = vi.hoisted(() => ({
+  assistantThreadsSetStatusMock: vi.fn(),
+  conversationsInfoMock: vi.fn(),
+  conversationsOpenMock: vi.fn(),
+  getSlackWriteClientMock: vi.fn(),
+}));
 
 vi.mock("./action-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
@@ -52,7 +56,7 @@ vi.mock("./client.js", async () => {
   return {
     ...actual,
     createSlackReadClient: vi.fn(createClient),
-    createSlackWebClient: vi.fn(createClient),
+    getSlackWriteClient: getSlackWriteClientMock.mockImplementation(createClient),
   };
 });
 
@@ -66,6 +70,7 @@ beforeEach(async () => {
   assistantThreadsSetStatusMock.mockResolvedValue({ ok: true });
   conversationsInfoMock.mockReset();
   conversationsOpenMock.mockReset();
+  getSlackWriteClientMock.mockClear();
   setSlackRuntime({
     channel: {
       slack: {
@@ -1227,6 +1232,21 @@ describe("slackPlugin outbound", () => {
       thread_ts: "1712345678.123456",
       status: "",
     });
+  });
+
+  it("uses the workspace-partitioned write-client cache for Grid assistant status", async () => {
+    const target = {
+      cfg: { channels: { slack: { botToken: "xoxb-test", enterpriseOrgInstall: true } } },
+      to: "team:T123:channel:C456",
+      accountId: "default",
+      threadId: "1712345678.123456",
+    };
+
+    await requireSlackHeartbeatSendTyping()(target);
+    await requireSlackHeartbeatClearTyping()(target);
+
+    expect(getSlackWriteClientMock).toHaveBeenNthCalledWith(1, "xoxb-test", { teamId: "T123" });
+    expect(getSlackWriteClientMock).toHaveBeenNthCalledWith(2, "xoxb-test", { teamId: "T123" });
   });
 
   it("resolves user targets to concrete DM channels for assistant status", async () => {
