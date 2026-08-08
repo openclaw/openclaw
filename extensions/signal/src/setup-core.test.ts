@@ -1,7 +1,12 @@
 // Signal tests cover setup adapter integration with account-owned transport policy.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSignalCliPathTextInput, signalSetupAdapter } from "./setup-core.js";
+import {
+  createSignalCliPathTextInput,
+  signalCompletionNote,
+  signalNumberTextInputs,
+  signalSetupAdapter,
+} from "./setup-core.js";
 import { signalSetupWizard } from "./setup-surface.js";
 
 const detectSignalTransportMock = vi.hoisted(() => vi.fn());
@@ -595,14 +600,6 @@ describe("signalSetupAdapter", () => {
     expect(
       await input.currentValue?.({ cfg, accountId: "default", credentialValues: {} }),
     ).toBeUndefined();
-    const wizardInput = signalSetupWizard.textInputs?.find((entry) => entry.inputKey === "cliPath");
-    expect(
-      await wizardInput?.shouldPrompt?.({
-        cfg,
-        accountId: "default",
-        credentialValues: {},
-      }),
-    ).toBe(false);
   });
 
   it("reports an external transport as configured without checking signal-cli", async () => {
@@ -627,5 +624,62 @@ describe("signalSetupAdapter", () => {
       "configured",
     );
     await expect(signalSetupWizard.status.resolveQuickstartScore?.(params)).resolves.toBe(1);
+  });
+
+  it("shows user-facing completion guidance instead of a raw gateway RPC", () => {
+    const lines = signalCompletionNote.lines.join("\n");
+
+    expect(lines).toContain("Signal setup is validated.");
+    expect(lines).toContain("openclaw channels status --probe");
+  });
+
+  it("collects account numbers only where the selected transport requires them", () => {
+    const requiredAccountInput = signalNumberTextInputs.find((input) => input.required !== false);
+    const optionalAccountInput = signalNumberTextInputs.find(
+      (input) => input.message === "Signal phone number (optional)",
+    );
+    expect(
+      requiredAccountInput?.shouldPrompt?.({
+        cfg: {},
+        accountId: "default",
+        credentialValues: { signalTransportKind: "managed-native" },
+      }),
+    ).toBe(false);
+    expect(
+      requiredAccountInput?.shouldPrompt?.({
+        cfg: {},
+        accountId: "default",
+        credentialValues: { signalTransportKind: "container" },
+      }),
+    ).toBe(true);
+    expect(optionalAccountInput?.required).toBe(false);
+    expect(optionalAccountInput?.applyEmptyValue).toBe(true);
+    expect(
+      optionalAccountInput?.shouldPrompt?.({
+        cfg: {},
+        accountId: "default",
+        credentialValues: { signalTransportKind: "external-native" },
+      }),
+    ).toBe(true);
+    const cleared = optionalAccountInput?.applySet?.({
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      value: "",
+    });
+    expect(cleared).toMatchObject({
+      channels: {
+        signal: {
+          account: undefined,
+          accountUuid: undefined,
+        },
+      },
+    });
   });
 });
