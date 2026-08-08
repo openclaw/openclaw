@@ -647,6 +647,27 @@ async function readOptionalUtf8File(params: {
   }
 }
 
+/**
+ * Best-effort pre-append existence probe so the append-only memory-flush write
+ * can report `created` truthfully. Sandbox-bridged appends resolve inside the
+ * bridge, so existence is unknown there; callers omit `created` instead of
+ * guessing.
+ */
+async function memoryFlushAppendTargetExists(params: {
+  absolutePath: string;
+  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
+}): Promise<boolean | undefined> {
+  if (params.sandbox) {
+    return undefined;
+  }
+  try {
+    await fs.stat(params.absolutePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function appendMemoryFlushContent(params: {
   absolutePath: string;
   root: string;
@@ -730,6 +751,10 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
+      const existedBeforeAppend = await memoryFlushAppendTargetExists({
+        absolutePath: allowedAbsolutePath,
+        sandbox: options.sandbox,
+      });
       await appendMemoryFlushContent({
         absolutePath: allowedAbsolutePath,
         root: options.root,
@@ -738,12 +763,16 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      // The wrapper inherits the base write tool's declared outputSchema via
+      // `{ ...tool }`, so the details it returns must satisfy that same
+      // contract. Append-only metadata here made the code-mode bridge reject
+      // the result after a successful append (openclaw/openclaw#120385).
       return {
         content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
-        details: {
-          path: options.relativePath,
-          appendOnly: true,
-        },
+        details:
+          existedBeforeAppend === undefined
+            ? { changed: true }
+            : { changed: true, created: !existedBeforeAppend },
       };
     },
   };
