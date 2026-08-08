@@ -312,7 +312,11 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearTrigger) {
             patch.trigger = null;
           } else if (triggerScriptPath) {
+            // Replacing only the script body keeps existing trigger metadata (e.g. once)
+            // intact, matching sibling merge behavior; the script body is still applied.
+            const existing = await readExistingCronJob();
             patch.trigger = {
+              ...(existing.trigger ?? {}),
               script: await readCronTriggerScript(triggerScriptPath),
               ...(opts.triggerOnce ? { once: true } : {}),
             };
