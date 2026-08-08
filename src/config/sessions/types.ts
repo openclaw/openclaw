@@ -293,6 +293,7 @@ export type SessionGoal = {
   completedAt?: number;
   usageLimitedAt?: number;
   budgetLimitedAt?: number;
+  consecutiveInfrastructureFailures?: number;
 };
 
 export type RestartRecoveryRun = {
