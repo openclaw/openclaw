@@ -44,7 +44,7 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
-const enterpriseGridActionTools = new Set(["react", "uploadFile"]);
+const enterpriseGridActionTools = new Set(["memberInfo", "react", "uploadFile"]);
 const SLACK_REACTION_USER_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
@@ -486,7 +486,7 @@ type SlackActionChannelTarget = {
 
 function resolveTrustedCurrentSlackTeamId(params: {
   account: ResolvedSlackAccount;
-  target: NonNullable<ReturnType<typeof parseSlackTarget>>;
+  target?: NonNullable<ReturnType<typeof parseSlackTarget>>;
   context?: SlackActionContext;
 }): string | undefined {
   const requesterAccountId = params.context?.requesterAccountId?.trim();
@@ -507,8 +507,9 @@ function resolveTrustedCurrentSlackTeamId(params: {
     const current = parseSlackTarget(raw);
     if (
       current?.teamId &&
-      current.kind === params.target.kind &&
-      current.id.toLowerCase() === params.target.id.toLowerCase()
+      (!params.target ||
+        (current.kind === params.target.kind &&
+          current.id.toLowerCase() === params.target.id.toLowerCase()))
     ) {
       matchingTeams.set(current.teamId.toLowerCase(), current.teamId);
     }
@@ -1036,8 +1037,13 @@ export async function handleSlackAction(
     }
     const userId = readStringParam(params, "userId", { required: true });
     assertSlackMemberInfoAllowed({ account, context, userId });
-    const info = readOpts
-      ? await slackActionRuntime.getSlackMemberInfo(userId, readOpts)
+    const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
+    if (account.config.enterpriseOrgInstall === true) {
+      assertSlackDirectSendAllowed(account, teamId);
+    }
+    const scopedReadOpts = teamId ? { ...readOpts, teamId } : readOpts;
+    const info = scopedReadOpts
+      ? await slackActionRuntime.getSlackMemberInfo(userId, scopedReadOpts)
       : await slackActionRuntime.getSlackMemberInfo(userId);
     return jsonResult({ ok: true, info });
   }

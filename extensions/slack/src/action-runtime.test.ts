@@ -74,6 +74,79 @@ describe("handleSlackAction", () => {
     expect(readSlackMessages).not.toHaveBeenCalled();
   });
 
+  it("reads the current requester from the trusted Enterprise Grid workspace", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    getSlackMemberInfo.mockResolvedValueOnce({
+      ok: true,
+      user: { id: "U123", is_bot: false },
+    });
+
+    const result = await handleSlackAction({ action: "memberInfo", userId: "U123" }, cfg, {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+      requesterSenderId: "U123",
+    });
+
+    expect(getSlackMemberInfo).toHaveBeenCalledWith("U123", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(requireDetails(result)).toEqual({
+      ok: true,
+      info: { ok: true, user: { id: "U123", is_bot: false } },
+    });
+  });
+
+  it.each([
+    {
+      name: "provider does not match",
+      context: {
+        currentChannelProvider: "discord",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      },
+    },
+    {
+      name: "account does not match",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "other",
+        requesterSenderId: "U123",
+      },
+    },
+    {
+      name: "workspace is absent",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      },
+    },
+    {
+      name: "current targets disagree on workspace",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        currentMessagingTarget: "team:T456:channel:C123",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      },
+    },
+  ])("rejects Enterprise Grid member info when the trusted $name", async ({ context }) => {
+    await expect(
+      handleSlackAction(
+        { action: "memberInfo", userId: "U123" },
+        slackConfig({ enterpriseOrgInstall: true }),
+        context,
+      ),
+    ).rejects.toThrow();
+    expect(getSlackMemberInfo).not.toHaveBeenCalled();
+  });
+
   function createReplyToFirstContext(hasRepliedRef: { value: boolean }) {
     return {
       currentChannelId: "C123",
