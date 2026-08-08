@@ -851,7 +851,12 @@ function buildParams(
       : (reasoningEffortMap[options.reasoningEffort] ??
         thinkingLevelMap?.[options.reasoningEffort] ??
         options.reasoningEffort);
-  const reasoningEnabled = reasoningEffort !== undefined && reasoningEffort !== "none";
+  // Reuse the shared predicate rather than re-deriving it: it already treats
+  // OpenClaw's "off" token and the provider-side "none" as disabled. A
+  // self-hosted catalog carries no reasoningEffortMap or thinkingLevelMap, so
+  // "off" arrives here unmapped and must not read as an enabled effort value.
+  const reasoningEnabled =
+    reasoningEffort !== undefined && isOpenAICompletionsThinkingEnabled(reasoningEffort);
   const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {

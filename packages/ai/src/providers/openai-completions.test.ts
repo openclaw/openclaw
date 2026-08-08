@@ -5,6 +5,7 @@ import { configureAiTransportHost } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import type { OpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
@@ -236,6 +237,37 @@ describe("OpenAI-compatible completions params", () => {
 
       expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject(expected);
       expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
+  it.each([
+    { thinkingFormat: "zai", expected: { thinking: { type: "disabled" } } },
+    { thinkingFormat: "qwen", expected: { enable_thinking: false } },
+    { thinkingFormat: "deepseek", expected: { thinking: { type: "disabled" } } },
+    { thinkingFormat: "together", expected: { reasoning: { enabled: false } } },
+  ] as const)(
+    "treats reasoningEffort off as disabled for $thinkingFormat payloads",
+    async ({ thinkingFormat, expected }) => {
+      // "off" is OpenClaw's own disable token; a self-hosted catalog carries no
+      // reasoningEffortMap or thinkingLevelMap, so it reaches the provider
+      // unmapped and must not be mistaken for an enabled effort value.
+      mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+      const compatibleModel = {
+        ...reasoningModel,
+        provider: "custom-openai-compatible",
+        baseUrl: "https://third-party.test/v1",
+        compat: { thinkingFormat, supportsReasoningEffort: true },
+      } satisfies Model<"openai-completions">;
+
+      await streamOpenAICompletions(compatibleModel, context, {
+        apiKey: "sk-test",
+        // "off" is OpenClaw's disable token. It is outside OpenAIReasoningEffort,
+        // but config-sourced levels reach the provider unmapped, which is exactly
+        // the case this pins.
+        reasoningEffort: "off" as unknown as OpenAIReasoningEffort,
+      }).result();
+
+      expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject(expected);
     },
   );
 
