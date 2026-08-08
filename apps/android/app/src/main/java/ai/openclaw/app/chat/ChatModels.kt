@@ -28,6 +28,8 @@ data class ChatMessage(
   val idempotencyKey: String? = null,
   /** Canonical transcript-tree identity supplied by chat.history. */
   val entryId: String? = null,
+  /** Channel-origin display name for user-role messages; null for locally-typed operator turns. */
+  val senderLabel: String? = null,
 )
 
 /** One selectable transcript branch returned by sessions.branches.list. */

@@ -143,6 +143,7 @@ class ChatMediaPlayerTest {
         messageId = "legacy-media",
         entryId = null,
         role = "assistant",
+        senderLabel = null,
         live = false,
         content = listOf(audio, video),
         timestampMs = null,

@@ -97,7 +97,7 @@ class ChatControllerMessageIdentityTest {
               """
               {
                 "messages": [
-                  { "role": "user", "content": "hello" },
+                  { "role": "user", "content": "hello", "senderLabel": "Alex (Slack)" },
                   { "role": "toolResult", "content": "private tool output" },
                   { "role": "internal", "text": "private reasoning" },
                   { "role": "custom", "content": "visible plugin notice" },
@@ -118,6 +118,12 @@ class ChatControllerMessageIdentityTest {
       assertEquals(
         listOf("hello", "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
+      )
+      // Channel-origin user turns carry the gateway's senderLabel so the UI can attribute the
+      // message to the actual channel member instead of always showing the local operator.
+      assertEquals(
+        listOf("Alex (Slack)", null, null),
+        controller.messages.value.map { it.senderLabel },
       )
     }
 
