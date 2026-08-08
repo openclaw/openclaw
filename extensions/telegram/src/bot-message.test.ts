@@ -855,7 +855,7 @@ describe("telegram bot message processor", () => {
     );
   });
 
-  it("swallows fallback delivery failures after dispatch throws", async () => {
+  it("logs the send failure when error fallback delivery also fails", async () => {
     const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
     const { processMessage, runtimeError, dispatchError } = createDispatchFailureHarness(
       {
@@ -875,6 +875,9 @@ describe("telegram bot message processor", () => {
     );
     expect(runtimeError).toHaveBeenCalledWith(
       "telegram message processing failed: Error: dispatch exploded",
+    );
+    expect(runtimeError).toHaveBeenLastCalledWith(
+      "telegram: error fallback send failed: Error: blocked by user",
     );
   });
 });
