@@ -3,13 +3,18 @@ import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { realtimeVoiceSessionTesting } from "./realtime-voice-session.test-support.js";
 
+type TestAudioPeerCallbacks = Parameters<
+  NonNullable<Parameters<typeof realtimeVoiceSessionTesting.createBridge>[4]>
+>[0];
+
+const CODEX_WEBSOCKET_RESET_ERROR =
+  "stream disconnected before completion: failed to read websocket message: WebSocket protocol error: Connection reset without closing handshake";
+
 describe("Codex app-server realtime voice bridge", () => {
   it("uses Realtime V3 on the bound thread and projects native media events", async () => {
-    const requestRpc = vi.fn(async () => ({}));
+    const requestRpc = vi.fn(async (_method: string) => ({}));
     const client = { request: requestRpc } as unknown as CodexAppServerClient;
-    let peerCallbacks:
-      | Parameters<NonNullable<Parameters<typeof realtimeVoiceSessionTesting.createBridge>[4]>>[0]
-      | undefined;
+    let peerCallbacks: TestAudioPeerCallbacks | undefined;
     const peer = {
       createOffer: vi.fn(async () => "v=offer\r\n"),
       applyAnswer: vi.fn(async () => undefined),
@@ -103,6 +108,244 @@ describe("Codex app-server realtime voice bridge", () => {
     });
     expect(await bridge.completion.promise).toBe("completed");
     expect(onClose).toHaveBeenCalledWith("completed");
+  });
+
+  it("renegotiates V3 media after consuming a connected websocket reset", async () => {
+    const requestRpc = vi.fn(async (_method: string) => ({}));
+    const client = { request: requestRpc } as unknown as CodexAppServerClient;
+    const peerCallbacks: TestAudioPeerCallbacks[] = [];
+    const peers = Array.from({ length: 2 }, (_, index) => ({
+      createOffer: vi.fn(async () => `v=offer-${index + 1}\r\n`),
+      applyAnswer: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+    }));
+    const createAudioPeer = vi.fn(async (callbacks: TestAudioPeerCallbacks) => {
+      peerCallbacks.push(callbacks);
+      return peers[peerCallbacks.length - 1]!;
+    });
+    const onAudio = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const onReady = vi.fn();
+    const onClose = vi.fn();
+    const bridge = realtimeVoiceSessionTesting.createBridge(
+      client,
+      "thread-1",
+      {
+        providerConfig: {},
+        onAudio,
+        onClearAudio: vi.fn(),
+        onError,
+        onEvent,
+        onReady,
+        onClose,
+      },
+      new AbortController().signal,
+      createAudioPeer,
+    );
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(requestRpc).toHaveBeenCalledOnce());
+    bridge.handleNotification({
+      method: "thread/realtime/sdp",
+      params: { threadId: "thread-1", sdp: "v=answer-1\r\n" },
+    });
+    await connecting;
+
+    const transportError = new Error(CODEX_WEBSOCKET_RESET_ERROR);
+    bridge.handleNotification({
+      method: "thread/realtime/error",
+      params: { threadId: "thread-1", message: transportError.message },
+    });
+    expect(requestRpc).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+
+    bridge.handleNotification({
+      method: "thread/realtime/closed",
+      params: { threadId: "thread-1", reason: "error" },
+    });
+    peerCallbacks[0]?.onAudio(Buffer.from([7, 8]));
+    peerCallbacks[0]?.onError(new Error("late retired peer error"));
+
+    await vi.waitFor(() => expect(requestRpc).toHaveBeenCalledTimes(2));
+    expect(requestRpc).toHaveBeenNthCalledWith(
+      2,
+      "thread/realtime/start",
+      expect.objectContaining({ transport: { type: "webrtc", sdp: "v=offer-2\r\n" } }),
+      { signal: expect.any(AbortSignal) },
+    );
+    bridge.handleNotification({
+      method: "thread/realtime/sdp",
+      params: { threadId: "thread-1", sdp: "v=answer-2\r\n" },
+    });
+    await vi.waitFor(() => expect(bridge.isConnected()).toBe(true));
+
+    expect(peers[0]?.close).toHaveBeenCalledOnce();
+    expect(peers[1]?.applyAnswer).toHaveBeenCalledWith("v=answer-2\r\n");
+    expect(onAudio).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "session.continuity.reset",
+      detail: "codex-transport-recovery",
+    });
+    expect(onReady).toHaveBeenCalledTimes(2);
+    expect(onClose).not.toHaveBeenCalled();
+
+    const liveAudio = Buffer.from([9, 10]);
+    bridge.sendAudio(liveAudio);
+    expect(peers[0]?.sendAudio).not.toHaveBeenCalledWith(liveAudio);
+    expect(peers[1]?.sendAudio).toHaveBeenCalledWith(liveAudio);
+
+    bridge.close();
+    await expect(bridge.completion.promise).resolves.toBe("completed");
+  });
+
+  it("keeps arbitrary V3 provider errors terminal", async () => {
+    const requestRpc = vi.fn(async (_method: string) => ({}));
+    const client = { request: requestRpc } as unknown as CodexAppServerClient;
+    const peer = {
+      createOffer: vi.fn(async () => "v=offer\r\n"),
+      applyAnswer: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+    };
+    const onClose = vi.fn();
+    const bridge = realtimeVoiceSessionTesting.createBridge(
+      client,
+      "thread-1",
+      {
+        providerConfig: {},
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onClose,
+      },
+      new AbortController().signal,
+      vi.fn(async () => peer),
+    );
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(requestRpc).toHaveBeenCalledOnce());
+    bridge.handleNotification({
+      method: "thread/realtime/sdp",
+      params: { threadId: "thread-1", sdp: "v=answer\r\n" },
+    });
+    await connecting;
+    bridge.handleNotification({
+      method: "thread/realtime/error",
+      params: { threadId: "thread-1", message: "invalid realtime model" },
+    });
+
+    await expect(bridge.completion.promise).resolves.toBe("error");
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(
+      requestRpc.mock.calls.filter(([method]) => method === "thread/realtime/start"),
+    ).toHaveLength(1);
+  });
+
+  it("does not restart after local close wins a pending reset", async () => {
+    const requestRpc = vi.fn(async (_method: string) => ({}));
+    const client = { request: requestRpc } as unknown as CodexAppServerClient;
+    const peer = {
+      createOffer: vi.fn(async () => "v=offer\r\n"),
+      applyAnswer: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+    };
+    const bridge = realtimeVoiceSessionTesting.createBridge(
+      client,
+      "thread-1",
+      {
+        providerConfig: {},
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      },
+      new AbortController().signal,
+      vi.fn(async () => peer),
+    );
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(requestRpc).toHaveBeenCalledOnce());
+    bridge.handleNotification({
+      method: "thread/realtime/sdp",
+      params: { threadId: "thread-1", sdp: "v=answer\r\n" },
+    });
+    await connecting;
+    bridge.handleNotification({
+      method: "thread/realtime/error",
+      params: { threadId: "thread-1", message: CODEX_WEBSOCKET_RESET_ERROR },
+    });
+    bridge.handleNotification({
+      method: "thread/realtime/closed",
+      params: { threadId: "thread-1", reason: "error" },
+    });
+    bridge.close();
+
+    await expect(bridge.completion.promise).resolves.toBe("completed");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(
+      requestRpc.mock.calls.filter(([method]) => method === "thread/realtime/start"),
+    ).toHaveLength(1);
+  });
+
+  it("fails once when the V3 replacement peer cannot start", async () => {
+    const requestRpc = vi.fn(async () => ({}));
+    const client = { request: requestRpc } as unknown as CodexAppServerClient;
+    const peer = {
+      createOffer: vi.fn(async () => "v=offer\r\n"),
+      applyAnswer: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+    };
+    const createAudioPeer = vi.fn(async () => {
+      if (createAudioPeer.mock.calls.length > 1) {
+        throw new Error("replacement peer failed");
+      }
+      return peer;
+    });
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const bridge = realtimeVoiceSessionTesting.createBridge(
+      client,
+      "thread-1",
+      {
+        providerConfig: {},
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onError,
+        onClose,
+      },
+      new AbortController().signal,
+      createAudioPeer,
+    );
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(requestRpc).toHaveBeenCalledOnce());
+    bridge.handleNotification({
+      method: "thread/realtime/sdp",
+      params: { threadId: "thread-1", sdp: "v=answer\r\n" },
+    });
+    await connecting;
+    bridge.handleNotification({
+      method: "thread/realtime/error",
+      params: { threadId: "thread-1", message: CODEX_WEBSOCKET_RESET_ERROR },
+    });
+    bridge.handleNotification({
+      method: "thread/realtime/closed",
+      params: { threadId: "thread-1", reason: "error" },
+    });
+
+    await expect(bridge.completion.promise).resolves.toBe("error");
+    expect(createAudioPeer).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "replacement peer failed" }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
   });
 
   it("settles completion when the close callback throws", async () => {

@@ -96,6 +96,7 @@ export function createRealtimeVoiceBridgeSession(
   let phase: RealtimeVoiceSessionPhase = "admitting";
   let terminalBeforeBridgeAdoption = false;
   let closeReported = false;
+  let greetingTriggered = false;
   const isAdmitting = () => phase === "admitting";
   const requireBridge = () => {
     if (!bridgeRef.current) {
@@ -220,7 +221,8 @@ export function createRealtimeVoiceBridgeSession(
       if (!bridgeRef.current || !isAdmitting()) {
         return;
       }
-      if (params.triggerGreetingOnReady) {
+      if (params.triggerGreetingOnReady && !greetingTriggered) {
+        greetingTriggered = true;
         bridgeRef.current.triggerGreeting?.(params.initialGreetingInstructions);
       }
       params.onReady?.(session);

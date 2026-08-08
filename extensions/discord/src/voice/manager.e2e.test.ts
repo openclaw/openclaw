@@ -38,6 +38,7 @@ const {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  loggerWarnMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -179,6 +180,7 @@ const {
     ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn(),
+    loggerWarnMock: vi.fn(),
     resolveConfiguredRealtimeVoiceProviderMock: vi.fn(() => ({
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
@@ -265,6 +267,12 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return {
     ...actual,
     logVerbose: logVerboseMock,
+    createSubsystemLogger: () => ({
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: loggerWarnMock,
+      error: vi.fn(),
+    }),
   };
 });
 
@@ -380,6 +388,7 @@ describe("DiscordVoiceManager", () => {
     textToSpeechMock.mockReset();
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
     logVerboseMock.mockClear();
+    loggerWarnMock.mockClear();
     updateVoiceStateMock.mockClear();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
@@ -3416,6 +3425,32 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     expect(createAudioResourceMock).toHaveBeenCalledTimes(2);
     expect(player.play).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not report a retired realtime pipeline as failed after player idle", async () => {
+    const manager = createAgentProxyManager();
+
+    const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(result.ok).toBe(true);
+    const player = getLastAudioPlayer() as { on: ReturnType<typeof vi.fn> };
+    const bridgeParams = lastRealtimeBridgeParams();
+    for (let index = 0; index < 50; index += 1) {
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    }
+    const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
+      | (() => void)
+      | undefined;
+    expect(idleHandler).toBeTypeOf("function");
+
+    idleHandler?.();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(loggerWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("realtime output pipeline failed"),
+    );
   });
 
   it("clears stale realtime playback when stream close and player idle do not fire", async () => {

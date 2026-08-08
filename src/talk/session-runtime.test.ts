@@ -234,6 +234,7 @@ describe("realtime voice bridge session runtime", () => {
       },
     };
     const onToolCall = vi.fn();
+    const onReady = vi.fn();
 
     const session = createRealtimeVoiceBridgeSession({
       provider,
@@ -242,6 +243,7 @@ describe("realtime voice bridge session runtime", () => {
       initialGreetingInstructions: "Say hello",
       triggerGreetingOnReady: true,
       onToolCall,
+      onReady,
     });
     const event = {
       itemId: "item-1",
@@ -251,9 +253,12 @@ describe("realtime voice bridge session runtime", () => {
     };
 
     callbacks?.onReady?.();
+    callbacks?.onReady?.();
     callbacks?.onToolCall?.(event);
 
+    expect(bridge["triggerGreeting"]).toHaveBeenCalledOnce();
     expect(bridge["triggerGreeting"]).toHaveBeenCalledWith("Say hello");
+    expect(onReady).toHaveBeenCalledTimes(2);
     expect(onToolCall).toHaveBeenCalledWith(event, session);
   });
 
