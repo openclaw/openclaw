@@ -226,6 +226,7 @@ export async function monitorWebChannel(
       }
 
       const connectionId = newConnectionId();
+      const statusConnection = statusController.beginConnectionSetup();
       const inboundDebounceMs = resolveInboundDebounceMs({
         cfg,
         channel: "whatsapp",
@@ -305,7 +306,7 @@ export async function monitorWebChannel(
                 await onMessage(admitted);
               },
               onPendingWorkChanged: (pendingWorkCount, at) => {
-                statusController.noteBusy(pendingWorkCount > 0, at);
+                statusConnection.noteBusy(pendingWorkCount > 0, at);
               },
               sock,
             })) as ManagedWhatsAppListener;
