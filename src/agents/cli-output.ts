@@ -833,12 +833,18 @@ type PendingToolUse = {
   name: string;
   kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
+  /** Complete input carried on content_block_start; used as a fallback when no
+   * input_json_delta chunks arrive (some dialects ship args inline here). */
+  initialInput?: Record<string, unknown>;
 };
 
 type ToolUseTracker = {
   pendingByIndex: Map<number, PendingToolUse>;
   nameById: Map<string, string>;
   startedIds: Set<string>;
+  /** Args emitted on the first start for each tool call id, so a later richer
+   * copy can upgrade a start that fired before args were available. */
+  emittedArgsById: Map<string, Record<string, unknown>>;
   resultDeliveredIds: Set<string>;
 };
 
@@ -847,6 +853,7 @@ function createToolUseTracker(): ToolUseTracker {
     pendingByIndex: new Map(),
     nameById: new Map(),
     startedIds: new Set(),
+    emittedArgsById: new Map(),
     resultDeliveredIds: new Set(),
   };
 }
@@ -860,11 +867,21 @@ function emitToolStartOnce(
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
   // Streaming and final assistant records may both describe the same tool call.
-  if (tracker.startedIds.has(toolCallId)) {
+  // If the streaming start fired before args were available (empty input), a
+  // later richer copy — typically the assistant-record snapshot — upgrades the
+  // prior emit instead of being deduped away, so the live draft can repair a
+  // name-only tool row. See #120306.
+  const priorArgs = tracker.emittedArgsById.get(toolCallId);
+  if (priorArgs !== undefined) {
+    if (Object.keys(priorArgs).length === 0 && Object.keys(args).length > 0) {
+      tracker.emittedArgsById.set(toolCallId, args);
+      onToolUseStart?.({ toolCallId, name, kind, args });
+    }
     return;
   }
   tracker.startedIds.add(toolCallId);
   tracker.nameById.set(toolCallId, name);
+  tracker.emittedArgsById.set(toolCallId, args);
   onToolUseStart?.({ toolCallId, name, kind, args });
 }
 
@@ -942,6 +959,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
             name,
             kind: block.type,
             inputJsonParts: [],
+            initialInput: isRecord(block.input) ? block.input : undefined,
           });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
@@ -972,12 +990,15 @@ function dispatchClaudeCliStreamingToolEvent(params: {
       const pending = tracker.pendingByIndex.get(event.index);
       tracker.pendingByIndex.delete(event.index);
       if (pending) {
+        const streamedArgs = parseToolInputJson(pending.inputJsonParts);
+        const args =
+          Object.keys(streamedArgs).length > 0 ? streamedArgs : (pending.initialInput ?? {});
         emitToolStartOnce(
           tracker,
           pending.toolCallId,
           pending.name,
           pending.kind,
-          parseToolInputJson(pending.inputJsonParts),
+          args,
           params.onToolUseStart,
         );
       }

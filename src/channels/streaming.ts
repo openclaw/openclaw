@@ -1248,11 +1248,12 @@ function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraf
   if (typeof previous !== "object" || typeof line !== "object") {
     return line;
   }
-  if (
-    line.kind !== "command-output" ||
-    !line.status ||
-    (line.detail && line.detail !== line.status)
-  ) {
+  // Carry a richer prior command/args detail forward when a later status-only
+  // update would otherwise drop it. Applies to tool rows too, not just
+  // command-output, so a name-only tool row can be repaired by a richer prior
+  // line. See #120306.
+  const isCarryForwardKind = line.kind === "command-output" || line.kind === "tool";
+  if (!isCarryForwardKind || !line.status || (line.detail && line.detail !== line.status)) {
     return line;
   }
   const previousDetail = previous.detail?.trim();
