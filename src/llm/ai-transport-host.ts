@@ -3,6 +3,7 @@
 // process-default stream facade.
 import { configureAiTransportHost } from "@openclaw/ai";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
+import { observeProviderTransportEvent } from "../agents/provider-transport-accounting.js";
 import {
   buildGuardedModelFetch,
   resolveModelRequestTimeoutMs,
@@ -40,6 +41,7 @@ configureAiTransportHost({
   normalizeAnthropicInlineContentBlocks,
   resolveOpenAIStrictToolSetting,
   resolveModelRequestTimeoutMs: (model) => resolveModelRequestTimeoutMs(model, undefined),
+  observeModelTransportEvent: observeProviderTransportEvent,
   logDebug: (subsystem, build) => {
     const log = transportLog(subsystem);
     if (!log.isEnabled("debug", "any")) {

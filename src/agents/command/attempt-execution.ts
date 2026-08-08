@@ -556,6 +556,7 @@ export function runAgentAttempt(params: {
   timeoutMs: number;
   runTimeoutOverrideMs?: number;
   runId: string;
+  allocateDiagnosticModelCallId?: () => string;
   lifecycleGeneration: string;
   opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
@@ -1276,6 +1277,7 @@ export function runAgentAttempt(params: {
   };
   bindEmbeddedRunAccountingObservers(embeddedRunParams, {
     codeModeActivityOwner: params.codeModeActivityOwner,
+    allocateDiagnosticModelCallId: params.allocateDiagnosticModelCallId,
     onAgentSubmission: params.commandRunAccounting?.beginAgentSubmission,
     onAttemptObserved: params.commandRunAccounting?.observeEmbeddedAttempt,
     onRuntimeSelected: params.commandRunAccounting?.selectRuntime,

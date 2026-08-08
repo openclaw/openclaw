@@ -1,4 +1,8 @@
 import type { Usage } from "../types.js";
+import {
+  bindCachedInputObservation,
+  cachedInputObservationFromRawUsage,
+} from "../usage-observation.js";
 
 type AnthropicUsagePayload = {
   input_tokens?: unknown;
@@ -110,6 +114,7 @@ export function applyAnthropicMessageStartUsage(
   target: Usage,
   payload: AnthropicUsagePayload,
 ): AnthropicPromptUsageSnapshot | undefined {
+  bindCachedInputObservation(target, cachedInputObservationFromRawUsage(payload));
   const promptUsage = readAnthropicPromptUsageSnapshot(payload);
   const promptTokens = promptUsage
     ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
@@ -158,6 +163,9 @@ export function applyAnthropicMessageDeltaUsage(
   messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined,
 ): void {
   const usage = payload ?? {};
+  if (Object.hasOwn(usage, "cache_read_input_tokens")) {
+    bindCachedInputObservation(target, cachedInputObservationFromRawUsage(usage));
+  }
   const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
   if (inputTokens !== undefined) {
     target.input = inputTokens;

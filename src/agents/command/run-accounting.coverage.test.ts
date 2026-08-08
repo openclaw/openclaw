@@ -114,7 +114,7 @@ describe("command run accounting coverage", () => {
     });
     expect(coverage.providerTransport).toEqual({
       state: "unavailable",
-      reasons: ["not_instrumented", reason],
+      reasons: ["not_observed", reason],
     });
   });
 
@@ -135,7 +135,7 @@ describe("command run accounting coverage", () => {
     });
     expect(snapshot.coverage.providerTransport).toEqual({
       state: "unavailable",
-      reasons: ["not_instrumented", "acp_runtime"],
+      reasons: ["not_observed", "acp_runtime"],
     });
   });
 });

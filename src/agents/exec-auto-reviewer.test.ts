@@ -279,7 +279,7 @@ describe("createModelExecAutoReviewer", () => {
       },
       providerTransport: {
         state: "unavailable",
-        reasons: ["not_instrumented", "exec_auto_review_model_completion"],
+        reasons: ["not_observed", "exec_auto_review_model_completion"],
       },
     });
   });
@@ -306,7 +306,7 @@ describe("createModelExecAutoReviewer", () => {
     expect(complete).not.toHaveBeenCalled();
     expect(coverage).toMatchObject({
       usage: { state: "unavailable", reasons: ["not_observed"] },
-      providerTransport: { state: "unavailable", reasons: ["not_instrumented"] },
+      providerTransport: { state: "unavailable", reasons: ["not_observed"] },
     });
   });
 
