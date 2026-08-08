@@ -1172,7 +1172,7 @@ export class DiscordVoiceManager {
       logger.warn(
         `discord voice: rejoining allowed voice channel guild=${guildId} channel=${target.channelId}`,
       );
-      const requester = existing?.requester ?? this.resolvePresentAutomaticRequester(target);
+      const requester = this.resolvePresentAutomaticRequester(target);
       await this.join(target, { automatic: true, ...(requester ? { requester } : {}) });
     }
   }

@@ -12,6 +12,7 @@ function createRuntime(
     nativeConnectFailure?: Error;
     replaceSessionBeforeRunFailure?: Record<string, unknown>;
     runFailureBeforeReady?: Error;
+    sessionEntry?: Record<string, unknown>;
     sessionHarnessId?: string;
     patchSessionHarnessId?: string;
   } = {},
@@ -24,6 +25,7 @@ function createRuntime(
         sessionId: "session-1",
         updatedAt: Date.now(),
         agentHarnessId: options.sessionHarnessId ?? "codex",
+        ...options.sessionEntry,
       };
   const nativeBridge: RealtimeVoiceBridge = {
     acknowledgeMark: vi.fn(),
@@ -198,6 +200,34 @@ describe("Codex realtime voice provider", () => {
 
     bridge.close();
     expect(nativeBridge.close.mock.calls).toHaveLength(1);
+  });
+
+  it("normalizes provider-prefixed persisted model overrides", async () => {
+    const harness = createRuntime({
+      sessionEntry: {
+        providerOverride: "openai",
+        modelOverride: "openai/gpt-5.4",
+      },
+    });
+    const provider = buildCodexRealtimeVoiceProvider({ runtime: harness.runtime });
+    const bridge = provider.createBridge({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } } as never,
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+      senderId: "discord-user-1",
+      senderIsOwner: true,
+      providerConfig: {},
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(harness.getAttempt()).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    bridge.close();
   });
 
   it("selects and forwards the V2 Platform key explicitly", async () => {

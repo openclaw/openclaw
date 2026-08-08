@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  parseModelRef,
-  resolveAgentEffectiveModelPrimary,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionModelRef } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -141,15 +138,7 @@ async function resolveBoundVoiceRun(params: {
     throw new Error(`Codex realtime voice could not resolve session ${sessionKey}`);
   }
 
-  const configuredModel =
-    sessionEntry.providerOverride && sessionEntry.modelOverride
-      ? `${sessionEntry.providerOverride}/${sessionEntry.modelOverride}`
-      : (resolveAgentEffectiveModelPrimary(cfg, agentId) ??
-        `${params.runtime.agent.defaults.provider}/${params.runtime.agent.defaults.model}`);
-  const modelRef = parseModelRef(configuredModel, params.runtime.agent.defaults.provider);
-  if (!modelRef) {
-    throw new Error(`Codex realtime voice could not resolve model ${configuredModel}`);
-  }
+  const modelRef = resolveSessionModelRef(cfg, sessionEntry, agentId);
   const workspaceDir = params.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = params.runtime.agent.resolveAgentDir(cfg, agentId);
   const version = resolveRealtimeVersion(params.request.providerConfig);
