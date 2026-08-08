@@ -602,10 +602,11 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .option("--days <days>", "Number of days to include", "30")
       .option("--agent <id>", "Scope the cost summary to a specific agent id")
       .option("--all-agents", "Aggregate the cost summary across all agents", false)
+      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const days = parseDaysOption(opts.days);
             const agentId = typeof opts.agent === "string" ? opts.agent.trim() : undefined;
             // The gateway honors agentScope only when no agentId is set, so reject the
@@ -707,12 +708,13 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       )
       .option("--export", "Write a shareable support diagnostics export", false)
       .option("--output <path>", "Diagnostics export output .zip path")
+      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
             const { normalizeDiagnosticStabilityQuery, selectDiagnosticStabilitySnapshot } =
               await import("../../logging/diagnostic-stability.js");
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const query = normalizeDiagnosticStabilityQuery(
               {
                 limit: opts.limit,
@@ -723,6 +725,15 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
             );
             const bundleTarget = normalizeStabilityBundleTarget(opts.bundle);
             if (opts.export) {
+              // The support export collects its status/health snapshots through
+              // writeSupportExportFromCli, which narrows RPC options to url/token/password/
+              // timeout and drops the local-port override. Accepting --port here would
+              // silently export a different Gateway than the one named.
+              if (rpcOpts.localPortOverride !== undefined) {
+                throw new Error(
+                  "--port is not supported with --export; the support export targets the configured Gateway. Run the export against that Gateway, or use --port without --export for a live stability query.",
+                );
+              }
               await writeSupportExportFromCli({
                 json: rpcOpts.json,
                 output: opts.output,
