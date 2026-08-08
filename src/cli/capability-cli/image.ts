@@ -306,6 +306,7 @@ function addImageGenerationOptions(command: Command): Command {
 
 function resolveImageGenerationOptions(opts: Record<string, unknown>) {
   return {
+    file: Array.isArray(opts.file) ? (opts.file as string[]) : undefined,
     model: opts.model as string | undefined,
     count: parseOptionalPositiveInteger(opts.count, "--count"),
     size: opts.size as string | undefined,
@@ -331,6 +332,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
     image
       .command("generate")
       .description("Generate images")
+      .option("--file <path>", "Input/reference image file", collectOption, [])
       .requiredOption("--prompt <text>", "Prompt text"),
   ).action(async (opts) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
@@ -351,11 +353,9 @@ export function registerImageCapabilityCommands(capability: Command): void {
       .requiredOption("--prompt <text>", "Prompt text"),
   ).action(async (opts) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
-      const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];
       const result = await runImageGenerate({
         capability: "image.edit",
         prompt: String(opts.prompt),
-        file: files,
         ...resolveImageGenerationOptions(opts),
       });
       emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
