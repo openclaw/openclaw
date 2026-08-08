@@ -345,6 +345,7 @@ export type DaemonStatus = {
     };
     version?: string | null;
     error?: string;
+    connectErrorDetails?: unknown;
     url?: string;
     authWarning?: string;
   };
