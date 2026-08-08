@@ -1,11 +1,16 @@
 // Qa Lab tests cover lab server ui plugin behavior.
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import type { Duplex } from "node:stream";
+import tls from "node:tls";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   detectContentType,
   missingUiHtml,
+  proxyUpgradeRequest,
   resolveUiAssetVersion,
   tryResolveUiAsset,
 } from "./lab-server-ui.js";
@@ -88,5 +93,122 @@ describe("qa-lab server ui helpers", () => {
     );
 
     expect(tryResolveUiAsset("/%E0%A4", uiDistDir, uiDistDir)).toBeNull();
+  });
+});
+
+// Emulates the timeout behavior of a real net.Socket: setTimeout(ms) schedules
+// a 'timeout' emission after ms (0 cancels it), matching what Node does so the
+// connect-stage deadline is testable with fake timers.
+class FakeUpstreamSocket extends EventEmitter {
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  setTimeout = (ms: number) => {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    if (ms > 0) {
+      this.timer = setTimeout(() => this.emit("timeout"), ms);
+    }
+  };
+  destroy = vi.fn(() => {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    this.emit("close");
+  });
+  write = vi.fn();
+  pipe = vi.fn(() => this);
+  destroyed = false;
+}
+
+function buildClientSocket(): Duplex {
+  const socket = new EventEmitter();
+  // proxyUpgradeRequest pipes the upstream <-> client socket and destroys both
+  // on cleanup; provide the minimum surface the proxy touches.
+  const fake = Object.assign(socket, {
+    destroyed: false,
+    destroy: vi.fn(() => {
+      fake.destroyed = true;
+    }),
+    pipe: vi.fn(() => fake),
+    write: vi.fn(() => true),
+  });
+  return fake as unknown as Duplex;
+}
+
+describe("proxyUpgradeRequest", () => {
+  let tlsSpy: ReturnType<typeof vi.spyOn>;
+  let netSpy: ReturnType<typeof vi.spyOn>;
+  let upstream: FakeUpstreamSocket;
+
+  beforeEach(() => {
+    upstream = new FakeUpstreamSocket();
+    // vi.mock does not intercept `node:tls`/`node:net` built-ins reliably in
+    // vitest, so spy on the live default-export object that lab-server-ui.ts
+    // imports. Node applies the `timeout` option by calling socket.setTimeout
+    // internally; mirror that so the connect-stage deadline is observable.
+    tlsSpy = vi.spyOn(tls, "connect").mockImplementation((options) => {
+      upstream.setTimeout((options as { timeout?: number }).timeout ?? 0);
+      return upstream as never;
+    });
+    netSpy = vi.spyOn(net, "connect").mockImplementation((options) => {
+      upstream.setTimeout((options as { timeout?: number }).timeout ?? 0);
+      return upstream as never;
+    });
+  });
+
+  afterEach(() => {
+    tlsSpy.mockRestore();
+    netSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("clears the connect-stage deadline once the upstream handshake succeeds", () => {
+    const clientSocket = buildClientSocket();
+    const setTimeoutSpy = vi.spyOn(upstream, "setTimeout");
+    const req = { url: "/ws", method: "GET", rawHeaders: [], httpVersion: "1.1" };
+    proxyUpgradeRequest({
+      req: req as never,
+      socket: clientSocket,
+      head: Buffer.alloc(0),
+      target: new URL("https://upstream.local"),
+    });
+
+    // The connect-stage deadline (10s) was applied via the `timeout` option.
+    expect(tlsSpy).toHaveBeenCalledWith(expect.objectContaining({ timeout: 10_000 }));
+    upstream.emit("connect");
+
+    // The established stream must not carry the connect-stage deadline.
+    expect(setTimeoutSpy).toHaveBeenCalledWith(0);
+    // The upgrade request line was forwarded to the upstream.
+    expect(upstream.write).toHaveBeenCalledWith(expect.stringContaining("HTTP/1.1"));
+  });
+
+  it("replies 504 and tears down both sockets when the upstream stalls past the connect deadline", async () => {
+    vi.useFakeTimers();
+    const clientSocket = buildClientSocket();
+    const writes: string[] = [];
+    (clientSocket as unknown as { write: ReturnType<typeof vi.fn> }).write.mockImplementation(
+      (chunk: unknown) => {
+        writes.push(String(chunk));
+        return true;
+      },
+    );
+    const req = { url: "/ws", method: "GET", rawHeaders: [], httpVersion: "1.1" };
+    proxyUpgradeRequest({
+      req: req as never,
+      socket: clientSocket,
+      head: Buffer.alloc(0),
+      target: new URL("https://upstream.local"),
+    });
+
+    // No connect, no error: a silent stall. Advance to the connect deadline.
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(writes).toContain("HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n");
+    expect(upstream.destroy).toHaveBeenCalled();
+    expect((clientSocket as unknown as { destroyed: boolean }).destroyed).toBe(true);
   });
 });

@@ -203,6 +203,13 @@ export async function proxyHttpRequest(params: {
   params.req.pipe(upstreamReq);
 }
 
+// A silent upstream TCP stall (firewall drop, black-holed route, slow backend
+// startup) emits neither a `connect` nor an `error` event, so the upgrade proxy
+// would hang the browser tab indefinitely. Bound to the connect/handshake stage
+// only; the `connect` handler clears it so established WebSocket streams stay
+// unbounded long-lived connections.
+const PROXY_UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
+
 export function proxyUpgradeRequest(params: {
   req: IncomingMessage;
   socket: Duplex;
@@ -218,10 +225,12 @@ export function proxyUpgradeRequest(params: {
           host: params.target.hostname,
           port,
           servername: params.target.hostname,
+          timeout: PROXY_UPSTREAM_CONNECT_TIMEOUT_MS,
         })
       : net.connect({
           host: params.target.hostname,
           port,
+          timeout: PROXY_UPSTREAM_CONNECT_TIMEOUT_MS,
         });
 
   const headerLines: string[] = [];
@@ -239,6 +248,9 @@ export function proxyUpgradeRequest(params: {
   }
 
   upstream.once("connect", () => {
+    // The handshake succeeded; disable the connect-stage deadline so the
+    // established WebSocket stream can stay open as a long-lived connection.
+    upstream.setTimeout(0);
     const requestText = [
       `${params.req.method ?? "GET"} ${rewriteControlUiProxyPath(requestUrl.pathname, requestUrl.search)} HTTP/${params.req.httpVersion}`,
       `Host: ${params.target.host}`,
@@ -263,6 +275,13 @@ export function proxyUpgradeRequest(params: {
       upstream.destroy();
     }
   };
+
+  upstream.once("timeout", () => {
+    if (!params.socket.destroyed) {
+      params.socket.write("HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n");
+    }
+    closeBoth();
+  });
 
   upstream.on("error", () => {
     if (!params.socket.destroyed) {
