@@ -3337,6 +3337,7 @@ jobs:
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            -only-testing:OpenClawTests/TerminalHubScreenTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
 
