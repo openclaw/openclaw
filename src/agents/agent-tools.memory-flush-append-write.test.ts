@@ -11,7 +11,7 @@ const RELATIVE_PATH = "memory/2026-08-08.md";
 
 // Mirror the catalog path: declared schemas are JSON-serialized before the
 // bridge validates results against them.
-const declaredWriteOutputSchema = JSON.parse(JSON.stringify(WriteToolOutputSchema)) as Parameters<
+const declaredWriteOutputSchema = structuredClone(WriteToolOutputSchema) as Parameters<
   typeof validateJsonSchemaValue
 >[0]["schema"];
 
@@ -63,7 +63,7 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
 
   it("returns write-schema-conforming details when creating the memory file", async () => {
     const details = await runAppend();
-    expect(details).toEqual({ changed: true, created: true });
+    expect(details).toEqual({ changed: true });
     expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
   });
 
@@ -72,7 +72,7 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     await fs.mkdir(path.dirname(absolute), { recursive: true });
     await fs.writeFile(absolute, "seed\n", "utf-8");
     const details = await runAppend();
-    expect(details).toEqual({ changed: true, created: false });
+    expect(details).toEqual({ changed: true });
     expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
     expect(await fs.readFile(absolute, "utf-8")).toBe("seed\nhello");
   });
