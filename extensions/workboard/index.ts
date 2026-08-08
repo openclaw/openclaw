@@ -16,7 +16,7 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
-    const store = WorkboardStore.openSqlite();
+    const store = WorkboardStore.openSqlite({ worktrees: api.runtime.worktrees });
     api.session.controls.registerControlUiDescriptor({
       surface: "widget",
       id: "card",

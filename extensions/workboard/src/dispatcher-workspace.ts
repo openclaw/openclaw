@@ -29,14 +29,16 @@ export function managedWorktreeName(cardId: string): string {
 
 export async function cleanupWorkboardRunWorktree(params: {
   store: WorkboardStore;
-  worktrees: Pick<PluginRuntime["worktrees"], "removeIfLossless">;
+  worktrees: Pick<PluginRuntime["worktrees"], "release" | "removeIfLossless">;
   runId: string;
 }): Promise<void> {
+  await params.store.reconcileArtifactRetention();
   const card = (await params.store.list()).find((entry) => entry.runId === params.runId);
   const workspace = card?.metadata?.automation?.workspace;
   if (!card || workspace?.kind !== "worktree" || !workspace.path) {
     return;
   }
+  await params.worktrees.release({ path: workspace.path });
   await params.worktrees.removeIfLossless({
     path: workspace.path,
     ownerKind: "workboard",

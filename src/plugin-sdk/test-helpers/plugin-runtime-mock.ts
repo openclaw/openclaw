@@ -1009,6 +1009,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       hasSelfContainedCheckoutMetadata: vi.fn(),
       create: vi.fn(),
       release: vi.fn(),
+      setRetentionClaim: vi.fn(),
       removeIfLossless: vi.fn(),
     },
     llm: {

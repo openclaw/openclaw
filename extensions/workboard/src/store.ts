@@ -1,6 +1,11 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  type WorkboardArtifactRetentionStore,
+  withWorkboardArtifactRetention,
+} from "./artifact-retention.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -45,6 +50,33 @@ export type { WorkboardDispatchResult } from "./store-inputs.js";
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  private readonly reconcileArtifactRetentionStore?: () => Promise<void>;
+
+  constructor(
+    store: WorkboardKeyedStore,
+    stores: {
+      boards?: WorkboardKeyedStore<PersistedWorkboardBoard>;
+      subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
+      attachments?: WorkboardKeyedStore<PersistedWorkboardAttachment>;
+      dataVersion?: () => number;
+    } = {},
+  ) {
+    super(store, stores);
+    const retentionStore = store as Partial<WorkboardArtifactRetentionStore>;
+    if (typeof retentionStore.reconcileArtifactRetention === "function") {
+      this.reconcileArtifactRetentionStore =
+        retentionStore.reconcileArtifactRetention.bind(retentionStore);
+    }
+  }
+
+  async reconcileArtifactRetention(): Promise<void> {
+    if (!this.reconcileArtifactRetentionStore) {
+      return;
+    }
+    // Keep upgrade reconciliation ordered with card mutations before GC can observe claims.
+    await this.enqueueMutation(this.reconcileArtifactRetentionStore);
+  }
+
   private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
     if (
       card.status !== "triage" ||
@@ -291,9 +323,14 @@ export class WorkboardStore extends WorkboardNotificationStore {
     );
   }
 
-  static openSqlite() {
+  static openSqlite(
+    options: { worktrees?: Pick<PluginRuntime["worktrees"], "setRetentionClaim"> } = {},
+  ) {
     const stores = createWorkboardSqliteStores();
-    return new WorkboardStore(stores.cards, {
+    const cards = options.worktrees
+      ? withWorkboardArtifactRetention(stores.cards, options.worktrees)
+      : stores.cards;
+    return new WorkboardStore(cards, {
       boards: stores.boards,
       subscriptions: stores.subscriptions,
       attachments: stores.attachments,

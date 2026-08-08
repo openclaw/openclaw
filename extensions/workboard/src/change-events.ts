@@ -10,9 +10,13 @@ export function createWorkboardChangeEventService(store: WorkboardStore): OpenCl
 
   return {
     id: "workboard-change-events",
-    start(ctx) {
+    async start(ctx) {
+      if (unsubscribe) {
+        return;
+      }
+      await store.reconcileArtifactRetention();
       const gatewayEvents = ctx.gatewayEvents;
-      if (!gatewayEvents || unsubscribe) {
+      if (!gatewayEvents) {
         return;
       }
       const emit = (change: WorkboardChange) => {

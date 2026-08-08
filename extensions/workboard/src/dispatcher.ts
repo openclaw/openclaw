@@ -29,7 +29,14 @@ const DEFAULT_DISPATCH_MAX_STARTS = 3;
 const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
 
 export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
-export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
+export type WorkboardWorktreeRuntime = Pick<
+  PluginRuntime["worktrees"],
+  | "resolveCheckoutRoot"
+  | "hasSelfContainedCheckoutMetadata"
+  | "create"
+  | "release"
+  | "removeIfLossless"
+>;
 
 type WorkboardDispatchStartOptions = {
   maxStarts?: number;
