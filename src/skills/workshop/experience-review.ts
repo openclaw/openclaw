@@ -84,13 +84,14 @@ export type ExperienceReviewCandidate = {
 
 type ExperienceReviewRunDeps = {
   getCurrentConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
+  abortSignal?: AbortSignal;
 };
 
 type ExperienceReviewTimer = ReturnType<typeof setTimeout>;
 
 type ExperienceReviewSchedulerDeps = {
   isSystemActive: () => boolean | Promise<boolean>;
-  runReview: (candidate: ExperienceReviewCandidate) => Promise<void>;
+  runReview: (candidate: ExperienceReviewCandidate, abortSignal?: AbortSignal) => Promise<void>;
   prepareReview?: (
     candidate: ExperienceReviewCandidate,
   ) => ExperienceReviewCandidate | undefined | Promise<ExperienceReviewCandidate | undefined>;
@@ -102,6 +103,8 @@ type PendingExperienceReview = {
   candidate: ExperienceReviewCandidate;
   generation: number;
   timer?: ExperienceReviewTimer;
+  abortController?: AbortController;
+  cancelled?: boolean;
 };
 
 function isAuthProfileMigrationRequiredError(
@@ -248,6 +251,8 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             return;
           }
           reviewInFlight = true;
+          const abortController = new AbortController();
+          pending.abortController = abortController;
           try {
             const candidate = deps.prepareReview
               ? await deps.prepareReview(pending.candidate)
@@ -259,15 +264,21 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
               return;
             }
-            await deps.runReview(candidate);
+            await deps.runReview(candidate, abortController.signal);
             if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
               pendingBySession.delete(sessionKey);
             }
           } finally {
+            if (pending.abortController === abortController) {
+              pending.abortController = undefined;
+            }
             reviewInFlight = false;
           }
         })
         .catch((error: unknown) => {
+          if (pending.cancelled) {
+            return;
+          }
           log.warn(`skill experience review failed: ${String(error)}`);
           if (isAuthProfileMigrationRequiredError(error)) {
             if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
@@ -473,6 +484,26 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         );
       }
     },
+    cancel(sessionKey: string): boolean {
+      const normalizedSessionKey = sessionKey.trim();
+      if (!normalizedSessionKey) {
+        return false;
+      }
+      const pending = pendingBySession.get(normalizedSessionKey);
+      const hadShallowEvidence = shallowBySession.delete(normalizedSessionKey);
+      if (!pending) {
+        return hadShallowEvidence;
+      }
+      pending.cancelled = true;
+      pending.generation += 1;
+      if (pending.timer) {
+        clearTimer(pending.timer);
+      }
+      pending.abortController?.abort(new Error("Skill experience review stopped by user"));
+      pendingBySession.delete(normalizedSessionKey);
+      log.debug(`experience review cancelled: session=${normalizedSessionKey}`);
+      return true;
+    },
     clear(): void {
       for (const pending of pendingBySession.values()) {
         if (pending.timer) {
@@ -575,6 +606,7 @@ async function runSkillExperienceReviewInner(
       sessionKey,
       ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
     },
+    abortSignal: deps.abortSignal,
     cleanupBundleMcpOnRunEnd: true,
     bootstrapContextMode: "lightweight",
     skillsSnapshot: { prompt: "", skills: [] },

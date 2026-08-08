@@ -15,6 +15,7 @@ import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
+const cancelSkillExperienceReviewMock = vi.hoisted(() => vi.fn());
 const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
 const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
@@ -31,6 +32,10 @@ const formatAbortReplyTextMock = vi.hoisted(() => vi.fn(() => "⚙️ Agent was 
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: abortEmbeddedAgentRunMock,
+}));
+
+vi.mock("../../skills/workshop/experience-review-default.js", () => ({
+  cancelSkillExperienceReview: cancelSkillExperienceReviewMock,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -168,6 +173,9 @@ describe("handleStopCommand target fallback", () => {
       sessionId: undefined,
     });
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalledWith("wrapper-session-id");
+    expect(cancelSkillExperienceReviewMock).toHaveBeenCalledWith(
+      "agent:target:telegram:direct:123",
+    );
     const [persistAbortTargetParams] = expectDefined(
       (
         persistAbortTargetEntryMock.mock.calls as unknown as Array<

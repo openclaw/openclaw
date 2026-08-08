@@ -112,6 +112,46 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
+  it("cancels a queued review for an explicitly stopped session", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun());
+    expect(scheduler.cancel("agent:main:main")).toBe(true);
+    await vi.runAllTimersAsync();
+
+    expect(runReview).not.toHaveBeenCalled();
+    expect(scheduler.cancel("agent:main:main")).toBe(false);
+  });
+
+  it("aborts an in-flight review for an explicitly stopped session", async () => {
+    vi.useFakeTimers();
+    let reviewSignal: AbortSignal | undefined;
+    const runReview = vi.fn((_candidate, abortSignal?: AbortSignal) => {
+      reviewSignal = abortSignal;
+      return new Promise<void>((_resolve, reject) => {
+        abortSignal?.addEventListener("abort", () => reject(abortSignal.reason), { once: true });
+      });
+    });
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun());
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).toHaveBeenCalledTimes(1);
+
+    expect(scheduler.cancel("agent:main:main")).toBe(true);
+    expect(reviewSignal?.aborted).toBe(true);
+    await flushMicrotasks();
+    expect(runReview).toHaveBeenCalledTimes(1);
+  });
+
   it("uses exact harness iterations for a Codex-style projected trajectory", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
@@ -123,7 +163,10 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun({ iterations: 1, modelIterations: 10 }));
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelIterations: 10 }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
@@ -142,7 +185,10 @@ describe("skill experience review scheduler", () => {
 
     scheduler.schedule(completedRun({ modelIterations: 4, runId: "run-c" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 12 }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelIterations: 12 }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
@@ -187,7 +233,10 @@ describe("skill experience review scheduler", () => {
 
     scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-c", senderId: "bob" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 12 }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelIterations: 12 }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
@@ -221,7 +270,10 @@ describe("skill experience review scheduler", () => {
 
     scheduler.schedule(completedRun({ modelIterations: 5, runId: "run-next" }));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelIterations: 10 }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
@@ -270,7 +322,10 @@ describe("skill experience review scheduler", () => {
     scheduler.schedule(completedRun({ modelIterations: 6, runId: "run-b", success: true }));
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ turnAborted: true }));
+    expect(runReview).toHaveBeenCalledWith(
+      expect.objectContaining({ turnAborted: true }),
+      expect.any(AbortSignal),
+    );
     scheduler.clear();
   });
 
