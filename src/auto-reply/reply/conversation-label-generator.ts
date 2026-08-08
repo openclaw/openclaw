@@ -1,4 +1,5 @@
 // Generates short labels for sessions from conversation context.
+import { createReasoningTagTextPartitioner } from "@openclaw/ai/internal/runtime";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -61,6 +62,15 @@ function extractSimpleCompletionError(result: {
     return null;
   }
   return result.errorMessage?.trim() || "unknown error";
+}
+
+function extractVisibleLabelText(text: string): string {
+  const partitioner = createReasoningTagTextPartitioner();
+  return [...partitioner.push(text), ...partitioner.flush()]
+    .filter((delta) => delta.kind === "text")
+    .map((delta) => delta.text)
+    .join("")
+    .trim();
 }
 
 function resolveMaxLabelLength(value: number | undefined): number {
@@ -211,11 +221,12 @@ async function completeLabel(params: {
       return null;
     }
 
-    const text = result.content
+    const rawText = result.content
       .filter(isTextContentBlock)
       .map((block) => block.text)
       .join("")
       .trim();
+    const text = extractVisibleLabelText(rawText);
     return text ? truncateUtf16Safe(text, params.maxLength) || null : null;
   } catch (err) {
     logLabelFailure(params.phase, `completion failed: ${String(err)}`);
