@@ -764,6 +764,46 @@ describe("plugin status reports", () => {
     ]);
   });
 
+  it("classifies manifest-declared web fetch providers without importing runtime", () => {
+    setPluginLoadResult({
+      plugins: [
+        createPluginRecord({
+          id: "firecrawl",
+          webFetchProviderIds: ["firecrawl"],
+          webSearchProviderIds: ["firecrawl", "firecrawl-free"],
+        }),
+        createPluginRecord({ id: "fetch-only", webFetchProviderIds: ["fetch-only"] }),
+      ],
+    });
+    const report = buildPluginSnapshotReport({ config: {} });
+    const firecrawl = expectInspectReport("firecrawl", { config: {}, report });
+    expect(firecrawl.shape).toBe("hybrid-capability");
+    expect(firecrawl.capabilities).toEqual([
+      { kind: "web-fetch", ids: ["firecrawl"] },
+      { kind: "web-search", ids: ["firecrawl", "firecrawl-free"] },
+    ]);
+    const fetchOnly = expectInspectReport("fetch-only", { config: {}, report });
+    expect(fetchOnly.shape).toBe("plain-capability");
+    expect(fetchOnly.capabilities).toEqual([{ kind: "web-fetch", ids: ["fetch-only"] }]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("exposes gateway discovery only after its service is actually registered", () => {
+    setSinglePluginLoadResult(createPluginRecord({ id: "bonjour" }));
+    const coldReport = buildPluginSnapshotReport({ config: {} });
+    const coldInspect = expectInspectReport("bonjour", { config: {}, report: coldReport });
+    expect(coldInspect.shape).toBe("non-capability");
+    expect(coldInspect.capabilities).toEqual([]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    setSinglePluginLoadResult(
+      createPluginRecord({ id: "bonjour", gatewayDiscoveryServiceIds: ["bonjour"] }),
+    );
+    const runtimeInspect = expectInspectReport("bonjour", { config: {} });
+    expect(runtimeInspect.shape).toBe("plain-capability");
+    expect(runtimeInspect.capabilities).toEqual([{ kind: "gateway-discovery", ids: ["bonjour"] }]);
+    expect(mockInput(loadOpenClawPluginsMock).activate).toBe(false);
+  });
+
   it("treats a CLI-command-only plugin as a plain capability", () => {
     setSinglePluginLoadResult(
       createPluginRecord({

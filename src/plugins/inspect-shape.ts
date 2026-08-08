@@ -15,12 +15,14 @@ export type PluginCapabilityKind =
   | "image-generation"
   | "video-generation"
   | "music-generation"
+  | "web-fetch"
   | "web-search"
   | "worker-provider"
   | "session-catalog"
   | "agent-harness"
   | "context-engine"
-  | "channel";
+  | "channel"
+  | "gateway-discovery";
 
 export type PluginInspectShape =
   | "hook-only"
@@ -57,6 +59,7 @@ function buildPluginCapabilityEntries(
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
     { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
     { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },
+    { kind: "web-fetch" as const, ids: plugin.webFetchProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "worker-provider" as const, ids: plugin.contracts?.workerProviders ?? [] },
     {
@@ -74,6 +77,7 @@ function buildPluginCapabilityEntries(
           : [],
     },
     { kind: "channel" as const, ids: plugin.channelIds },
+    { kind: "gateway-discovery" as const, ids: plugin.gatewayDiscoveryServiceIds },
   ].filter((entry) => entry.ids.length > 0);
 }
 
@@ -85,7 +89,6 @@ function derivePluginInspectShape(params: {
   commandCount: number;
   cliCount: number;
   serviceCount: number;
-  gatewayDiscoveryServiceCount: number;
   gatewayMethodCount: number;
   httpRouteCount: number;
 }): PluginInspectShape {
@@ -101,7 +104,6 @@ function derivePluginInspectShape(params: {
     params.commandCount === 0 &&
     params.cliCount === 0 &&
     params.serviceCount === 0 &&
-    params.gatewayDiscoveryServiceCount === 0 &&
     params.gatewayMethodCount === 0 &&
     params.httpRouteCount === 0;
   if (hasOnlyHooks) {
@@ -140,7 +142,6 @@ export function buildPluginShapeSummary(params: {
     commandCount: params.plugin.commands.length,
     cliCount: params.plugin.cliCommands.length,
     serviceCount: params.plugin.services.length,
-    gatewayDiscoveryServiceCount: params.plugin.gatewayDiscoveryServiceIds.length,
     gatewayMethodCount,
     httpRouteCount: params.plugin.httpRoutes,
   });
