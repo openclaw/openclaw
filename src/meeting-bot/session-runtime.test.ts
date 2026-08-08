@@ -124,7 +124,7 @@ function createTestRuntime(params: {
   ): Promise<{ keepBrowserTab: boolean } | void>;
   refreshBrowserHealth?(
     session: TestSession,
-    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
+    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number },
   ): Promise<MeetingBrowserHealthRefreshOutcome | boolean | void>;
   refreshStatus?(session: TestSession): Promise<void>;
   joinTransport(input: {
@@ -390,7 +390,7 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
     const refreshBrowserHealth = vi.fn(
       async (
         _session: TestSession,
-        _options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
+        _options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number },
       ) => refreshOutcome,
     );
     const { runtime } = createTestRuntime({
@@ -414,14 +414,15 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
     const legacyRefresh: (session: TestSession) => Promise<void> =
       runtime.refreshCaptionHealth.bind(runtime);
     await expect(legacyRefresh(session)).resolves.toBeUndefined();
+    const deadline = Date.now() + 125;
     await expect(
       getMeetingSessionRuntimeProbeAccess<TestSession, TestRequest>(
         runtime,
-      ).refreshCaptionHealthForProbe(session, 125),
+      ).refreshCaptionHealthForProbe(session, deadline),
     ).resolves.toEqual(refreshOutcome);
     expect(refreshBrowserHealth).toHaveBeenCalledTimes(2);
     expect(refreshBrowserHealth.mock.calls[0]?.[1]).toEqual({});
-    expect(refreshBrowserHealth.mock.calls[1]?.[1]).toEqual({ force: true, timeoutMs: 125 });
+    expect(refreshBrowserHealth.mock.calls[1]?.[1]).toEqual({ force: true, deadline });
   });
 
   it("serializes probe and lifecycle browser refreshes", async () => {
@@ -464,9 +465,10 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
 
     const lifecycleRefresh = runtime.refreshBrowserHealth(session, { force: true });
     await firstRefreshStarted;
+    const deadline = Date.now() + 250;
     const probeRefresh = getMeetingSessionRuntimeProbeAccess<TestSession, TestRequest>(
       runtime,
-    ).refreshCaptionHealthForProbe(session, 250);
+    ).refreshCaptionHealthForProbe(session, deadline);
     await Promise.resolve();
 
     expect(refreshBrowserHealth).toHaveBeenCalledTimes(1);
@@ -477,8 +479,99 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
     expect(refreshBrowserHealth).toHaveBeenNthCalledWith(1, session, { force: true });
     expect(refreshBrowserHealth).toHaveBeenNthCalledWith(2, session, {
       force: true,
-      timeoutMs: 250,
+      deadline,
     });
+  });
+
+  it("does not run a queued probe after its tab begins reassignment", async () => {
+    let releaseFirstRefresh!: () => void;
+    let markFirstRefreshStarted!: () => void;
+    const firstRefreshStarted = new Promise<void>((resolve) => {
+      markFirstRefreshStarted = resolve;
+    });
+    const firstRefreshReleased = new Promise<void>((resolve) => {
+      releaseFirstRefresh = resolve;
+    });
+    let releaseFinalCapture!: () => void;
+    let markFinalCaptureStarted!: () => void;
+    const finalCaptureStarted = new Promise<void>((resolve) => {
+      markFinalCaptureStarted = resolve;
+    });
+    const finalCaptureReleased = new Promise<void>((resolve) => {
+      releaseFinalCapture = resolve;
+    });
+    let releaseReplacementTransport!: () => void;
+    let markReplacementTransportStarted!: () => void;
+    const replacementTransportStarted = new Promise<void>((resolve) => {
+      markReplacementTransportStarted = resolve;
+    });
+    const replacementTransportReleased = new Promise<void>((resolve) => {
+      releaseReplacementTransport = resolve;
+    });
+    const refreshBrowserHealth = vi.fn(async () => {
+      if (refreshBrowserHealth.mock.calls.length === 1) {
+        markFirstRefreshStarted();
+        await firstRefreshReleased;
+      }
+      return { browserHealthChecked: true, manualActionIsAuthoritative: true } as const;
+    });
+    const { runtime } = createTestRuntime({
+      transcribe: true,
+      captureTranscript: async (options) => {
+        if (options?.finalize) {
+          markFinalCaptureStarted();
+          await finalCaptureReleased;
+        }
+        return { droppedLines: 0, lines: [] };
+      },
+      refreshBrowserHealth,
+      releaseBrowserTab: async () => true,
+      joinTransport: async ({ session, context }) => {
+        if (session.agentId === "main") {
+          markReplacementTransportStarted();
+          await replacementTransportReleased;
+        }
+        session.browser = {
+          launched: false,
+          tab: context.inheritedBrowserTab({
+            meetingUrl: session.url,
+            tab: { targetId: "reassigned-caption-tab", openedByPlugin: false },
+            transport: session.transport,
+          }),
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/reassigned-captions",
+      agentId: "support",
+    });
+
+    const firstRefresh = runtime.refreshBrowserHealth(session, { force: true });
+    await firstRefreshStarted;
+    const replacement = runtime.join({
+      url: "https://meeting.example/reassigned-captions",
+      agentId: "main",
+    });
+    expect(session.state).toBe("active");
+    releaseFirstRefresh();
+    await firstRefresh;
+    await finalCaptureStarted;
+    const queuedProbe = getMeetingSessionRuntimeProbeAccess<TestSession, TestRequest>(
+      runtime,
+    ).refreshCaptionHealthForProbe(session, Date.now() + 250);
+
+    releaseFinalCapture();
+    await replacementTransportStarted;
+    await queuedProbe;
+    expect(refreshBrowserHealth).toHaveBeenCalledOnce();
+    releaseReplacementTransport();
+    const replacementResult = await replacement;
+
+    expect(refreshBrowserHealth).toHaveBeenCalledOnce();
+    expect(session.state).toBe("ended");
+    expect(session.browser?.tab).toBeUndefined();
+    expect(replacementResult.session.browser?.tab?.targetId).toBe("reassigned-caption-tab");
   });
 });
 
@@ -559,10 +652,15 @@ describe("MeetingSessionRuntime status cleanup ordering", () => {
 
     const status = runtime.status(session.id);
     await refreshStarted;
-    await runtime.leave(session.id);
-    expect(session.browser?.health).toMatchObject({ inCall: false, speechReady: false });
+    const leaving = runtime.leave(session.id);
+    expect(session.state).toBe("active");
 
     finishRefresh();
+    const [, leaveResult] = await Promise.all([status, leaving]);
+    expect(leaveResult).toMatchObject({
+      browserLeft: true,
+      session: { state: "ended" },
+    });
     await expect(status).resolves.toMatchObject({
       found: true,
       session: { state: "ended" },
@@ -570,7 +668,7 @@ describe("MeetingSessionRuntime status cleanup ordering", () => {
     expect(session.browser?.health).toMatchObject({ inCall: false, speechReady: false });
   });
 
-  it("releases a tab recovered while terminal transcript capture is pending", async () => {
+  it("releases a tab recovered before terminal transcript capture", async () => {
     let finishFinalCapture!: () => void;
     let markFinalCaptureStarted!: () => void;
     const finalCaptureStarted = new Promise<void>((resolve) => {
@@ -589,7 +687,6 @@ describe("MeetingSessionRuntime status cleanup ordering", () => {
       transcribe: true,
       captureTranscript: async (options) => {
         if (options?.finalize) {
-          session.browser!.tab = undefined;
           markFinalCaptureStarted();
           await finalCaptureFinished;
         }
@@ -614,9 +711,10 @@ describe("MeetingSessionRuntime status cleanup ordering", () => {
       agentId: "main",
     });
 
+    const refreshing = runtime.refreshBrowserHealth(session, { force: true });
     const leaving = runtime.leave(session.id);
+    await refreshing;
     await finalCaptureStarted;
-    await runtime.refreshBrowserHealth(session, { force: true });
     finishFinalCapture();
 
     await expect(leaving).resolves.toMatchObject({

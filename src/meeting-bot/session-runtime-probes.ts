@@ -99,13 +99,13 @@ type MeetingSessionRuntimeProbeAccess<TSession, TRequest> = {
   joinForProbe(request: TRequest): Promise<MeetingSessionProbeJoinResult<TSession>>;
   refreshCaptionHealthForProbe(
     session: TSession,
-    timeoutMs?: number,
+    deadline?: number,
   ): Promise<MeetingBrowserHealthRefreshOutcome>;
 };
 
 type MeetingSessionRuntimeHealthRefresh<TSession> = (
   session: TSession,
-  options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
+  options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number },
 ) => Promise<MeetingBrowserHealthRefreshOutcome>;
 
 type MeetingSessionRuntimeRecoveryFailure<TSession> = (

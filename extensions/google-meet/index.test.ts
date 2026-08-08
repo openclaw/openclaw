@@ -5470,15 +5470,18 @@ describe("google-meet plugin", () => {
       .mockResolvedValue({ browserHealthChecked: false, manualActionIsAuthoritative: false });
 
     try {
+      const startedAt = Date.now();
       await runtime.testListen({ url: MEET_URL, mode: "transcribe", timeoutMs: 1 });
 
       expect(joinForProbe).toHaveBeenCalled();
       expect(publicJoin).not.toHaveBeenCalled();
-      const forwardedTimeoutMs = refreshForProbe.mock.calls[0]?.[2];
-      expect(forwardedTimeoutMs).toBeGreaterThan(0);
-      expect(forwardedTimeoutMs).toBeLessThanOrEqual(1);
+      const forwardedDeadline = refreshForProbe.mock.calls[0]?.[2];
+      expect(forwardedDeadline).toBeGreaterThanOrEqual(startedAt);
+      expect(forwardedDeadline).toBeLessThanOrEqual(Date.now() + 1);
     } finally {
       refreshForProbe.mockRestore();
+      joinForProbe.mockRestore();
+      publicJoin.mockRestore();
     }
   });
 
@@ -6177,7 +6180,7 @@ describe("google-meet plugin", () => {
     }
   });
 
-  it("does not reattach a recovery result after leave reaches the terminal state", async () => {
+  it("waits for an in-flight recovery before terminal cleanup", async () => {
     const { launch: launchChromeMeet, leave: leaveChromeMeet } = mockChromeMeetLifecycle({
       launches: [
         {
@@ -6215,12 +6218,15 @@ describe("google-meet plugin", () => {
 
       const refreshing = runtime.status(joined.session.id);
       await recoveryStarted;
-      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      const leaving = runtime.leave(joined.session.id);
+      expect(joined.session.state).toBe("active");
+      expect(leaveChromeMeet).not.toHaveBeenCalled();
+      releaseRecovery();
+      const [, leaveResult] = await Promise.all([refreshing, leaving]);
+      expect(leaveResult).toMatchObject({
         browserLeft: true,
         session: { state: "ended", browserLeft: true },
       });
-      releaseRecovery();
-      await refreshing;
 
       expect(joined.session.chrome?.browserTab).toBeUndefined();
       await runtime.status(joined.session.id);

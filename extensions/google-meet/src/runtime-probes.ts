@@ -27,7 +27,7 @@ export type GoogleMeetRuntimeProbeContext = {
   refreshHealth(sessionId: string): void;
   refreshCaptionHealth(
     session: GoogleMeetSession,
-    timeoutMs?: number,
+    deadline?: number,
   ): Promise<MeetingBrowserHealthRefreshOutcome | boolean | void>;
 };
 
@@ -67,8 +67,8 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
     }
   },
   resolveSpeechTimeoutMs: (_request, config) => Math.min(config.chrome.joinTimeoutMs, 5_000),
-  refreshCaptionHealth: async (context, session, timeoutMs) =>
-    await context.refreshCaptionHealth(session, timeoutMs),
+  refreshCaptionHealth: async (context, session, deadline) =>
+    await context.refreshCaptionHealth(session, deadline),
   speechModeError:
     "test_speech requires mode: agent or bidi; use join mode: transcribe for observe-only sessions.",
   listeningModeError:

@@ -102,7 +102,7 @@ export type MeetingSessionRuntimeOptions<
   releaseBrowserTab(session: TSession): Promise<boolean | undefined>;
   refreshBrowserHealth(
     session: TSession,
-    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
+    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number },
   ): Promise<void>;
   refreshStatus(session: TSession): Promise<void>;
   refreshReusableSession(
@@ -189,8 +189,8 @@ export class MeetingSessionRuntime<
     });
     registerMeetingSessionRuntimeProbeAccess<TSession, TRequest>(this, {
       joinForProbe: async (request) => await this.#joinForProbe(request),
-      refreshCaptionHealthForProbe: async (session, timeoutMs) =>
-        await this.#refreshCaptionHealthForProbe(session, timeoutMs),
+      refreshCaptionHealthForProbe: async (session, deadline) =>
+        await this.#refreshCaptionHealthForProbe(session, deadline),
     });
   }
 
@@ -385,14 +385,14 @@ export class MeetingSessionRuntime<
 
   async refreshBrowserHealth(
     session: TSession,
-    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number } = {},
+    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number } = {},
   ): Promise<void> {
     await this.#refreshBrowserHealth(session, options);
   }
 
   async #refreshBrowserHealth(
     session: TSession,
-    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number } = {},
+    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number } = {},
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
     return await this.#browserHealthRefreshLock.run(
       session.id,
@@ -402,8 +402,15 @@ export class MeetingSessionRuntime<
 
   async #refreshBrowserHealthUnlocked(
     session: TSession,
-    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
+    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number },
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
+    if (
+      this.#sessions.get(session.id) !== session ||
+      session.state !== "active" ||
+      (options.deadline !== undefined && Date.now() >= options.deadline)
+    ) {
+      return { browserHealthChecked: false, manualActionIsAuthoritative: false };
+    }
     const browserTransport = this.options.isBrowserTransport(session.transport);
     const browser = browserTransport ? this.options.getBrowser(session) : undefined;
     if (!browser?.launched && !(options.force && browser?.tab?.targetId)) {
@@ -426,8 +433,12 @@ export class MeetingSessionRuntime<
         normalizeMeetingBrowserHealthRefreshOutcome(
           await this.options.refreshBrowserHealth(session, options),
         ))());
-    if (session.state !== "active") {
-      return refreshOutcome;
+    if (
+      this.#sessions.get(session.id) !== session ||
+      session.state !== "active" ||
+      (options.deadline !== undefined && Date.now() > options.deadline)
+    ) {
+      return { browserHealthChecked: false, manualActionIsAuthoritative: false };
     }
     if (session.browserLeft === true && this.options.getBrowser(session)?.tab) {
       session.browserLeft = undefined;
@@ -446,13 +457,13 @@ export class MeetingSessionRuntime<
 
   async #refreshCaptionHealthForProbe(
     session: TSession,
-    timeoutMs?: number,
+    deadline?: number,
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
     if (!this.options.isTranscribeMode(session.mode)) {
       this.refreshSpeechReadiness(session);
       return { browserHealthChecked: false, manualActionIsAuthoritative: false };
     }
-    return await this.#refreshBrowserHealth(session, { force: true, timeoutMs });
+    return await this.#refreshBrowserHealth(session, { force: true, deadline });
   }
 
   refreshSpeechReadiness(session: TSession): {
@@ -528,7 +539,7 @@ export class MeetingSessionRuntime<
       if (reusable.state !== "active") {
         // The refresh hook runs inside the join lock, so it marks stale sessions
         // ended and lets this owner perform cleanup without recursive lock entry.
-        await this.#leaveSession(reusable, {
+        await this.#leaveSessionAfterBrowserRefreshes(reusable, {
           keepBrowserTab: refreshResult?.keepBrowserTab ?? true,
         });
         reusable = undefined;
@@ -623,7 +634,7 @@ export class MeetingSessionRuntime<
         ...(session.browserLeft === undefined ? {} : { browserLeft: session.browserLeft }),
       };
     }
-    const leave = this.#leaveSession(session, options);
+    const leave = this.#leaveSessionAfterBrowserRefreshes(session, options);
     this.#sessionLeaves.set(sessionId, leave);
     try {
       return await leave;
@@ -632,6 +643,16 @@ export class MeetingSessionRuntime<
         this.#sessionLeaves.delete(sessionId);
       }
     }
+  }
+
+  async #leaveSessionAfterBrowserRefreshes(
+    session: TSession,
+    options?: { keepBrowserTab?: boolean },
+  ): Promise<MeetingSessionLeaveResult<TSession>> {
+    return await this.#browserHealthRefreshLock.run(
+      session.id,
+      async () => await this.#leaveSession(session, options),
+    );
   }
 
   async #leaveSession(

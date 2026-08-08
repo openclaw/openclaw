@@ -27,7 +27,7 @@ type MeetingSessionJoinRuntimeForProbe<TSession, TRequest> = {
 type MeetingSessionHealthRuntimeForProbe<TSession> = {
   refreshBrowserHealth(
     session: TSession,
-    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
+    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number },
   ): Promise<void>;
   refreshCaptionHealth(session: TSession): Promise<void>;
 };
@@ -72,18 +72,18 @@ export function joinMeetingSessionForProbe<TSession, TRequest>(
 export function refreshMeetingCaptionHealthForProbe<TSession>(
   runtime: MeetingSessionHealthRuntimeForProbe<TSession>,
   session: TSession,
-  timeoutMs?: number,
+  deadline?: number,
 ): Promise<MeetingBrowserHealthRefreshOutcome> {
   return getMeetingSessionRuntimeProbeAccess<TSession, unknown>(
     runtime,
-  ).refreshCaptionHealthForProbe(session, timeoutMs);
+  ).refreshCaptionHealthForProbe(session, deadline);
 }
 
 export function registerMeetingSessionRuntimeHealthRefreshForProbe<TSession>(
   runtime: MeetingSessionHealthRuntimeForProbe<TSession>,
   refresh: (
     session: TSession,
-    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number },
+    options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number },
   ) => Promise<MeetingBrowserHealthRefreshOutcome>,
 ): void {
   registerMeetingSessionRuntimeHealthRefresh(runtime, refresh);

@@ -60,7 +60,7 @@ export type MeetingProbeContext<
   ): boolean;
   hasHealthHandle(sessionId: string): boolean;
   refreshHealth(sessionId: string): void;
-  refreshCaptionHealth(session: Session, timeoutMs?: number): Promise<MeetingProbeRefreshResult>;
+  refreshCaptionHealth(session: Session, deadline?: number): Promise<MeetingProbeRefreshResult>;
 };
 
 type MeetingRuntimeProbeOptions<
@@ -92,7 +92,7 @@ export function createMeetingRuntimeProbes<
     refreshCaptionHealth?(
       context: MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>,
       session: Session,
-      timeoutMs: number,
+      deadline: number,
     ): Promise<MeetingProbeRefreshResult>;
     speechModeError?: string;
     listeningModeError?: string;
@@ -251,8 +251,8 @@ export function createMeetingRuntimeProbes<
         });
         const refreshOutcome = await Promise.race([
           (
-            options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
-            context.refreshCaptionHealth(result.session, remainingMs)
+            options.refreshCaptionHealth?.(context, result.session, deadline) ??
+            context.refreshCaptionHealth(result.session, deadline)
           ).then((refreshResult) => {
             const outcome =
               typeof refreshResult === "object"

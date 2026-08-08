@@ -391,7 +391,7 @@ describe("Microsoft Teams meeting session flow", () => {
     });
   });
 
-  it("does not reattach a recovery result after leave reaches the terminal state", async () => {
+  it("waits for an in-flight recovery before terminal cleanup", async () => {
     const harness = runtimeHarness();
     const runtime = new TeamsMeetingsRuntime({
       config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
@@ -417,12 +417,14 @@ describe("Microsoft Teams meeting session flow", () => {
 
     const refreshing = runtime.status(joined.session.id);
     await tabListStarted;
-    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+    const leaving = runtime.leave(joined.session.id);
+    expect(joined.session.state).toBe("active");
+    releaseTabList();
+    const [, leaveResult] = await Promise.all([refreshing, leaving]);
+    expect(leaveResult).toMatchObject({
       browserLeft: true,
       session: { state: "ended", browserLeft: true },
     });
-    releaseTabList();
-    await refreshing;
 
     expect(joined.session.chrome?.browserTab).toBeUndefined();
     const requestCount = harness.gatewayRequest.mock.calls.length;

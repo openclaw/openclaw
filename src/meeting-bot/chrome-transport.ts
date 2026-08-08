@@ -320,6 +320,7 @@ export function createMeetingChromeTransport<
   async function resolveChromeNode(params: {
     runtime: PluginRuntime;
     requestedNode?: string;
+    deadline?: number;
   }): Promise<string> {
     return await resolveMeetingBrowserNode({
       ...params,
@@ -551,14 +552,19 @@ export function createMeetingChromeTransport<
     trackedTargetId?: string;
     transport: "chrome" | "chrome-node";
     timeoutMs?: number;
+    deadline?: number;
     url?: string;
   }) {
+    const deadline =
+      params.deadline ??
+      (params.timeoutMs === undefined ? undefined : Date.now() + Math.max(1, params.timeoutMs));
     const nodeId =
       params.transport === "chrome-node"
         ? (params.nodeId ??
           (await resolveChromeNode({
             runtime: params.runtime,
             requestedNode: params.config.chromeNode.node,
+            deadline,
           })))
         : undefined;
     return {
@@ -576,7 +582,9 @@ export function createMeetingChromeTransport<
                 body: request.body,
                 timeoutMs: request.timeoutMs,
               })
-          : await resolveLocalMeetingBrowserRequest(params.runtime),
+          : await resolveLocalMeetingBrowserRequest(params.runtime, {
+              deadline,
+            }),
         captureCaptions:
           params.mode === "transcribe" ||
           resolveTranscriptsConfig(params.fullConfig?.transcripts).enabled,
@@ -585,6 +593,7 @@ export function createMeetingChromeTransport<
         meetingSessionId: params.meetingSessionId,
         mode: params.mode,
         readOnly: params.readOnly,
+        deadline,
         requestedMeetingUrl: params.url,
         trackedMeetingUrl: params.trackedMeetingUrl,
         trackedTargetId: params.trackedTargetId,

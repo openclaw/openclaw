@@ -5,6 +5,7 @@ import type {
   TranscriptStartRequest,
   TranscriptStopRequest,
 } from "../transcripts/provider-types.js";
+import { isMeetingBrowserDeadlinePast } from "./browser-deadline.js";
 import { isMeetingRealtimeRouteReady } from "./meeting-modes.js";
 import type { MeetingPluginConfig } from "./plugin-config.js";
 import type {
@@ -293,10 +294,10 @@ export function createMeetingRuntimeFacade<
         isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
         hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
         refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
-        refreshCaptionHealth: async (session, timeoutMs) =>
+        refreshCaptionHealth: async (session, deadline) =>
           await getMeetingSessionRuntimeProbeAccess<Session, Request>(
             this.#sessions,
-          ).refreshCaptionHealthForProbe(session, timeoutMs),
+          ).refreshCaptionHealthForProbe(session, deadline),
       };
     }
 
@@ -434,7 +435,12 @@ export function createMeetingRuntimeFacade<
 
     async #refreshBrowserHealth(
       session: Session,
-      refreshOptions: { force?: boolean; readOnly?: boolean; timeoutMs?: number } = {},
+      refreshOptions: {
+        force?: boolean;
+        readOnly?: boolean;
+        timeoutMs?: number;
+        deadline?: number;
+      } = {},
     ): Promise<MeetingBrowserHealthRefreshOutcome> {
       try {
         const result = await options.transport.recoverCurrentTab({
@@ -449,9 +455,10 @@ export function createMeetingRuntimeFacade<
           trackedTargetId: session.chrome?.browserTab?.targetId,
           transport: session.transport,
           timeoutMs: refreshOptions.timeoutMs,
+          deadline: refreshOptions.deadline,
           url: session.url,
         });
-        if (session.state !== "active") {
+        if (session.state !== "active" || isMeetingBrowserDeadlinePast(refreshOptions.deadline)) {
           return { browserHealthChecked: false, manualActionIsAuthoritative: false };
         }
         if (result.found && session.chrome) {
@@ -496,7 +503,7 @@ export function createMeetingRuntimeFacade<
         }
         return { browserHealthChecked: false, manualActionIsAuthoritative: false };
       } catch (error) {
-        if (session.state !== "active") {
+        if (session.state !== "active" || isMeetingBrowserDeadlinePast(refreshOptions.deadline)) {
           return { browserHealthChecked: false, manualActionIsAuthoritative: false };
         }
         const formattedError = formatErrorMessage(error);

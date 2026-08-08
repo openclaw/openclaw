@@ -392,6 +392,7 @@ export async function recoverCurrentMeetTab(params: {
   fullConfig?: OpenClawConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
+  deadline?: number;
   timeoutMs?: number;
   trackedMeetingUrl?: string;
   trackedTargetId?: string;
@@ -405,16 +406,22 @@ export async function recoverCurrentMeetTab(params: {
   browser?: GoogleMeetChromeHealth;
   message: string;
 }> {
+  const deadline =
+    params.deadline ??
+    (params.timeoutMs === undefined ? undefined : Date.now() + Math.max(1, params.timeoutMs));
   return {
     transport: "chrome",
     ...(await recoverMeetingBrowserTab({
       adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime, {
+        deadline,
+      }),
       captureCaptions: shouldCaptureCaptions(params.mode ?? "bidi", params.fullConfig),
       config: params.config.chrome,
       locationLabel: "in local Chrome",
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
+      deadline,
       requestedMeetingUrl: params.url,
       timeoutMs: params.timeoutMs,
       trackedMeetingUrl: params.trackedMeetingUrl,
@@ -429,6 +436,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
   fullConfig?: OpenClawConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
+  deadline?: number;
   timeoutMs?: number;
   trackedMeetingUrl?: string;
   trackedTargetId?: string;
@@ -442,9 +450,13 @@ export async function recoverCurrentMeetTabOnNode(params: {
   browser?: GoogleMeetChromeHealth;
   message: string;
 }> {
+  const deadline =
+    params.deadline ??
+    (params.timeoutMs === undefined ? undefined : Date.now() + Math.max(1, params.timeoutMs));
   const nodeId = await resolveChromeNode({
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
+    deadline,
   });
   return {
     transport: "chrome-node",
@@ -465,6 +477,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
       locationLabel: "on the selected Chrome node",
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
+      deadline,
       requestedMeetingUrl: params.url,
       timeoutMs: params.timeoutMs,
       trackedMeetingUrl: params.trackedMeetingUrl,

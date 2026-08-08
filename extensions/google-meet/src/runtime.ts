@@ -325,8 +325,8 @@ export class GoogleMeetRuntime {
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
-      refreshCaptionHealth: async (session, timeoutMs) =>
-        await refreshMeetingCaptionHealthForProbe(this.#sessions, session, timeoutMs),
+      refreshCaptionHealth: async (session, deadline) =>
+        await refreshMeetingCaptionHealthForProbe(this.#sessions, session, deadline),
     };
   }
 
@@ -544,7 +544,12 @@ export class GoogleMeetRuntime {
 
   async #refreshBrowserHealth(
     session: GoogleMeetSession,
-    options: { force?: boolean; readOnly?: boolean; timeoutMs?: number } = {},
+    options: {
+      force?: boolean;
+      readOnly?: boolean;
+      timeoutMs?: number;
+      deadline?: number;
+    } = {},
   ): Promise<boolean> {
     return await refreshGoogleMeetBrowserHealth({ ...this.params, options, session });
   }

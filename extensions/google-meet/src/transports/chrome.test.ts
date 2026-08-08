@@ -3,7 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "../config.js";
-import { launchChromeMeet, recoverCurrentMeetTab } from "./chrome.js";
+import { launchChromeMeet, recoverCurrentMeetTab, recoverCurrentMeetTabOnNode } from "./chrome.js";
 
 const logger = {
   info() {},
@@ -18,9 +18,12 @@ type TestGatewayRequest = (
   options?: unknown,
 ) => Promise<unknown>;
 
-function browserRuntime(request: TestGatewayRequest): PluginRuntime {
+function browserRuntime(
+  request: TestGatewayRequest,
+  isAvailable: () => Promise<boolean> = async () => true,
+): PluginRuntime {
   const gateway: PluginRuntime["gateway"] = {
-    isAvailable: async () => true,
+    isAvailable,
     request: async <T = unknown>(
       method: string,
       params?: Record<string, unknown>,
@@ -336,5 +339,96 @@ describe("google meet chrome transport", () => {
     expect(recoveryTimeouts.every((timeoutMs) => timeoutMs !== undefined && timeoutMs <= 25)).toBe(
       true,
     );
+  });
+
+  it("does not start local recovery after Gateway discovery reaches the probe deadline", async () => {
+    let resolveAvailability!: (available: boolean) => void;
+    const availability = new Promise<boolean>((resolve) => {
+      resolveAvailability = resolve;
+    });
+    const gatewayRequest = vi.fn(async () => ({ tabs: [] }));
+    const recovery = recoverCurrentMeetTab({
+      runtime: browserRuntime(gatewayRequest, async () => await availability),
+      config: resolveGoogleMeetConfig({}),
+      timeoutMs: 5,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    resolveAvailability(true);
+
+    await expect(recovery).resolves.toEqual(expect.any(Error));
+    expect(String(await recovery)).toContain("timed out");
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not start Gateway discovery after the probe deadline", async () => {
+    const gatewayRequest = vi.fn(async () => ({ tabs: [] }));
+    const isAvailable = vi.fn(async () => true);
+
+    await expect(
+      recoverCurrentMeetTab({
+        runtime: browserRuntime(gatewayRequest, isAvailable),
+        config: resolveGoogleMeetConfig({}),
+        deadline: Date.now() - 1,
+      }),
+    ).rejects.toThrow("timed out");
+    expect(isAvailable).not.toHaveBeenCalled();
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not start node recovery after node discovery reaches the probe deadline", async () => {
+    let resolveNodes!: (result: { nodes: Array<Record<string, unknown>> }) => void;
+    const nodes = new Promise<{ nodes: Array<Record<string, unknown>> }>((resolve) => {
+      resolveNodes = resolve;
+    });
+    const invoke = vi.fn(async () => ({ payload: { result: { tabs: [] } } }));
+    const runtime = {
+      nodes: {
+        list: vi.fn(async () => await nodes),
+        invoke,
+      },
+    } as unknown as PluginRuntime;
+    const recovery = recoverCurrentMeetTabOnNode({
+      runtime,
+      config: resolveGoogleMeetConfig({}),
+      timeoutMs: 5,
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    resolveNodes({
+      nodes: [
+        {
+          nodeId: "meet-node",
+          connected: true,
+          commands: ["googlemeet.chrome", "browser.proxy"],
+        },
+      ],
+    });
+
+    await expect(recovery).resolves.toEqual(expect.any(Error));
+    expect(String(await recovery)).toContain("timed out");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not start node discovery after the probe deadline", async () => {
+    const list = vi.fn(async () => ({ nodes: [] }));
+    const invoke = vi.fn(async () => ({ payload: { result: { tabs: [] } } }));
+    const runtime = { nodes: { list, invoke } } as unknown as PluginRuntime;
+
+    await expect(
+      recoverCurrentMeetTabOnNode({
+        runtime,
+        config: resolveGoogleMeetConfig({}),
+        deadline: Date.now() - 1,
+      }),
+    ).rejects.toThrow("timed out");
+    expect(list).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

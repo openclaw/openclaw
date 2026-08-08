@@ -107,6 +107,7 @@ type MeetingRuntimeTransport<
     trackedTargetId?: string;
     transport: "chrome" | "chrome-node";
     timeoutMs?: number;
+    deadline?: number;
     url?: string;
   }): Promise<{
     browser?: Health;

@@ -16,11 +16,15 @@ function clearNonAuthoritativeManualAction(
   return rest;
 }
 
+function isRecoveryDeadlinePast(deadline: number | undefined): boolean {
+  return deadline !== undefined && Date.now() > deadline;
+}
+
 export async function refreshGoogleMeetBrowserHealth(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
   logger: RuntimeLogger;
-  options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number };
+  options?: { force?: boolean; readOnly?: boolean; timeoutMs?: number; deadline?: number };
   runtime: PluginRuntime;
   session: GoogleMeetSession;
 }): Promise<boolean> {
@@ -34,6 +38,7 @@ export async function refreshGoogleMeetBrowserHealth(params: {
             fullConfig,
             mode: session.mode,
             readOnly: options.readOnly,
+            deadline: options.deadline,
             timeoutMs: options.timeoutMs,
             trackedMeetingUrl: session.url,
             trackedTargetId: session.chrome?.browserTab?.targetId,
@@ -45,12 +50,13 @@ export async function refreshGoogleMeetBrowserHealth(params: {
             fullConfig,
             mode: session.mode,
             readOnly: options.readOnly,
+            deadline: options.deadline,
             timeoutMs: options.timeoutMs,
             trackedMeetingUrl: session.url,
             trackedTargetId: session.chrome?.browserTab?.targetId,
             url: session.url,
           });
-    if (session.state !== "active") {
+    if (session.state !== "active" || isRecoveryDeadlinePast(options.deadline)) {
       return false;
     }
     if (result.found && session.chrome) {
@@ -87,7 +93,7 @@ export async function refreshGoogleMeetBrowserHealth(params: {
     }
     return false;
   } catch (error) {
-    if (session.state !== "active") {
+    if (session.state !== "active" || isRecoveryDeadlinePast(options.deadline)) {
       return false;
     }
     const message = `Google Meet browser readiness refresh failed: ${formatErrorMessage(error)}`;

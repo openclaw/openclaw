@@ -1,6 +1,7 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { callGatewayFromCli } from "../cli/gateway-rpc.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { waitForMeetingBrowserDeadline } from "./browser-deadline.js";
 import type {
   MeetingBrowserRequestCaller,
   MeetingBrowserRequestParams,
@@ -39,10 +40,13 @@ async function callLocalBrowserRequest(params: MeetingBrowserRequestParams) {
 
 export async function resolveLocalMeetingBrowserRequest(
   runtime: PluginRuntime,
+  options: { deadline?: number } = {},
 ): Promise<MeetingBrowserRequestCaller> {
   // Gateway-hosted plugin work stays in-process; otherwise agent tools would
   // need an external operator.admin token just to reach the local browser.
-  if (!(await runtime.gateway.isAvailable())) {
+  if (
+    !(await waitForMeetingBrowserDeadline(() => runtime.gateway.isAvailable(), options.deadline))
+  ) {
     return callLocalBrowserRequest;
   }
   return async (params) =>

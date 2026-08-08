@@ -15,6 +15,7 @@ export type BrowserTab = MeetingBrowserCandidateTab;
 export async function resolveChromeNodeInfo(params: {
   runtime: PluginRuntime;
   requestedNode?: string;
+  deadline?: number;
 }) {
   return await resolveMeetingBrowserNodeInfo({
     ...params,
@@ -25,6 +26,7 @@ export async function resolveChromeNodeInfo(params: {
 export async function resolveChromeNode(params: {
   runtime: PluginRuntime;
   requestedNode?: string;
+  deadline?: number;
 }): Promise<string> {
   return await resolveMeetingBrowserNode({
     ...params,
