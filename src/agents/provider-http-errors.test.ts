@@ -304,6 +304,126 @@ describe("provider error utils", () => {
     expect(providerError.errorBody).not.toContain("sk-secret1234567890abcd");
   });
 
+  it("redacts request secrets from errors and transcript-bound metadata", async () => {
+    const sensitiveValue = "orchidRiver17glassMoth92cabin";
+    const response = new Response(
+      JSON.stringify({
+        error: {
+          message: `provider reflected ${sensitiveValue}`,
+          code: sensitiveValue,
+          type: sensitiveValue,
+        },
+      }),
+      {
+        status: 401,
+        headers: { "x-request-id": sensitiveValue },
+      },
+    );
+
+    const providerError = (await createProviderHttpError(response, "Provider API error", {
+      sensitiveValues: [sensitiveValue],
+    })) as ProviderHttpError;
+    const transcriptFields = {
+      errorMessage: providerError.message,
+      errorCode: providerError.errorCode,
+      errorType: providerError.errorType,
+      errorBody: providerError.errorBody,
+    };
+
+    expect(providerError).toMatchObject({
+      code: "orchid…abin",
+      errorCode: "orchid…abin",
+      errorType: "orchid…abin",
+      requestId: "orchid…abin",
+    } satisfies Partial<ProviderHttpError>);
+    expect(JSON.stringify(providerError)).not.toContain(sensitiveValue);
+    expect(JSON.stringify(transcriptFields)).not.toContain(sensitiveValue);
+  });
+
+  it.each([
+    (value: string) => value,
+    (value: string) => JSON.stringify(value).slice(1, -1),
+    (value: string) =>
+      encodeURIComponent(value).replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase()),
+    (value: string) =>
+      new URLSearchParams({ key: value })
+        .toString()
+        .slice("key=".length)
+        .replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase()),
+  ])("redacts raw and encoded request secrets from provider metadata", async (encodeValue) => {
+    const sensitiveValue = 'orchid/River +17="glassMoth92~cabin';
+    const reflectedValue = encodeValue(sensitiveValue);
+    const response = new Response(
+      JSON.stringify({ error: { message: reflectedValue, code: reflectedValue } }),
+      {
+        status: 401,
+        headers: { "x-request-id": reflectedValue },
+      },
+    );
+
+    const providerError = await createProviderHttpError(response, "Provider API error", {
+      sensitiveValues: [sensitiveValue],
+    });
+
+    expect(JSON.stringify(providerError)).not.toContain(reflectedValue);
+    expect(JSON.stringify(providerError)).not.toContain("glassMoth92");
+  });
+
+  it("redacts request secrets before truncating JSON error details", async () => {
+    const sensitiveValue = "orchidRiver17glassMoth92cabin";
+    const reflectedPrefix = "x".repeat(205);
+    const response = new Response(
+      JSON.stringify({ error: { message: `${reflectedPrefix}${sensitiveValue}` } }),
+      { status: 401 },
+    );
+
+    const providerError = await createProviderHttpError(response, "Provider API error", {
+      sensitiveValues: [sensitiveValue],
+    });
+
+    expect(providerError.message).toContain(`${reflectedPrefix}orchid…abin`);
+    expect(providerError.message).not.toContain("orchidRiver17");
+    expect(JSON.stringify(providerError)).not.toContain("orchidRiver17");
+  });
+
+  it.each([16 * 1024, 64 * 1024])(
+    "suppresses a request-secret prefix truncated at %i bytes",
+    async (limitBytes) => {
+      const sensitiveValue = "orchidRiver17glassMoth92cabin";
+      const retainedPrefix = sensitiveValue.slice(0, 12);
+      const response = new Response(
+        `${"x".repeat(limitBytes - retainedPrefix.length)}${sensitiveValue} trailing text`,
+        { status: 401 },
+      );
+
+      const detail = await readResponseTextLimited(response, limitBytes, {
+        sensitiveValues: [sensitiveValue],
+      });
+
+      expect(detail).toContain("truncated diagnostic omitted");
+      expect(detail).not.toContain(retainedPrefix);
+      expect(detail).not.toContain(sensitiveValue);
+    },
+  );
+
+  it("suppresses a request-secret prefix split by the provider error-body cap", async () => {
+    const sensitiveValue = "orchidRiver17glassMoth92cabin";
+    const retainedPrefix = sensitiveValue.slice(0, 12);
+    const limitBytes = 16 * 1024;
+    const response = new Response(
+      `${"x".repeat(limitBytes - retainedPrefix.length)}${sensitiveValue} trailing text`,
+      { status: 401 },
+    );
+
+    const providerError = await createProviderHttpError(response, "Provider API error", {
+      sensitiveValues: [sensitiveValue],
+    });
+
+    expect(providerError.message.length).toBeLessThan(700);
+    expect(JSON.stringify(providerError)).not.toContain(retainedPrefix);
+    expect(JSON.stringify(providerError)).not.toContain(sensitiveValue);
+  });
+
   it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
     const response = new Response(
       JSON.stringify({

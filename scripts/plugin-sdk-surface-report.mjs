@@ -119,8 +119,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  // +1: flushLogger projected through the deprecated text-runtime barrel.
-  "text-runtime": 192,
+  // +2: flushLogger and request-scoped redaction options through deprecated text-runtime.
+  "text-runtime": 193,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
   "agent-harness-runtime": 4,
@@ -223,7 +223,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
       // +1: simple channel secret contract factory replacing repeated collectors.
-      4835,
+      // +2: request-scoped tool redaction options through current and compatibility barrels.
+      4837,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -286,7 +287,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: flushLogger projected through the deprecated text-runtime barrel.
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
-      1703,
+      // +1: request-scoped redaction options projected through deprecated text-runtime.
+      1704,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

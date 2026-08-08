@@ -12,7 +12,7 @@ import {
   readResponseWithLimit,
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
@@ -32,6 +32,7 @@ type ProviderHttpErrorOptions = {
   statusPrefix?: string;
   bodyTimeoutMs?: ReadResponseTextPrefixOptions["timeoutMs"];
   onBodyTimeout?: NonNullable<ReadResponseTextPrefixOptions["onTimeout"]>;
+  sensitiveValues?: readonly string[];
 };
 
 class ProviderErrorBodyTimeout extends Error {
@@ -58,30 +59,54 @@ export function truncateErrorDetail(detail: string, limit = 220): string {
   return detail.length <= limit ? detail : `${truncateUtf16Safe(detail, limit - 1)}…`;
 }
 
-/** Redacts secrets before preserving a bounded provider error body preview. */
-function redactProviderErrorBody(body: string): string {
-  return truncateErrorDetail(redactSensitiveText(body), ERROR_BODY_METADATA_LIMIT);
+function redactProviderErrorText(body: string, sensitiveValues?: readonly string[]): string {
+  return sensitiveValues?.length
+    ? redactToolPayloadText(body, { exactSecretValues: sensitiveValues })
+    : redactSensitiveText(body);
 }
 
-/** Reads at most `limitBytes` from a response body without buffering provider-sized failures. */
+async function readResponseTextLimitedResult(
+  response: Response,
+  limitBytes: number,
+  options?: ReadResponseTextPrefixOptions,
+) {
+  return await readResponseTextPrefix(response, limitBytes, {
+    chunkTimeoutMs: options?.chunkTimeoutMs ?? 10_000,
+    onIdleTimeout:
+      options?.onIdleTimeout ??
+      (({ chunkTimeoutMs }) => new Error(`error body read stalled for ${chunkTimeoutMs}ms`)),
+    timeoutMs: options?.timeoutMs,
+    onTimeout: options?.onTimeout,
+  });
+}
+
+/** Redacts secrets before preserving a bounded provider error body preview. */
+function redactProviderErrorBody(body: string, sensitiveValues?: readonly string[]): string {
+  return truncateErrorDetail(
+    redactProviderErrorText(body, sensitiveValues),
+    ERROR_BODY_METADATA_LIMIT,
+  );
+}
+
+/**
+ * Reads at most `limitBytes` without buffering provider-sized failures.
+ * Request secrets are redacted before a partial value can survive the byte boundary.
+ */
 export async function readResponseTextLimited(
   response: Response,
   limitBytes = 16 * 1024,
-  options?: ReadResponseTextPrefixOptions,
+  options?: ReadResponseTextPrefixOptions & { sensitiveValues?: readonly string[] },
 ): Promise<string> {
   if (limitBytes <= 0) {
     return "";
   }
-  return (
-    await readResponseTextPrefix(response, limitBytes, {
-      chunkTimeoutMs: options?.chunkTimeoutMs ?? 10_000,
-      onIdleTimeout:
-        options?.onIdleTimeout ??
-        (({ chunkTimeoutMs }) => new Error(`error body read stalled for ${chunkTimeoutMs}ms`)),
-      timeoutMs: options?.timeoutMs,
-      onTimeout: options?.onTimeout,
-    })
-  ).text;
+  const result = await readResponseTextLimitedResult(response, limitBytes, options);
+  return options?.sensitiveValues?.length
+    ? redactToolPayloadText(result.text, {
+        exactSecretValues: options.sensitiveValues,
+        sourceTruncated: result.truncated,
+      })
+    : result.text;
 }
 
 /** Reads a successful provider text response under a byte cap. */
@@ -105,8 +130,15 @@ export async function readProviderTextResponse(
   return new TextDecoder().decode(bytes);
 }
 
-/** Formats common provider JSON error payload shapes into one readable detail string. */
-export function formatProviderErrorPayload(payload: unknown): string | undefined {
+type ProviderErrorPayloadFields = {
+  message?: string;
+  code?: string;
+  type?: string;
+};
+
+function extractProviderErrorPayloadFields(
+  payload: unknown,
+): ProviderErrorPayloadFields | undefined {
   const root = asObject(payload);
   const detailObject = asObject(root?.detail);
   const subject = asObject(root?.error) ?? detailObject ?? root;
@@ -125,19 +157,36 @@ export function formatProviderErrorPayload(payload: unknown): string | undefined
     trimToUndefined(root?.detail);
   const type = trimToUndefined(subject.type);
   const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status) ?? oauthCode;
-  const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
+  return {
+    ...(message ? { message } : {}),
+    ...(code ? { code } : {}),
+    ...(type ? { type } : {}),
+  };
+}
+
+function formatProviderErrorFields(fields: ProviderErrorPayloadFields): string | undefined {
+  const metadata = [
+    fields.type ? `type=${fields.type}` : undefined,
+    fields.code ? `code=${fields.code}` : undefined,
+  ]
     .filter((value): value is string => Boolean(value))
     .join(", ");
-  if (message && metadata) {
-    return `${truncateErrorDetail(message)} [${metadata}]`;
+  if (fields.message && metadata) {
+    return `${truncateErrorDetail(fields.message)} [${metadata}]`;
   }
-  if (message) {
-    return truncateErrorDetail(message);
+  if (fields.message) {
+    return truncateErrorDetail(fields.message);
   }
   if (metadata) {
     return `[${metadata}]`;
   }
   return undefined;
+}
+
+/** Formats common provider JSON error payload shapes into one readable detail string. */
+export function formatProviderErrorPayload(payload: unknown): string | undefined {
+  const fields = extractProviderErrorPayloadFields(payload);
+  return fields ? formatProviderErrorFields(fields) : undefined;
 }
 
 type ProviderErrorPayloadMetadata = {
@@ -146,22 +195,23 @@ type ProviderErrorPayloadMetadata = {
   type?: string;
 };
 
-function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
-  const root = asObject(payload);
-  const detailObject = asObject(root?.detail);
-  const subject = asObject(root?.error) ?? detailObject ?? root;
-  if (!subject) {
+function extractProviderErrorPayloadMetadata(
+  payload: unknown,
+  sensitiveValues?: readonly string[],
+): ProviderErrorPayloadMetadata {
+  const fields = extractProviderErrorPayloadFields(payload);
+  if (!fields) {
     return {};
   }
-
-  const detail = formatProviderErrorPayload(payload);
-  const type = trimToUndefined(subject.type);
-  const errorDescription =
-    trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
-  const oauthCode = errorDescription ? trimToUndefined(root?.error) : undefined;
-  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status) ?? oauthCode;
+  // Redact before the detail cap; truncating first can retain an unmatched secret prefix.
+  const message = fields.message
+    ? redactProviderErrorText(fields.message, sensitiveValues)
+    : undefined;
+  const code = fields.code ? redactProviderErrorText(fields.code, sensitiveValues) : undefined;
+  const type = fields.type ? redactProviderErrorText(fields.type, sensitiveValues) : undefined;
+  const detail = formatProviderErrorFields({ message, code, type });
   return {
-    ...(detail ? { detail: redactSensitiveText(detail) } : {}),
+    ...(detail ? { detail } : {}),
     ...(code ? { code } : {}),
     ...(type ? { type } : {}),
   };
@@ -182,37 +232,56 @@ async function extractProviderErrorInfo(
   options?: ProviderHttpErrorOptions,
 ): Promise<ProviderHttpErrorInfo> {
   const bodyTimeoutMs = options?.bodyTimeoutMs;
-  const rawBody = trimToUndefined(
-    await readResponseTextLimited(response, 16 * 1024, {
-      timeoutMs:
-        typeof bodyTimeoutMs === "function"
-          ? () => {
-              try {
-                return bodyTimeoutMs();
-              } catch (error) {
-                throw new ProviderErrorBodyTimeout(error);
-              }
+  const bodyRead = await readResponseTextLimitedResult(response, 16 * 1024, {
+    timeoutMs:
+      typeof bodyTimeoutMs === "function"
+        ? () => {
+            try {
+              return bodyTimeoutMs();
+            } catch (error) {
+              throw new ProviderErrorBodyTimeout(error);
             }
-          : bodyTimeoutMs,
-      onTimeout: (params) =>
-        new ProviderErrorBodyTimeout(
-          options?.onBodyTimeout?.(params) ??
-            new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
-        ),
-    }).catch((error: unknown) => {
-      if (error instanceof ProviderErrorBodyTimeout) {
-        throw error.timeoutError;
-      }
-      return "";
-    }),
-  );
-  const requestId = extractProviderRequestId(response);
+          }
+        : bodyTimeoutMs,
+    onTimeout: (params) =>
+      new ProviderErrorBodyTimeout(
+        options?.onBodyTimeout?.(params) ??
+          new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
+      ),
+  }).catch((error: unknown) => {
+    if (error instanceof ProviderErrorBodyTimeout) {
+      throw error.timeoutError;
+    }
+    return { text: "", size: 0, truncated: false };
+  });
+  const rawBody = trimToUndefined(bodyRead.text);
+  const rawRequestId = extractProviderRequestId(response);
+  const requestId = rawRequestId
+    ? redactProviderErrorText(rawRequestId, options?.sensitiveValues)
+    : undefined;
   if (!rawBody) {
     return requestId ? { requestId } : {};
   }
-  const body = redactProviderErrorBody(rawBody);
+  if (bodyRead.truncated && options?.sensitiveValues?.length) {
+    const body = truncateErrorDetail(
+      redactToolPayloadText(rawBody, {
+        exactSecretValues: options.sensitiveValues,
+        sourceTruncated: true,
+      }),
+      ERROR_BODY_METADATA_LIMIT,
+    );
+    return {
+      detail: body,
+      body,
+      ...(requestId ? { requestId } : {}),
+    };
+  }
+  const body = redactProviderErrorBody(rawBody, options?.sensitiveValues);
   try {
-    const metadata = extractProviderErrorPayloadMetadata(JSON.parse(rawBody));
+    const metadata = extractProviderErrorPayloadMetadata(
+      JSON.parse(rawBody),
+      options?.sensitiveValues,
+    );
     return {
       ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
       ...(metadata.code ? { code: metadata.code } : {}),
@@ -230,8 +299,11 @@ async function extractProviderErrorInfo(
 }
 
 /** Returns only the normalized provider detail string for callers that do not need metadata. */
-export async function extractProviderErrorDetail(response: Response): Promise<string | undefined> {
-  return (await extractProviderErrorInfo(response)).detail;
+export async function extractProviderErrorDetail(
+  response: Response,
+  options?: ProviderHttpErrorOptions,
+): Promise<string | undefined> {
+  return (await extractProviderErrorInfo(response, options)).detail;
 }
 
 /** Reads the provider request id header variants used across model and media APIs. */
