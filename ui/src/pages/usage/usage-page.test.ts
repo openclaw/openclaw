@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionUsageTimeSeries } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import type { SessionLogEntry } from "./types.ts";
+import type { UsageRouteData } from "./usage-page.ts";
 import "./usage-page.ts";
 
 type TestUsagePage = HTMLElement & {
   context: ApplicationContext;
+  routeData: UsageRouteData;
   usageSelectedSessions: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
   usageTimeSeriesStatus: { error: string | null; hasLoaded: boolean; stale: boolean };
@@ -29,23 +32,45 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
-  const subscribe = () => () => undefined;
-  const snapshot = {
+function gatewaySnapshot(
+  client: GatewayBrowserClient | null,
+  phase: "connected" | "reconnecting",
+): ApplicationGatewaySnapshot {
+  return {
     client,
-    phase: "connected",
+    phase,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
     lastErrorCode: null,
   } as ApplicationGatewaySnapshot;
+}
+
+/** Gateway stub whose snapshot publishes reach subscribers, for reconnect tests. */
+function publishableGateway(client: GatewayBrowserClient) {
+  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  const gateway = {
+    snapshot: gatewaySnapshot(client, "connected"),
+    subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    publish(next: ApplicationGatewaySnapshot) {
+      gateway.snapshot = next;
+      for (const listener of listeners) {
+        listener(next);
+      }
+    },
+  };
+  return gateway;
+}
+
+function contextWithClient(client: GatewayBrowserClient): ApplicationContext {
+  const subscribe = () => () => undefined;
   return {
     basePath: "",
-    gateway: {
-      snapshot,
-      subscribe,
-    },
+    gateway: publishableGateway(client),
     agents: {
       state: { agentsList: null, agentsLoading: false, agentsError: null },
       ensureList: vi.fn(async () => null),
@@ -75,6 +100,138 @@ async function createPage(client: GatewayBrowserClient): Promise<TestUsagePage> 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+const loadedProviderUsage: ProviderUsageSummary = {
+  updatedAt: 2,
+  providers: [
+    {
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 10 }],
+    },
+  ],
+};
+
+function usageRouteData(
+  context: ApplicationContext,
+  providerUsageSummary: ProviderUsageSummary,
+): UsageRouteData {
+  return {
+    gateway: context.gateway,
+    gatewaySnapshot: context.gateway.snapshot,
+    query: {
+      startDate: "2026-08-05",
+      endDate: "2026-08-05",
+      scope: "family",
+      timeZone: "local",
+      agentId: null,
+    },
+    result: null,
+    costSummary: null,
+    providerUsageSummary,
+    loadedAtMs: Date.now(),
+    error: null,
+  };
+}
+
+describe("UsagePage provider usage", () => {
+  it("fills the provider panel after a refreshing payload without user action", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      const request = vi.fn(async (method: string) => {
+        if (method === "usage.status") {
+          return loadedProviderUsage;
+        }
+        return method === "usage.cost" ? { daily: [] } : { sessions: [], totals: null };
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const page = document.createElement("openclaw-usage-page") as TestUsagePage;
+      page.context = contextWithClient(client);
+      document.body.append(page);
+      await page.updateComplete;
+
+      // A Gateway that has not loaded provider usage yet answers with the marker only.
+      page.routeData = usageRouteData(page.context, {
+        updatedAt: 1,
+        providers: [],
+        refreshing: true,
+      });
+      await page.updateComplete;
+      expect(document.querySelector(".provider-usage-card")).toBeNull();
+      expect(request).not.toHaveBeenCalledWith("usage.status", undefined, expect.anything());
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("usage.status", undefined, expect.anything());
+      });
+      await vi.waitFor(async () => {
+        await page.updateComplete;
+        expect(document.querySelector(".provider-usage-card__name")?.textContent).toContain(
+          "OpenAI",
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-arms the exhausted retry budget after a same-client reconnect", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    try {
+      const refreshingUsage: ProviderUsageSummary = {
+        updatedAt: 1,
+        providers: [],
+        refreshing: true,
+      };
+      let usageStatusCalls = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "usage.status") {
+          usageStatusCalls += 1;
+          return refreshingUsage;
+        }
+        return method === "usage.cost" ? { daily: [] } : { sessions: [], totals: null };
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const page = document.createElement("openclaw-usage-page") as TestUsagePage;
+      page.context = contextWithClient(client);
+      document.body.append(page);
+      await page.updateComplete;
+      page.routeData = usageRouteData(page.context, refreshingUsage);
+      await page.updateComplete;
+
+      // Every response stays refreshing, so the bounded budget spends itself:
+      // three fetches, then silence.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      await vi.waitFor(() => {
+        expect(usageStatusCalls).toBe(3);
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(usageStatusCalls).toBe(3);
+
+      // The transport supervisor reconnects inside the same client object; only
+      // the connection is new. The reconnect fetch must run with a re-armed
+      // budget so its refreshing answer schedules a bounded follow-up retry.
+      const gateway = page.context.gateway as unknown as ReturnType<typeof publishableGateway>;
+      gateway.publish(gatewaySnapshot(client, "reconnecting"));
+      gateway.publish(gatewaySnapshot(client, "connected"));
+      await vi.waitFor(() => {
+        expect(usageStatusCalls).toBe(4);
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => {
+        expect(usageStatusCalls).toBe(5);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("UsagePage detail requests", () => {

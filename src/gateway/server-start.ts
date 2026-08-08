@@ -11,8 +11,8 @@ import { finishGatewayStartup } from "./server-startup-finish.js";
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 type LoadGatewayModelCatalogSnapshot =
   typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
-type ReadPreparedGatewayModelCatalog =
-  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
+type ReadPreparedGatewayModelCatalogSnapshot =
+  typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalogSnapshot;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -64,9 +64,11 @@ const loadGatewayModelCatalogSnapshot: LoadGatewayModelCatalogSnapshot = async (
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalogSnapshot(...args);
 };
-const readPreparedGatewayModelCatalog: ReadPreparedGatewayModelCatalog = async (...args) => {
+const readPreparedGatewayModelCatalogSnapshot: ReadPreparedGatewayModelCatalogSnapshot = async (
+  ...args
+) => {
   const mod = await loadGatewayModelCatalogModule();
-  return mod.readPreparedGatewayModelCatalog(...args);
+  return mod.readPreparedGatewayModelCatalogSnapshot(...args);
 };
 
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
@@ -164,7 +166,7 @@ export async function startGatewayServer(
       loadGatewayPluginBootstrapModule,
       loadGatewayModelCatalog,
       loadGatewayModelCatalogSnapshot,
-      readPreparedGatewayModelCatalog,
+      readPreparedGatewayModelCatalogSnapshot,
     });
     await finishGatewayStartup({
       coreRuntime,

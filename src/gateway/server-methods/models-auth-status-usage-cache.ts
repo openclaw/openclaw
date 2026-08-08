@@ -49,8 +49,20 @@ type ProviderUsageRefresh = {
   promise: Promise<UsageSummary>;
 };
 
+type ProviderUsageRefreshFailure = {
+  agentDir: string;
+  configRef: object;
+  credentialKey: string;
+  providerKey: string;
+  error: unknown;
+};
+
 const usageCacheByAgentId = new Map<string, ProviderUsageCacheEntry>();
 const usageRefreshByAgentId = new Map<string, ProviderUsageRefresh>();
+// A rejected background refresh must reach the next capable cold read, or the
+// marker path answers successful placeholders forever and no client ever
+// observes the failure.
+const usageRefreshFailureByAgentId = new Map<string, ProviderUsageRefreshFailure>();
 let cacheGeneration = 0;
 
 function sortedRecordEntries<T>(value: Record<string, T> | undefined) {
@@ -106,6 +118,7 @@ export function clearModelAuthStatusUsageCache(): void {
   cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
+  usageRefreshFailureByAgentId.clear();
 }
 
 function providerUsageCacheKey(providerIds: readonly UsageProviderId[]): string {
@@ -189,6 +202,7 @@ function scheduleProviderUsageRefresh(params: {
           summary: usage,
           usageByProvider: mapProviderUsage(usage),
         });
+        usageRefreshFailureByAgentId.delete(params.agentId);
       }
       return usage;
     })
@@ -198,6 +212,18 @@ function scheduleProviderUsageRefresh(params: {
       log.debug(
         `usage refresh failed: providers=${params.providerIds.join(",")} error=${formatForLog(err)}`,
       );
+      if (
+        publishGeneration === cacheGeneration &&
+        usageRefreshByAgentId.get(params.agentId) === refresh
+      ) {
+        usageRefreshFailureByAgentId.set(params.agentId, {
+          agentDir: params.agentDir,
+          configRef: params.configRef,
+          credentialKey: params.credentialKey,
+          providerKey: params.providerKey,
+          error: err,
+        });
+      }
       throw err;
     })
     .finally(() => {
@@ -221,6 +247,7 @@ type ProviderUsageCacheParams = {
   agentDir: string;
   configRef: object;
   credentialKey: string;
+  coldRead?: "refresh-marker";
   forceRefresh?: boolean;
   providerIds: UsageProviderId[];
   now: number;
@@ -269,7 +296,7 @@ export function readProviderUsageStaleWhileRevalidate(
   return matching?.usageByProvider ?? new Map();
 }
 
-/** Returns cached provider usage, awaiting only a cold miss and refreshing stale data in place. */
+/** Returns cached provider usage while every network refresh runs in the background. */
 async function loadProviderUsageSummaryStaleWhileRevalidate(
   params: ProviderUsageCacheParams,
 ): Promise<UsageSummary> {
@@ -294,12 +321,37 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
     void refresh.catch(() => {});
     return matching.summary;
   }
-  return await refresh;
+  if (params.coldRead !== "refresh-marker") {
+    // Clients that never negotiated the marker cache an empty payload as the
+    // answer, so their cold read keeps awaiting the provider refresh.
+    return await refresh;
+  }
+  const recordedFailure = usageRefreshFailureByAgentId.get(params.agentId);
+  if (
+    recordedFailure &&
+    recordedFailure.agentDir === params.agentDir &&
+    recordedFailure.configRef === params.configRef &&
+    recordedFailure.credentialKey === credentialKey &&
+    recordedFailure.providerKey === providerKey
+  ) {
+    // A capable retry must observe the failed refresh instead of an endless
+    // placeholder chain. Clearing lets the refresh scheduled above own the
+    // next answer, so a recovered provider self-heals on the following read.
+    usageRefreshFailureByAgentId.delete(params.agentId);
+    void refresh.catch(() => {});
+    throw recordedFailure.error;
+  }
+  void refresh.catch(() => {});
+  // Cold read: the refresh owns the real values, so say so instead of letting an
+  // empty list read as "no provider usage" for the client's whole cache window.
+  return { updatedAt: params.now, providers: [], refreshing: true };
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
 export async function loadUsageStatusStaleWhileRevalidate(params: {
   config: OpenClawConfig;
+  /** "refresh-marker" returns a marked incomplete payload on a cold cache miss. */
+  coldRead?: "refresh-marker";
   now?: number;
 }): Promise<UsageSummary> {
   const agentId = resolveDefaultAgentId(params.config);
@@ -338,6 +390,7 @@ export async function loadUsageStatusStaleWhileRevalidate(params: {
       store,
     }),
     providerIds,
+    coldRead: params.coldRead,
     now: params.now ?? Date.now(),
   });
 }

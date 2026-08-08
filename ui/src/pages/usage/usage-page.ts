@@ -24,6 +24,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import { isUsageIncomplete } from "../../lib/incomplete-usage-retry.ts";
 import {
   buildSessionUsageDateParams,
   requestSessionUsage,
@@ -52,12 +53,12 @@ import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogEntry,
   type SessionLogRole,
+  type UsageDetailTaskValue,
   type UsageProps,
 } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 export type UsageRouteData = {
-  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
   query: {
@@ -75,14 +76,10 @@ export type UsageRouteData = {
 };
 
 type UsageTaskValue = {
+  epoch: object;
   result: SessionsUsageResult;
   costSummary: CostUsageSummary;
   providerUsageSummary: ProviderUsageSummary | null;
-};
-
-type UsageDetailTaskValue<T> = {
-  sessionKey: string;
-  data: T;
 };
 
 class UsagePage extends OpenClawLightDomElement {
@@ -136,6 +133,9 @@ class UsagePage extends OpenClawLightDomElement {
   // Invalidation runs the Task with a null client to supersede stale completions.
   // Track real gateway work separately so that no-op runs cannot block reconnect retries.
   private usageTaskActiveClient: GatewayBrowserClient | null = null;
+  // Retry-budget key, replaced on identity change AND same-client reconnect: the
+  // client object survives a transport drop, so it cannot key an exhausted budget.
+  private connectionEpoch: object = {};
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private readonly refreshPolicy = new UsageRefreshPolicy({
@@ -189,6 +189,8 @@ class UsagePage extends OpenClawLightDomElement {
         return initialState;
       }
       this.refreshPolicy.beginLoad();
+      // Request-time capture: the payload keys the budget of the connection that produced it.
+      const epoch = this.connectionEpoch;
       const agentId = normalizedAgentId || undefined;
       const agentScopeParams = agentId ? { agentId } : { agentScope: "all" as const };
       const [result, costSummary, providerUsageSummary] = await Promise.all([
@@ -207,7 +209,7 @@ class UsagePage extends OpenClawLightDomElement {
           .request<ProviderUsageSummary>("usage.status", undefined, { signal })
           .catch(() => null),
       ]);
-      return { result, costSummary, providerUsageSummary } satisfies UsageTaskValue;
+      return { epoch, result, costSummary, providerUsageSummary } satisfies UsageTaskValue;
     },
     onComplete: (value) => {
       this.usageTaskActiveClient = null;
@@ -215,7 +217,10 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageCostSummary = value.costSummary;
       this.providerUsageSummary = value.providerUsageSummary;
       this.usageError = null;
-      this.refreshPolicy.markLoaded();
+      this.refreshPolicy.markLoaded({
+        incomplete: isUsageIncomplete(value.providerUsageSummary),
+        connection: value.epoch,
+      });
       this.refreshPolicy.flushPending();
     },
     onError: (error) => {
@@ -298,6 +303,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     this.clearDateDebounce();
     this.clearQueryDebounce();
+    this.refreshPolicy.dispose();
     this.usageTaskActiveClient = null;
     void this.usageTask.run(this.usageTaskArgs(null));
     void this.usageTimeSeriesTask.run([null, ""]);
@@ -336,7 +342,11 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
     this.providerUsageSummary = data.providerUsageSummary;
-    this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs);
+    this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs, {
+      incomplete: isUsageIncomplete(data.providerUsageSummary),
+      // Current epoch is safe: isRouteDataCurrent rejects route data from a superseded snapshot.
+      connection: this.connectionEpoch,
+    });
     this.usageError = data.error;
   }
 
@@ -472,8 +482,12 @@ class UsagePage extends OpenClawLightDomElement {
       return;
     }
     void this.context.agents.ensureList();
-    if (this.routeDataInitialized && (change.identityChanged || change.becameConnected)) {
-      this.refreshPolicy.request("reconnect");
+    if (change.identityChanged || change.becameConnected) {
+      // A reconnect is a new cold cache even for a surviving client object: rotate.
+      this.connectionEpoch = {};
+      if (this.routeDataInitialized) {
+        this.refreshPolicy.request("reconnect");
+      }
     }
   }
 

@@ -21,9 +21,7 @@ export async function readPreparedServerMethodModelCatalog(
   context: GatewayRequestContext,
   options?: { agentId?: string },
 ): Promise<ModelCatalogEntry[] | undefined> {
-  return context.readPreparedGatewayModelCatalog
-    ? await context.readPreparedGatewayModelCatalog(options)
-    : undefined;
+  return (await context.readPreparedGatewayModelCatalogSnapshot?.(options))?.entries;
 }
 
 type LoadOptionalServerMethodModelCatalogOptions<T> = {
@@ -68,7 +66,12 @@ export function startOptionalServerMethodModelCatalogSnapshotLoad(
   loadParams?: Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0],
 ): OptionalServerMethodModelCatalogLoad<GatewayModelCatalogSnapshot> {
   return startOptionalServerMethodModelCatalogValueLoad({
-    load: () => context.loadGatewayModelCatalogSnapshot(loadParams),
+    load: async () =>
+      // Published startup facts answer without provider discovery. The load stays as
+      // the cold-start path because it also publishes the generation that capability
+      // checks (image support) read; skipping it makes them fail closed.
+      (await context.readPreparedGatewayModelCatalogSnapshot?.(loadParams)) ??
+      (await context.loadGatewayModelCatalogSnapshot(loadParams)),
     normalize: normalizeOptionalModelCatalogSnapshot,
   });
 }
