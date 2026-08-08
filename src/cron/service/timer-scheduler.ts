@@ -6,6 +6,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { markCronJobActive } from "../active-jobs.js";
+import { reconcileMaintenancePhaseTransition } from "../maintenance-policy.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type { CronJob } from "../types.js";
@@ -643,6 +644,36 @@ async function onAdmittedTimer(state: CronServiceState) {
       state.deps.log.warn({ err: String(err) }, "cron: session reaper preparation failed");
     } finally {
       state.running = false;
+      // Reconcile the maintenance phase transition before re-arming. This is
+      // the scheduler-owned owner of the deferred-queue phase id (bumped on
+      // window entry) and the backlog drain (on window exit). The next tick's
+      // `collectRunnableJobs` re-evaluates the job store and admits any due
+      // jobs naturally, so we don't need to push them back into the admission
+      // queue from here.
+      const transitionNow = state.deps.nowMs();
+      try {
+        const transition = reconcileMaintenancePhaseTransition(state, transitionNow);
+        if (transition.phaseBegan) {
+          state.deps.log.info(
+            { nowMs: transitionNow, previous: transition.previous, current: transition.current },
+            "cron: maintenance phase entered",
+          );
+        } else if (transition.drainedCount > 0) {
+          state.deps.log.info(
+            {
+              nowMs: transitionNow,
+              previous: transition.previous,
+              current: transition.current,
+              drainedCount: transition.drainedCount,
+            },
+            "cron: maintenance phase exited, deferred backlog drained",
+          );
+        }
+      } catch (err) {
+        // Reconciliation is bookkeeping; an Intl or queue failure here must
+        // never strand the scheduler. Log and continue.
+        state.deps.log.warn({ err: String(err) }, "cron: maintenance phase reconcile failed");
+      }
       armTimer(state);
     }
   }

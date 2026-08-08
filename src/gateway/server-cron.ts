@@ -28,6 +28,7 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { clearMaintenanceDeferrals } from "../cron/maintenance-deferred.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { CronService, type CronEvent } from "../cron/service.js";
@@ -281,6 +282,15 @@ export function buildGatewayCronService(params: {
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  // The maintenance deferred queue is a process-global singleton. When
+  // the gateway hot-reloads the cron subsystem (e.g. after a config
+  // change that flips `plan.restartCron`), the new service instance
+  // must not inherit the previous instance's held-backlog. Without
+  // this reset, a job that was deferred by the old service would
+  // silently hang in the queue with no scheduler tick to replay it.
+  // ClawSweeper cycle 4 [P1] "Clear deferred state when replacing the
+  // cron service".
+  clearMaintenanceDeferrals();
   // Resolve once per cron service snapshot so every webhook route shares the
   // same explicit opt-in while omitted config keeps the guard strict.
   const webhookSsrfPolicy = mergeSsrFPolicies(params.cfg.cron?.webhookSsrfPolicy);
@@ -613,6 +623,7 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
+    userTimezone: params.cfg.agents?.defaults?.userTimezone,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     ...(scriptRuntime
       ? {

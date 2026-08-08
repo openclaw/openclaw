@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
+import { getMaintenanceStatusReport } from "../maintenance-status.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
@@ -33,6 +34,17 @@ export async function status(state: CronServiceState) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
     const sqlitePath = resolveOpenClawStateSqlitePath();
+    // Maintenance status is a per-process snapshot — the deferred queue is
+    // process-global, so we surface it here even when no due jobs are
+    // currently selected. The probe agent id is a sentinel; the phase and
+    // window data do not depend on the agent.
+    const maintenanceReport = getMaintenanceStatusReport({
+      cfg: {
+        agents: { defaults: { userTimezone: state.deps.userTimezone } },
+        cron: state.deps.cronConfig ?? {},
+      } as Parameters<typeof getMaintenanceStatusReport>[0]["cfg"],
+      nowMs: state.deps.nowMs(),
+    });
     return {
       enabled: state.deps.cronEnabled,
       storePath: sqlitePath,
@@ -40,6 +52,7 @@ export async function status(state: CronServiceState) {
       sqlitePath,
       jobs: state.store?.jobs.length ?? 0,
       nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
+      maintenance: maintenanceReport,
     };
   });
 }

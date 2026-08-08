@@ -30,10 +30,26 @@ export type DeferDecision =
   | { defer: false }
   | {
       defer: true;
-      reason: "not-due" | "min-spacing" | "flood";
+      reason: "not-due" | "min-spacing" | "flood" | "maintenance-window";
       /** First wall-clock instant at which this guard can admit the wake. */
       retryAtMs: number;
     };
+
+/**
+ * Optional maintenance-window context passed by the dispatcher. When
+ * `isAllowed === false`, every non-manual wake is deferred with
+ * `reason: 'maintenance-window'` until `nextAllowedAtMs`. Manual intent is
+ * still exempt (see the intent matrix), so an operator-initiated wake can
+ * pierce the window — but only if the cron service has `allowManualRun: true`,
+ * which is enforced upstream of the dispatcher.
+ */
+export type MaintenanceWindowContext = {
+  isAllowed: boolean;
+  /** Wall-clock instant the window exits; used as `retryAtMs` for deferral. */
+  nextAllowedAtMs?: number;
+  /** End of the configured window; surfaced in logs/UI but not used for retry. */
+  windowEndsAtMs?: number;
+};
 
 type ShouldDeferInput = {
   /** Scheduler behavior requested by the wake producer. */
@@ -58,6 +74,15 @@ type ShouldDeferInput = {
   floodThreshold?: number;
   /** Work already retained by the wake queue after a prior guard deferral. */
   retainedWork?: boolean;
+  /**
+   * Maintenance-window state for this agent. When the agent is not allowed to
+   * run, every non-manual wake is deferred with `reason: 'maintenance-window'`
+   * and `retryAtMs = maintenanceWindow.nextAllowedAtMs`. The maintenance gate
+   * has higher priority than the flood guard (an agent inside a maintenance
+   * window should never trigger a flood-warning log), but lower than
+   * `manual` intent (operator-initiated wakes are always admitted).
+   */
+  maintenanceWindow?: MaintenanceWindowContext;
 };
 
 /**
@@ -93,6 +118,18 @@ type ShouldDeferInput = {
 export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
   if (input.intent === "manual") {
     return { defer: false };
+  }
+
+  // Maintenance window gates every non-manual wake. Manual intent is exempt
+  // above (and `allowManualRun` is enforced upstream in the cron service, not
+  // here), so an operator-initiated wake is the only way to pierce the window.
+  // The maintenance check must run *before* the flood guard so a non-allowed
+  // agent inside the window cannot trip the flood-warning log path with
+  // repeated attempts; we want a single, stable "maintenance-window" reason
+  // instead.
+  if (input.maintenanceWindow && !input.maintenanceWindow.isAllowed) {
+    const retryAtMs = input.maintenanceWindow.nextAllowedAtMs ?? input.now + 60_000; // safe fallback
+    return { defer: true, reason: "maintenance-window", retryAtMs };
   }
 
   if (input.intent === "immediate") {

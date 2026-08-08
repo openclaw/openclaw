@@ -95,6 +95,19 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  // `agents.defaults.userTimezone` is the cron service's fallback
+  // timezone when `cron.maintenance.window.timezone` is unset. A
+  // change to this field changes the maintenance phase evaluation
+  // (and any operator-facing window reports) and must therefore
+  // restart the cron service. Without this rule, a user who changes
+  // their timezone while the gateway is running would see the
+  // maintenance window continue to evaluate against the OLD timezone
+  // until the gateway itself is restarted.
+  {
+    prefix: "agents.defaults.userTimezone",
+    kind: "hot",
+    actions: ["restart-cron"],
+  },
   { prefix: "agents.defaults", kind: "hot" },
   {
     prefix: "agents.defaults.models",

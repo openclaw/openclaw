@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { listDueCommitmentSessionKeys } from "../commitments/store.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveMaintenancePhaseForCron } from "../cron/maintenance-policy.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatErrorMessage } from "./errors.js";
@@ -152,7 +153,15 @@ export function startHeartbeatRunner(opts: {
     now: number,
     reason?: string,
     intent: HeartbeatWakeIntent = "event",
-    options: { authoritativeScheduledTick?: boolean; retainedWork?: boolean } = {},
+    options: {
+      authoritativeScheduledTick?: boolean;
+      retainedWork?: boolean;
+      maintenanceWindow?: {
+        isAllowed: boolean;
+        nextAllowedAtMs?: number;
+        windowEndsAtMs?: number;
+      };
+    } = {},
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
@@ -162,6 +171,7 @@ export function startHeartbeatRunner(opts: {
       lastRunStartedAtMs: agent.lastRunStartedAtMs,
       recentRunStarts: agent.recentRunStarts,
       retainedWork: options.retainedWork,
+      maintenanceWindow: options.maintenanceWindow,
     });
     if (decision.defer && decision.reason === "flood") {
       if (!agent.floodLoggedSinceLastRun) {
@@ -330,9 +340,31 @@ export function startHeartbeatRunner(opts: {
       agent: HeartbeatAgentState,
       authoritativeScheduledTick = false,
     ): Promise<AgentWakeOutcome> => {
+      // Maintenance window context. The heartbeat runner is the canonical
+      // owner of wake admission; the maintenance policy module owns the
+      // phase + role decision. We resolve per agent at evaluation time
+      // because a heartbeat wake for an in-roster agent must still be
+      // admitted even when the window is active.
+      const maintenance = wakeConfig.cron?.maintenance;
+      const maintenanceWindow = maintenance?.enabled
+        ? (() => {
+            const phase = resolveMaintenancePhaseForCron({
+              maintenance,
+              userTimezone: wakeConfig.agents?.defaults?.userTimezone,
+              nowMs: now,
+              agentId: agent.agentId,
+            });
+            return {
+              isAllowed: phase.allowed,
+              nextAllowedAtMs: phase.nextPhaseChangeMs,
+              windowEndsAtMs: phase.nextPhaseChangeMs,
+            };
+          })()
+        : undefined;
       const deferral = evaluateWakeDeferral(agent, now, reason, intent, {
         authoritativeScheduledTick,
         retainedWork,
+        maintenanceWindow,
       });
       if (deferral.defer) {
         advanceStaleScheduleAfterDeferral(agent, now, reason, deferral);
@@ -475,9 +507,28 @@ export function startHeartbeatRunner(opts: {
         return outcome.result ?? { status: "skipped", reason: "not-due" };
       }
       if (targetAgent) {
+        // Same maintenance resolution as the runOneAgent path above; the
+        // targeted broadcast wake shares the same admission gate.
+        const maintenance = wakeConfig.cron?.maintenance;
+        const maintenanceWindow = maintenance?.enabled
+          ? (() => {
+              const phase = resolveMaintenancePhaseForCron({
+                maintenance,
+                userTimezone: wakeConfig.agents?.defaults?.userTimezone,
+                nowMs: now,
+                agentId: targetAgent.agentId,
+              });
+              return {
+                isAllowed: phase.allowed,
+                nextAllowedAtMs: phase.nextPhaseChangeMs,
+                windowEndsAtMs: phase.nextPhaseChangeMs,
+              };
+            })()
+          : undefined;
         const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent, {
           authoritativeScheduledTick,
           retainedWork,
+          maintenanceWindow,
         });
         if (deferral.defer) {
           advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);

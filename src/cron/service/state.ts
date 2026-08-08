@@ -77,6 +77,13 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /**
+   * Operator user timezone (IANA) used to evaluate `cron.maintenance.window`
+   * when the window does not pin its own `timezone`. Optional; when omitted
+   * the maintenance gate cannot evaluate the phase and treats every job as
+   * not-maintenance (safe-by-default).
+   */
+  userTimezone?: string;
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
@@ -290,6 +297,13 @@ export type CronServiceState = {
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
+  /**
+   * Last maintenance phase observed by the scheduler tick. `undefined` until
+   * the first tick after service start records a phase. Used to detect the
+   * normal <-> maintenance transition so the deferred-queue phase id is
+   * bumped on entry and the backlog is drained on exit.
+   */
+  lastMaintenancePhase?: "normal" | "maintenance";
 };
 
 /** Creates mutable cron service state with a concrete clock dependency. */
@@ -358,6 +372,7 @@ export type CronRunResult =
   | { ok: true; ran: false; reason: "restart-recovery-pending" }
   | { ok: true; ran: false; reason: "invalid-spec" }
   | { ok: true; ran: false; reason: "stopped" }
+  | { ok: true; ran: false; reason: "maintenance-blocked" }
   | { ok: false };
 
 /** Remove result that distinguishes missing jobs from failed removal. */

@@ -372,7 +372,10 @@ describe("buildGatewayReloadPlan", () => {
     "agents.defaults.contextPruning.mode",
     "agents.defaults.contextLimits.postCompactionMaxChars",
     "agents.defaults.timeoutSeconds",
-    "agents.defaults.userTimezone",
+    // Note: `agents.defaults.userTimezone` is NOT in this list. The cron
+    // service depends on the user timezone to evaluate maintenance
+    // windows, so a change must restart the cron subsystem. See
+    // config-reload-plan.ts for the dedicated rule.
     "tools",
     "tools.deny",
     "tools.allow",
@@ -422,6 +425,19 @@ describe("buildGatewayReloadPlan", () => {
     for (const path of paths) {
       expect(resolveConfigReloadMetadata(path).kind).toBe("none");
     }
+  });
+
+  it("restarts the cron service when userTimezone changes (regression for #79192)", () => {
+    // ClawSweeper cycle 4 [P1]: a change to agents.defaults.userTimezone
+    // must restart the cron subsystem because the maintenance window
+    // evaluation depends on the resolved timezone. Without this rule,
+    // a user who changes their timezone while the gateway is running
+    // would see the maintenance window continue to evaluate against
+    // the OLD timezone.
+    const plan = buildGatewayReloadPlan(["agents.defaults.userTimezone"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartCron).toBe(true);
+    expect(plan.hotReasons).toContain("agents.defaults.userTimezone");
   });
 
   it("restarts for forced whole-record plugin install changes", () => {

@@ -485,6 +485,17 @@ export const CronJobStateSchema = closedObject({
   streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastStartedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastExitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Maintenance-window diagnostics. Reported read-only; not patchable.
+  // Cleared on phase exit by the gateway's drain path. The fields are
+  // nullable so the absence of a value (cron job has never been deferred)
+  // is distinguishable from a zero count.
+  deferredMaintenanceCount: Type.Optional(Type.Integer({ minimum: 0 })),
+  firstDeferredMaintenanceAtMs: Type.Optional(
+    Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  ),
+  lastDeferredMaintenanceAtMs: Type.Optional(
+    Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  ),
 });
 
 const CronJobStatePatchSchema = closedObject({

@@ -316,6 +316,47 @@ export const OpenClawSchemaShape = {
       webhookToken: SecretInputSchema.optional().register(sensitive),
       webhookSsrfPolicy: SsrFPolicyConfigSchema.optional(),
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
+      maintenance: z
+        .strictObject({
+          enabled: z.boolean().optional(),
+          window: z
+            .strictObject({
+              start: z
+                .string()
+                .regex(/^([01]\d|2[0-3]):[0-5]\d$/u, "use HH:MM (24h) format")
+                .optional(),
+              end: z
+                .string()
+                .regex(/^([01]\d|2[0-3]):[0-5]\d$/u, "use HH:MM (24h) format")
+                .optional(),
+              timezone: z.string().min(1).optional(),
+            })
+            .optional(),
+          maintenanceAgents: z.array(z.string().min(1)).optional(),
+          allowManualRun: z.boolean().optional(),
+        })
+        .superRefine((val, ctx) => {
+          // When window is present, both start and end must be set, and start must
+          // be strictly before end. Cross-midnight windows are out of scope for
+          // v2; reject with an explicit message so the operator sees the gap.
+          if (val.window && (val.window.start === undefined || val.window.end === undefined)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["window"],
+              message: "maintenance.window requires both start and end (HH:MM)",
+            });
+            return;
+          }
+          if (val.window?.start && val.window?.end && val.window.start >= val.window.end) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["window"],
+              message:
+                "maintenance.window.start must be strictly before end; cross-midnight windows are not supported in this release",
+            });
+          }
+        })
+        .optional(),
       failureAlert: z
         .strictObject({
           enabled: z.boolean().optional(),

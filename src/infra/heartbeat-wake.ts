@@ -41,7 +41,12 @@ const RETRYABLE_BUSY_SKIP_REASONS = new Set([
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_LANES_BUSY,
 ]);
-const RETRYABLE_GUARD_SKIP_REASONS = new Set(["not-due", "min-spacing", "flood"]);
+const RETRYABLE_GUARD_SKIP_REASONS = new Set([
+  "not-due",
+  "min-spacing",
+  "flood",
+  "maintenance-window",
+]);
 
 export function isRetryableHeartbeatBusySkipReason(reason: string): boolean {
   return RETRYABLE_BUSY_SKIP_REASONS.has(reason);

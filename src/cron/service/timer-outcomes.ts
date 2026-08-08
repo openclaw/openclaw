@@ -87,6 +87,12 @@ export function applyJobResult(
     pacedNextRunAtMs: job.state.pacedNextRunAtMs,
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
+  // Note: maintenance diagnostics (deferredMaintenanceCount / first /
+  // lastDeferredMaintenanceAtMs) are written by exactly one owner —
+  // `reconcileMaintenancePhaseTransition` at the scheduler's finally
+  // block — so a job that runs on the exit tick is counted once, not
+  // once at applyJobResult and once at reconciliation. We deliberately
+  // do NOT project the queue here; the phase-exit mirror is authoritative.
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.state.pacedNextRunAtMs = undefined;
