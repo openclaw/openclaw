@@ -46,6 +46,13 @@ function installFakeCodesign(binDir: string) {
     `#!/usr/bin/env bash
 set -euo pipefail
 
+# Opt-in argv capture: only cases asserting on signing flags set CODESIGN_ARGS_LOG,
+# so the entitlement-focused cases keep their existing CODESIGN_LOG shape.
+if [ -n "\${CODESIGN_ARGS_LOG:-}" ]; then
+  printf '%s\\t' "$@" >>"$CODESIGN_ARGS_LOG"
+  printf '\\n' >>"$CODESIGN_ARGS_LOG"
+fi
+
 entitlements=""
 target=""
 while [ "$#" -gt 0 ]; do
@@ -81,6 +88,94 @@ fi
 `,
   );
   chmodSync(fakeCodesign, 0o755);
+}
+
+// Two Developer ID certs share a common name here: that ambiguity is exactly why
+// operators pin SIGN_IDENTITY to a cert SHA-1 hash, which codesign also accepts.
+const DEVELOPER_ID_HASH = "63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1";
+const APPLE_DEVELOPMENT_HASH = "11AA22BB33CC44DD55EE66FF77008899AABBCCDD";
+const DEVELOPER_ID_NAME = "Developer ID Application: Example Corp (ABCDE12345)";
+const FIND_IDENTITY_LISTING = [
+  `  1) 7BB27EA163FB4783A0EBEB579DC66FBBACE96453 "${DEVELOPER_ID_NAME}"`,
+  `  2) ${DEVELOPER_ID_HASH} "${DEVELOPER_ID_NAME}"`,
+  `  3) ${APPLE_DEVELOPMENT_HASH} "Apple Development: Dev Person (ZZZZZ99999)"`,
+  "     3 valid identities found",
+].join("\n");
+
+function installFakeSecurity(binDir: string) {
+  const fakeSecurity = path.join(binDir, "security");
+  writeFileSync(
+    fakeSecurity,
+    `#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "\${SECURITY_LOG:-}" ]; then
+  printf '%s\\n' "$*" >>"$SECURITY_LOG"
+fi
+
+if [ "\${1:-}" = "find-identity" ]; then
+  cat <<'LISTING'
+${FIND_IDENTITY_LISTING}
+LISTING
+  exit 0
+fi
+
+echo "unexpected security invocation: $*" >&2
+exit 1
+`,
+  );
+  chmodSync(fakeSecurity, 0o755);
+}
+
+type TimestampScenario = {
+  codesignArgs: string[][];
+  securityCalls: string[];
+  status: number | null;
+};
+
+function runTimestampScenario(options: {
+  prefix: string;
+  identity: string;
+  timestampMode?: string;
+}): TimestampScenario {
+  const tempRoot = makeTempDir(options.prefix);
+  const app = path.join(tempRoot, "Fake.app");
+  const binDir = path.join(tempRoot, "bin");
+  const captureDir = path.join(tempRoot, "capture");
+  const argsLogPath = path.join(captureDir, "codesign-args.log");
+  const securityLogPath = path.join(captureDir, "security.log");
+  mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+  mkdirSync(binDir);
+  mkdirSync(captureDir);
+  writeFileSync(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+  installFakeCodesign(binDir);
+  installFakeSecurity(binDir);
+
+  const result = spawnSync("bash", [scriptPath, app], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CODESIGN_ARGS_LOG: argsLogPath,
+      CODESIGN_CAPTURE_DIR: captureDir,
+      CODESIGN_LOG: path.join(captureDir, "codesign.log"),
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      SECURITY_LOG: securityLogPath,
+      SIGN_IDENTITY: options.identity,
+      SKIP_TEAM_ID_CHECK: "1",
+      TMPDIR: tempRoot,
+      ...(options.timestampMode === undefined ? {} : { CODESIGN_TIMESTAMP: options.timestampMode }),
+    },
+  });
+
+  const readLines = (file: string): string[] =>
+    existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+
+  return {
+    codesignArgs: readLines(argsLogPath).map((line) => line.split("\t").filter(Boolean)),
+    securityCalls: readLines(securityLogPath),
+    status: result.status,
+  };
 }
 
 afterEach(() => {
@@ -209,5 +304,88 @@ describe("codesign-mac-app temp file hygiene", () => {
       expect(copiedEntitlements).toContain("com.apple.security.device.camera");
     }
     expect(entitlementTemps(tempRoot)).toEqual([]);
+  });
+});
+
+describe("codesign-mac-app timestamp policy", () => {
+  it("timestamps a Developer ID identity pinned by certificate hash", () => {
+    const scenario = runTimestampScenario({
+      prefix: "openclaw-codesign-ts-hash-",
+      identity: DEVELOPER_ID_HASH,
+    });
+
+    expect(scenario.status).toBe(0);
+    expect(scenario.codesignArgs.length).toBeGreaterThan(0);
+    for (const args of scenario.codesignArgs) {
+      expect(args).toContain("--timestamp");
+      expect(args).not.toContain("--timestamp=none");
+    }
+  });
+
+  it("timestamps a Developer ID identity named in full without consulting the keychain", () => {
+    const scenario = runTimestampScenario({
+      prefix: "openclaw-codesign-ts-name-",
+      identity: DEVELOPER_ID_NAME,
+    });
+
+    expect(scenario.status).toBe(0);
+    expect(scenario.codesignArgs.length).toBeGreaterThan(0);
+    for (const args of scenario.codesignArgs) {
+      expect(args).toContain("--timestamp");
+    }
+    expect(scenario.securityCalls).toEqual([]);
+  });
+
+  it("does not timestamp a non-Developer-ID identity pinned by certificate hash", () => {
+    const scenario = runTimestampScenario({
+      prefix: "openclaw-codesign-ts-devhash-",
+      identity: APPLE_DEVELOPMENT_HASH,
+    });
+
+    expect(scenario.status).toBe(0);
+    expect(scenario.codesignArgs.length).toBeGreaterThan(0);
+    for (const args of scenario.codesignArgs) {
+      expect(args).toContain("--timestamp=none");
+    }
+  });
+
+  it("does not timestamp a certificate hash that matches no identity", () => {
+    const scenario = runTimestampScenario({
+      prefix: "openclaw-codesign-ts-unknown-",
+      identity: "0123456789ABCDEF0123456789ABCDEF01234567",
+    });
+
+    expect(scenario.status).toBe(0);
+    expect(scenario.codesignArgs.length).toBeGreaterThan(0);
+    for (const args of scenario.codesignArgs) {
+      expect(args).toContain("--timestamp=none");
+    }
+  });
+
+  it("keeps ad-hoc signing untimestamped", () => {
+    const scenario = runTimestampScenario({
+      prefix: "openclaw-codesign-ts-adhoc-",
+      identity: "-",
+    });
+
+    expect(scenario.status).toBe(0);
+    expect(scenario.codesignArgs.length).toBeGreaterThan(0);
+    for (const args of scenario.codesignArgs) {
+      expect(args).toContain("--timestamp=none");
+    }
+  });
+
+  it("honors an explicit CODESIGN_TIMESTAMP=off for a Developer ID hash", () => {
+    const scenario = runTimestampScenario({
+      prefix: "openclaw-codesign-ts-off-",
+      identity: DEVELOPER_ID_HASH,
+      timestampMode: "off",
+    });
+
+    expect(scenario.status).toBe(0);
+    expect(scenario.codesignArgs.length).toBeGreaterThan(0);
+    for (const args of scenario.codesignArgs) {
+      expect(args).toContain("--timestamp=none");
+    }
   });
 });
