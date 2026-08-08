@@ -272,8 +272,10 @@ export async function startGatewayCoreRuntime(input: {
         stopChannel,
         getChannelAutostartSuppression: channelManager.getAutostartSuppression,
         logChannels,
-        registerWorkerTurnClaimClosedHandler:
-          workerEnvironmentStartup?.placementStore.registerTurnClaimClosedHandler,
+        registerWorkerTurnClaimClosedHandler: workerEnvironmentStartup?.placementStore
+          ? (handler) =>
+              workerEnvironmentStartup.placementStore.registerTurnClaimClosedHandler(handler)
+          : undefined,
         validateAgentRuntimeDelegatedAuthority: (authority) =>
           validateAgentRuntimeApprovalAuthority({
             kind: "agentRuntime",
