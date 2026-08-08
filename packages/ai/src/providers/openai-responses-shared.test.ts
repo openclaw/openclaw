@@ -9,6 +9,7 @@ import { configureAiTransportHost } from "../host.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   applyCommonResponsesParams,
@@ -926,6 +927,48 @@ describe("processResponsesStream", () => {
       expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("reports Responses lifecycle events as activity with only the outer signal", async () => {
+    const abortController = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(abortController.signal, onActivity);
+
+    try {
+      await runResponsesStreamLifecycle({
+        stream: new AssistantMessageEventStream(),
+        model: nativeOpenAIModel,
+        output: createAssistantOutput(),
+        options: { signal: abortController.signal },
+        createClient: () => ({
+          responses: {
+            create: () => ({
+              withResponse: async () => ({
+                data: streamResponsesEvents([
+                  {
+                    type: "response.created",
+                    sequence_number: 1,
+                    response: { id: "resp_activity", status: "in_progress" },
+                  } as ResponseStreamEvent,
+                  {
+                    type: "response.completed",
+                    sequence_number: 2,
+                    response: { id: "resp_activity", status: "completed" },
+                  } as ResponseStreamEvent,
+                ]),
+                response: new Response(null, { status: 200 }),
+              }),
+            }),
+          },
+        }),
+        buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
+        formatError: (error) => (error instanceof Error ? error.message : String(error)),
+      });
+
+      expect(onActivity).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
     }
   });
 

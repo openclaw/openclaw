@@ -596,7 +596,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     const processStreamOptions =
       params.processStreamOptions ||
       firstEventTimeoutMs !== undefined ||
-      onFirstEventTimeout !== undefined
+      onFirstEventTimeout !== undefined ||
+      options?.signal !== undefined
         ? {
             ...params.processStreamOptions,
             firstEventTimeoutMs:

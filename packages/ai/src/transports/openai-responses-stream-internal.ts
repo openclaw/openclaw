@@ -20,6 +20,7 @@ import {
 } from "../providers/openai-responses-tool-call-tracker.js";
 import type { Api, AssistantMessage, Model, TextContent, ToolCall, Usage } from "../types.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   type FirstStreamEventInternalOptions,
   withFirstStreamEventTimeout,
@@ -294,6 +295,9 @@ export async function processResponsesStream<TApi extends Api>(
   );
   try {
     for await (const event of guardedStream) {
+      // Internal Responses events are provider progress even when they emit no
+      // public stream event, so keep the outer idle watchdog alive.
+      notifyLlmRequestActivity(options?.signal);
       if (event.type === "response.created") {
         output.responseId = event.response.id;
       } else if (event.type === "response.output_item.added") {

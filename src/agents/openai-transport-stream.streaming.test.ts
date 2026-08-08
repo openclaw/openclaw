@@ -453,6 +453,140 @@ describe("openai transport stream", () => {
     },
   );
 
+  it("keeps internal Responses web-search events alive beyond the model idle timeout", async () => {
+    const idleTimeoutMs = 1_000;
+    const internalEventDelayMs = 220;
+    let internalPhaseElapsedMs = 0;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+
+        const item = {
+          id: "ws_internal",
+          type: "web_search_call",
+          status: "in_progress",
+          action: { type: "search", query: "idle activity proof" },
+        };
+        const internalEvents = [
+          {
+            type: "response.created",
+            response: { id: "resp_internal", status: "in_progress", output: [] },
+          },
+          { type: "response.output_item.added", output_index: 0, item },
+          {
+            type: "response.web_search_call.in_progress",
+            item_id: item.id,
+            output_index: 0,
+          },
+          {
+            type: "response.web_search_call.searching",
+            item_id: item.id,
+            output_index: 0,
+          },
+          {
+            type: "response.web_search_call.completed",
+            item_id: item.id,
+            output_index: 0,
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: { ...item, status: "completed" },
+          },
+        ];
+        const internalPhaseStartedAt = Date.now();
+        let eventIndex = 0;
+        const writeNextEvent = () => {
+          if (res.destroyed) {
+            return;
+          }
+          if (eventIndex < internalEvents.length) {
+            res.write(`data: ${JSON.stringify(internalEvents[eventIndex])}\n\n`);
+            eventIndex += 1;
+            setTimeout(writeNextEvent, internalEventDelayMs);
+            return;
+          }
+
+          internalPhaseElapsedMs = Date.now() - internalPhaseStartedAt;
+          res.write(
+            `data: ${JSON.stringify({
+              type: "response.output_item.added",
+              item: { id: "msg_internal", type: "message", role: "assistant", content: [] },
+            })}\n\n`,
+          );
+          res.write(
+            `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "OK" })}\n\n`,
+          );
+          res.write(
+            `data: ${JSON.stringify({
+              type: "response.completed",
+              response: { id: "resp_internal", status: "completed", output: [] },
+            })}\n\n`,
+          );
+          res.end();
+        };
+
+        writeNextEvent();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        id: "gpt-internal-activity",
+        name: "Internal Activity",
+        api: "openai-responses",
+        provider: "custom-openai",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 4_096,
+      } satisfies Model<"openai-responses">;
+      const onIdleTimeout = vi.fn();
+      const streamFn = streamWithIdleTimeout(
+        createOpenAIResponsesTransportStreamFn(),
+        idleTimeoutMs,
+        onIdleTimeout,
+      );
+      const stream = streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        },
+        { apiKey: "test-key" },
+      );
+
+      let text = "";
+      for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+        if (event.type === "text_delta") {
+          text += event.delta ?? "";
+        }
+      }
+
+      expect(text).toBe("OK");
+      expect(onIdleTimeout).not.toHaveBeenCalled();
+      expect(internalPhaseElapsedMs).toBeGreaterThan(idleTimeoutMs);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
     const model = makeCompletionsModel({
       id: "qwen-coder-plus",
