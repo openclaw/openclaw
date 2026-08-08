@@ -188,6 +188,8 @@ export type EmbeddedAgentSubscribeState = {
   pendingToolMediaAttachments?: ReplyMediaAttachment[];
   /** Per-URL local-media trust; keys are normalized pending media URLs. */
   pendingToolMediaTrustByUrl: Map<string, boolean>;
+  /** Host-staged media paths whose provenance survived tool-result filtering. */
+  pendingToolMediaHostOwnedUrls: Set<string>;
   pendingToolAudioAsVoice: boolean;
   hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
@@ -336,7 +338,9 @@ type ToolHandlerState = Pick<
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
+  | "pendingToolMediaAttachments"
   | "pendingToolMediaTrustByUrl"
+  | "pendingToolMediaHostOwnedUrls"
   | "pendingToolAudioAsVoice"
   | "deterministicApprovalPromptPending"
   | "hadDeterministicSideEffect"
