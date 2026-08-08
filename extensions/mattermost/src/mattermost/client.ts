@@ -512,7 +512,7 @@ export async function createMattermostDirectChannelWithRetry(
   );
 }
 
-function isRetryableError(error: Error): boolean {
+export function isRetryableError(error: Error): boolean {
   const candidates = collectErrorCandidates(error);
   const messages = candidates
     .map((candidate) => normalizeLowercaseStringOrEmpty(readErrorMessage(candidate)))
