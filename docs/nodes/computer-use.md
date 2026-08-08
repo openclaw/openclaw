@@ -65,6 +65,21 @@ The plugin calls `CuaDriver.createConfigured`, never bare `create()`. Its author
 
 This is a hard replacement of the former 0.10 daemon/MCP integration. OpenClaw does not spawn a CUA process, proxy an MCP client, or fall back to another CUA runtime.
 
+### Upgrade from the retired plugin configuration
+
+If `plugins.entries.cua-computer.config.driverPath` is present in an existing
+configuration, run:
+
+```bash
+openclaw doctor --fix
+```
+
+Doctor removes that retired plugin setting. Do not replace it: the bundled
+plugin initializes its pinned Driver SDK directly and has no plugin-managed
+binary, daemon, or MCP configuration. This migration does not change an
+independently registered `cua-driver` MCP server; that remains a separate,
+generic external-MCP setup.
+
 ### Troubleshooting
 
 The `cua-computer` fulfiller surfaces typed error codes in the tool result and node logs. Common ones:
