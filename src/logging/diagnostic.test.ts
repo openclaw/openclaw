@@ -16,6 +16,7 @@ import {
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -996,7 +997,6 @@ describe("stuck session diagnostics threshold", () => {
   it("recovers stale model calls through the active embedded-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
-    const stuckSessionAbortMs = 60_000;
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -1019,7 +1019,7 @@ describe("stuck session diagnostics threshold", () => {
         model: "gpt-5",
       });
 
-      vi.advanceTimersByTime(stuckSessionAbortMs - 30_000);
+      vi.advanceTimersByTime(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - 30_000);
       expect(recoverStuckSession).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(30_000);
@@ -1277,7 +1277,6 @@ describe("stuck session diagnostics threshold", () => {
   it("actively aborts silent local model calls after the stuck timeout", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
-    const stuckSessionAbortMs = 60_000;
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -1300,7 +1299,7 @@ describe("stuck session diagnostics threshold", () => {
         model: "qwen/qwen3.5-9b",
       });
 
-      vi.advanceTimersByTime(stuckSessionAbortMs);
+      vi.advanceTimersByTime(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
     } finally {
       unsubscribe();
     }
@@ -1327,7 +1326,6 @@ describe("stuck session diagnostics threshold", () => {
   it("recovers stale model calls without active embedded-run ownership", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
-    const stuckSessionAbortMs = 60_000;
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -1349,7 +1347,7 @@ describe("stuck session diagnostics threshold", () => {
         model: "gpt-5",
       });
 
-      vi.advanceTimersByTime(stuckSessionAbortMs);
+      vi.advanceTimersByTime(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
     } finally {
       unsubscribe();
     }
@@ -1538,7 +1536,7 @@ describe("stuck session diagnostics threshold", () => {
     });
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
 
-    vi.advanceTimersByTime(59_000);
+    vi.advanceTimersByTime(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS - 1_000);
     logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
     vi.advanceTimersByTime(1_000);
     await Promise.resolve();
