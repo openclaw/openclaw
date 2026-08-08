@@ -570,7 +570,7 @@ export async function handleSlackAction(
   const isActionEnabled = createActionGate(actionConfig);
   const botToken = account.botToken?.trim();
 
-  const buildActionOpts = (operation: "read" | "write") => {
+  const buildActionOpts = (operation: "read" | "write", teamId?: string) => {
     const token = resolveSlackOperationToken(account, operation);
     if (!token && account.identity === "user") {
       throw new Error(`Slack operation token missing for account "${account.accountId}".`);
@@ -580,11 +580,10 @@ export async function handleSlackAction(
       cfg,
       ...(accountId ? { accountId } : {}),
       ...(tokenOverride ? { token: tokenOverride } : {}),
+      teamId,
     };
   };
 
-  const readOpts = buildActionOpts("read");
-  const writeOpts = buildActionOpts("write");
   const assertReadTargetAllowed = async (target: SlackActionChannelTarget) => {
     await assertSlackReadTargetAllowed({
       account,
@@ -602,8 +601,8 @@ export async function handleSlackAction(
     }
     const target = resolveChannelTarget();
     const { channelId } = target;
-    const scopedReadOpts = { ...readOpts, teamId: target.teamId };
-    const scopedWriteOpts = { ...writeOpts, teamId: target.teamId };
+    const readOpts = buildActionOpts("read", target.teamId);
+    const writeOpts = buildActionOpts("write", target.teamId);
     const messageId = readStringParam(params, "messageId", { required: true });
     if (action === "react") {
       const { emoji, remove, isEmpty } = readReactionParams(params, {
@@ -611,18 +610,18 @@ export async function handleSlackAction(
       });
       await assertReadTargetAllowed(target);
       if (remove) {
-        await slackActionRuntime.removeSlackReaction(channelId, messageId, emoji, scopedWriteOpts);
+        await slackActionRuntime.removeSlackReaction(channelId, messageId, emoji, writeOpts);
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
         const removed = await slackActionRuntime.removeOwnSlackReactions(
           channelId,
           messageId,
-          scopedWriteOpts,
+          writeOpts,
         );
         return jsonResult({ ok: true, removed });
       }
-      await slackActionRuntime.reactSlackMessage(channelId, messageId, emoji, scopedWriteOpts);
+      await slackActionRuntime.reactSlackMessage(channelId, messageId, emoji, writeOpts);
       return jsonResult({ ok: true, added: emoji });
     }
     await assertReadTargetAllowed(target);
@@ -632,11 +631,7 @@ export async function handleSlackAction(
       }) ?? SLACK_REACTION_USER_LIMIT,
       SLACK_REACTION_USER_LIMIT,
     );
-    const reactions = await slackActionRuntime.listSlackReactions(
-      channelId,
-      messageId,
-      scopedReadOpts,
-    );
+    const reactions = await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts);
     return jsonResult({
       ok: true,
       reactions: reactions?.map((reaction) =>
@@ -698,7 +693,7 @@ export async function handleSlackAction(
           },
         );
         const baseSendOpts = {
-          ...writeOpts,
+          ...buildActionOpts("write"),
           mediaAccess: context?.mediaAccess,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
@@ -816,7 +811,7 @@ export async function handleSlackAction(
           destination,
           initialComment ?? "",
           {
-            ...writeOpts,
+            ...buildActionOpts("write"),
             mediaUrl: filePath,
             mediaAccess: context?.mediaAccess,
             mediaLocalRoots: context?.mediaLocalRoots,
@@ -847,9 +842,9 @@ export async function handleSlackAction(
           throw new Error("Slack editMessage requires content or blocks.");
         }
         await assertReadTargetAllowed(target);
-        const scopedWriteOpts = { ...writeOpts, teamId: target.teamId };
+        const writeOpts = buildActionOpts("write", target.teamId);
         await slackActionRuntime.editSlackMessage(channelId, messageId, content ?? "", {
-          ...scopedWriteOpts,
+          ...writeOpts,
           blocks,
         });
         return jsonResult({ ok: true });
@@ -861,15 +856,15 @@ export async function handleSlackAction(
           required: true,
         });
         await assertReadTargetAllowed(target);
-        const scopedWriteOpts = { ...writeOpts, teamId: target.teamId };
-        await slackActionRuntime.deleteSlackMessage(channelId, messageId, scopedWriteOpts);
+        const writeOpts = buildActionOpts("write", target.teamId);
+        await slackActionRuntime.deleteSlackMessage(channelId, messageId, writeOpts);
         return jsonResult({ ok: true });
       }
       case "readMessages": {
         const target = resolveChannelTarget();
         const { channelId } = target;
         await assertReadTargetAllowed(target);
-        const scopedReadOpts = { ...readOpts, teamId: target.teamId };
+        const readOpts = buildActionOpts("read", target.teamId);
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
         });
@@ -878,7 +873,7 @@ export async function handleSlackAction(
         const threadId = readStringParam(params, "threadId");
         const messageId = readStringParam(params, "messageId");
         const result = await slackActionRuntime.readSlackMessages(channelId, {
-          ...scopedReadOpts,
+          ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
@@ -918,10 +913,10 @@ export async function handleSlackAction(
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
         const readToken = resolveSlackOperationToken(account, "read");
-        const scopedReadOpts = { ...readOpts, teamId: target.teamId };
+        const readOpts = buildActionOpts("read", target.teamId);
         const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
-          ...scopedReadOpts,
-          ...(readToken && !scopedReadOpts.token ? { token: readToken } : {}),
+          ...readOpts,
+          ...(readToken && !readOpts.token ? { token: readToken } : {}),
           maxBytes,
           channelId,
           threadId: threadId ?? undefined,
@@ -969,14 +964,14 @@ export async function handleSlackAction(
     }
     const target = resolveChannelTarget();
     const { channelId } = target;
-    const scopedReadOpts = { ...readOpts, teamId: target.teamId };
-    const scopedWriteOpts = { ...writeOpts, teamId: target.teamId };
+    const readOpts = buildActionOpts("read", target.teamId);
+    const writeOpts = buildActionOpts("write", target.teamId);
     if (action === "pinMessage") {
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
       await assertReadTargetAllowed(target);
-      await slackActionRuntime.pinSlackMessage(channelId, messageId, scopedWriteOpts);
+      await slackActionRuntime.pinSlackMessage(channelId, messageId, writeOpts);
       return jsonResult({ ok: true });
     }
     if (action === "unpinMessage") {
@@ -984,11 +979,11 @@ export async function handleSlackAction(
         required: true,
       });
       await assertReadTargetAllowed(target);
-      await slackActionRuntime.unpinSlackMessage(channelId, messageId, scopedWriteOpts);
+      await slackActionRuntime.unpinSlackMessage(channelId, messageId, writeOpts);
       return jsonResult({ ok: true });
     }
     await assertReadTargetAllowed(target);
-    const pins = await slackActionRuntime.listSlackPins(channelId, scopedReadOpts);
+    const pins = await slackActionRuntime.listSlackPins(channelId, readOpts);
     const normalizedPins = pins.map((pin) => {
       const message = pin.message
         ? withNormalizedTimestamp(
@@ -1011,7 +1006,10 @@ export async function handleSlackAction(
     if (account.config.enterpriseOrgInstall === true) {
       assertSlackDirectSendAllowed(account, teamId);
     }
-    const info = await slackActionRuntime.getSlackMemberInfo(userId, { ...readOpts, teamId });
+    const info = await slackActionRuntime.getSlackMemberInfo(
+      userId,
+      buildActionOpts("read", teamId),
+    );
     return jsonResult({ ok: true, info });
   }
 
@@ -1026,7 +1024,7 @@ export async function handleSlackAction(
     if (account.config.enterpriseOrgInstall === true) {
       assertSlackDirectSendAllowed(account, teamId);
     }
-    const result = await slackActionRuntime.listSlackEmojis({ ...readOpts, teamId });
+    const result = await slackActionRuntime.listSlackEmojis(buildActionOpts("read", teamId));
     if (limit != null && limit > 0 && result.emoji != null) {
       const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
       if (entries.length > limit) {

@@ -1215,7 +1215,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
         },
       });
       recordSlackThreadParticipation("default", channelId, rootTs, {
-        ...(scenario.enterpriseTeamId ? { teamId: scenario.enterpriseTeamId } : {}),
+        teamId: scenario.enterpriseTeamId,
       });
       const followUp = await prepareSlackMessage({
         ctx: slackCtx,
