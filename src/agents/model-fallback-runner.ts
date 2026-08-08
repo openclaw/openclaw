@@ -61,6 +61,13 @@ import {
 } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import {
+  acquireModelCircuit,
+  type ModelCircuitAttempt,
+  recordCandidateCircuitFailure,
+  recordCandidateCircuitSuccess,
+  releaseModelCircuitAttempt,
+} from "./model-fallback-circuit.js";
+import {
   markProbeAttempt,
   resolveCooldownDecision,
   resolveProbeThrottleKey,
@@ -301,13 +308,13 @@ async function runWithModelFallbackInternal<T>(
     const pushAttempt = (
       error: string,
       reason: FailoverReason,
-      auth?: Pick<FallbackAttempt, "authMode">,
+      details?: Pick<FallbackAttempt, "authMode" | "status" | "code">,
     ) =>
       attempts.push({
         ...candidateRef,
         error,
         reason,
-        ...auth,
+        ...details,
       });
 
     let candidateAuthProfileIds: string[] | undefined;
@@ -491,6 +498,30 @@ async function runWithModelFallbackInternal<T>(
       }
     }
 
+    let modelCircuitAttempt: ModelCircuitAttempt | undefined;
+    if (hasRemainingCandidate) {
+      const circuitGate = acquireModelCircuit({
+        ...candidateRef,
+        agentDir: params.agentDir,
+      });
+      if (circuitGate.type === "open") {
+        pushAttempt(circuitGate.error, circuitGate.reason, {
+          status: 503,
+          code: "model_circuit_open",
+        });
+        await observeCandidateDecision("skip_candidate", {
+          reason: circuitGate.reason,
+          status: 503,
+          code: "model_circuit_open",
+          error: circuitGate.error,
+        });
+        continue;
+      }
+      modelCircuitAttempt = circuitGate.attempt;
+    }
+
+    // Terminal attempt paths can reject before returning an outcome. Release a
+    // half-open lease so the next turn can perform the recovery probe.
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -511,8 +542,12 @@ async function runWithModelFallbackInternal<T>(
       ...attemptContext,
       attribution: runAttribution,
       abortSignal: params.abortSignal,
+    }).catch((err: unknown) => {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
+      throw err;
     });
     if ("success" in attemptRun) {
+      recordCandidateCircuitSuccess({ attempt: modelCircuitAttempt, ...candidateRef });
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
         await observeCandidateDecision("candidate_succeeded", {
           previousAttempts: attempts,
@@ -531,9 +566,11 @@ async function runWithModelFallbackInternal<T>(
     // Max-turn termination can follow successful tool actions. Stop before
     // candidate fallback so the user can verify effects before any replay.
     if (findCliMaxTurnsError(err)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     if (isAgentHarnessPreflightError(err)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
       if (!failedHarnessId) {
         // Pre-scope callers established that their preflight is global to the
@@ -590,6 +627,7 @@ async function runWithModelFallbackInternal<T>(
         ...attemptContext,
       }))
     ) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     if (attemptRun.classifiedResult) {
@@ -607,9 +645,11 @@ async function runWithModelFallbackInternal<T>(
     // the same local condition and surfacing a misleading "All models
     // failed" summary. See #83510.
     if (isNonProviderRuntimeCoordinationError(err)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     if (isTranscriptNotContinuableError(err)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     if (transientProbeProviderForAttempt) {
@@ -624,9 +664,11 @@ async function runWithModelFallbackInternal<T>(
     // that may have a smaller context window and fail worse.
     const errMessage = formatErrorMessage(err);
     if (isLikelyContextOverflowError(errMessage)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     if (isMissingAgentHarnessError(err)) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
     }
     const normalized =
@@ -641,6 +683,7 @@ async function runWithModelFallbackInternal<T>(
     // so the outer runner cannot loop on the conflicting model, but they
     // are not provider overloads.
     if (err instanceof LiveSessionModelSwitchError) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       // Runtime selection is part of the live switch transaction. The outer
       // owner must apply it before any retry; redirecting here would pair the
       // new model with the stale harness runtime captured by the caller.
@@ -682,7 +725,17 @@ async function runWithModelFallbackInternal<T>(
     // (handled above) are truly non-retryable.
     const isKnownFailover = isFailoverError(normalized);
     if (!isKnownFailover && !hasRemainingCandidate) {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
       throw err;
+    }
+    if (isKnownFailover) {
+      recordCandidateCircuitFailure({
+        attempt: modelCircuitAttempt,
+        ...candidateRef,
+        error: normalized,
+      });
+    } else {
+      releaseModelCircuitAttempt(modelCircuitAttempt);
     }
 
     // Record auth-class failures in the session-scoped skip cache so the
