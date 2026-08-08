@@ -212,6 +212,7 @@ describe("Codex app-server realtime voice bridge", () => {
       method === "thread/realtime/appendAudio" ? stalledAudio : Promise.resolve({}),
     );
     const onError = vi.fn();
+    const onClose = vi.fn();
     const client = { request: requestRpc } as unknown as CodexAppServerClient;
     const bridge = realtimeVoiceSessionTesting.createBridge(
       client,
@@ -221,6 +222,7 @@ describe("Codex app-server realtime voice bridge", () => {
         onAudio: vi.fn(),
         onClearAudio: vi.fn(),
         onError,
+        onClose,
       },
       new AbortController().signal,
     );
@@ -237,6 +239,25 @@ describe("Codex app-server realtime voice bridge", () => {
     bridge.sendAudio(Buffer.alloc(1));
     expect(await bridge.completion.promise).toBe("error");
     expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Codex realtime voice input audio queue exceeded two seconds",
+      }),
+    );
+    expect(requestRpc).toHaveBeenCalledWith(
+      "thread/realtime/stop",
+      { threadId: "thread-1" },
+      { signal: expect.any(AbortSignal), timeoutMs: 5_000 },
+    );
+    const stopCallOrder = requestRpc.mock.invocationCallOrder.find(
+      (_, index) => requestRpc.mock.calls[index]?.[0] === "thread/realtime/stop",
+    );
+    const errorCallOrder = onError.mock.invocationCallOrder[0];
+    expect(stopCallOrder).toBeDefined();
+    expect(errorCallOrder).toBeDefined();
+    expect(stopCallOrder!).toBeLessThan(errorCallOrder!);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(bridge.getFailure()).toEqual(
       expect.objectContaining({
         message: "Codex realtime voice input audio queue exceeded two seconds",
       }),

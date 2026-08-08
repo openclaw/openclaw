@@ -40,6 +40,7 @@ const CODEX_REALTIME_AUDIO_RPC_BYTES = 4_800;
 const CODEX_REALTIME_MAX_QUEUED_AUDIO_BYTES =
   CODEX_REALTIME_SAMPLE_RATE_HZ * CODEX_REALTIME_CHANNELS * 2 * 2;
 const CODEX_REALTIME_AUDIO_RPC_TIMEOUT_MS = 10_000;
+const CODEX_REALTIME_STOP_TIMEOUT_MS = 5_000;
 const CODEX_REALTIME_DEFAULT_V3_MODEL = "gpt-live-1-codex";
 
 type CodexRealtimeVersion = "v1" | "v2" | "v3";
@@ -131,8 +132,10 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   readonly completion = createCompletion();
   private connected = false;
   private terminal = false;
-  private startAccepted = false;
-  private stopRequested = false;
+  private startRequested = false;
+  private stopPromise?: Promise<void>;
+  private failureTask?: Promise<void>;
+  private failure?: Error;
   private responseTerminalEmitted = false;
   private transport: "websocket" | "webrtc" = "websocket";
   private audioPeer?: CodexRealtimeAudioPeerContract;
@@ -175,7 +178,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
                 this.request.onAudio(audio);
               }
             },
-            onError: (error) => this.fail(error),
+            onError: (error) => void this.fail(error),
           },
           this.signal,
         );
@@ -188,6 +191,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.answerApplied = createDeferred();
         transport = { type: "webrtc", sdp };
       }
+      this.startRequested = true;
       await this.client.request(
         "thread/realtime/start",
         {
@@ -210,7 +214,6 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
         },
         { signal: this.signal },
       );
-      this.startAccepted = true;
       if (this.answerApplied) {
         await this.answerApplied.promise;
       }
@@ -220,9 +223,9 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.connected = true;
       this.request.onReady?.();
     } catch (error) {
-      this.fail(error);
-      await this.stop();
-      throw error;
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      await this.fail(normalized).catch(() => undefined);
+      throw normalized;
     }
   }
 
@@ -238,7 +241,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.activeAudioBytes + this.queuedAudioBytes + audio.length >
       CODEX_REALTIME_MAX_QUEUED_AUDIO_BYTES
     ) {
-      this.fail(new Error("Codex realtime voice input audio queue exceeded two seconds"));
+      void this.fail(new Error("Codex realtime voice input audio queue exceeded two seconds"));
       return;
     }
     this.audioQueue.push(Buffer.from(audio));
@@ -281,7 +284,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   acknowledgeMark(): void {}
 
   close(): void {
-    if (this.terminal) {
+    if (this.terminal || this.failureTask) {
       return;
     }
     void this.stop().finally(() => this.finish("completed"));
@@ -291,7 +294,14 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return this.connected && !this.terminal;
   }
 
+  getFailure(): Error | undefined {
+    return this.failure;
+  }
+
   handleNotification(notification: CodexServerNotification): void {
+    if (this.terminal || this.failureTask) {
+      return;
+    }
     const params = asRecord(notification.params);
     if (readString(params, "threadId") !== this.threadId) {
       return;
@@ -302,7 +312,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "thread/realtime/sdp": {
         const sdp = readString(params, "sdp");
         if (!sdp || this.transport !== "webrtc") {
-          this.fail(new Error("Codex realtime returned an invalid WebRTC SDP answer"));
+          void this.fail(new Error("Codex realtime returned an invalid WebRTC SDP answer"));
           return;
         }
         void this.applyRealtimeAnswer(sdp);
@@ -359,7 +369,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       case "thread/realtime/error":
-        this.fail(new Error(readString(params, "message") ?? "Codex realtime voice failed"));
+        void this.fail(new Error(readString(params, "message") ?? "Codex realtime voice failed"));
         return;
       case "thread/realtime/closed":
         this.finish("completed");
@@ -367,7 +377,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   handleRouteFailure(reason: unknown): void {
-    this.fail(reason instanceof Error ? reason : new Error(String(reason)));
+    void this.fail(reason instanceof Error ? reason : new Error(String(reason)));
   }
 
   private async applyRealtimeAnswer(sdp: string): Promise<void> {
@@ -382,18 +392,26 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));
       answerApplied.reject(normalized);
-      this.fail(normalized);
+      void this.fail(normalized);
     }
   }
 
-  private async stop(): Promise<void> {
-    if (this.stopRequested || !this.startAccepted) {
-      return;
+  private stop(): Promise<void> {
+    if (this.stopPromise) {
+      return this.stopPromise;
     }
-    this.stopRequested = true;
-    await this.client
-      .request("thread/realtime/stop", { threadId: this.threadId }, { signal: this.signal })
+    if (!this.startRequested) {
+      return Promise.resolve();
+    }
+    this.stopPromise = this.client
+      .request(
+        "thread/realtime/stop",
+        { threadId: this.threadId },
+        { signal: this.signal, timeoutMs: CODEX_REALTIME_STOP_TIMEOUT_MS },
+      )
+      .then(() => undefined)
       .catch(() => undefined);
+    return this.stopPromise;
   }
 
   private async drainAudioQueue(): Promise<void> {
@@ -424,7 +442,7 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
         }
       }
     } catch (error) {
-      this.fail(error);
+      void this.fail(error);
     } finally {
       this.audioDrainActive = false;
     }
@@ -459,12 +477,24 @@ class CodexAppServerRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.request.onEvent?.({ direction: "server", type: "response.done" });
   }
 
-  private fail(error: unknown): void {
-    if (this.terminal) {
-      return;
+  private fail(error: unknown): Promise<void> {
+    if (this.failureTask) {
+      return this.failureTask;
     }
-    this.request.onError?.(error instanceof Error ? error : new Error(String(error)));
-    this.finish("error");
+    if (this.terminal) {
+      return Promise.resolve();
+    }
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    this.failure = normalized;
+    this.connected = false;
+    this.failureTask = this.stop().finally(() => {
+      try {
+        this.request.onError?.(normalized);
+      } finally {
+        this.finish("error");
+      }
+    });
+    return this.failureTask;
   }
 
   private finish(reason: RealtimeVoiceCloseReason): void {
@@ -505,9 +535,13 @@ function readRealtimeRole(value: string | undefined): RealtimeVoiceRole | undefi
 function buildRealtimeVoiceAttemptResult(params: {
   attempt: AgentHarnessAttemptParams;
   systemPromptReport: CodexSystemPromptReport;
+  failure?: Error;
 }) {
   return {
-    terminal: attemptTerminal.normalize({}),
+    terminal: attemptTerminal.normalize({
+      promptError: params.failure,
+      promptErrorSource: params.failure ? "prompt" : null,
+    }),
     sessionIdUsed: params.attempt.sessionId,
     messagesSnapshot: [],
     assistantTexts: [],
@@ -599,10 +633,13 @@ export async function runCodexAppServerRealtimeVoiceSession(
     });
     state.routeActivated = true;
     realtimeVoice.onBridgeReady(bridge);
-    await bridge.completion.promise;
+    const closeReason = await bridge.completion.promise;
     return buildRealtimeVoiceAttemptResult({
       attempt: params,
       systemPromptReport: attemptPrompt.systemPromptReport,
+      ...(closeReason === "error"
+        ? { failure: bridge.getFailure() ?? new Error("Codex realtime voice session failed") }
+        : {}),
     });
   } finally {
     detachRouteAbort();

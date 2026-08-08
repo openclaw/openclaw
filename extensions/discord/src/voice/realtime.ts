@@ -518,6 +518,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       consultPolicy,
       providerHandlesAgentTurns,
     });
+    let terminalFailureReported = false;
+    const reportTerminalFailure = (error: Error) => {
+      if (this.stopped || terminalFailureReported) {
+        return;
+      }
+      terminalFailureReported = true;
+      this.params.onTerminalError(error);
+    };
     this.bridge = this.harness.createBridge({
       provider: resolved.provider,
       cfg: this.params.cfg,
@@ -622,10 +630,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           logger.info(lifecycleLog);
         }
       },
-      onError: (error) => this.logRealtimeError(formatErrorMessage(error)),
+      onError: (error) => {
+        this.logRealtimeError(formatErrorMessage(error));
+        reportTerminalFailure(error);
+      },
       onClose: (reason) => {
         this.flushSuppressedRealtimeErrors();
         logVoiceVerbose(`realtime closed: ${reason}`);
+        reportTerminalFailure(new Error(`Realtime voice provider closed unexpectedly: ${reason}`));
       },
     });
     const resolvedModel =

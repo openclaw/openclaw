@@ -1335,6 +1335,45 @@ describe("DiscordVoiceManager", () => {
     expect(realtimeSessionMock.sendAudio).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      name: "provider error",
+      terminate: (bridgeParams: TestRealtimeBridgeParams) =>
+        bridgeParams.onError?.(new Error("upstream realtime reset")),
+    },
+    {
+      name: "unexpected provider close",
+      terminate: (bridgeParams: TestRealtimeBridgeParams) => bridgeParams.onClose?.("completed"),
+    },
+  ])("tears down direct-agent voice after $name", async ({ terminate }) => {
+    resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
+      provider: {
+        id: "codex",
+        capabilities: {
+          transports: ["bridge"],
+          inputAudioFormats: [],
+          outputAudioFormats: [],
+          supportsToolCalls: false,
+          handlesAgentTurns: true,
+        },
+      },
+      providerConfig: { model: "gpt-live-1-codex", voice: "arbor" },
+    } as never);
+    const manager = createAgentProxyManager();
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { requester: { senderId: "u-owner", senderIsOwner: true } },
+    );
+    terminate(lastRealtimeBridgeParams());
+
+    expect(manager.status()).toEqual([]);
+    expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
+    expect(connection.destroy).toHaveBeenCalledOnce();
+  });
+
   it("preserves the verified requester when direct-agent realtime recovers from DAVE failures", async () => {
     resolveConfiguredRealtimeVoiceProviderMock.mockReturnValue({
       provider: {
