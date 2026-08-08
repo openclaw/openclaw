@@ -833,6 +833,7 @@ type PendingToolUse = {
   name: string;
   kind: CliToolUseStartDelta["kind"];
   inputJsonParts: string[];
+  initialInput?: Record<string, unknown>;
 };
 
 type ToolUseTracker = {
@@ -840,6 +841,8 @@ type ToolUseTracker = {
   nameById: Map<string, string>;
   startedIds: Set<string>;
   resultDeliveredIds: Set<string>;
+  // Last args emitted per tool call, used to backfill empty starts (#120306).
+  emittedArgsById: Map<string, Record<string, unknown>>;
 };
 
 function createToolUseTracker(): ToolUseTracker {
@@ -848,6 +851,7 @@ function createToolUseTracker(): ToolUseTracker {
     nameById: new Map(),
     startedIds: new Set(),
     resultDeliveredIds: new Set(),
+    emittedArgsById: new Map(),
   };
 }
 
@@ -860,11 +864,24 @@ function emitToolStartOnce(
   onToolUseStart?: (delta: CliToolUseStartDelta) => void,
 ): void {
   // Streaming and final assistant records may both describe the same tool call.
+  // When the first emission carried empty args (e.g. the provider streamed no
+  // input_json_delta chunks) but a later record carries the resolved args, re-emit
+  // once so renderers can backfill the command/args instead of freezing on an
+  // empty tool row. See #120306 (Discord progress draft dropped tool args).
   if (tracker.startedIds.has(toolCallId)) {
+    const prev = tracker.emittedArgsById.get(toolCallId);
+    const prevEmpty = !prev || Object.keys(prev).length === 0;
+    const nowNonEmpty = Object.keys(args).length > 0;
+    if (!prevEmpty || !nowNonEmpty) {
+      return;
+    }
+    tracker.emittedArgsById.set(toolCallId, args);
+    onToolUseStart?.({ toolCallId, name, kind, args });
     return;
   }
   tracker.startedIds.add(toolCallId);
   tracker.nameById.set(toolCallId, name);
+  tracker.emittedArgsById.set(toolCallId, args);
   onToolUseStart?.({ toolCallId, name, kind, args });
 }
 
@@ -942,6 +959,9 @@ function dispatchClaudeCliStreamingToolEvent(params: {
             name,
             kind: block.type,
             inputJsonParts: [],
+            initialInput: isRecord(block.input)
+              ? (block.input as Record<string, unknown>)
+              : undefined,
           });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
@@ -972,12 +992,18 @@ function dispatchClaudeCliStreamingToolEvent(params: {
       const pending = tracker.pendingByIndex.get(event.index);
       tracker.pendingByIndex.delete(event.index);
       if (pending) {
+        const args =
+          pending.inputJsonParts.length > 0
+            ? parseToolInputJson(pending.inputJsonParts)
+            : pending.initialInput && Object.keys(pending.initialInput).length > 0
+              ? pending.initialInput
+              : {};
         emitToolStartOnce(
           tracker,
           pending.toolCallId,
           pending.name,
           pending.kind,
-          parseToolInputJson(pending.inputJsonParts),
+          args,
           params.onToolUseStart,
         );
       }
