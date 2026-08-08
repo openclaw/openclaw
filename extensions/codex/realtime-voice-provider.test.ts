@@ -116,20 +116,18 @@ beforeEach(() => {
 });
 
 describe("Codex realtime voice provider", () => {
-  it("advertises subscription-backed V3 and API-key-backed V2", () => {
+  it("advertises app-server-authenticated V3 and API-key-backed V2", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
     const { runtime } = createRuntime();
     const provider = buildCodexRealtimeVoiceProvider({ runtime });
 
-    expect(provider.isConfigured({ providerConfig: {}, cfg: {} as never })).toBe(false);
+    expect(provider.isConfigured({ providerConfig: {}, cfg: {} as never })).toBe(true);
     expect(
       provider.isConfigured({
-        providerConfig: {},
-        cfg: {
-          auth: { profiles: { "openai:chatgpt": { provider: "openai", mode: "oauth" } } },
-        } as never,
+        providerConfig: { version: "v2" },
+        cfg: {} as never,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       provider.isConfigured({
         providerConfig: { version: "v2" },

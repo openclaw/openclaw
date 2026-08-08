@@ -6,10 +6,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  isProviderAuthProfileConfigured,
-  resolveProviderAuthProfileApiKey,
-} from "openclaw/plugin-sdk/provider-auth";
+import { resolveProviderAuthProfileApiKey } from "openclaw/plugin-sdk/provider-auth";
 import {
   convertPcmToMulaw8k,
   mulawToPcm,
@@ -32,22 +29,6 @@ function resolveRealtimeVersion(providerConfig: Record<string, unknown>): "v1" |
     return version;
   }
   throw new Error('Codex realtime version must be "v1", "v2", or "v3"');
-}
-
-function hasOpenAIChatGptSubscription(cfg: OpenClawConfig | undefined): boolean {
-  if (
-    Object.values(cfg?.auth?.profiles ?? {}).some(
-      (profile) => profile.provider === "openai" && profile.mode === "oauth",
-    )
-  ) {
-    return true;
-  }
-  return isProviderAuthProfileConfigured({
-    provider: "openai",
-    cfg,
-    profileTypes: ["oauth"],
-    includeExternalCliAuth: false,
-  });
 }
 
 function hasOpenAIPlatformApiKey(
@@ -415,9 +396,10 @@ export function buildCodexRealtimeVoiceProvider(options: {
         : {}),
     }),
     isConfigured: ({ cfg, providerConfig }) =>
-      resolveRealtimeVersion(providerConfig) === "v3"
-        ? hasOpenAIChatGptSubscription(cfg)
-        : hasOpenAIPlatformApiKey(cfg, providerConfig),
+      // V3 auth belongs to the agent-scoped Codex app-server home and is only
+      // resolvable once the bound agent directory is known at connect time.
+      resolveRealtimeVersion(providerConfig) === "v3" ||
+      hasOpenAIPlatformApiKey(cfg, providerConfig),
     createBridge: (request) => new CodexBoundRealtimeVoiceBridge(options.runtime, request),
   };
 }
