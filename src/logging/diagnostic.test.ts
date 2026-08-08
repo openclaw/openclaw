@@ -2870,6 +2870,88 @@ describe("stuck session recovery activity reconciliation", () => {
     });
   }
 
+  function expectQueuedFollowupDoesNotRecover(): void {
+    const recoverStuckSession = vi.fn();
+    vi.useFakeTimers();
+    try {
+      startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+      logMessageQueued({ sessionId, sessionKey, source: "test-followup" });
+      vi.advanceTimersByTime(60_000);
+
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+    } finally {
+      resetDiagnosticStateForTest();
+      vi.useRealTimers();
+    }
+  }
+
+  async function expectFailedRecoveryReconcilesOrphanedActivity(
+    markOrphanedActivity: () => void,
+  ): Promise<void> {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markOrphanedActivity();
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    state.queueDepth = 2;
+
+    requestStuckSessionRecovery({
+      recover: () => Promise.reject(new Error("recovery failed")),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })).toMatchObject({
+      state: "idle",
+      queueDepth: 0,
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      undefined,
+    );
+    expectQueuedFollowupDoesNotRecover();
+  }
+
+  async function expectFailedRecoveryPreservesFreshActivity(
+    startActivity: () => void,
+    expectedWorkKind: "tool_call" | "model_call",
+  ): Promise<void> {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+
+    requestStuckSessionRecovery({
+      recover: async () => {
+        startActivity();
+        await flush();
+        throw new Error("recovery failed");
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 1,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      expectedWorkKind,
+    );
+  }
+
   beforeEach(() => {
     setDiagnosticsEnabledForProcess(true);
     resetDiagnosticSessionStateForTest();
@@ -2882,6 +2964,148 @@ describe("stuck session recovery activity reconciliation", () => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticRunActivityForTest();
     resetDiagnosticSessionRecoveryCoordinatorForTest();
+  });
+
+  it("idles an ownerless diagnostic state after recovery fails", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    state.queueDepth = 2;
+
+    requestStuckSessionRecovery({
+      recover: () => Promise.reject(new Error("recovery failed")),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 2,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })).toMatchObject({
+      state: "idle",
+      queueDepth: 0,
+    });
+  });
+
+  it("clears orphaned tool activity after failed recovery before later work queues", async () => {
+    await expectFailedRecoveryReconcilesOrphanedActivity(() => {
+      markDiagnosticToolStartedForTest({
+        sessionId,
+        sessionKey,
+        toolName: "Bash",
+        toolCallId: "t1",
+      });
+    });
+  });
+
+  it("clears orphaned model activity after failed recovery before later work queues", async () => {
+    await expectFailedRecoveryReconcilesOrphanedActivity(() => {
+      markDiagnosticModelStartedForTest({
+        sessionId,
+        sessionKey,
+        runId: sessionId,
+        provider: "openai",
+        model: "gpt-5.5",
+      });
+    });
+  });
+
+  it("preserves a fresh tool marker that starts while failed recovery is pending", async () => {
+    await expectFailedRecoveryPreservesFreshActivity(
+      () =>
+        emitDiagnosticEvent({
+          type: "tool.execution.started",
+          sessionId,
+          sessionKey,
+          runId: sessionId,
+          toolName: "Bash",
+          toolCallId: "fresh-tool",
+        }),
+      "tool_call",
+    );
+  });
+
+  it("preserves a fresh model marker that starts while failed recovery is pending", async () => {
+    await expectFailedRecoveryPreservesFreshActivity(
+      () =>
+        emitDiagnosticEvent({
+          type: "model.call.started",
+          sessionId,
+          sessionKey,
+          runId: sessionId,
+          callId: "fresh-model",
+          provider: "openai",
+          model: "gpt-5.5",
+        }),
+      "model_call",
+    );
+  });
+
+  it("preserves an active embedded owner after recovery fails", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+
+    requestStuckSessionRecovery({
+      recover: () => Promise.reject(new Error("recovery failed")),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 1,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).hasActiveEmbeddedRun,
+    ).toBe(true);
+  });
+
+  it("preserves a newer diagnostic generation after recovery fails", async () => {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    let rejectRecovery: (reason: Error) => void = () => {};
+
+    requestStuckSessionRecovery({
+      recover: () =>
+        new Promise((_, reject) => {
+          rejectRecovery = reject;
+        }),
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 1,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    logSessionStateChange({
+      sessionId: "wa-run-2",
+      sessionKey,
+      state: "processing",
+      reason: "run_restarted",
+    });
+    rejectRecovery(new Error("recovery failed"));
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
   });
 
   it("clears the embedded-run activity flag when recovery declares the lane idle", async () => {

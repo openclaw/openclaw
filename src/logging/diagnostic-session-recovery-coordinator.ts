@@ -6,6 +6,7 @@ import {
 import {
   clearDiagnosticEmbeddedRunActivityForSession,
   getDiagnosticEmbeddedRunActivitySequence,
+  getDiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity.js";
 import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
@@ -100,7 +101,8 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   if (!params.outcome) {
     return;
   }
-  if (!recoveryOutcomeMutatesSessionState(params.outcome)) {
+  const clearsFailedGhost = params.outcome.status === "failed";
+  if (!clearsFailedGhost && !recoveryOutcomeMutatesSessionState(params.outcome)) {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
     return;
   }
@@ -129,6 +131,20 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     return;
   }
   const state = getDiagnosticSessionState(params.request);
+  if (
+    clearsFailedGhost &&
+    getDiagnosticSessionActivitySnapshot({
+      sessionId: state.sessionId,
+      sessionKey: state.sessionKey,
+    }).hasActiveEmbeddedRun
+  ) {
+    emitSessionRecoveryCompleted({
+      request: params.request,
+      outcome: params.outcome,
+      stale: true,
+    });
+    return;
+  }
   // The idle declaration is authoritative for the recovered owner only. If a
   // different embedded owner appeared under the same session key while recovery
   // awaited abort/drain, keep the lane active instead of erasing fresh work.
@@ -139,7 +155,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     recoveryStartedAfterEmbeddedRunSequence: params.recoveryStartedAfterEmbeddedRunSequence,
     recoveryStartedAfterDiagnosticEventSequence: params.recoveryStartedAfterDiagnosticEventSequence,
   });
-  if (activityClear.blockedByActiveEmbeddedRun) {
+  if (activityClear.blockedByActiveEmbeddedRun || activityClear.blockedByFreshActivity) {
     emitSessionRecoveryCompleted({
       request: params.request,
       outcome: params.outcome,
@@ -155,11 +171,13 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   state.lastLongRunningWarnAgeMs = undefined;
   const preserveQueuedIdleWork =
     params.request.expectedState === "idle" && recoveryOutcomeHasQueuedLaneWork(params.outcome);
-  state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)
+  state.queueDepth = clearsFailedGhost
     ? 0
-    : preserveQueuedIdleWork
-      ? Math.max(state.queueDepth, params.request.queueDepth ?? 0)
-      : Math.max(0, state.queueDepth - 1);
+    : recoveryOutcomeClearsQueuedSessionState(params.outcome)
+      ? 0
+      : preserveQueuedIdleWork
+        ? Math.max(state.queueDepth, params.request.queueDepth ?? 0)
+        : Math.max(0, state.queueDepth - 1);
   emitDiagnosticEvent({
     type: "session.state",
     sessionId: state.sessionId,
