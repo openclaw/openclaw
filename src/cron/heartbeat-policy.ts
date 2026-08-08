@@ -25,13 +25,17 @@ export function shouldSkipHeartbeatOnlyDelivery(
   if (hasAnyNonTextContent) {
     return false;
   }
-  // Heartbeat acks may include tiny punctuation/noise; strip the token before
-  // deciding whether there is user-visible text worth delivering.
-  return payloads.some((payload) => {
-    const result = stripHeartbeatToken(payload.text, {
+  // Only the final deliverable decides whether a heartbeat acknowledgement is
+  // terminal; earlier acknowledgements must not hide the completed result.
+  for (let index = payloads.length - 1; index >= 0; index -= 1) {
+    const payload = payloads[index];
+    if (!payload || !hasOutboundReplyContent(payload, { trimText: true })) {
+      continue;
+    }
+    return stripHeartbeatToken(payload.text, {
       mode: "heartbeat",
       maxAckChars: ackMaxChars,
-    });
-    return result.shouldSkip;
-  });
+    }).shouldSkip;
+  }
+  return true;
 }

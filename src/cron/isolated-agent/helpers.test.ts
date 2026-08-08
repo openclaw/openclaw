@@ -62,6 +62,19 @@ describe("isHeartbeatOnlyResponse", () => {
     );
   });
 
+  it.each([
+    {
+      name: "an acknowledgement before the final result",
+      payloads: [{ text: "HEARTBEAT_OK" }, { text: "Something important happened" }],
+    },
+    {
+      name: "an empty payload after the final result",
+      payloads: [{ text: "Something important happened" }, { text: "  " }],
+    },
+  ])("returns false for $name", ({ payloads }) => {
+    expect(isHeartbeatOnlyResponse(payloads, ACK_MAX)).toBe(false);
+  });
+
   it("returns true when multiple payloads include narration followed by HEARTBEAT_OK", () => {
     // Agent narrates its work then signals nothing needs attention.
     expect(

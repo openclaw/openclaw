@@ -16,6 +16,27 @@ describe("shouldSkipHeartbeatOnlyDelivery", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      name: "an acknowledgement before the final result",
+      payloads: [{ text: "HEARTBEAT_OK" }, { text: "Critical deployment failure" }],
+    },
+    {
+      name: "multiple acknowledgements before the final result",
+      payloads: [
+        { text: "HEARTBEAT_OK" },
+        { text: "HEARTBEAT_OK" },
+        { text: "Critical deployment failure" },
+      ],
+    },
+    {
+      name: "an empty payload after the final result",
+      payloads: [{ text: "Critical deployment failure" }, { text: "  " }],
+    },
+  ])("does not suppress $name", ({ payloads }) => {
+    expect(shouldSkipHeartbeatOnlyDelivery(payloads, 300)).toBe(false);
+  });
+
   it("does not suppress when media is present", () => {
     expect(
       shouldSkipHeartbeatOnlyDelivery(

@@ -1,5 +1,6 @@
 // Interim retry tests cover retry behavior for incomplete isolated cron runs.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -11,6 +12,7 @@ import {
   mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
   resolveCronDeliveryPlanMock,
+  resolveCronPayloadOutcomeMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -127,6 +129,33 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
+  });
+
+  it("delivers a final result after an earlier heartbeat acknowledgement", async () => {
+    const finalResult = "Critical deployment failure: database unavailable.";
+    const payloads = [{ text: "HEARTBEAT_OK" }, { text: finalResult }];
+    const { resolveCronPayloadOutcome } =
+      await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
+    usePayloadTextExtraction();
+    resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
+    isHeartbeatOnlyResponseMock.mockImplementation(shouldSkipHeartbeatOnlyDelivery);
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads,
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runTurnAndExpectOk(1, 1);
+
+    expect(result.delivered).toBe(true);
+    expect(requireDeliveryRequest().skipHeartbeatDelivery).toBe(false);
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual(payloads);
   });
 
   it("does not retry over a fatal structured failure signal", async () => {
