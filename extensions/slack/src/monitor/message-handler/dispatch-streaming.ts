@@ -5,7 +5,6 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../../errors.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
-import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import {
   appendSlackStream,
   markSlackStreamFallbackDelivered,
@@ -39,7 +38,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     prepared,
     replyDeliveryMode,
     replyPlan,
-    route,
     runtime,
     slackClient,
     slackIdentity,
@@ -69,17 +67,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     tool: 0,
     block: 0,
     final: 0,
-  };
-  const recordedParticipationThreads = new Set<string>();
-  const recordDeliveredThreadParticipation = (threadTs: string | undefined) => {
-    if (!threadTs || recordedParticipationThreads.has(threadTs)) {
-      return;
-    }
-    recordedParticipationThreads.add(threadTs);
-    recordSlackThreadParticipation(account.accountId, message.channel, threadTs, {
-      agentId: route.agentId,
-      ...(prepared.eventScope ? { teamId: prepared.eventScope.teamId } : {}),
-    });
   };
   const refreshStreamedAcknowledgements = (session: SlackStreamSession) => {
     if (session.pendingText.length === 0) {
@@ -170,7 +157,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     threadTs: string | undefined;
   }) => {
     deliveryTracker.markDelivered(params);
-    recordDeliveredThreadParticipation(params.threadTs);
     // Single-use reply modes move later same-turn payloads off the preview
     // thread, so protect both delivery keys from duplicates.
     const nextThreadTs = replyPlan.peekThreadTs();
@@ -215,7 +201,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
         acknowledgeStoppedStreamedDeliveries(session, stopResult.messageId);
         state.observedReplyDelivery = true;
         state.usedReplyThreadTs ??= session.threadTs;
-        recordDeliveredThreadParticipation(session.threadTs);
         return true;
       } catch (stopErr) {
         if (stopErr instanceof SlackStreamNotDeliveredError) {
@@ -278,7 +263,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       emitSuccessfulPendingStreamedDeliveries();
       state.observedReplyDelivery = true;
       state.usedReplyThreadTs ??= session.threadTs;
-      recordDeliveredThreadParticipation(session.threadTs);
       logVerbose(
         `slack-stream: streamed delivery failed (${fallbackError.slackCode}); delivered ${fallbackText.length} chars via deliverReplies fallback`,
       );
@@ -333,7 +317,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       ...messageSentDeliveryHookContext,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
-    recordDeliveredThreadParticipation(deliveryReplyThreadTs);
     state.observedReplyDelivery = true;
     if (params.kind === "final") {
       state.observedFinalReplyDelivery = true;
@@ -468,7 +451,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
         // the SDK reports a real Slack response.
         if (state.streamSession.delivered) {
           state.observedReplyDelivery = true;
-          recordDeliveredThreadParticipation(streamThreadTs);
           if (params.kind === "final") {
             state.observedFinalReplyDelivery = true;
           }
@@ -517,7 +499,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       // optimistic "done" status until Slack acknowledges a flush.
       if (state.streamSession.delivered) {
         state.observedReplyDelivery = true;
-        recordDeliveredThreadParticipation(state.streamSession.threadTs);
         if (params.kind === "final") {
           state.observedFinalReplyDelivery = true;
         }
@@ -615,7 +596,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     emitFailedPendingStreamedDeliveries,
     hasDelivered: (params: SlackEventDeliveryAttempt) => deliveryTracker.hasDelivered(params),
     markPreviewPayloadDelivered,
-    recordDeliveredThreadParticipation,
     rememberDeliveredThreadTs,
     reconcileCounts,
     resetDeliveryTracker: () => {

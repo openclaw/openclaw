@@ -187,6 +187,7 @@ async function resolveSlackSendContext(params: {
   cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
   accountId?: string;
   to: string;
+  spaceId?: string | null;
   deps?: { [channelId: string]: unknown };
   replyToId?: string | number | null;
   threadId?: string | number | null;
@@ -196,7 +197,24 @@ async function resolveSlackSendContext(params: {
   // is intentional so boot-time misconfigurations surface loudly. See #68237.
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const target = parseSlackTarget(params.to, { defaultKind: "channel" });
-  assertSlackDirectSendAllowed(account, target?.teamId);
+  const ambientTeamId = normalizeOptionalString(params.spaceId);
+  if (
+    account.config.enterpriseOrgInstall === true &&
+    target?.teamId &&
+    ambientTeamId &&
+    target.teamId !== ambientTeamId
+  ) {
+    throw new Error("conflicting_enterprise_slack_workspace");
+  }
+  const teamId =
+    account.config.enterpriseOrgInstall === true
+      ? (target?.teamId ?? ambientTeamId)
+      : target?.teamId;
+  assertSlackDirectSendAllowed(account, teamId);
+  const to =
+    target && teamId && !target.teamId
+      ? formatSlackTeamTarget({ teamId, kind: target.kind, id: target.id })
+      : params.to;
   const send =
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
     (await loadSlackSendRuntime()).sendMessageSlack;
@@ -204,7 +222,7 @@ async function resolveSlackSendContext(params: {
   const botToken = account.botToken?.trim();
   const tokenOverride = token && token !== botToken ? token : undefined;
   const threadTsValue = resolveSlackThreadTsValue(params);
-  return { send, threadTsValue, tokenOverride };
+  return { send, threadTsValue, tokenOverride, to };
 }
 
 async function setSlackHeartbeatThreadStatus(params: {
@@ -518,10 +536,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     },
   }),
   sendPayload: async (ctx) => {
-    const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
+    const { send, threadTsValue, tokenOverride, to } = await resolveSlackSendContext({
       cfg: ctx.cfg,
       accountId: ctx.accountId ?? undefined,
       to: ctx.to,
+      spaceId: ctx.spaceId,
       deps: ctx.deps,
       replyToId: ctx.replyToId,
       threadId: ctx.threadId,
@@ -529,6 +548,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     const { slackOutbound } = await loadSlackOutboundAdapterModule();
     return await slackOutbound.sendPayload!({
       ...ctx,
+      to,
       replyToId: threadTsValue,
       threadId: null,
       deliveryQueueId: undefined,
@@ -541,10 +561,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     });
   },
   sendText: async (ctx) => {
-    const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
+    const { send, threadTsValue, tokenOverride, to } = await resolveSlackSendContext({
       cfg: ctx.cfg,
       accountId: ctx.accountId ?? undefined,
       to: ctx.to,
+      spaceId: ctx.spaceId,
       deps: ctx.deps,
       replyToId: ctx.replyToId,
       threadId: ctx.threadId,
@@ -552,6 +573,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     const { slackOutbound } = await loadSlackOutboundAdapterModule();
     return await slackOutbound.sendText!({
       ...ctx,
+      to,
       replyToId: threadTsValue,
       threadId: null,
       deliveryQueueId: undefined,
@@ -566,10 +588,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     });
   },
   sendMedia: async (ctx) => {
-    const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
+    const { send, threadTsValue, tokenOverride, to } = await resolveSlackSendContext({
       cfg: ctx.cfg,
       accountId: ctx.accountId ?? undefined,
       to: ctx.to,
+      spaceId: ctx.spaceId,
       deps: ctx.deps,
       replyToId: ctx.replyToId,
       threadId: ctx.threadId,
@@ -577,6 +600,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
     const { slackOutbound } = await loadSlackOutboundAdapterModule();
     return await slackOutbound.sendMedia!({
       ...ctx,
+      to,
       replyToId: threadTsValue,
       threadId: null,
       deliveryQueueId: undefined,

@@ -192,7 +192,6 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (threadTs) {
       delivery.usedReplyThreadTs ??= threadTs;
       delivery.rememberDeliveredThreadTs("block", threadTs);
-      delivery.recordDeliveredThreadParticipation(threadTs);
     }
     return true;
   };
