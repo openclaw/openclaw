@@ -689,6 +689,7 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
@@ -707,6 +708,7 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
 
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
@@ -736,6 +738,7 @@ describe("ensureAgentWorkspace", () => {
   it("propagates a transient profile read after the retry budget is exhausted", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
     const identityPath = path.join(tempDir, DEFAULT_IDENTITY_FILENAME);
     const originalReadFile = fs.readFile.bind(fs);
     const readSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
@@ -765,6 +768,7 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_IDENTITY_FILENAME,
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
     const bootstrapPath = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
     const rmSpy = vi
       .spyOn(fs, "rm")
@@ -792,6 +796,7 @@ describe("ensureAgentWorkspace", () => {
       name: DEFAULT_SOUL_FILENAME,
       content: "# SOUL.md\n\nUse a concise, practical voice.\n",
     });
+    await fs.mkdir(path.join(tempDir, "memory"), { recursive: true });
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
