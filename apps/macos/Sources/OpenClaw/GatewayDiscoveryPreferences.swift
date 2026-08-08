@@ -1,6 +1,20 @@
 import Foundation
+import OSLog
 
 enum GatewayDiscoveryPreferences {
+    struct StartupConfig {
+        let root: [String: Any]
+        let migrationChanged: Bool
+        let migrationPersisted: Bool
+        let remoteToken: GatewayRemoteConfig.TokenValue
+        let remoteTransport: AppState.RemoteTransport
+        let remoteURL: String?
+        let connectionMode: AppState.ConnectionMode
+        let remoteIdentityConfigured: Bool
+        let remoteIdentity: String
+    }
+
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway-discovery-preferences")
     private static let preferredStableIDKey = "gateway.preferredStableID"
     private static let legacyPreferredStableIDKey = "bridge.preferredStableID"
     private static let preferredRouteBindingKey = "gateway.preferredStableIDRouteBinding.v1"
@@ -31,6 +45,126 @@ enum GatewayDiscoveryPreferences {
         let raw = UserDefaults.standard.string(forKey: self.preferredRouteBindingKey)
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    @MainActor
+    static func prepareStartupConfig(
+        isPreview: Bool,
+        saver: ([String: Any]) -> Bool) -> StartupConfig
+    {
+        let loadedRoot = OpenClawConfigFile.loadDict()
+        let migration = isPreview
+            ? (root: loadedRoot, changed: false)
+            : self.migrateUnsafeDiscoveryRoute(loadedRoot)
+        let persisted = !migration.changed || saver(migration.root)
+        if !persisted {
+            self.logger.error("legacy discovery route migration could not be persisted")
+        }
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: migration.root)
+        let remote = (migration.root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let remoteIdentity = (remote?["sshIdentity"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return StartupConfig(
+            root: migration.root,
+            migrationChanged: migration.changed,
+            migrationPersisted: persisted,
+            remoteToken: GatewayRemoteConfig.resolveTokenValue(root: migration.root),
+            remoteTransport: resolution.transport,
+            remoteURL: resolution.directURL?.absoluteString ??
+                GatewayRemoteConfig.resolveUrlString(root: migration.root),
+            connectionMode: ConnectionModeResolver.resolve(root: migration.root).mode,
+            remoteIdentityConfigured: remote?.keys.contains("sshIdentity") == true,
+            remoteIdentity: remoteIdentity)
+    }
+
+    @MainActor
+    static func migrateUnsafeDiscoveryRoute(_ currentRoot: [String: Any])
+        -> (root: [String: Any], changed: Bool)
+    {
+        let connectionMode = ConnectionModeResolver.resolve(root: currentRoot).mode
+        guard GatewayRemoteConfig.resolveTransport(root: currentRoot) == .direct
+        else {
+            return (currentRoot, false)
+        }
+        if connectionMode == .remote {
+            guard let preferredStableID = self.preferredStableID() else {
+                // Active Direct without a discovery receipt is operator-owned.
+                return (currentRoot, false)
+            }
+            if self.isVerifiedTailscaleServeRoute(
+                stableID: preferredStableID,
+                root: currentRoot)
+            {
+                return (currentRoot, false)
+            }
+            if let storedBinding = self.preferredRouteBinding() {
+                let currentBinding = self.routeBinding(
+                    connectionMode: .remote,
+                    remoteTransport: .direct,
+                    remoteURL: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "",
+                    remoteTarget: "")
+                // A mismatched binding proves the route was edited after discovery selected it.
+                guard storedBinding == currentBinding else { return (currentRoot, false) }
+            }
+        }
+
+        // Shipped mode-exit flows cleared the discovery receipt, so an inactive Direct route has
+        // no reliable ownership provenance. Keeping it would let a mode-only return to Remote
+        // reactivate an attacker-selected endpoint without another trusted Direct decision.
+
+        var root = currentRoot
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var remote = gateway["remote"] as? [String: Any] ?? [:]
+        remote["transport"] = AppState.RemoteTransport.ssh.rawValue
+        remote["url"] = GatewayDiscoverySelectionSupport.sshTunnelGatewayUrl(
+            current: GatewayRemoteConfig.resolveUrlString(root: currentRoot) ?? "")
+        gateway["remote"] = remote
+        root["gateway"] = gateway
+        return (root, true)
+    }
+
+    private static func isVerifiedTailscaleServeRoute(
+        stableID: String,
+        root: [String: Any]) -> Bool
+    {
+        guard let url = GatewayRemoteConfig.resolveGatewayUrl(root: root),
+              url.scheme?.lowercased() == "wss",
+              let host = url.host?.lowercased(),
+              url.port == nil || url.port == 443
+        else {
+            return false
+        }
+        return stableID.lowercased() == "tailscale-serve|\(host)"
+    }
+
+    @MainActor
+    static func currentRouteIsDiscoveryOwned(state: AppState) -> Bool {
+        guard self.preferredStableID() != nil,
+              let storedBinding = self.preferredRouteBinding()
+        else {
+            return false
+        }
+        // Match the bound route itself, not only the persisted discovery id. A manual route edit
+        // transfers authority immediately, before asynchronous preference cleanup catches up.
+        return storedBinding == self.routeBinding(
+            connectionMode: state.connectionMode,
+            remoteTransport: state.remoteTransport,
+            remoteURL: state.remoteUrl,
+            remoteTarget: state.remoteTarget)
+    }
+
+    @MainActor
+    static func retirePreferredRouteBeforeLeavingRemote(state: AppState) {
+        // Clear automatic Direct authority while its route binding is still observable.
+        // Clearing the receipt first would make a later discovery choice look manual.
+        if self.currentRouteIsDiscoveryOwned(state: state),
+           state.remoteTransport == .direct
+        {
+            state.remoteTransport = .ssh
+            state.remoteUrl = GatewayDiscoverySelectionSupport.sshTunnelGatewayUrl(
+                current: state.remoteUrl)
+        }
+        self.setPreferredStableID(nil)
     }
 
     static func setPreferredStableID(_ stableID: String?, routeBinding: String?) {
@@ -96,8 +230,16 @@ enum GatewayDiscoveryPreferences {
 
     @discardableResult
     static func clearPreferredStableIDIfRouteBindingMismatch(_ currentRouteBinding: String?) -> Bool {
-        guard self.preferredStableID() != nil else {
+        guard let preferredStableID = self.preferredStableID() else {
             UserDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
+            return false
+        }
+        if self.preferredRouteBinding() == nil,
+           let current = self.normalized(currentRouteBinding)
+        {
+            // Releases predating route bindings persisted only the discovery id. Adopt the
+            // current route once so its automatic transport cannot look like a manual choice.
+            self.setPreferredStableID(preferredStableID, routeBinding: current)
             return false
         }
         guard let stored = self.preferredRouteBinding(),

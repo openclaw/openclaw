@@ -296,6 +296,13 @@ final class AppState {
     }
 
     var connectionMode: ConnectionMode {
+        willSet {
+            if self.connectionMode == .remote, newValue != .remote {
+                // Route ownership is still observable until the mode changes. Retire automatic
+                // Direct authority here so every settings and config-driven exit is covered.
+                GatewayDiscoveryPreferences.retirePreferredRouteBeforeLeavingRemote(state: self)
+            }
+        }
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
             if oldValue != self.connectionMode {
@@ -512,45 +519,37 @@ final class AppState {
             UserDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
-        let configRoot = OpenClawConfigFile.loadDict()
-        self.lastConfigFingerprint = Self.configFingerprint(configRoot)
-        self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
-        let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
-        let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
-        let configRemoteTransport = configRemoteResolution.transport
-        let configRemoteUrl = configRemoteResolution.directURL?.absoluteString
-            ?? GatewayRemoteConfig.resolveUrlString(root: configRoot)
-        let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
-        self.remoteTransport = configRemoteTransport
-        self.connectionMode = resolvedConnectionMode
+        let startupConfig = GatewayDiscoveryPreferences.prepareStartupConfig(
+            isPreview: isPreview, saver: gatewayConfigSaver)
+        self.lastConfigFingerprint = Self.configFingerprint(startupConfig.root)
+        self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(startupConfig.root)
+        self.remoteTransport = startupConfig.remoteTransport
+        self.connectionMode = startupConfig.connectionMode
 
-        let configRemote = (configRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let configRemote = (startupConfig.root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         let hasConfigRemoteTarget = configRemote?.keys.contains("sshTarget") == true
         let configRemoteTarget = (configRemote?["sshTarget"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
-        if resolvedConnectionMode == .remote,
+        if startupConfig.connectionMode == .remote,
            hasConfigRemoteTarget
         {
             self.remoteTarget = configRemoteTarget
-        } else if resolvedConnectionMode == .remote,
-                  configRemoteTransport != .direct,
+        } else if startupConfig.connectionMode == .remote,
+                  startupConfig.remoteTransport != .direct,
                   storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  let host = AppState.remoteHost(from: configRemoteUrl),
+                  let host = AppState.remoteHost(from: startupConfig.remoteURL),
                   !LoopbackHost.isLoopbackHost(host)
         {
             self.remoteTarget = "\(NSUserName())@\(host)"
         } else {
             self.remoteTarget = storedRemoteTarget
         }
-        self.remoteUrl = configRemoteUrl ?? ""
-        self.remoteToken = configRemoteToken.textFieldValue
-        self.remoteTokenUnsupported = configRemoteToken.isUnsupportedNonString
-        let hasConfigRemoteIdentity = configRemote?.keys.contains("sshIdentity") == true
-        let configRemoteIdentity = (configRemote?["sshIdentity"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        self.remoteIdentity = hasConfigRemoteIdentity
-            ? configRemoteIdentity
+        self.remoteUrl = startupConfig.remoteURL ?? ""
+        self.remoteToken = startupConfig.remoteToken.textFieldValue
+        self.remoteTokenUnsupported = startupConfig.remoteToken.isUnsupportedNonString
+        self.remoteIdentity = startupConfig.remoteIdentityConfigured
+            ? startupConfig.remoteIdentity
             : UserDefaults.standard.string(forKey: remoteIdentityKey)?.nonEmpty ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
@@ -581,13 +580,21 @@ final class AppState {
         }
 
         if !self.isPreview {
-            self.reconcilePreferredGatewayRouteBinding()
+            if !startupConfig.migrationPersisted {
+                // Failed persistence must keep routing closed instead of letting the watcher
+                // republish the old Direct endpoint from disk.
+                self.gatewayConfigSyncState = .failed
+            } else if startupConfig.migrationChanged {
+                GatewayDiscoveryPreferences.setPreferredStableID(nil)
+            } else {
+                self.reconcilePreferredGatewayRouteBinding()
+            }
         }
         self.isInitializing = false
         if !self.isPreview {
             scheduleExecApprovalModeReadRetry()
         }
-        if !self.isPreview {
+        if !self.isPreview, startupConfig.migrationPersisted {
             self.startConfigWatcher()
         }
     }
@@ -887,11 +894,6 @@ extension AppState {
         }
 
         self.isApplyingGatewayConfig = true
-        self.applyGatewayConfigMode(
-            desiredMode,
-            hasRemoteUrl: hasRemoteUrl,
-            forcing: forcedFields.contains(.mode))
-
         let shouldApplyTransport = forcedFields.contains(.remoteTransport) ||
             !self.dirtyGatewayConfigFields.contains(.remoteTransport)
         if shouldApplyTransport, remoteTransport != self.remoteTransport {
@@ -943,6 +945,12 @@ extension AppState {
                 self.remoteIdentity = configuredIdentity
             }
         }
+        // Apply mode last so a Remote exit retires authority against the final incoming route.
+        // Applying it first lets later transport fields recreate Direct without its owner receipt.
+        self.applyGatewayConfigMode(
+            desiredMode,
+            hasRemoteUrl: hasRemoteUrl,
+            forcing: forcedFields.contains(.mode))
         self.isApplyingGatewayConfig = false
     }
 

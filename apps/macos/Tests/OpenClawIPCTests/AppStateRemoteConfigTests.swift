@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawDiscovery
 import Testing
 @testable import OpenClaw
 
@@ -126,6 +127,242 @@ struct AppStateRemoteConfigTests {
 
         #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-b")
         #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == nil)
+    }
+
+    @Test
+    func `discovery ownership requires the bound route to remain current`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        state.remoteTransport = .direct
+        state.remoteUrl = "wss://gateway-a.example.test"
+
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "gateway-a",
+            routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: state.connectionMode,
+                remoteTransport: state.remoteTransport,
+                remoteURL: state.remoteUrl,
+                remoteTarget: state.remoteTarget))
+
+        #expect(GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(state: state))
+
+        state.remoteUrl = "ws://gateway-b.example.ts.net:18789"
+
+        #expect(!GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(state: state))
+    }
+
+    @Test
+    func `legacy unbound direct selection is retired before endpoint publication`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            let vulnerableRoot: [String: Any] = [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "ws://legacy-gateway.local:18789",
+                        "token": "stored-token",
+                    ],
+                ],
+            ]
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "tailscale-serve|verified-gateway.example.ts.net")
+
+            let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(vulnerableRoot)
+            #expect(migration.changed)
+            #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
+            #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) ==
+                "ws://127.0.0.1:18789")
+            #expect(OpenClawConfigFile.saveDict(migration.root))
+
+            let state = AppState(preview: true)
+            let source = await GatewayEndpointStore._testLiveSourceSnapshot(
+                state: state,
+                beforeConfigRead: {})
+            #expect(state.remoteTransport == .ssh)
+            #expect(source.remoteTransport == .ssh)
+            #expect(source.directRemoteURL == nil)
+        }
+    }
+
+    @Test
+    func `legacy verified tailscale serve route remains direct`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let tailnetHost = "gateway-host.tailnet-example.ts.net"
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://\(tailnetHost)",
+                ],
+            ],
+        ]
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "tailscale-serve|\(tailnetHost)",
+            routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "wss://\(tailnetHost)",
+                remoteTarget: ""))
+
+        let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
+
+        #expect(!migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .direct)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "wss://\(tailnetHost)")
+    }
+
+    @Test
+    func `active bound non serve discovery route is retired`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let directURL = "ws://192.168.1.42:18789"
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": ["transport": "direct", "url": directURL],
+            ],
+        ]
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "bonjour|nearby-gateway",
+            routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: directURL,
+                remoteTarget: ""))
+
+        let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
+
+        #expect(migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "ws://127.0.0.1:18789")
+    }
+
+    @Test
+    func `inactive direct route without reliable provenance is retired`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        GatewayDiscoveryPreferences.setPreferredStableID(nil)
+        let tailnetHost = "gateway-host.tailnet-example.ts.net"
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "local",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://\(tailnetHost)",
+                ],
+            ],
+        ]
+        let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
+
+        #expect(migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .ssh)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) == "ws://127.0.0.1:18789")
+    }
+
+    @Test
+    func `cold inactive direct route is retired before mode only reactivation`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.local.rawValue])
+        {
+            let trustedURL = "wss://trusted-gateway.example.ts.net"
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "remote": [
+                        "transport": "direct",
+                        "url": trustedURL,
+                        "token": "stored-token",
+                    ],
+                ],
+            ]))
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "tailscale-serve|trusted-gateway.example.ts.net",
+                routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                    connectionMode: .remote,
+                    remoteTransport: .direct,
+                    remoteURL: trustedURL,
+                    remoteTarget: ""))
+
+            let startup = GatewayDiscoveryPreferences.prepareStartupConfig(
+                isPreview: false,
+                saver: { OpenClawConfigFile.saveDict($0) })
+            #expect(startup.migrationChanged)
+            #expect(startup.migrationPersisted)
+            #expect(startup.remoteTransport == .ssh)
+
+            let state = AppState(preview: true)
+            state.connectionMode = .remote
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
+        }
+    }
+
+    @Test
+    func `active direct route without a discovery receipt remains operator owned`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://manual-gateway.example.test",
+                ],
+            ],
+        ]
+        GatewayDiscoveryPreferences.setPreferredStableID(nil)
+
+        let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
+
+        #expect(!migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .direct)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) ==
+            "wss://manual-gateway.example.test")
+    }
+
+    @Test
+    func `active direct route with a mismatched binding remains operator owned`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "remote",
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://manual-gateway.example.test",
+                ],
+            ],
+        ]
+        GatewayDiscoveryPreferences.setPreferredStableID(
+            "bonjour|old-gateway",
+            routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                connectionMode: .remote,
+                remoteTransport: .direct,
+                remoteURL: "wss://old-gateway.example.test",
+                remoteTarget: ""))
+
+        let migration = GatewayDiscoveryPreferences.migrateUnsafeDiscoveryRoute(root)
+
+        #expect(!migration.changed)
+        #expect(GatewayRemoteConfig.resolveTransport(root: migration.root) == .direct)
+        #expect(GatewayRemoteConfig.resolveUrlString(root: migration.root) ==
+            "wss://manual-gateway.example.test")
     }
 
     @Test
@@ -561,6 +798,57 @@ struct AppStateRemoteConfigTests {
         #expect(routeIdentity != "remote:id:gateway-a")
         #expect(!OnboardingSystemAgentResumeStore.isPending(for: routeIdentity))
         #expect(OnboardingSystemAgentResumeStore.isPending(for: "remote:id:gateway-a"))
+    }
+
+    @Test
+    func `config watcher mode exit retires discovered direct before next selection`() {
+        let previousGatewayPreference = captureGatewayPreference()
+        defer { restoreGatewayPreference(previousGatewayPreference) }
+
+        for destination in [AppState.ConnectionMode.local, .unconfigured] {
+            let trustedURL = "wss://trusted-gateway.example.ts.net"
+            let state = AppState(preview: true)
+            state._testApplyConfigOverrides([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": ["transport": "direct", "url": trustedURL],
+                ],
+            ])
+            GatewayDiscoveryPreferences.setPreferredStableID(
+                "tailscale-serve|trusted-gateway.example.ts.net",
+                routeBinding: GatewayDiscoveryPreferences.routeBinding(
+                    connectionMode: state.connectionMode,
+                    remoteTransport: state.remoteTransport,
+                    remoteURL: state.remoteUrl,
+                    remoteTarget: state.remoteTarget))
+
+            state._testApplyConfigOverrides([
+                "gateway": [
+                    "mode": destination.rawValue,
+                    "remote": ["transport": "direct", "url": trustedURL],
+                ],
+            ])
+            GatewayDiscoverySelectionSupport.applyRemoteSelection(
+                gateway: GatewayDiscoveryModel.DiscoveredGateway(
+                    displayName: "Nearby gateway",
+                    serviceHost: "nearby-gateway.local",
+                    servicePort: 18789,
+                    lanHost: nil,
+                    tailnetDns: nil,
+                    sshPort: 22,
+                    gatewayPort: 18789,
+                    gatewayDirectReachable: true,
+                    stableID: "bonjour|nearby-gateway",
+                    debugID: "nearby-gateway",
+                    isLocal: false),
+                currentRouteIsDiscoveryOwned: GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(
+                    state: state),
+                state: state)
+
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
+        }
     }
 
     @Test

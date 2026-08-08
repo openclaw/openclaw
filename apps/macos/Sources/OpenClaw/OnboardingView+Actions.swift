@@ -12,7 +12,6 @@ extension OnboardingView {
         preferredGatewayID = nil
         showAdvancedConnection = false
         showRemoteChoices = false
-        GatewayDiscoveryPreferences.setPreferredStableID(nil)
         probeConfiguredGatewayForDashboard()
     }
 
@@ -23,7 +22,6 @@ extension OnboardingView {
         preferredGatewayID = nil
         showAdvancedConnection = false
         showRemoteChoices = false
-        GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
 
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
@@ -40,7 +38,11 @@ extension OnboardingView {
         }
         defaultsToLocalGateway = false
         preferredGatewayID = gateway.stableID
-        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: state)
+        GatewayDiscoverySelectionSupport.applyRemoteSelection(
+            gateway: gateway,
+            currentRouteIsDiscoveryOwned: GatewayDiscoveryPreferences.currentRouteIsDiscoveryOwned(
+                state: state),
+            state: state)
 
         state.connectionMode = .remote
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: state)
