@@ -54,7 +54,7 @@ export async function runExec(params: {
   code: string;
   assistantTurnId?: string;
   language?: CodeModeLanguage;
-  restartSafe: boolean;
+  enforceReplaySafeTools: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   onRuntime?: (runtime: ToolSearchRuntime) => void;
@@ -72,6 +72,7 @@ export async function runExec(params: {
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
   params.onRuntime?.(runtime);
   const bridgeDispatch = { started: false };
+  const replaySafety = { safe: true };
   if (params.signal?.aborted) {
     return {
       status: "failed" as const,
@@ -80,7 +81,7 @@ export async function runExec(params: {
       failurePhase: "host" as const,
       bridgeDispatchStarted: false,
       output: [],
-      replaySafe: params.restartSafe,
+      replaySafe: replaySafety.safe,
       telemetry: telemetry(runtime),
     };
   }
@@ -130,7 +131,8 @@ export async function runExec(params: {
     return await settleCodeModeResult({
       result,
       output: result.output,
-      replaySafe: params.restartSafe,
+      enforceReplaySafeTools: params.enforceReplaySafeTools,
+      replaySafety,
       deadlineMs,
       parentToolCallId: params.toolCallId,
       codeModeReplayId,
@@ -155,7 +157,7 @@ export async function runExec(params: {
           : ("host" as const),
       bridgeDispatchStarted: bridgeDispatch.started,
       output: [],
-      replaySafe: params.restartSafe,
+      replaySafe: replaySafety.safe,
       telemetry: telemetry(runtime),
     };
   }
@@ -220,7 +222,8 @@ async function waitForPending(
 async function settleCodeModeResult(params: {
   result: CodeModeWorkerResult;
   output: unknown[];
-  replaySafe: boolean;
+  enforceReplaySafeTools: boolean;
+  replaySafety: { safe: boolean };
   parentToolCallId: string;
   codeModeReplayId: string;
   ctx: ToolSearchToolContext;
@@ -255,7 +258,7 @@ async function settleCodeModeResult(params: {
     failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
     bridgeDispatchStarted: params.bridgeDispatch.started,
     output: output.slice(deliveredOutputCount),
-    replaySafe: params.replaySafe,
+    replaySafe: params.replaySafety.safe,
     telemetry: telemetry(params.runtime),
   });
   // Bridge tool calls (search/describe/call/namespace) run through the same
@@ -269,9 +272,13 @@ async function settleCodeModeResult(params: {
     result.pendingRequests.length > 0 &&
     result.pendingRequests.every((request) => request.method !== "yield")
   ) {
-    if (params.replaySafe) {
-      // Replay-safe runs never inline-drain: namespace calls stay a hard error
-      // and other pending work falls through to the replay-safe snapshot check.
+    const pendingReplaySafe = pendingBridgeRequestsReplaySafe(
+      result.pendingRequests,
+      params.runtime,
+    );
+    if (params.enforceReplaySafeTools) {
+      // Recovery-enforced runs never inline-drain. Reject unsafe work before
+      // dispatch; safe work falls through to a persisted checkpoint.
       if (result.pendingRequests.every((request) => request.method === "namespace")) {
         cancelPendingBridgeStates(pending);
         return {
@@ -285,8 +292,22 @@ async function settleCodeModeResult(params: {
           telemetry: telemetry(params.runtime),
         };
       }
+      if (!pendingReplaySafe) {
+        cancelPendingBridgeStates(pending);
+        return {
+          status: "failed" as const,
+          error: "restart-safe code mode cannot call side-effecting tools.",
+          code: "invalid_input" as const,
+          failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("input" as const),
+          bridgeDispatchStarted: params.bridgeDispatch.started,
+          output: output.slice(deliveredOutputCount),
+          replaySafe: true,
+          telemetry: telemetry(params.runtime),
+        };
+      }
       break;
     }
+    params.replaySafety.safe &&= pendingReplaySafe;
     const remainingMs = settleDeadline - Date.now();
     if (remainingMs <= 0) {
       break;
@@ -350,7 +371,8 @@ async function settleCodeModeResult(params: {
           runId: activeRunId,
           replayId: params.codeModeReplayId,
           pending,
-          replaySafe: false,
+          enforceReplaySafeTools: params.enforceReplaySafeTools,
+          replaySafe: params.replaySafety.safe,
           settlementMode: result.settlementMode,
           snapshotBytes: result.snapshotBytes,
           parentToolCallId: params.parentToolCallId,
@@ -405,7 +427,7 @@ async function settleCodeModeResult(params: {
       result.pendingRequests,
       params.runtime,
     );
-    if (params.replaySafe && !pendingReplaySafe) {
+    if (params.enforceReplaySafeTools && !pendingReplaySafe) {
       cancelPendingBridgeStates(pending);
       return {
         status: "failed" as const,
@@ -417,6 +439,9 @@ async function settleCodeModeResult(params: {
         replaySafe: true,
         telemetry: telemetry(params.runtime),
       };
+    }
+    if (!params.enforceReplaySafeTools) {
+      params.replaySafety.safe &&= pendingReplaySafe;
     }
     if (pending.length > 0) {
       let releaseReservation: (() => void) | undefined;
@@ -457,7 +482,8 @@ async function settleCodeModeResult(params: {
           runId: activeRunId,
           replayId: params.codeModeReplayId,
           pending,
-          replaySafe: params.replaySafe && pendingReplaySafe,
+          enforceReplaySafeTools: params.enforceReplaySafeTools,
+          replaySafe: params.replaySafety.safe,
           settlementMode: result.settlementMode,
           snapshotBytes: result.snapshotBytes,
           parentToolCallId: params.parentToolCallId,
@@ -490,7 +516,8 @@ async function settleCodeModeResult(params: {
       output,
       deliveredOutputCount,
       reservedActiveRunSlot: params.reservedActiveRunSlot,
-      replaySafe: params.replaySafe,
+      enforceReplaySafeTools: params.enforceReplaySafeTools,
+      replaySafe: params.replaySafety.safe,
       settlementMode: result.settlementMode,
       signal: params.signal,
       onUpdate: params.onUpdate,
@@ -513,7 +540,7 @@ async function settleCodeModeResult(params: {
         }
       : {}),
     output: output.slice(deliveredOutputCount),
-    replaySafe: params.replaySafe,
+    replaySafe: params.replaySafety.safe,
     telemetry: telemetry(params.runtime),
   };
 }
@@ -549,6 +576,7 @@ export async function runWait(params: {
   // One wait call shares a single wall-clock deadline across draining the prior
   // pending calls, the resume worker, and the inline settle phase.
   const deadlineMs = Date.now() + state.config.timeoutMs;
+  const replaySafety = { safe: state.replaySafe };
   let releaseActiveRunSlot: (() => void) | undefined;
   try {
     const ready = await waitForPending(
@@ -620,7 +648,8 @@ export async function runWait(params: {
     return await settleCodeModeResult({
       result,
       output,
-      replaySafe: state.replaySafe,
+      enforceReplaySafeTools: state.enforceReplaySafeTools,
+      replaySafety,
       deadlineMs,
       parentToolCallId: state.parentToolCallId,
       codeModeReplayId: state.replayId,
@@ -649,7 +678,7 @@ export async function runWait(params: {
       failurePhase: "bridge" as const,
       bridgeDispatchStarted: true,
       output: takeUndeliveredCodeModeRunOutput(state),
-      replaySafe: state.replaySafe,
+      replaySafe: replaySafety.safe,
       telemetry: telemetry(state.runtime),
     };
   } finally {

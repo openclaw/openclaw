@@ -1001,6 +1001,48 @@ describe("qa mock openai server", () => {
     expect(body).toContain(command);
   });
 
+  it("keeps Code Mode restart policy out of model-planned exec arguments", async () => {
+    const server = await startMockServer();
+    await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [
+        {
+          type: "function",
+          name: "exec",
+          parameters: {
+            type: "object",
+            properties: {
+              language: { type: "string" },
+              code: { type: "string" },
+            },
+            required: ["code"],
+          },
+        },
+        {
+          type: "function",
+          name: "wait",
+          parameters: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      input: [
+        makeUserInput("Code Mode restart wait QA check. Reply exactly: RESTART-CODE-MODE-WAIT-OK"),
+      ],
+    });
+
+    const debug = requireRecord(await getJson(server, "/debug/last-request"), "debug request");
+    expect(debug.plannedToolName).toBe("exec");
+    expect(debug.plannedToolArgs).toMatchObject({
+      language: "javascript",
+      code: expect.stringContaining('tools.search("qa_restart_wait")'),
+    });
+    expect(requireRecord(debug.plannedToolArgs, "planned exec args")).not.toHaveProperty(
+      "restartSafe",
+    );
+  });
+
   it("dispatches structured Slack commentary, exec, and final phases", async () => {
     const server = await startMockServer();
     const suffix = "A1B2C3D4";

@@ -250,7 +250,6 @@ export async function runUntilCompleted(params: {
   waitTool: AnyAgentTool;
   code: string;
   language?: "javascript" | "typescript";
-  restartSafe?: boolean;
 }) {
   // Code Mode may return a waiting state before completion; tests poll through
   // the public wait tool instead of reaching into activeRuns.
@@ -258,7 +257,6 @@ export async function runUntilCompleted(params: {
     await params.execTool.execute("code-call-1", {
       code: params.code,
       language: params.language,
-      restartSafe: params.restartSafe,
     }),
   );
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {

@@ -266,6 +266,7 @@ describe("Code Mode swarm host bridge", () => {
   it("re-settles a persisted collector after restart without double-spawn", async () => {
     let persisted: Record<string, unknown> | undefined;
     let replayId = "";
+    let spawnVisible = true;
     const callExactId = vi.fn(async (_id: string, input: Record<PropertyKey, unknown>) => {
       const idempotencyKey = input[SWARM_CODE_MODE_IDEMPOTENCY_KEY];
       const requestFingerprint = input[SWARM_CODE_MODE_REQUEST_FINGERPRINT];
@@ -284,9 +285,10 @@ describe("Code Mode swarm host bridge", () => {
       };
     });
     const runtime = {
-      namespaceEntries: () => [
-        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
-      ],
+      namespaceEntries: () =>
+        spawnVisible
+          ? [{ id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" }]
+          : [],
       callExactId,
     };
     const getSwarmRunByLaunchReplayKey = vi.fn(() => persisted);
@@ -337,6 +339,7 @@ describe("Code Mode swarm host bridge", () => {
     };
 
     const first = await testing.runBridgeRequest({ ...bridgeBase, request: spawnRequest });
+    spawnVisible = false;
     const replayed = await testing.runBridgeRequest({ ...bridgeBase, request: spawnRequest });
     const waited = await testing.runBridgeRequest({
       ...bridgeBase,
@@ -428,14 +431,16 @@ describe("Code Mode swarm host bridge", () => {
   });
 
   it("rejects replay when the collector request payload changes", async () => {
+    let spawnVisible = true;
     const callExactId = vi.fn(async (_id: string, input: Record<PropertyKey, unknown>) => ({
       result: { details: { status: "accepted", runId: "collector-1" } },
       fingerprint: input[SWARM_CODE_MODE_REQUEST_FINGERPRINT],
     }));
     const runtime = {
-      namespaceEntries: () => [
-        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
-      ],
+      namespaceEntries: () =>
+        spawnVisible
+          ? [{ id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" }]
+          : [],
       callExactId,
     };
     const persisted: { value?: Record<string, unknown> } = {};
@@ -460,6 +465,7 @@ describe("Code Mode swarm host bridge", () => {
       childSessionKey: "agent:main:subagent:1",
       swarmLaunchRequestFingerprint: spawnInput[SWARM_CODE_MODE_REQUEST_FINGERPRINT],
     };
+    spawnVisible = false;
 
     const replay = await testing.runBridgeRequest({
       ...bridgeBase,
@@ -517,6 +523,26 @@ describe("Code Mode swarm host bridge", () => {
     expect(callExactId).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a fresh launch when sessions_spawn is not visible", async () => {
+    const runtime = {
+      namespaceEntries: () => [],
+      callExactId: vi.fn(),
+    };
+
+    const launch = await testing.runBridgeRequest({
+      runtime,
+      namespaceRuntime: {},
+      parentToolCallId: "parent",
+      codeModeRunId: "cm-restart",
+      ctx: swarmContext(),
+      request: { id: "bridge:1", method: "agentSpawn", args: ["Research", {}] },
+    });
+
+    expect(launch).toMatchObject({ ok: false });
+    expect(launch.ok ? "" : launch.error).toContain("requires the sessions_spawn tool");
+    expect(runtime.callExactId).not.toHaveBeenCalled();
+  });
+
   it("re-enqueues a durable pending reservation before returning its handle", async () => {
     const initSubagentRegistry = vi.fn();
     testing.setSwarmDepsForTest({
@@ -538,9 +564,7 @@ describe("Code Mode swarm host bridge", () => {
       }),
     });
     const runtime = {
-      namespaceEntries: () => [
-        { id: "openclaw:core:sessions_spawn", source: "openclaw", name: "sessions_spawn" },
-      ],
+      namespaceEntries: () => [],
       callExactId: vi.fn(),
     };
 

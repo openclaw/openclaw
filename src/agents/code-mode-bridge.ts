@@ -259,12 +259,6 @@ async function runAgentSpawnBridge(params: {
   const model = readOptionalStringOption(options, "model");
   const thinking = readOptionalStringOption(options, "thinking");
   const agentId = readOptionalStringOption(options, "agentId");
-  const spawnEntry = params.runtime
-    .namespaceEntries()
-    .find((entry) => entry.source === "openclaw" && entry.name === "sessions_spawn");
-  if (!spawnEntry) {
-    throw new ToolInputError("agents.run requires the sessions_spawn tool.");
-  }
   const spawnInput: Record<PropertyKey, unknown> = {
     task: prompt.trim(),
     collect: true,
@@ -304,6 +298,12 @@ async function runAgentSpawnBridge(params: {
       }
     }
     return replayedSpawnResult(existing);
+  }
+  const spawnEntry = params.runtime
+    .namespaceEntries()
+    .find((entry) => entry.source === "openclaw" && entry.name === "sessions_spawn");
+  if (!spawnEntry) {
+    throw new ToolInputError("agents.run requires the sessions_spawn tool.");
   }
   Object.defineProperty(spawnInput, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
     value: idempotencyKey,

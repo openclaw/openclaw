@@ -331,7 +331,6 @@ export function enforceResultLimit(params: {
 export function readCode(args: unknown): {
   code: string;
   language?: CodeModeLanguage;
-  restartSafe: boolean;
 } {
   const params = asToolParamsRecord(args);
   const codeParam = params.code;
@@ -351,11 +350,7 @@ export function readCode(args: unknown): {
   if (language !== undefined && language !== "javascript" && language !== "typescript") {
     throw new ToolInputError("language must be javascript or typescript.");
   }
-  const restartSafe = params.restartSafe;
-  if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
-    throw new ToolInputError("restartSafe must be a boolean.");
-  }
-  return { code, language, restartSafe: restartSafe === true };
+  return { code, language };
 }
 
 export function readRunId(args: unknown): string {

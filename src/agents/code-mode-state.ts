@@ -33,7 +33,9 @@ type CodeModeRunState = {
   snapshotBytes: Uint8Array;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
-  // True only when every future bridge call is enforced read-only before execution.
+  // Host recovery policy persists across wait calls independently of evidence.
+  enforceReplaySafeTools: boolean;
+  // Monotonic host-observed fact: once false, later safe calls cannot restore it.
   replaySafe: boolean;
   output: unknown[];
   // Retain all output for cumulative limits, but never replay blocks already returned to the model.
@@ -216,6 +218,7 @@ export function snapshotState(params: {
   output: unknown[];
   deliveredOutputCount?: number;
   reservedActiveRunSlot?: boolean;
+  enforceReplaySafeTools: boolean;
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
@@ -337,6 +340,7 @@ export function storeSnapshotState(params: {
   runId: string;
   replayId: string;
   pending: PendingBridgeState[];
+  enforceReplaySafeTools: boolean;
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
   snapshotBytes: Uint8Array;
@@ -371,6 +375,7 @@ export function storeSnapshotState(params: {
     snapshotBytes: params.snapshotBytes,
     pending: params.pending,
     settlementMode: params.settlementMode,
+    enforceReplaySafeTools: params.enforceReplaySafeTools,
     replaySafe: params.replaySafe,
     output: params.output,
     deliveredOutputCount: params.output.length,

@@ -262,9 +262,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
     expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
     expect(parameters.properties?.code?.description).toContain("`require`, `import`");
-    expect(parameters.properties?.restartSafe?.description).toContain(
-      "Leave unset for ordinary calls",
-    );
+    expect(parameters.properties).not.toHaveProperty("restartSafe");
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );

@@ -24,7 +24,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     resetCodeModeTestState();
   });
 
-  it("marks yield suspensions and resumes the snapshot with wait", async () => {
+  it("marks yield-only suspensions replay-safe and resumes the snapshot with wait", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -39,7 +39,6 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
         "code-call-yield",
         {
-          restartSafe: true,
           code: `
           text("before");
           await yield_control("pause");
@@ -66,6 +65,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
 
     expect(resumed.status).toBe("completed");
     expect(resumed.value).toBe("done");
+    expect(resumed.replaySafe).toBe(true);
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
   });
 
@@ -650,7 +650,6 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.output).toEqual([{ type: "text", text: "before timeout" }]);
-    expect(first.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
     const runId = first.runId;
     expect(typeof runId).toBe("string");
     if (typeof runId !== "string") {
@@ -659,6 +658,10 @@ describe("Code Mode wait, scope, and suspended runs", () => {
 
     const activeRun = testing.activeRuns.get(runId);
     expect(activeRun).toBeDefined();
+    if (activeRun!.pending.length > 1) {
+      await Promise.race(activeRun!.pending.map((entry) => entry.promise));
+    }
+    expect(activeRun!.pending.filter((entry) => !entry.settled)).toHaveLength(1);
     activeRun!.config.timeoutMs = 100;
 
     const second = resultDetails(
