@@ -654,7 +654,7 @@ export async function searchKeyword(params: {
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
-}): Promise<Array<SearchRowResult & { textScore: number }>> {
+}): Promise<Array<SearchRowResult & { textScore: number; likeFallbackBody?: boolean }>> {
   if (params.limit <= 0) {
     return [];
   }
@@ -761,6 +761,9 @@ export async function searchKeyword(params: {
         textScore,
         snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
         source: row.source,
+        // Mark LIKE fallback body hits so the manager's path-only sentinel
+        // (textScore === 0) does not erase the boost-derived lexical score.
+        ...(usedMatch ? {} : { likeFallbackBody: true }),
       },
       readChunkProvenance(params.db, row.id),
     );
