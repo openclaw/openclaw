@@ -46,7 +46,7 @@ import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
 import type { SlackSendIdentity } from "../../send.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
-import { formatSlackTeamTarget } from "../../target-parsing.js";
+import { formatSlackTarget } from "../../target-parsing.js";
 import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeAllowListLower, normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import {
@@ -1184,14 +1184,14 @@ export async function prepareSlackMessage(params: {
     accountId: account.accountId,
   });
   const physicalSlackTarget = opts.eventScope
-    ? formatSlackTeamTarget({
+    ? formatSlackTarget({
         teamId: opts.eventScope.teamId,
         kind: "channel",
         id: message.channel,
       })
     : `channel:${message.channel}`;
   const logicalSlackTarget = opts.eventScope
-    ? formatSlackTeamTarget({
+    ? formatSlackTarget({
         teamId: opts.eventScope.teamId,
         kind: isDirectMessage ? "user" : "channel",
         id: isDirectMessage ? senderId : message.channel,

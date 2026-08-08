@@ -36,7 +36,7 @@ import {
 } from "./exec-approvals.js";
 import {
   canonicalizeSlackApiTargetId,
-  formatSlackTeamTarget,
+  formatSlackTarget,
   parseSlackTarget,
   type SlackTarget,
 } from "./target-parsing.js";
@@ -448,6 +448,6 @@ export function shouldHandleSlackNativeApprovalRequest(params: {
 
 function formatSlackApprovalTarget(target: SlackTarget, id = target.id): string {
   return target.teamId
-    ? formatSlackTeamTarget({ teamId: target.teamId, kind: target.kind, id })
+    ? formatSlackTarget({ teamId: target.teamId, kind: target.kind, id })
     : `${target.kind}:${id}`;
 }

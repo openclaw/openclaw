@@ -76,7 +76,7 @@ import {
 } from "./shared.js";
 import {
   canonicalizeSlackApiTargetId,
-  formatSlackTeamTarget,
+  formatSlackTarget,
   parseSlackTarget,
 } from "./target-parsing.js";
 import { slackContextTargetsMatch } from "./targets.js";
@@ -213,7 +213,7 @@ async function resolveSlackSendContext(params: {
   assertSlackDirectSendAllowed(account, teamId);
   const to =
     target && teamId && !target.teamId
-      ? formatSlackTeamTarget({ teamId, kind: target.kind, id: target.id })
+      ? formatSlackTarget({ teamId, kind: target.kind, id: target.id })
       : params.to;
   const send =
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
@@ -381,9 +381,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   const apiTargetId = canonicalizeSlackApiTargetId(parsed.kind, parsed.id, params.target);
   const isDm = parsed.kind === "user";
   let peerKind: "direct" | "channel" | "group" = isDm ? "direct" : "channel";
-  let peerId = parsed.teamId
-    ? formatSlackTeamTarget({ teamId: parsed.teamId, kind: parsed.kind, id: parsed.id })
-    : parsed.id;
+  let peerId = formatSlackTarget(parsed);
   let recipientSessionExact = isDm
     ? /^[UW][A-Z0-9]{8,}$/i.test(parsed.id)
     : /^C[A-Z0-9]{8,}$/i.test(parsed.id);
@@ -398,9 +396,11 @@ async function resolveSlackOutboundSessionRoute(params: {
       return null;
     }
     peerKind = "direct";
-    peerId = parsed.teamId
-      ? formatSlackTeamTarget({ teamId: parsed.teamId, kind: "user", id: conversation.user })
-      : conversation.user;
+    peerId = formatSlackTarget({
+      teamId: parsed.teamId,
+      kind: "user",
+      id: conversation.user,
+    });
     recipientSessionExact = true;
   } else if (!isDm && /^G/i.test(parsed.id)) {
     const channelType = await resolveSlackChannelType({

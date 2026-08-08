@@ -57,13 +57,16 @@ function parseQualifiedSlackTarget(raw: string): SlackTarget | undefined {
   };
 }
 
-export function formatSlackTeamTarget(params: {
-  teamId: string;
+export function formatSlackTarget(params: {
+  teamId?: string;
   kind: SlackTargetKind;
   id: string;
 }): string {
-  const teamId = params.teamId.trim();
+  const teamId = params.teamId?.trim();
   const id = params.id.trim();
+  if (!teamId) {
+    return id;
+  }
   const idPattern = params.kind === "user" ? /^[UW][A-Z0-9]+$/i : /^[CDG][A-Z0-9]+$/i;
   if (!/^T[A-Z0-9]+$/i.test(teamId) || !idPattern.test(id)) {
     throw new Error("Invalid Slack workspace-qualified target");

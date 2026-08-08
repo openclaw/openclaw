@@ -26,7 +26,7 @@ import {
   type OpenClawConfig,
   withNormalizedTimestamp,
 } from "./runtime-api.js";
-import { formatSlackTeamTarget } from "./target-parsing.js";
+import { formatSlackTarget } from "./target-parsing.js";
 import { parseSlackTarget, resolveSlackChannelId, slackContextTargetsMatch } from "./targets.js";
 
 type ConversationReadInvocationOrigin = NonNullable<
@@ -362,9 +362,11 @@ async function assertSlackReadTargetAllowed(params: {
   };
   const currentConversation = isCurrentSlackReadTarget({
     account: params.account,
-    target: params.teamId
-      ? formatSlackTeamTarget({ teamId: params.teamId, kind: "channel", id: params.channelId })
-      : params.channelId,
+    target: formatSlackTarget({
+      teamId: params.teamId,
+      kind: "channel",
+      id: params.channelId,
+    }),
     context: params.context,
   });
   const directOperator = params.conversationReadOrigin === "direct-operator";
@@ -529,9 +531,7 @@ function resolveSlackActionTarget(
     parsed.teamId ?? resolveTrustedCurrentSlackTeamId({ account, target: parsed, context });
   assertSlackDirectSendAllowed(account, teamId);
   return {
-    routingTarget: teamId
-      ? formatSlackTeamTarget({ teamId, kind: parsed.kind, id: parsed.id })
-      : raw,
+    routingTarget: teamId ? formatSlackTarget({ teamId, kind: parsed.kind, id: parsed.id }) : raw,
     teamId,
   };
 }

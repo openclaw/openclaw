@@ -6,7 +6,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "./accounts.js";
-import { formatSlackTeamTarget, parseSlackTarget } from "./target-parsing.js";
+import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate } from "./thread-ts.js";
 
 export function buildSlackThreadingToolContext(params: {
@@ -40,7 +40,7 @@ export function buildSlackThreadingToolContext(params: {
   const nativeChannelId = normalizeOptionalString(params.context.NativeChannelId);
   const currentChannelId =
     parsedMessagingTarget?.teamId && nativeChannelId
-      ? formatSlackTeamTarget({
+      ? formatSlackTarget({
           teamId: parsedMessagingTarget.teamId,
           kind: "channel",
           id: nativeChannelId,

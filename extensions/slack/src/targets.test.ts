@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeSlackApiTargetId,
-  formatSlackTeamTarget,
+  formatSlackTarget,
   slackTargetsMatch,
 } from "./target-parsing.js";
 import {
@@ -67,11 +67,12 @@ describe("parseSlackTarget", () => {
     });
   });
 
-  it("formats only structurally valid workspace-qualified targets", () => {
-    expect(formatSlackTeamTarget({ teamId: "T123", kind: "channel", id: "C456" })).toBe(
+  it("formats bare and structurally valid workspace-qualified targets", () => {
+    expect(formatSlackTarget({ teamId: "T123", kind: "channel", id: "C456" })).toBe(
       "team:T123:channel:C456",
     );
-    expect(() => formatSlackTeamTarget({ teamId: "E123", kind: "channel", id: "C456" })).toThrow(
+    expect(formatSlackTarget({ kind: "channel", id: "C456" })).toBe("C456");
+    expect(() => formatSlackTarget({ teamId: "E123", kind: "channel", id: "C456" })).toThrow(
       "Invalid Slack workspace-qualified target",
     );
   });

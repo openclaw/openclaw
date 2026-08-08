@@ -9,11 +9,7 @@ import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
-import {
-  formatSlackTeamTarget,
-  parseSlackTarget,
-  resolveSlackChannelId,
-} from "./target-parsing.js";
+import { formatSlackTarget, parseSlackTarget, resolveSlackChannelId } from "./target-parsing.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -93,11 +89,8 @@ export function createSlackActions(
 
 function normalizeSlackActionChannelTarget(raw: string): string {
   const target = parseSlackTarget(raw, { defaultKind: "channel" });
-  if (!target?.teamId) {
-    return resolveSlackChannelId(raw);
-  }
   const channelId = resolveSlackChannelId(raw);
-  return formatSlackTeamTarget({ teamId: target.teamId, kind: "channel", id: channelId });
+  return formatSlackTarget({ teamId: target?.teamId, kind: "channel", id: channelId });
 }
 
 function shouldUseWorkspaceAwareSlackActionSend(
