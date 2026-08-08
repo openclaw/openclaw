@@ -77,6 +77,7 @@ export { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
 export { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 export { readSqliteTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export {
+  classifySqliteTranscriptPresence,
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync,
@@ -87,3 +88,4 @@ export {
   readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
+export type { TranscriptMessagePresence } from "./session-accessor.sqlite-read.js";

@@ -4,6 +4,7 @@ import {
   appendSqliteTranscriptEventSync as appendTranscriptEventSync,
   appendSqliteTranscriptMessage as appendTranscriptMessage,
   appendSqliteTranscriptMessageSync as appendTranscriptMessageSync,
+  classifySqliteTranscriptPresence as classifyTranscriptMessagePresence,
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText as readLatestTranscriptAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync as loadTranscriptEventRowsAfterSeqSync,
@@ -23,6 +24,7 @@ import {
   withSqliteTranscriptWriteLock as withTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction as withTranscriptWriteTransaction,
 } from "./session-accessor.sqlite.js";
+import type { TranscriptMessagePresence } from "./session-accessor.sqlite.js";
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptReadScope,
@@ -42,6 +44,7 @@ export {
   appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  classifyTranscriptMessagePresence,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
@@ -59,6 +62,7 @@ export {
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 };
+export type { TranscriptMessagePresence };
 
 /** Keeps transcript event delivery behind the transcript owner boundary. */
 export function emitTranscriptUpdate(

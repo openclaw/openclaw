@@ -199,6 +199,7 @@ export {
   appendTranscriptEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  classifyTranscriptMessagePresence,
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
@@ -219,6 +220,7 @@ export {
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
+export type { TranscriptMessagePresence } from "./session-accessor.transcript.js";
 export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,

@@ -17,8 +17,8 @@ import {
 import { resolveStorePath } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
+  classifyTranscriptMessagePresence,
   listSessionEntries,
-  loadTranscriptEventsSync,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
@@ -156,13 +156,20 @@ function isTranscriptMessageRecord(entry: unknown): boolean {
   return record.type === undefined && isTranscriptMessageRole(record.role);
 }
 
-function sqliteTranscriptHasMessageRecords(params: {
+// Prune only when the transcript is provably message-free. The classifier scans
+// rows newest-first and skips torn rows per-row (matching transcript-index
+// tolerance), so a single unparseable row can no longer condemn a session that
+// still holds readable message rows. It also distinguishes "confirmed empty"
+// from "every row was unreadable": the latter (and any whole-store read failure)
+// keeps the entry rather than destroy recoverable content.
+function sqliteTranscriptConfirmedMessageFree(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
 }): boolean {
   try {
-    return loadTranscriptEventsSync(params).some(isTranscriptMessageRecord);
+    const presence = classifyTranscriptMessagePresence(params, isTranscriptMessageRecord);
+    return presence.mode === "confirmed-absent";
   } catch {
     return false;
   }
@@ -311,7 +318,7 @@ function pruneMissingTranscriptEntries(params: {
       continue;
     }
     if (
-      !sqliteTranscriptHasMessageRecords({
+      sqliteTranscriptConfirmedMessageFree({
         sessionId: entry.sessionId,
         sessionKey: key,
         storePath: params.storePath,
@@ -553,6 +560,12 @@ export async function runSessionsCleanup(params: {
             missingRemovals.push({
               sessionKey,
               expectedEntry: structuredClone(entry),
+              // A pruned "missing" session can still hold readable transcript
+              // rows (torn rows are skipped, not the whole read). Archive the
+              // removal like every other reclaim path so the operator can
+              // recover the conversation. Matches the DM-scope sibling below;
+              // genuinely empty transcripts auto-skip the archive write.
+              archiveRemovedTranscript: true,
             });
           },
         });

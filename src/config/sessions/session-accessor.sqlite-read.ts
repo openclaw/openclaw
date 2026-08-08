@@ -373,6 +373,46 @@ function parseLatestAssistantMessageEvent(
   };
 }
 
+// Newest-first tolerant scan result. `no-match` records whether any row failed
+// to parse so callers can tell a genuinely empty transcript apart from one whose
+// rows are all unreadable — the latter must never be treated as "confirmed empty".
+type SqliteTranscriptScanResult =
+  | { mode: "match"; event: TranscriptEvent }
+  | { mode: "no-match"; sawUnreadableRow: boolean };
+
+function scanSqliteTranscriptEventsInDatabase(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  match: (event: TranscriptEvent) => boolean,
+): SqliteTranscriptScanResult {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["event_json"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "desc"),
+  ).rows;
+  let sawUnreadableRow = false;
+  for (const row of rows) {
+    let event: TranscriptEvent;
+    try {
+      event = JSON.parse(row.event_json) as TranscriptEvent;
+    } catch {
+      // Malformed rows are skipped, matching transcript index tolerance, but
+      // recorded so a caller that must not destroy content can distinguish
+      // "no match" from "some rows were unreadable".
+      sawUnreadableRow = true;
+      continue;
+    }
+    if (match(event)) {
+      return { mode: "match", event };
+    }
+  }
+  return { mode: "no-match", sawUnreadableRow };
+}
+
 /** Finds the newest transcript record accepted by the matcher without parsing older rows. */
 export function findSqliteTranscriptEvent(
   scope: SessionTranscriptReadScope,
@@ -388,26 +428,31 @@ export function findSqliteTranscriptEventInDatabase(
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
 ): { event: TranscriptEvent } | undefined {
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select(["event_json"])
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "desc"),
-  ).rows;
-  for (const row of rows) {
-    try {
-      const event = JSON.parse(row.event_json) as TranscriptEvent;
-      if (match(event)) {
-        return { event };
-      }
-    } catch {
-      // Malformed rows are skipped, matching transcript index tolerance.
-    }
+  const result = scanSqliteTranscriptEventsInDatabase(database, sessionId, match);
+  return result.mode === "match" ? { event: result.event } : undefined;
+}
+
+// Tri-state so a "cannot confirm empty" caller (e.g. `sessions cleanup
+// --fix-missing`) keeps the entry on `unreadable` instead of deleting a
+// transcript whose only rows are torn. `confirmed-absent` means every row
+// parsed and none matched — the only state safe to reclaim on.
+export type TranscriptMessagePresence =
+  | { mode: "match" }
+  | { mode: "confirmed-absent" }
+  | { mode: "unreadable" };
+
+/** Classifies whether any transcript row satisfies the matcher, newest-first. */
+export function classifySqliteTranscriptPresence(
+  scope: SessionTranscriptReadScope,
+  match: (event: TranscriptEvent) => boolean,
+): TranscriptMessagePresence {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const result = scanSqliteTranscriptEventsInDatabase(database, resolved.sessionId, match);
+  if (result.mode === "match") {
+    return { mode: "match" };
   }
-  return undefined;
+  return result.sawUnreadableRow ? { mode: "unreadable" } : { mode: "confirmed-absent" };
 }
 
 export function readTranscriptEventMessage(
