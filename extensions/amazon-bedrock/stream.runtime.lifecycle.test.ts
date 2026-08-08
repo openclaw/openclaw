@@ -107,4 +107,60 @@ describe("Bedrock provider-owned stream lifecycle", () => {
       expect(output.content[0]).toMatchObject({ redacted: true, thinkingSignature: "AQID" });
     }
   });
+
+  it("resolves the full tool-call arguments for a large, multi-chunk streamed argument", async () => {
+    // Regression test: re-parsing the whole accumulated buffer on every single
+    // delta made large tool-call arguments (e.g. a multi-KB document body)
+    // O(n^2) in argument size. The incremental, time-bounded preview (see
+    // packages/ai/src/utils/json-parse.ts) fixes the per-delta cost, but
+    // `handleContentBlockStop` must still force one final, unthrottled
+    // resolution from the complete buffer - not a stale/partial preview and
+    // not an empty `{}`.
+    const longContent = "lorem ipsum dolor sit amet ".repeat(2000); // ~54KB of content
+    const expectedArguments = { filename: "report.docx", content: longContent };
+    const fullArgsJson = JSON.stringify(expectedArguments);
+
+    // Split into many small deltas, matching real provider streaming.
+    const chunkSize = 40;
+    const deltaEvents = [];
+    for (let i = 0; i < fullArgsJson.length; i += chunkSize) {
+      deltaEvents.push({
+        contentBlockDelta: {
+          contentBlockIndex: 0,
+          delta: { toolUse: { input: fullArgsJson.slice(i, i + chunkSize) } },
+        },
+      });
+    }
+
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: events([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockStart: {
+            contentBlockIndex: 0,
+            start: { toolUse: { toolUseId: "call_write", name: "write_file" } },
+          },
+        },
+        ...deltaEvents,
+        { messageStop: { stopReason: BedrockStopReason.TOOL_USE } },
+      ]),
+    } as never);
+
+    const stream = streamSimpleBedrock(model as never, {
+      messages: [{ role: "user", content: "Write the report", timestamp: 0 }],
+    });
+    const drainedEventTypes: string[] = [];
+    for await (const event of stream) {
+      drainedEventTypes.push(event.type);
+    }
+    const output = await stream.result();
+
+    expect(output.content[0]).toMatchObject({
+      type: "toolCall",
+      arguments: expectedArguments,
+    });
+    expect(output.content[0]).not.toHaveProperty("partialJson");
+    expect(output.content[0]).not.toHaveProperty("jsonPreview");
+  });
 });

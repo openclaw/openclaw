@@ -5,11 +5,15 @@ export type { ApiProvider } from "@openclaw/ai";
 export {
   calculateCost,
   clampThinkingLevel,
+  createStreamingJsonPreviewState,
+  finalizeStreamingJsonPreview,
   getApiProvider,
   getApiProviders,
   getEnvApiKey,
   parseStreamingJson,
+  pushStreamingJsonPreview,
   sanitizeSurrogates,
+  type StreamingJsonPreviewState,
 } from "@openclaw/ai/internal/runtime";
 export {
   adjustMaxTokensForThinking,

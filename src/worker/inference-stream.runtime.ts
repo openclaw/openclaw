@@ -1,4 +1,10 @@
-import { parseStreamingJson } from "@openclaw/ai/internal/runtime";
+import {
+  createStreamingJsonPreviewState,
+  finalizeStreamingJsonPreview,
+  parseStreamingJson,
+  pushStreamingJsonPreview,
+  type StreamingJsonPreviewState,
+} from "@openclaw/ai/internal/runtime";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceContext,
@@ -18,7 +24,21 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import type { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
 
-type StreamingToolCall = ToolCall & { partialJson?: string };
+type StreamingToolCall = ToolCall & {
+  partialJson?: string;
+  jsonPreview?: StreamingJsonPreviewState;
+};
+
+// Re-parsing the whole accumulated tool-call argument buffer on every single
+// forwarded delta makes total parse cost O(n^2) in the argument size (see
+// extensions/amazon-bedrock/stream.runtime.ts for the full explanation and
+// the shared fix - this adapter can receive the same raw per-delta stream
+// forwarded from that provider via Worker inference). `pushStreamingJsonPreview`
+// keeps the live preview refreshing on every delta via an incremental JSON
+// repair step, while gating the remaining (unavoidably O(buffer-size))
+// JSON.parse/partial-json fallback on cumulative buffer growth rather than
+// elapsed time, so the cost bound holds regardless of delta cadence - see
+// packages/ai/src/utils/json-parse.ts for the full rationale.
 
 type WorkerInferenceStreamAdapterOptions = {
   client: WorkerInferenceProxyClient;
@@ -165,7 +185,8 @@ function processInferenceEvent(
       }
       const streaming = content as StreamingToolCall;
       streaming.partialJson = `${streaming.partialJson ?? ""}${event.delta}`;
-      content.arguments = parseStreamingJson(streaming.partialJson);
+      streaming.jsonPreview ??= createStreamingJsonPreviewState();
+      content.arguments = pushStreamingJsonPreview(streaming.jsonPreview, event.delta);
       return {
         type: "toolcall_delta",
         contentIndex: event.contentIndex,
@@ -181,7 +202,16 @@ function processInferenceEvent(
         }
         throw new Error("worker inference tool end has no active tool call");
       }
-      delete (content as StreamingToolCall).partialJson;
+      const streaming = content as StreamingToolCall;
+      // Always force one final, unthrottled resolution from the complete
+      // buffer here, regardless of the reparse growth gate applied to the
+      // live preview above - this guarantees correctness independent of
+      // stream timing.
+      content.arguments = streaming.jsonPreview
+        ? finalizeStreamingJsonPreview(streaming.jsonPreview)
+        : parseStreamingJson(streaming.partialJson);
+      delete streaming.partialJson;
+      delete streaming.jsonPreview;
       return { type: "toolcall_end", contentIndex: event.contentIndex, toolCall: content, partial };
     }
   }
