@@ -65,6 +65,9 @@ const DmConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     systemPrompt: z.string().optional(),
+    // Shared DM history override; the core resolver reads dms.<id>.historyLimit
+    // before falling back to dmHistoryLimit.
+    historyLimit: z.number().int().min(0).optional(),
   })
   .strict()
   .optional();

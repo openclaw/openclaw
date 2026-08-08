@@ -28,6 +28,10 @@ interface LineAccountBaseConfig {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
+  /** Max retained history entries for DM sessions on this channel. */
+  dmHistoryLimit?: number;
+  /** Per-DM history overrides keyed by conversation id. */
+  dms?: Record<string, { historyLimit?: number }>;
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
   mediaMaxMb?: number;

@@ -1,5 +1,6 @@
 // Sms helper module supports config schema behavior.
 import {
+  DmConfigSchema,
   AllowFromListSchema,
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,
@@ -26,6 +27,8 @@ const SmsAccountConfigSchema = z
     publicWebhookUrl: z.string().optional(),
     dangerouslyDisableSignatureValidation: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     allowFrom: AllowFromListSchema,
     textChunkLimit: z.number().int().positive().optional(),
   })

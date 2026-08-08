@@ -46,6 +46,10 @@ export type MattermostAccountConfig = {
   implicitMentions?: Partial<ResolvedChannelImplicitMentions>;
   /** Direct message policy (pairing/allowlist/open/disabled). */
   dmPolicy?: DmPolicy;
+  /** Max retained history entries for DM sessions on this channel. */
+  dmHistoryLimit?: number;
+  /** Per-DM history overrides keyed by conversation id. */
+  dms?: Record<string, { historyLimit?: number }>;
   /** Allowlist for direct messages (user ids or @usernames). */
   allowFrom?: Array<string | number>;
   /** Allowlist for group messages (user ids or @usernames). */

@@ -12,6 +12,10 @@ type SmsChannelConfigFields = {
   publicWebhookUrl?: string;
   dangerouslyDisableSignatureValidation?: boolean;
   dmPolicy?: "pairing" | "open" | "allowlist" | "disabled";
+  /** Max retained history entries for DM sessions on this channel. */
+  dmHistoryLimit?: number;
+  /** Per-DM history overrides keyed by conversation id. */
+  dms?: Record<string, { historyLimit?: number }>;
   allowFrom?: string | Array<string | number>;
   textChunkLimit?: number;
 };

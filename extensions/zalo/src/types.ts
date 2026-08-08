@@ -18,6 +18,10 @@ export type ZaloAccountConfig = {
   webhookPath?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
+  /** Max retained history entries for DM sessions on this channel. */
+  dmHistoryLimit?: number;
+  /** Per-DM history overrides keyed by conversation id. */
+  dms?: Record<string, { historyLimit?: number }>;
   /** Allowlist for DM senders (Zalo user IDs). */
   allowFrom?: Array<string | number>;
   /** Group-message access policy. */

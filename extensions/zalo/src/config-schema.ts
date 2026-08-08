@@ -1,5 +1,6 @@
 // Zalo helper module supports config schema behavior.
 import {
+  DmConfigSchema,
   AllowFromListSchema,
   buildMultiAccountChannelSchema,
   DmPolicySchema,
@@ -20,6 +21,8 @@ const zaloAccountSchema = z.object({
   webhookSecret: buildSecretInputSchema().optional(),
   webhookPath: z.string().optional(),
   dmPolicy: DmPolicySchema.optional(),
+  dmHistoryLimit: z.number().int().min(0).optional(),
+  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   allowFrom: AllowFromListSchema,
   groupPolicy: GroupPolicySchema.optional(),
   groupAllowFrom: AllowFromListSchema,
