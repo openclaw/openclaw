@@ -2919,6 +2919,39 @@ describe("stuck session recovery activity reconciliation", () => {
     expectQueuedFollowupDoesNotRecover();
   }
 
+  async function expectFailedRecoveryPreservesFreshActivity(
+    startActivity: () => void,
+    expectedWorkKind: "tool_call" | "model_call",
+  ): Promise<void> {
+    logSessionStateChange({ sessionId, sessionKey, state: "processing", reason: "run_started" });
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+
+    requestStuckSessionRecovery({
+      recover: async () => {
+        startActivity();
+        await flush();
+        throw new Error("recovery failed");
+      },
+      classification: stalledClassification,
+      request: {
+        sessionId,
+        sessionKey,
+        ageMs: 139_014,
+        queueDepth: 1,
+        allowActiveAbort: true,
+        expectedState: "processing",
+        stateGeneration: state.generation,
+      },
+    });
+    await flush();
+    await flush();
+
+    expect(peekDiagnosticSessionState({ sessionId, sessionKey })?.state).toBe("processing");
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      expectedWorkKind,
+    );
+  }
+
   beforeEach(() => {
     setDiagnosticsEnabledForProcess(true);
     resetDiagnosticSessionStateForTest();
@@ -2981,6 +3014,37 @@ describe("stuck session recovery activity reconciliation", () => {
         model: "gpt-5.5",
       });
     });
+  });
+
+  it("preserves a fresh tool marker that starts while failed recovery is pending", async () => {
+    await expectFailedRecoveryPreservesFreshActivity(
+      () =>
+        emitDiagnosticEvent({
+          type: "tool.execution.started",
+          sessionId,
+          sessionKey,
+          runId: sessionId,
+          toolName: "Bash",
+          toolCallId: "fresh-tool",
+        }),
+      "tool_call",
+    );
+  });
+
+  it("preserves a fresh model marker that starts while failed recovery is pending", async () => {
+    await expectFailedRecoveryPreservesFreshActivity(
+      () =>
+        emitDiagnosticEvent({
+          type: "model.call.started",
+          sessionId,
+          sessionKey,
+          runId: sessionId,
+          callId: "fresh-model",
+          provider: "openai",
+          model: "gpt-5.5",
+        }),
+      "model_call",
+    );
   });
 
   it("preserves an active embedded owner after recovery fails", async () => {

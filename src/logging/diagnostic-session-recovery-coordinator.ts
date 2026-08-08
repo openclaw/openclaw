@@ -155,7 +155,7 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     recoveryStartedAfterEmbeddedRunSequence: params.recoveryStartedAfterEmbeddedRunSequence,
     recoveryStartedAfterDiagnosticEventSequence: params.recoveryStartedAfterDiagnosticEventSequence,
   });
-  if (activityClear.blockedByActiveEmbeddedRun) {
+  if (activityClear.blockedByActiveEmbeddedRun || activityClear.blockedByFreshActivity) {
     emitSessionRecoveryCompleted({
       request: params.request,
       outcome: params.outcome,

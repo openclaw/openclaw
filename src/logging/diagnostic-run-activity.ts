@@ -17,6 +17,14 @@ import {
 } from "./diagnostic-argument-churn-activity.js";
 import { createDiagnosticEmbeddedRunIndex } from "./diagnostic-embedded-run-index.js";
 import {
+  activityMarkerStartedAfter,
+  embeddedRunStartedAfter,
+  hasActivityMarkerStartedAfter,
+  markerBelongsToRecoveredOwner,
+  ownerRefsForRecovery,
+  ownerRefsForStartedEvent,
+} from "./diagnostic-recovery-activity-utils.js";
+import {
   clearRepeatedRequestActivity,
   type DiagnosticRepeatedRequestActivity,
   mergeRepeatedRequestActivity,
@@ -430,46 +438,6 @@ function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string
   return params.workKey ?? params.sessionId;
 }
 
-function ownerRefsForRecovery(params: {
-  sessionId?: string;
-  activeSessionId?: string;
-}): Set<string> {
-  const refs = [params.activeSessionId?.trim(), params.sessionId?.trim()].filter(
-    (ref): ref is string => Boolean(ref),
-  );
-  return new Set(refs);
-}
-
-function ownerRefsForStartedEvent(event: { runId?: string; sessionId?: string }): string[] {
-  return [event.runId?.trim(), event.sessionId?.trim()].filter((ref): ref is string =>
-    Boolean(ref),
-  );
-}
-
-function markerBelongsToRecoveredOwner(
-  marker: { runId?: string; sessionId?: string },
-  ownerRefs: Set<string>,
-): boolean {
-  return (
-    (marker.runId !== undefined && ownerRefs.has(marker.runId)) ||
-    (marker.sessionId !== undefined && ownerRefs.has(marker.sessionId))
-  );
-}
-
-function embeddedRunStartedAfter(
-  embeddedRun: ActiveEmbeddedRun,
-  sequence: number | undefined,
-): boolean {
-  return sequence !== undefined && embeddedRun.sequence > sequence;
-}
-
-function activityMarkerStartedAfter(
-  marker: { sequence?: number },
-  sequence: number | undefined,
-): boolean {
-  return sequence !== undefined && marker.sequence !== undefined && marker.sequence > sequence;
-}
-
 function clearRecoveredOwnerEmbeddedRuns(
   activity: SessionActivity,
   ownerRefs: Set<string>,
@@ -597,17 +565,20 @@ function shouldIgnoreRecoveredOwnerStartEvent(
 
 // Reconciles a session's terminal embedded-run activity at once. Used when an
 // authority (stuck-session recovery) declares the lane idle and the per-run
-// markDiagnosticEmbeddedRunEnded may have been bypassed. Clears the embedded-run
-// owners AND their tool/model markers, matching the default teardown so the lane
-// cannot be left as idle + orphaned tool/model activity (which
-// isIdleQueuedRecoverableSessionStall still treats as recoverable).
+// markDiagnosticEmbeddedRunEnded may have been bypassed. Clears pre-recovery
+// embedded-run owners and tool/model markers, but preserves post-watermark work
+// so the lane cannot be made idle while fresh activity is still running.
 export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   sessionId?: string;
   sessionKey?: string;
   activeSessionId?: string;
   recoveryStartedAfterEmbeddedRunSequence?: number;
   recoveryStartedAfterDiagnosticEventSequence?: number;
-}): { cleared: boolean; blockedByActiveEmbeddedRun: boolean } {
+}): {
+  cleared: boolean;
+  blockedByActiveEmbeddedRun: boolean;
+  blockedByFreshActivity?: boolean;
+} {
   const shouldCreateCutoffActivity =
     params.recoveryStartedAfterDiagnosticEventSequence !== undefined;
   const activity = resolveSessionActivity({
@@ -670,6 +641,14 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
       return { cleared: false, blockedByActiveEmbeddedRun: true };
     }
     embeddedRunIndex.clear(activity);
+  }
+  if (hasActivityMarkerStartedAfter(activity, params.recoveryStartedAfterDiagnosticEventSequence)) {
+    touchSessionActivity(activity, "recovery:preserved_fresh_activity");
+    return {
+      cleared: false,
+      blockedByActiveEmbeddedRun: false,
+      blockedByFreshActivity: true,
+    };
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
