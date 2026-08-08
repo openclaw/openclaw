@@ -50,6 +50,7 @@ import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
   msteamsConfigAdapter,
   msteamsMeta,
+  resolveMSTeamsDmPolicy,
   type ResolvedMSTeamsAccount,
 } from "./channel-config.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
@@ -1137,6 +1138,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     security: {
+      resolveDmPolicy: resolveMSTeamsDmPolicy,
       collectWarnings: projectConfigWarningCollector<{ cfg: OpenClawConfig }>(
         collectMSTeamsSecurityWarnings,
       ),
