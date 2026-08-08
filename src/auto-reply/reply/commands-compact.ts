@@ -21,10 +21,7 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
-import {
-  resolvePersistedSessionRuntimeId,
-  resolveSessionRuntimeOverrideForProvider,
-} from "../../agents/session-runtime-compat.js";
+import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
@@ -248,9 +245,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
-  const selectedRuntime = resolveSessionRuntimeOverrideForProvider({
+  const compactionCliTarget = resolveManualCompactionCliTarget({
     provider: params.provider,
     entry: targetSessionEntry,
+    cfg: params.cfg,
   });
   const compactionStorePath = resolveSessionStorePathForScope({
     agentId: sessionAgentId,
@@ -290,13 +288,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     authProfileId: targetSessionEntry.authProfileOverride,
     authProfileIdSource: resolveSessionAuthProfileOverrideSource(targetSessionEntry),
     contextTokenBudget,
-    agentHarnessId:
-      targetSessionEntry.modelSelectionLocked === true
-        ? resolvePersistedSessionRuntimeId(targetSessionEntry)
-        : (selectedRuntime ??
-          (targetSessionEntry.agentRuntimeOverride
-            ? undefined
-            : targetSessionEntry.agentHarnessId)),
+    agentHarnessId: compactionCliTarget.agentHarnessId,
+    cliSessionId: compactionCliTarget.cliSessionId,
     modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {

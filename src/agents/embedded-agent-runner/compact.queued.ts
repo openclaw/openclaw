@@ -36,6 +36,7 @@ import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
+import { compactNativeCliSession } from "./compact.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -353,6 +354,13 @@ async function compactEmbeddedAgentSessionImpl(
     ],
   });
   const run = async () => {
+    const nativeCliResult = await compactNativeCliSession({
+      runtime: runtimeSelection.selectedHarnessRuntime,
+      compactParams: params,
+    });
+    if (nativeCliResult) {
+      return nativeCliResult;
+    }
     ensureContextEnginesInitialized();
     const contextEngine = await resolveContextEngine(params.config, {
       agentDir,

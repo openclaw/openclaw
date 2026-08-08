@@ -169,7 +169,8 @@ export async function executePreparedCliRun(
     : (context.openClawHistoryPrompt ?? params.prompt);
   let prompt = applyPluginTextReplacements(
     appendBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
-      preserveExactPrompt: context.heartbeatPrompt,
+      preserveExactPrompt:
+        params.controlOperation !== undefined ? basePrompt : context.heartbeatPrompt,
     }),
     context.backendResolved.textTransforms?.input,
   );
@@ -193,7 +194,11 @@ export async function executePreparedCliRun(
         media: params.media,
       });
   prompt = imagePayload.prompt;
-  const { argsPrompt, stdin } = resolvePromptInput({ backend, prompt });
+  const promptInputBackend =
+    params.controlOperation === "compact" && context.backendResolved.manualCompactionInput
+      ? { ...backend, input: context.backendResolved.manualCompactionInput }
+      : backend;
+  const { argsPrompt, stdin } = resolvePromptInput({ backend: promptInputBackend, prompt });
   const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
