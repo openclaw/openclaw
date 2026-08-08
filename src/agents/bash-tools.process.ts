@@ -13,6 +13,7 @@ import {
   deleteSession,
   drainSession,
   getFinishedSession,
+  getFinishedSessionForProcess,
   getSession,
   listFinishedSessions,
   listRunningSessions,
@@ -153,7 +154,7 @@ function finishedPollResult(
   finished: NonNullable<ReturnType<typeof getFinishedSession>>,
 ): AgentToolResult<unknown> {
   resetPollRetrySuggestion(sessionId);
-  takeFinishedCompletionReceipt(sessionId)?.remove();
+  takeFinishedCompletionReceipt(finished)?.();
   return {
     content: [
       {
@@ -451,13 +452,14 @@ export function createProcessTool(
             }
           }
           if (scopedSession.exited) {
-            // Exit finalization owns the terminal transition. Re-read its
-            // retained result instead of rebuilding it from the stale live
-            // object captured before this waiting poll yielded.
-            const finishedAfterWait = getFinishedSession(params.sessionId);
+            // Exit finalization owns the terminal transition. Re-read the snapshot
+            // bound to this process object; the public id may already belong to a successor.
+            const finishedAfterWait = getFinishedSessionForProcess(scopedSession);
             if (finishedAfterWait && isInScope(finishedAfterWait)) {
               return finishedPollResult(params.sessionId, finishedAfterWait);
             }
+            resetPollRetrySuggestion(params.sessionId);
+            return failText(`No session found for ${params.sessionId}`);
           }
           const { stdout, stderr } = drainSession(scopedSession);
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();

@@ -1,6 +1,7 @@
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import { createDeferred } from "../shared/deferred.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { runExecProcess, type ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
 type SupervisorSpawnMock = {
@@ -9,6 +10,7 @@ type SupervisorSpawnMock = {
 export async function startDeferredNotifyRun(params: {
   spawn: SupervisorSpawnMock;
   sessionKey: string;
+  notifyDeliveryContext?: DeliveryContext;
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
 }) {
   const exit = createDeferred<Awaited<ReturnType<ManagedRun["wait"]>>>();
@@ -31,6 +33,7 @@ export async function startDeferredNotifyRun(params: {
     pendingMaxOutput: 1000,
     notifyOnExit: true,
     sessionKey: params.sessionKey,
+    notifyDeliveryContext: params.notifyDeliveryContext,
     timeoutSec: null,
     onSettledBeforeNotify: params.onSettledBeforeNotify,
   });

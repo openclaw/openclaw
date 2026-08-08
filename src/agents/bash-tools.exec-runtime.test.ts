@@ -29,7 +29,8 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
 }));
 
-vi.mock("../infra/system-event-receipts.js", () => ({
+vi.mock("../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/system-events.js")>()),
   enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
 }));
 
@@ -66,7 +67,7 @@ beforeEach(() => {
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockClear();
   enqueueSystemEventWithReceiptMock.mockReset();
-  enqueueSystemEventWithReceiptMock.mockReturnValue({ remove: vi.fn(() => true) });
+  enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
 });
 

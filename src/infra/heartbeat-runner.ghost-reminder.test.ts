@@ -16,6 +16,7 @@ import {
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { HEARTBEAT_SKIP_CRON_IN_PROGRESS } from "./heartbeat-wake.js";
+import { drainPendingHeartbeatWakesForTest } from "./heartbeat-wake.test-support.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
@@ -24,7 +25,8 @@ beforeEach(() => {
   resetCronActiveJobs();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await drainPendingHeartbeatWakesForTest();
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
   vi.restoreAllMocks();

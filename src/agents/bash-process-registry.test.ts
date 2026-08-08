@@ -191,7 +191,7 @@ describe("bash process registry", () => {
 
   it("removes a completion receipt when its finished session is missing", () => {
     const remove = vi.fn(() => true);
-    const isPending = retainFinishedCompletionReceipt("missing", { remove });
+    const isPending = retainFinishedCompletionReceipt("missing", remove);
 
     expect(remove).toHaveBeenCalledOnce();
     expect(isPending()).toBe(false);

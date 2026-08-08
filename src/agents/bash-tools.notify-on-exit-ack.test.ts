@@ -26,6 +26,7 @@ const startNotifyRun = (
   startDeferredNotifyRun({
     spawn: supervisorSpawnMock,
     sessionKey: QUEUE_KEY,
+    notifyDeliveryContext: { channel: "telegram", to: "-100123", threadId: 42 },
     onSettledBeforeNotify,
   });
 const processTool = createProcessTool();
@@ -40,20 +41,21 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
-it("isolates identical completions by their full producer identity", async () => {
+it("isolates identical completions across exact full-slug reuse", async () => {
   const first = await startNotifyRun();
   await first.finish();
+  await execute("clear", first.run.session.id);
   enqueueSystemEventEntry("unrelated", { sessionKey: QUEUE_KEY, contextKey: "marker" });
   const second = await startNotifyRun();
   await second.finish();
-  expect([first.run.session.id, second.run.session.id]).toEqual(["amber-atlas", "amber-atlas-2"]);
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas-2"]);
+  expect([first.run.session.id, second.run.session.id]).toEqual(["amber-atlas", "amber-atlas"]);
+  expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas"]);
+  const queued = peekSystemEventEntries(QUEUE_KEY);
+  expect(queued[0]).toEqual(queued[2]);
   await poll(second.run.session.id);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
   await poll(second.run.session.id);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
-  await poll(first.run.session.id);
-  expect(contexts()).toEqual(["marker"]);
 });
 it("lets settlement poll remove the receipt before heartbeat handoff", async () => {
   let sessionId = "";

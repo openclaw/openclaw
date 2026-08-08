@@ -7,7 +7,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { setHeartbeatWakeHandler } from "../infra/heartbeat-wake.js";
+import { drainPendingHeartbeatWakesForTest } from "../infra/heartbeat-wake.test-support.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
 import {
   peekSystemEventEntries,
@@ -802,25 +803,9 @@ describe("exec exit codes", () => {
 describe("exec notifyOnExit", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 
-  async function drainPendingHeartbeatWakes(): Promise<void> {
-    const handler = vi.fn(async () => ({ status: "ran" as const, durationMs: 0 }));
-    const dispose = setHeartbeatWakeHandler(handler);
-    try {
-      requestHeartbeat({
-        source: "other",
-        intent: "immediate",
-        reason: "test-cleanup",
-        coalesceMs: 0,
-      });
-      await expect.poll(() => handler.mock.calls.length, NOTIFY_POLL_OPTIONS).toBeGreaterThan(0);
-    } finally {
-      dispose();
-    }
-  }
+  beforeEach(drainPendingHeartbeatWakesForTest);
 
-  beforeEach(drainPendingHeartbeatWakes);
-
-  afterEach(drainPendingHeartbeatWakes);
+  afterEach(drainPendingHeartbeatWakesForTest);
 
   it("keeps a background completion queued until terminal poll acknowledges it", async () => {
     const tool = createNotifyOnExitExecTool();

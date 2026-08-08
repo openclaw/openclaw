@@ -16,7 +16,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
-import { enqueueSystemEventWithReceipt } from "../infra/system-event-receipts.js";
+import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -340,11 +340,15 @@ function queueNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     mainKey: session.mainKey,
     sessionScope: session.sessionScope,
   };
-  const receipt = enqueueSystemEventWithReceipt(eventText, {
-    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-    contextKey: `exec:${session.id}`,
-    deliveryContext: session.notifyDeliveryContext,
-  });
+  const receipt = enqueueSystemEventWithReceipt(
+    eventText,
+    {
+      sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
+      contextKey: `exec:${session.id}`,
+      deliveryContext: session.notifyDeliveryContext,
+    },
+    { allowDuplicate: true },
+  );
   if (!receipt) {
     return undefined;
   }
