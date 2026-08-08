@@ -4108,6 +4108,21 @@ NODE
     );
   });
 
+  it("budgets macOS Swift time by runner, so fork pull requests are not cancelled mid-build", () => {
+    const workflow = readCiWorkflow();
+    const macosSwift = workflow.jobs["macos-swift"];
+
+    // runs-on falls back to hosted macos-26 for dispatches, retries, and fork PRs.
+    // The timeout must cover every one of those, or the slower runner gets the
+    // Blacksmith budget and is cancelled mid-compile (see PR #118989).
+    expect(macosSwift["timeout-minutes"]).toBe(
+      "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}",
+    );
+    expect(macosSwift["runs-on"]).toContain(
+      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+    );
+  });
+
   it("serializes macOS Swift tests only on hosted dispatches and retries", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
