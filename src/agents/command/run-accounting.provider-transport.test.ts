@@ -2,6 +2,7 @@ import { getAiTransportHost } from "@openclaw/ai";
 import { describe, expect, it } from "vitest";
 import "../../llm/ai-transport-host.js";
 import {
+  observeProviderTransportLogicalCallFinalized,
   observeProviderTransportLogicalCallSettled,
   observeProviderTransportLogicalCallStarted,
 } from "../provider-transport-accounting.js";
@@ -32,6 +33,7 @@ describe("command provider transport accounting", () => {
         outcome: "completed",
       });
       observeProviderTransportLogicalCallSettled("call-command", "completed");
+      observeProviderTransportLogicalCallFinalized("call-command");
       return accounting.project();
     });
 
@@ -70,6 +72,7 @@ describe("command provider transport accounting", () => {
           reason: "failed_before_submission",
         });
         observeProviderTransportLogicalCallSettled("call-thrown", "failed");
+        observeProviderTransportLogicalCallFinalized("call-thrown");
         throw failure;
       }),
     ).rejects.toBe(failure);

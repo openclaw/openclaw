@@ -17,6 +17,8 @@ export interface AiProviderRequestCapabilities {
   allowsAnthropicServiceTier: boolean;
 }
 
+export type AiBeforeFetchDispatch = (params: { url: string; init: RequestInit }) => void;
+
 /** Transport-safe provider policy input kept independent of OpenClaw config types. */
 export interface AiProviderRequestPolicyInput {
   provider?: string;
@@ -126,6 +128,7 @@ export const AI_MODEL_TRANSPORT_CONNECTION_REASONS = ["initial", "prewarm", "rec
 export const AI_MODEL_TRANSPORT_FALLBACK_REASONS = [
   "unsupported",
   "connection_failure",
+  "submission_failure",
   "stream_failure",
   "policy",
 ] as const;
@@ -142,6 +145,30 @@ export type AiModelTransportConnectionReason =
 export type AiModelTransportFallbackReason = (typeof AI_MODEL_TRANSPORT_FALLBACK_REASONS)[number];
 export type AiModelZeroSubmissionOutcome = (typeof AI_MODEL_ZERO_SUBMISSION_OUTCOMES)[number];
 export type AiModelZeroSubmissionReason = (typeof AI_MODEL_ZERO_SUBMISSION_REASONS)[number];
+export type AiModelFetchProvenance = "dispatch_attested";
+export type AiModelFetchResult = {
+  fetch: typeof fetch;
+  provenance: AiModelFetchProvenance;
+};
+
+export type AiModelFetchOptions = {
+  sanitizeSse?: boolean;
+  /**
+   * Observes every physical fetch hop after network preflight and a normal
+   * fetch invocation return. Observer failures must never alter provider traffic.
+   */
+  observeFetchDispatch?: AiBeforeFetchDispatch;
+  /**
+   * Fires after the underlying fetch invocation returns normally. Synchronous
+   * preflight rejection therefore remains an attested zero-dispatch outcome.
+   */
+  onFetchDispatch?: () => void;
+};
+
+export type AiBlockingModelFetchOptions = AiModelFetchOptions & {
+  /** Blocks every physical fetch hop after network preflight and before dispatch. */
+  beforeFetchDispatch: AiBeforeFetchDispatch;
+};
 
 type AiModelTransportEventBase = {
   /** Stable identity for de-duplicating one emitted transport fact. */
@@ -159,15 +186,15 @@ type AiModelTransportCallEventBase = AiModelTransportEventBase & {
 /**
  * Provider transport facts for one model call.
  *
- * An attempt is one submitted provider request. Its ordinal starts at one and
+ * An attempt is one dispatched provider request. Its ordinal starts at one and
  * advances within one call; connection setup and run-scoped prewarm never count
  * as attempts. A transport fallback remains pending until a matching
  * `transport_fallback` attempt or zero-submission phase consumes it. Retries stay
  * on the current transport. Zero-submission facts describe one route phase that
- * ended before submission, including a pending fallback target after earlier
- * failed attempts. Server-side provider fallback records an in-request serving
- * model transition without changing the requested provider, model, API, or
- * active transport.
+ * ended before the dispatch boundary, including a pending fallback target after
+ * earlier failed attempts. Server-side provider fallback records an in-request
+ * serving model transition without changing the requested provider, model, API,
+ * or active transport.
  */
 export type AiModelTransportEvent =
   | (AiModelTransportCallEventBase & {
@@ -218,6 +245,14 @@ export type AiModelTransportEvent =
       transport: string;
     })
   | (AiModelTransportCallEventBase & {
+      /** Semantic uncertainty that preserves exact transport counts. */
+      type: "coverage";
+      scope: "transport_semantics";
+      state: "unverified";
+      reason: "transport_terminal_unverified" | "transport_endpoint_authority_partial";
+      transport: string;
+    })
+  | (AiModelTransportCallEventBase & {
       type: "submission";
       transport: string;
       total: 0;
@@ -234,8 +269,26 @@ export interface AiTransportHost {
   buildModelFetch(
     model: Model,
     timeoutMs?: number,
-    options?: { sanitizeSse?: boolean },
+    options?: AiModelFetchOptions,
   ): typeof fetch | undefined;
+  /**
+   * Builds a policy-guarded fetch and attests that dispatch callbacks run at
+   * their documented boundaries.
+   */
+  buildModelFetchWithDispatchAttestation?(
+    model: Model,
+    timeoutMs: number | undefined,
+    options: AiModelFetchOptions,
+  ): AiModelFetchResult | undefined;
+  /**
+   * Builds a fetch whose blocking callback is guaranteed to run immediately
+   * before every physical dispatch. Missing support must fail closed.
+   */
+  buildModelFetchWithBlockingDispatchGuard?(
+    model: Model,
+    timeoutMs: number | undefined,
+    options: AiBlockingModelFetchOptions,
+  ): AiModelFetchResult | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
   /** Redacts secrets inside structured tool-result payloads. */

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createProviderTransportAccountingCollector,
   observeProviderTransportEvent,
+  observeProviderTransportLogicalCallFinalized,
   observeProviderTransportLogicalCallSettled,
   observeProviderTransportLogicalCallStarted,
   runWithProviderTransportAccountingObserver,
@@ -19,6 +20,9 @@ function createThrowingObserver(
     },
     onLogicalCallSettled() {
       throw new Error("settle failed");
+    },
+    onLogicalCallFinalized() {
+      throw new Error("finalize failed");
     },
     onTransportEvent() {
       throw new Error("event failed");
@@ -45,6 +49,7 @@ describe("provider transport accounting observer", () => {
         outcome: "completed",
       });
       observeProviderTransportLogicalCallSettled("call-none", "completed");
+      observeProviderTransportLogicalCallFinalized("call-none");
     }).not.toThrow();
   });
 
@@ -58,12 +63,14 @@ describe("provider transport accounting observer", () => {
         startCall("call-throws");
         emitAttempt({ callId: "call-throws", ordinal: 1, outcome: "completed" });
         observeProviderTransportLogicalCallSettled("call-throws", "completed");
+        observeProviderTransportLogicalCallFinalized("call-throws");
       }),
     ).not.toThrow();
     expect(onObservationFailure.mock.calls).toEqual([
       ["logical_call_started"],
       ["transport_event"],
       ["logical_call_settled"],
+      ["logical_call_finalized"],
     ]);
   });
 
@@ -77,6 +84,7 @@ describe("provider transport accounting observer", () => {
         startCall("call-reporter-throws");
         emitAttempt({ callId: "call-reporter-throws", ordinal: 1, outcome: "completed" });
         observeProviderTransportLogicalCallSettled("call-reporter-throws", "completed");
+        observeProviderTransportLogicalCallFinalized("call-reporter-throws");
       }),
     ).not.toThrow();
   });

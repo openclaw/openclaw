@@ -20,6 +20,7 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
+  type OpenAIResponsesPayloadVariant,
   type OpenAIResponsesReasoningReplayMetadata,
   type OpenAIResponsesReplayContext,
   type OpenAIResponsesRequestParams,
@@ -28,6 +29,7 @@ import {
 } from "./openai-responses-contracts.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { markOpenAISdkPayloadRecovery } from "./openai-sdk-transport-accounting-internal.js";
 import { log } from "./openai-transport-shared.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
@@ -223,12 +225,17 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
   requestOptions: unknown;
   model: Model;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
+  beforeTransportDispatch?: (
+    request: OpenAIResponsesRequestParams,
+    payloadVariant: OpenAIResponsesPayloadVariant,
+  ) => void;
 }): Promise<{ stream: AsyncIterable<unknown>; response: Response }> {
   try {
     params.observePrompt?.(params.request, {
       egress: "responses-sdk",
       payloadVariant: "initial",
     });
+    params.beforeTransportDispatch?.(params.request, "initial");
     const { data, response } = await params.client.responses
       .create(params.request as never, params.requestOptions as never)
       .withResponse();
@@ -242,10 +249,12 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       `[responses] retrying without encrypted reasoning content provider=${params.model.provider} ` +
         `api=${params.model.api} model=${params.model.id}`,
     );
+    markOpenAISdkPayloadRecovery(params.client);
     params.observePrompt?.(retryRequest, {
       egress: "responses-sdk",
       payloadVariant: "encrypted-content-retry",
     });
+    params.beforeTransportDispatch?.(retryRequest, "encrypted-content-retry");
     const { data, response } = await params.client.responses
       .create(retryRequest as never, params.requestOptions as never)
       .withResponse();

@@ -17,7 +17,9 @@ export type ProviderTransportAccountingCoverageReason =
   | "transport_invalid_fact"
   | "transport_invalid_ordinal"
   | "transport_observer_failed"
-  | "transport_logical_call_incomplete";
+  | "transport_logical_call_incomplete"
+  | "transport_terminal_unverified"
+  | "transport_endpoint_authority_partial";
 
 export type ProviderTransportAccountingCoverage =
   | { state: "complete" }
@@ -66,6 +68,7 @@ export type ProviderTransportAccountingSnapshot = {
   fallbacks: ProviderTransportTotals & {
     unsupported: number;
     connectionFailures: number;
+    submissionFailures: number;
     streamFailures: number;
     policy: number;
   };
@@ -90,6 +93,7 @@ export type ProviderTransportLogicalCallStarted = Pick<
 export type ProviderTransportAccountingObservationKind =
   | "logical_call_started"
   | "logical_call_settled"
+  | "logical_call_finalized"
   | "transport_event";
 
 export type ProviderTransportAccountingObserver = {
@@ -101,10 +105,12 @@ export type ProviderTransportAccountingObserver = {
     cachedInput?: CachedInputObservation,
   ): void;
   onTransportEvent(event: AiModelTransportEvent): void;
+  onLogicalCallFinalized(callId: string): void;
 };
 
 export type ProviderTransportAccountingCollector = {
   observer: ProviderTransportAccountingObserver;
+  finalize(callId: string): void;
   project(): {
     snapshot?: ProviderTransportAccountingSnapshot;
     coverage: ProviderTransportAccountingCoverage;

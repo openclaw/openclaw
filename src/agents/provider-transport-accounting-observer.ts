@@ -61,6 +61,12 @@ export function observeProviderTransportLogicalCallSettled(
   );
 }
 
+export function observeProviderTransportLogicalCallFinalized(callId: string): void {
+  withActiveProviderTransportObserver("logical_call_finalized", (observer) =>
+    observer.onLogicalCallFinalized(callId),
+  );
+}
+
 export function observeProviderTransportEvent(event: AiModelTransportEvent): void {
   withActiveProviderTransportObserver("transport_event", (observer) =>
     observer.onTransportEvent(event),

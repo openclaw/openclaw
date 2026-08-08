@@ -70,11 +70,43 @@ export function emitAttempt(params: {
   });
 }
 
+export function emitConnection(params: {
+  callId: string;
+  ordinal: number;
+  outcome: AiModelTransportOutcome;
+  reason?: "initial" | "reconnect";
+  transport?: string;
+  route?: TestRoute;
+  eventId?: string;
+}): void {
+  const route = params.route ?? ROUTE;
+  const transport = params.transport ?? route.transport;
+  observeProviderTransportEvent({
+    type: "connection",
+    eventId:
+      params.eventId ??
+      `connection-${params.callId}-${String(params.ordinal)}-${params.outcome}-${transport}`,
+    callId: params.callId,
+    provider: route.provider,
+    model: route.model,
+    api: route.api,
+    transport,
+    ordinal: params.ordinal,
+    reason: params.reason ?? (params.ordinal === 1 ? "initial" : "reconnect"),
+    outcome: params.outcome,
+  });
+}
+
 export function emitTransportFallback(params: {
   callId: string;
   fromTransport: string;
   toTransport: string;
-  reason?: "unsupported" | "connection_failure" | "stream_failure" | "policy";
+  reason?:
+    | "unsupported"
+    | "connection_failure"
+    | "submission_failure"
+    | "stream_failure"
+    | "policy";
   eventId?: string;
 }): void {
   observeProviderTransportEvent({
@@ -129,14 +161,37 @@ export function emitProviderFallbackCoverage(params: {
   });
 }
 
+export function emitTransportSemanticCoverage(params: {
+  callId: string;
+  reason: "transport_terminal_unverified" | "transport_endpoint_authority_partial";
+  transport?: string;
+  eventId?: string;
+}): void {
+  observeProviderTransportEvent({
+    type: "coverage",
+    eventId: params.eventId ?? `semantic-coverage-${params.callId}`,
+    callId: params.callId,
+    provider: ANTHROPIC_ROUTE.provider,
+    model: ANTHROPIC_ROUTE.model,
+    api: ANTHROPIC_ROUTE.api,
+    transport: params.transport ?? ANTHROPIC_ROUTE.transport,
+    scope: "transport_semantics",
+    state: "unverified",
+    reason: params.reason,
+  });
+}
+
 export function emitZeroSubmission(params: {
   callId: string;
+  eventId?: string;
   outcome: "failed" | "aborted";
   transport?: string;
 }): void {
   observeProviderTransportEvent({
     type: "submission",
-    eventId: `zero-${params.callId}-${params.outcome}-${params.transport ?? ROUTE.transport}`,
+    eventId:
+      params.eventId ??
+      `zero-${params.callId}-${params.outcome}-${params.transport ?? ROUTE.transport}`,
     callId: params.callId,
     provider: ROUTE.provider,
     model: ROUTE.model,

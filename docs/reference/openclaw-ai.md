@@ -48,16 +48,32 @@ A runnable version lives in the repository at `examples/ai-chat`.
   example SSRF policy), secret redaction of tool-result replay text, OpenAI
   strict-tool defaults, diagnostics logging, and typed transport-event
   observation are `AiTransportHost` ports configured with
-  `configureAiTransportHost`. One attempt means one submitted provider request;
-  connection setup and prewarm do not count as attempts. Transport fallback
-  stages a concrete target until a matching attempt or zero-submission phase
-  consumes it. A server-side serving-model fallback is in-stream submission
-  evidence and does not rewrite the requested provider/model/API identity.
+  `configureAiTransportHost`. `buildModelFetchWithBlockingDispatchGuard` owns
+  the fail-closed `beforeFetchDispatch` callback for every physical fetch hop
+  after SSRF and DNS preflight but before network dispatch. Throwing prevents
+  that hop, and hosts that cannot install the named guard fail closed.
+  `buildModelFetchWithDispatchAttestation` is the separate optional port for
+  non-blocking per-hop observation. Both named ports require a structured
+  `AiModelFetchResult` with `dispatch_attested` provenance; the legacy
+  `buildModelFetch` port is callable-only and cannot attest dispatch.
+  Within those ports, `observeFetchDispatch` runs once per physical hop,
+  including redirects. `onFetchDispatch` remains isolated observational
+  accounting, runs once per provider-request fetch invocation, and cannot alter
+  provider behavior. One attempt means one dispatched provider request,
+  distinct from its physical fetch hops;
+  connection setup and prewarm do not count as attempts. A zero-submission fact
+  means the route phase ended before the dispatch boundary. Exact zero requires
+  a structured `AiModelFetchResult` with `dispatch_attested` provenance; a
+  legacy bare fetch without callback evidence remains unavailable. Transport
+  fallback stages a concrete target until a matching attempt or zero-submission
+  phase consumes it. A server-side serving-model fallback is in-stream
+  submission evidence and does not rewrite the requested provider/model/API
+  identity.
   Scoped coverage can mark only provider-fallback identity lower-bound when
-  terminal metadata is unavailable; submitted attempt and event totals remain
-  exact. The library default observer is inert; OpenClaw installs its collector
-  in its stream facade. Provider coverage depends on which adapters emit these
-  facts.
+  terminal metadata is unavailable; dispatched attempt and event totals remain
+  exact. The library default observer is inert; OpenClaw installs
+  its collector in its stream facade. Provider coverage depends on which
+  adapters emit these facts.
 - **One event-stream identity.** `@openclaw/ai/event-stream` is the canonical
   `EventStream` constructor shared by OpenClaw core, agent-core, and external
   consumers.

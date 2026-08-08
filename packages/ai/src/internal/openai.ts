@@ -16,5 +16,15 @@ export * from "../providers/openai-tool-schema-compat.js";
 export * from "../providers/openai-tool-schema.js";
 export * from "../providers/schema-keyword-strip.js";
 export * from "../providers/tool-schema-json-projection.js";
-export { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
-export type { ResponsesPromptObservation } from "../transports/openai-responses-contracts.js";
+export {
+  openAIResponsesDispatchGuards,
+  responsesPromptObserver,
+} from "../transports/openai-responses-contracts.js";
+export { OPENAI_SDK_DEFAULT_MAX_RETRIES } from "../transports/openai-sdk-transport-accounting-internal.js";
+export type {
+  BeforeTransportDispatch,
+  OpenAIResponsesDispatchGuards,
+  OpenAIResponsesPayloadVariant,
+  OpenAIResponsesRequestParams,
+  ResponsesPromptObservation,
+} from "../transports/openai-responses-contracts.js";

@@ -2,7 +2,11 @@ import { zstdDecompressSync } from "node:zlib";
 import type { Api, Context, Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
+import {
+  openAIResponsesDispatchGuards,
+  responsesPromptObserver,
+  type ResponsesPromptObservation,
+} from "../internal/openai.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
@@ -259,6 +263,100 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(run.observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
     expect(JSON.stringify(run.requests[0])).toContain("encrypted_content");
     expect(JSON.stringify(run.requests[1])).not.toContain("encrypted_content");
+  });
+
+  it("runs blocking request guards immediately before each OpenAI SDK request", async () => {
+    const invalidEncryptedContent = Object.assign(new Error("invalid encrypted content"), {
+      code: "invalid_encrypted_content",
+    });
+    const options: Record<string, unknown> = {
+      onPayload: (request: Record<string, unknown>) => ({
+        ...request,
+        input: [
+          ...((request.input as unknown[]) ?? []),
+          { type: "reasoning", encrypted_content: "opaque", summary: [] },
+        ],
+      }),
+    };
+    openAIResponsesDispatchGuards.set(options, {
+      beforeTransportDispatch: ({ payloadVariant }) => {
+        sdkState.order.push(`guard.${payloadVariant}`);
+      },
+      beforeFetchDispatch: vi.fn(),
+    });
+    configureAiTransportHost({
+      ...initialHost,
+      buildModelFetchWithBlockingDispatchGuard: () => ({
+        fetch: vi.fn() as unknown as typeof fetch,
+        provenance: "dispatch_attested",
+      }),
+    });
+
+    const run = await runObservedRequest({
+      context: createContext("GUARDED-REPLAY-PROMPT"),
+      errors: [invalidEncryptedContent, new Error("stop after retry")],
+      options,
+    });
+
+    expect(run.order).toEqual([
+      "observe",
+      "guard.initial",
+      "openai.create",
+      "observe",
+      "guard.encrypted-content-retry",
+      "openai.create",
+    ]);
+  });
+
+  it("blocks the OpenAI SDK request when the request guard rejects", async () => {
+    const options: Record<string, unknown> = {};
+    openAIResponsesDispatchGuards.set(options, {
+      beforeTransportDispatch: () => {
+        sdkState.order.push("guard.reject");
+        throw new Error("request rejected");
+      },
+      beforeFetchDispatch: vi.fn(),
+    });
+    configureAiTransportHost({
+      ...initialHost,
+      buildModelFetchWithBlockingDispatchGuard: () => ({
+        fetch: vi.fn() as unknown as typeof fetch,
+        provenance: "dispatch_attested",
+      }),
+    });
+
+    const run = await runObservedRequest({
+      context: createContext("REJECTED-PROMPT"),
+      options,
+    });
+
+    expect(run.order).toEqual(["observe", "guard.reject"]);
+    expect(run.requests).toEqual([]);
+  });
+
+  it("does not install OpenAI dispatch guards on Azure Responses", async () => {
+    const guard = vi.fn();
+    const beforeFetchDispatch = vi.fn();
+    const options: Record<string, unknown> = {};
+    openAIResponsesDispatchGuards.set(options, {
+      beforeTransportDispatch: guard,
+      beforeFetchDispatch,
+    });
+
+    const run = await runObservedRequest({
+      azure: true,
+      context: createContext("AZURE-UNGARDED-PROMPT"),
+      model: createModel({
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        baseUrl: "https://example.openai.azure.com",
+      }),
+      options,
+    });
+
+    expect(run.order).toEqual(["observe", "azure.create"]);
+    expect(guard).not.toHaveBeenCalled();
+    expect(beforeFetchDispatch).not.toHaveBeenCalled();
   });
 
   it("uses cache-boundary and surrogate normalization as the expected prompt owner", async () => {

@@ -53,6 +53,7 @@ export async function* adaptResponsesStream(
 export async function* observeResponsesStream<TEvent>(
   stream: AsyncIterable<TEvent>,
   model: Model,
+  observeEvent?: (event: TEvent) => void,
 ): AsyncGenerator<TEvent> {
   const startedAt = Date.now();
   const eventTypes = new Map<string, number>();
@@ -60,6 +61,7 @@ export async function* observeResponsesStream<TEvent>(
   let eventCount = 0;
   try {
     for await (const event of stream) {
+      observeEvent?.(event);
       const type = isRecord(event) && typeof event.type === "string" ? event.type : "unknown";
       eventCount += 1;
       eventTypes.set(type, (eventTypes.get(type) ?? 0) + 1);

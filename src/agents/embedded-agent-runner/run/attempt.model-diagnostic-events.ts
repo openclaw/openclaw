@@ -43,6 +43,7 @@ import type {
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
 import {
+  observeProviderTransportLogicalCallFinalized,
   observeProviderTransportLogicalCallSettled,
   observeProviderTransportLogicalCallStarted,
 } from "../../provider-transport-accounting.js";
@@ -676,6 +677,7 @@ function emitModelCallCompleted(
     "completed",
     state.cachedInput ?? { state: "unknown" },
   );
+  observeProviderTransportLogicalCallFinalized(eventBase.callId);
   const durationMs = Date.now() - startedAt;
   const sizeTimingFields = modelCallSizeTimingFields(state);
   emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, true, state.responseStatus);
@@ -716,6 +718,7 @@ function emitModelCallError(
     fields.failureKind === "aborted" ? "aborted" : "failed",
     state.cachedInput ?? { state: "unknown" },
   );
+  observeProviderTransportLogicalCallFinalized(eventBase.callId);
   const errorStatus = diagnosticHttpStatusCode(err);
   const responseStatus =
     state.responseStatus ?? (errorStatus === undefined ? undefined : Number(errorStatus));
