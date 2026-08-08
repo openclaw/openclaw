@@ -450,8 +450,12 @@ function sanitizeToolCallIdPart(value: string): string {
   return safe || "call";
 }
 
+const MAX_ATTEMPTED_TOOL_NAMES = 64;
+
 export class ToolSearchRuntime {
   private callSequence = 0;
+  private readonly attemptedToolNames: string[] = [];
+  private attemptedToolNamesTruncated = false;
   private readonly networkInvocations = new Map<string, { active: number; observed: boolean }>();
   private readonly searchIndexes = new WeakMap<
     ToolSearchCatalogSession,
@@ -605,6 +609,11 @@ export class ToolSearchRuntime {
     },
   ) => {
     catalog.callCount += 1;
+    if (this.attemptedToolNames.length < MAX_ATTEMPTED_TOOL_NAMES) {
+      this.attemptedToolNames.push(entry.name);
+    } else {
+      this.attemptedToolNamesTruncated = true;
+    }
     const normalizedInput = input ?? {};
     await assertCatalogOutputSchemaIsValid(entry);
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
@@ -695,7 +704,11 @@ export class ToolSearchRuntime {
   };
 
   telemetry() {
-    return getTelemetry(resolveCatalog(this.ctx));
+    return {
+      ...getTelemetry(resolveCatalog(this.ctx)),
+      attemptedToolNames: [...this.attemptedToolNames],
+      attemptedToolNamesTruncated: this.attemptedToolNamesTruncated,
+    };
   }
 }
 

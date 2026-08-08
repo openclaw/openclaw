@@ -9,6 +9,7 @@ import type {
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import {
   createProviderTransportAccountingCollector,
+  hasUnattributedProviderAttemptUsage,
   runWithProviderTransportAccountingObserver,
 } from "../provider-transport-accounting.js";
 import { resolveNormalizedUsageObservedBuckets } from "../usage.js";
@@ -500,6 +501,11 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
         ...runtimeReasons,
         ...auxiliaryHiddenWorkReasons,
       ]);
+      const providerAttemptUsageReasons = hasUnattributedProviderAttemptUsage(
+        providerTransport.snapshot,
+      )
+        ? (["provider_attempt_usage_unattributed"] as const)
+        : [];
       const candidateCoverageReasons = [
         ...(state.candidates.truncated > 0 ? (["candidate_details_truncated"] as const) : []),
         ...(state.candidateIdentityTruncated ? (["candidate_identity_truncated"] as const) : []),
@@ -534,6 +540,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
             ...wholeRunUsageReasons,
             ...(state.usageMissing > 0 ? (["missing_usage"] as const) : []),
             ...(observed < state.attemptsObserved ? (["partial_usage"] as const) : []),
+            ...providerAttemptUsageReasons,
             ...opaqueWorkReasons,
           ];
           return [
@@ -552,6 +559,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
         extraReasons: [
           ...(state.usageMissing > 0 ? (["missing_usage"] as const) : []),
           ...(state.usagePartial > 0 ? (["partial_usage"] as const) : []),
+          ...providerAttemptUsageReasons,
           ...opaqueWorkReasons,
         ],
       });
@@ -563,6 +571,7 @@ export function createRunAccountingAccumulator(startedAtMs = Date.now()): RunAcc
           ...(state.costPartialUsage > 0 ? (["partial_usage"] as const) : []),
           ...(state.costMissingPricing > 0 ? (["missing_pricing"] as const) : []),
           ...(state.costTieredAggregate > 0 ? (["tiered_pricing_aggregate"] as const) : []),
+          ...providerAttemptUsageReasons,
           ...opaqueWorkReasons,
         ],
       });

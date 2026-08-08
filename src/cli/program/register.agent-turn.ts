@@ -1,6 +1,6 @@
 // Single agent-turn command registration; delegates execution to the Gateway-backed agent command.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
@@ -149,6 +149,24 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     )
     .option("--auth-env-only", "Use provider credentials from environment variables only", false)
     .option("--no-auth-env-only", "Allow stored and external CLI credential discovery")
+    .addOption(
+      new Option(
+        "--frontier-evidence-policy <path>",
+        "Internal frontier evidence policy",
+      ).hideHelp(),
+    )
+    .addOption(
+      new Option(
+        "--frontier-evidence-policy-sha256 <sha256>",
+        "Internal frontier evidence policy digest",
+      ).hideHelp(),
+    )
+    .addOption(
+      new Option(
+        "--frontier-evidence-run-nonce <hex>",
+        "Internal frontier evidence run nonce",
+      ).hideHelp(),
+    )
     .option("--timeout <seconds>", "Agent deadline in seconds", "600")
     .option("--json", "Emit the stable agent-exec JSON envelope", false)
     .addHelpText(

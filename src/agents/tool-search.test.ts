@@ -2032,6 +2032,28 @@ describe("Tool Search", () => {
     expect(runtime.telemetry()).toMatchObject({ counterScope: replacementScope, searchCount: 0 });
   });
 
+  it("bounds attempted tool names and reports truncation explicitly", async () => {
+    const config = { tools: { toolSearch: true } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("fake_telemetry_target", "Telemetry target");
+    applyToolSearchCatalog({
+      tools: [fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"), target],
+      config,
+      catalogRef,
+    });
+    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+
+    for (let index = 0; index < 65; index += 1) {
+      await runtime.call(target.name);
+    }
+
+    expect(runtime.telemetry()).toMatchObject({
+      callCount: 65,
+      attemptedToolNames: Array.from({ length: 64 }, () => target.name),
+      attemptedToolNamesTruncated: true,
+    });
+  });
+
   it("scopes catalogs by run id when attempts share a session", async () => {
     // Overlapping run attempts can share a session id; run-scoped catalogs keep
     // one attempt from calling tools only exposed to another.

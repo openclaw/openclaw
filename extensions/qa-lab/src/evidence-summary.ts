@@ -147,10 +147,12 @@ const qaEvidenceResultSchema = z.strictObject({
 });
 
 const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
+const qaEvidenceClassSchema = z.enum(["diagnostic_only", "frontier_beta_qualification"]);
 
 const qaEvidenceSummaryEntrySchema = z.strictObject({
   test: qaEvidenceTestSchema,
   coverage: z.array(qaEvidenceCoverageSchema),
+  evidenceClass: qaEvidenceClassSchema.optional(),
   posture: qaEvidencePostureSchema.optional(),
   refs: z.array(qaEvidenceRefSchema).optional(),
   runtimePairLane: qaRuntimePairLaneSchema.optional(),
@@ -172,6 +174,7 @@ const qaEvidenceSummarySchema = z.strictObject({
 type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
+export type QaEvidenceClass = z.infer<typeof qaEvidenceClassSchema>;
 export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;
 export type QaEvidenceScorecardJson = z.infer<typeof qaEvidenceScorecardSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
@@ -235,13 +238,17 @@ type QaEvidenceArtifactInput = {
   path: string;
 };
 
+export type QaEvidenceProviderMode = QaProviderMode | "diagnostic-only";
+
 type QaEvidenceBuildBase = {
   artifactPaths: readonly QaEvidenceArtifactInput[];
+  evidenceClass?: QaEvidenceClass;
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
   generatedAt: string;
   primaryModel: string;
-  providerMode: QaProviderMode;
+  providerLive?: boolean;
+  providerMode: QaEvidenceProviderMode;
   channelDriver?: string;
   packageSource?: QaEvidencePackageSource;
   profile?: QaEvidenceProfile;
@@ -348,8 +355,11 @@ function resolveQaEvidenceBuildPackageSource(params: QaEvidenceBuildBase) {
   return params.packageSource ?? resolveQaEvidencePackageSource(params.env);
 }
 
-function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primaryModel: string }) {
-  const provider = getQaProvider(params.providerMode);
+function buildQaEvidenceProvider(params: {
+  providerMode: QaEvidenceProviderMode;
+  primaryModel: string;
+  providerLive?: boolean;
+}) {
   const split = splitQaModelRef(params.primaryModel);
   const providerShape = {
     id: split?.provider ?? params.providerMode,
@@ -358,6 +368,13 @@ function buildQaEvidenceProvider(params: { providerMode: QaProviderMode; primary
       ref: params.primaryModel || null,
     },
   };
+  if (params.providerMode === "diagnostic-only") {
+    return {
+      ...providerShape,
+      live: params.providerLive === true,
+    };
+  }
+  const provider = getQaProvider(params.providerMode);
   if (provider.kind === "live") {
     return {
       ...providerShape,
@@ -514,6 +531,7 @@ export function buildQaSuiteEvidenceSummary(
     });
     const timing = timingForRttResult(result);
     return {
+      ...(params.evidenceClass ? { evidenceClass: params.evidenceClass } : {}),
       test: {
         kind: "qa-scenario",
         id: testId,
@@ -589,6 +607,7 @@ function buildTestRunnerEvidenceSummary(
     });
     const timing = timingForTestResult(result);
     return {
+      ...(params.evidenceClass ? { evidenceClass: params.evidenceClass } : {}),
       test: {
         kind: params.testKind,
         id: target?.id ?? fallbackId,

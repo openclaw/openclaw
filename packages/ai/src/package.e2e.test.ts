@@ -249,7 +249,7 @@ function packageSpecifier(packageName: string, exportKey: string): string {
 }
 
 function compatibilityTypeSource(): string {
-  return Object.entries(compatibility)
+  const compatibilityExports = Object.entries(compatibility)
     .flatMap(([specifier, inventory], index) => {
       const lines = [
         `export { ${inventory.values.map((name) => `${name} as value_${index}_${name}`).join(", ")} } from ${JSON.stringify(specifier)};`,
@@ -262,6 +262,17 @@ function compatibilityTypeSource(): string {
       return lines;
     })
     .join("\n");
+  return `${compatibilityExports}
+export type { AiBeforeFetchDispatch as public_AiBeforeFetchDispatch } from "@openclaw/ai";
+export type {
+  BeforeTransportDispatch as internal_BeforeTransportDispatch,
+  OpenAIResponsesDispatchGuards as internal_OpenAIResponsesDispatchGuards,
+} from "@openclaw/ai/internal/openai";
+// @ts-expect-error Frontier evidence receipts are application-private.
+export type { FrontierEvidenceSnapshot as forbidden_public_FrontierEvidenceSnapshot } from "@openclaw/ai";
+// @ts-expect-error Frontier evidence receipts are not part of the internal OpenAI package API.
+export type { FrontierEvidenceSnapshot as forbidden_internal_FrontierEvidenceSnapshot } from "@openclaw/ai/internal/openai";
+`;
 }
 
 function publicBoundaryTypeSource(): string {

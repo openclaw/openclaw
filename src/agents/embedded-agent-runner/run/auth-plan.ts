@@ -1,6 +1,10 @@
 import { resolveProviderAuthProfileId } from "../../../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
+import {
+  getFrontierEvidenceExpectedAuthProfileId,
+  getFrontierEvidencePolicy,
+} from "../../frontier-evidence-policy.js";
 import type { AgentHarness } from "../../harness/types.js";
 import {
   ensureAuthProfileStore,
@@ -22,6 +26,37 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 type ModelResolution = Awaited<ReturnType<typeof resolveModelAsync>>;
 type RuntimeModel = NonNullable<ModelResolution["model"]>;
 
+function resolveEmbeddedRunAuthInputs(params: {
+  runParams: Pick<RunEmbeddedAgentParams, "authProfileId" | "authProfileIdSource">;
+  provider: string;
+  modelId: string;
+}): {
+  env: NodeJS.ProcessEnv;
+  sessionAuthProfileId: string | undefined;
+  sessionAuthProfileSource: RunEmbeddedAgentParams["authProfileIdSource"];
+} {
+  const policy = getFrontierEvidencePolicy();
+  const expectedProfileId = getFrontierEvidenceExpectedAuthProfileId();
+  if ((policy && !expectedProfileId) || (!policy && expectedProfileId)) {
+    throw new Error("frontier evidence auth binding is incomplete");
+  }
+  if (policy) {
+    if (params.provider !== policy.provider || params.modelId !== policy.model) {
+      throw new Error("frontier evidence auth binding does not match the selected model");
+    }
+    return {
+      env: {},
+      sessionAuthProfileId: expectedProfileId,
+      sessionAuthProfileSource: "user",
+    };
+  }
+  return {
+    env: process.env,
+    sessionAuthProfileId: params.runParams.authProfileId?.trim() || undefined,
+    sessionAuthProfileSource: params.runParams.authProfileIdSource,
+  };
+}
+
 function loadEmbeddedRunAuthProfileStore(params: {
   agentDir: string;
   config: RunEmbeddedAgentParams["config"];
@@ -40,7 +75,7 @@ function loadEmbeddedRunAuthProfileStore(params: {
 // must stay provable without composing a full embedded runner.
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.embeddedRunAuthPlanTestApi")] =
-    { loadEmbeddedRunAuthProfileStore };
+    { loadEmbeddedRunAuthProfileStore, resolveEmbeddedRunAuthInputs };
 }
 
 export async function prepareEmbeddedRunAuthPlan(params: {
@@ -67,6 +102,11 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   markStage?: (stage: string) => void;
 }) {
   const runParams = params.runParams;
+  const authInputs = resolveEmbeddedRunAuthInputs({
+    runParams,
+    provider: params.provider,
+    modelId: params.modelId,
+  });
   const usesOpenAIAuthRouting = params.provider === OPENAI_PROVIDER_ID;
   const initialHarness = params.getAgentHarness();
   const initialPluginHarnessOwnsTransport = initialHarness.id !== "openclaw";
@@ -88,7 +128,9 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           modelId: params.modelId,
           workspaceDir: params.workspaceDir,
           userLockedAuthProfileId:
-            runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
+            authInputs.sessionAuthProfileSource === "user"
+              ? authInputs.sessionAuthProfileId
+              : undefined,
         });
   let noExternalAuthStore: AuthProfileStore | undefined;
   if (!initialPluginHarnessOwnsTransport && !externalCliAuthScope.providerIds) {
@@ -103,7 +145,9 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       workspaceDir: params.workspaceDir,
       store: noExternalAuthStore,
       userLockedAuthProfileId:
-        runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
+        authInputs.sessionAuthProfileSource === "user"
+          ? authInputs.sessionAuthProfileId
+          : undefined,
     });
   }
   params.markStage?.("scope");
@@ -130,8 +174,9 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           }));
   params.markStage?.("store");
 
-  const requestedProfileId = runParams.authProfileId?.trim() || undefined;
-  const lockedProfileId = runParams.authProfileIdSource === "user" ? requestedProfileId : undefined;
+  const requestedProfileId = authInputs.sessionAuthProfileId;
+  const lockedProfileId =
+    authInputs.sessionAuthProfileSource === "user" ? requestedProfileId : undefined;
   const preferredProfileId =
     externalCliAuthScope.ignoreAutoPreferredProfile && !lockedProfileId
       ? undefined
@@ -145,12 +190,12 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       modelBaseUrl: params.model.baseUrl,
       requestTransportOverrides: params.requestStreamTransportOverrides,
       config: runParams.config,
-      env: process.env,
+      env: authInputs.env,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       authProfileStore: attemptAuthProfileStore,
       sessionAuthProfileId: preferredProfileId,
-      sessionAuthProfileSource: runParams.authProfileIdSource,
+      sessionAuthProfileSource: authInputs.sessionAuthProfileSource,
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,
@@ -161,7 +206,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           provider: params.provider,
           config: runParams.config,
           workspaceDir: params.workspaceDir,
-          env: process.env,
+          env: authInputs.env,
           context,
         }),
     });
@@ -180,7 +225,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       config: runParams.config,
       getModel: params.getRuntimeModel,
       nativeModelOwned: params.nativeModelOwned,
-      requestedProfileId: runParams.authProfileId,
+      requestedProfileId,
       providerUsesProfileScopedModelMetadata,
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, params.agentDir, config, {

@@ -41,6 +41,7 @@ const tempDirs = createTempDirHarness();
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
   resolveQaNodeExecPathMock.mockReset();
+  vi.unstubAllEnvs();
   qaTempPathState.preferredTmpDir = process.env.TMPDIR || "/tmp";
   await tempDirs.cleanup();
 });
@@ -466,6 +467,35 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
 
+  it("uses the frozen runtime env for live provider config discovery", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-frozen-provider-env-");
+    const ambientConfigPath = await writeTempProviderConfig({
+      models: { providers: { "custom-openai": { models: [] } } },
+    });
+    const frozenConfigPath = path.join(
+      await tempDirs.makeTempDir("qa-frozen-provider-config-"),
+      "openclaw.json",
+    );
+    await writeFile(frozenConfigPath, "{", "utf8");
+    vi.stubEnv("OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH", ambientConfigPath);
+    qaTempPathState.preferredTmpDir = tempParent;
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: process.cwd(),
+        providerMode: "live-frontier",
+        primaryModel: "custom-openai/model-a",
+        alternateModel: "custom-openai/model-a",
+        runtimeBaseEnv: {
+          OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: frozenConfigPath,
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("failed to read OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH provider config");
+
+    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+  });
+
   it.each([
     {
       failure: "bundled plugin staging cannot copy root package metadata",
@@ -590,6 +620,25 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENAI_API_KEY).toBe("openai-live");
     expect(env.ANTHROPIC_API_KEY).toBe("anthropic-live");
     expect(env.GEMINI_API_KEY).toBe("gemini-live");
+  });
+
+  it("uses an explicit base env without inheriting ambient provider routing", () => {
+    const env = buildQaRuntimeEnv({
+      ...createParams({
+        HTTPS_PROXY: "http://ambient-proxy.invalid",
+        OPENAI_BASE_URL: "https://ambient.invalid/v1",
+      }),
+      baseEnv: {
+        OPENAI_API_KEY: "frozen-key",
+        PATH: "/frozen/bin",
+      },
+      providerMode: "live-frontier",
+    });
+
+    expect(env.OPENAI_API_KEY).toBe("frozen-key");
+    expect(env.PATH).toBe("/frozen/bin");
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.OPENAI_BASE_URL).toBeUndefined();
   });
 
   it("defaults gateway-child provider mode to mock-openai when omitted", () => {
@@ -1968,6 +2017,29 @@ describe("buildQaRuntimeEnv", () => {
 
     await expectPathMissing(tempRoot);
     await expectPathMissing(stagedRoot);
+  });
+
+  it("attempts every temp-root removal before propagating cleanup failure", async () => {
+    const failure = new Error("temp root removal failed");
+    const remove = vi.fn(async (target: string) => {
+      if (target === "/tmp/qa-primary") {
+        throw failure;
+      }
+    });
+
+    await expect(
+      testing.cleanupQaGatewayTempRoots(
+        {
+          tempRoot: "/tmp/qa-primary",
+          stagedBundledPluginsRoot: "/tmp/qa-staged",
+        },
+        remove as typeof rm,
+      ),
+    ).rejects.toBe(failure);
+    expect(remove.mock.calls.map(([target]) => target)).toEqual([
+      "/tmp/qa-primary",
+      "/tmp/qa-staged",
+    ]);
   });
 });
 

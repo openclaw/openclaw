@@ -221,4 +221,104 @@ describe("agent.wait gateway dedupe observations", () => {
       expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
     },
   );
+
+  it("returns the complete runtime identity from the lifecycle owner", async () => {
+    const runId = "run-runtime-identity";
+    emitAgentEvent({
+      runId,
+      agentId: "main",
+      sessionId: "session-runtime",
+      sessionKey: "agent:main:runtime",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 200 },
+    });
+
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+    await waiter.promise;
+
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "ok",
+        agentId: "main",
+        sessionId: "session-runtime",
+        sessionKey: "agent:main:runtime",
+      }),
+    );
+  });
+
+  it("preserves lifecycle runtime identity when a later dedupe snapshot wins status", async () => {
+    const runId = "run-runtime-identity-dedupe";
+    const dedupe = new Map<string, DedupeEntry>();
+    emitAgentEvent({
+      runId,
+      agentId: "main",
+      sessionId: "session-runtime",
+      sessionKey: "agent:main:runtime",
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 100, endedAt: 300 },
+    });
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 200,
+        ok: false,
+        payload: {
+          runId,
+          status: "timeout",
+          startedAt: 100,
+          endedAt: 200,
+          timeoutPhase: "provider",
+        },
+      },
+    });
+
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+    await waiter.promise;
+
+    expect(waiter.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "timeout",
+        agentId: "main",
+        sessionId: "session-runtime",
+        sessionKey: "agent:main:runtime",
+      }),
+    );
+  });
+
+  it("suppresses runtime identity after conflicting lifecycle tuples", async () => {
+    const runId = "run-runtime-identity-conflict";
+    for (const identity of [
+      {
+        agentId: "main",
+        sessionId: "session-runtime",
+        sessionKey: "agent:main:runtime",
+      },
+      {
+        agentId: "foreign",
+        sessionId: "session-foreign",
+        sessionKey: "agent:foreign:runtime",
+      },
+    ]) {
+      emitAgentEvent({
+        runId,
+        ...identity,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 100, endedAt: 200 },
+      });
+    }
+
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+    await waiter.promise;
+
+    const payload = waiter.respond.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).toMatchObject({ runId, status: "ok" });
+    expect(payload).not.toHaveProperty("agentId");
+    expect(payload).not.toHaveProperty("sessionId");
+    expect(payload).not.toHaveProperty("sessionKey");
+  });
 });

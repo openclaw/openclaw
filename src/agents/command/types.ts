@@ -74,6 +74,8 @@ export type AgentCommandOpts = {
   agentId?: string;
   /** Per-run provider override. */
   provider?: string;
+  /** Internal provider prompt-cache affinity, separate from transcript/session identity. */
+  promptCacheKey?: string;
   /** Per-run model override. */
   model?: string;
   /** Explicit ordered fallback chain for this run. Undefined uses normal selection policy. */

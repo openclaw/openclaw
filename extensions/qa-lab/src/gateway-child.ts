@@ -304,13 +304,31 @@ async function clearQaGatewayArtifactDir(dir: string) {
   }
 }
 
-async function cleanupQaGatewayTempRoots(params: {
-  tempRoot: string;
-  stagedBundledPluginsRoot?: string | null;
-}) {
-  await fs.rm(params.tempRoot, { recursive: true, force: true }).catch(() => {});
+async function cleanupQaGatewayTempRoots(
+  params: {
+    tempRoot: string;
+    stagedBundledPluginsRoot?: string | null;
+  },
+  remove: typeof fs.rm = fs.rm,
+) {
+  const errors: unknown[] = [];
+  try {
+    await remove(params.tempRoot, { recursive: true, force: true });
+  } catch (error) {
+    errors.push(error);
+  }
   if (params.stagedBundledPluginsRoot) {
-    await fs.rm(params.stagedBundledPluginsRoot, { recursive: true, force: true }).catch(() => {});
+    try {
+      await remove(params.stagedBundledPluginsRoot, { recursive: true, force: true });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "qa gateway temp cleanup failed");
   }
 }
 
@@ -1252,6 +1270,8 @@ export async function startQaGatewayChild(params: {
   enabledPluginIds?: string[];
   allowUnhealthyStartup?: boolean;
   forwardHostHome?: boolean;
+  keepTemp?: boolean;
+  runtimeBaseEnv?: NodeJS.ProcessEnv;
   mockAuthAgentIds?: readonly string[];
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
@@ -1260,7 +1280,7 @@ export async function startQaGatewayChild(params: {
   // Verified launchers may require every runtime artifact to stay inside their
   // prepared root; carry that root forward instead of rediscovering host temp policy.
   const tempParentDir = params.command?.tempParentDir ?? resolvePreferredOpenClawTmpDir();
-  const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
+  const keepTemp = params.keepTemp ?? process.env.OPENCLAW_QA_KEEP_TEMP === "1";
   const gatewayLogStreams: Array<["stdout" | "stderr", WriteStream]> = [];
   let child: ReturnType<typeof spawn> | null = null;
   let childIdentity: QaGatewayVerifiedProcessIdentity | null = null;
@@ -1320,6 +1340,7 @@ export async function startQaGatewayChild(params: {
       : [];
     const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
       providerIds: liveProviderIds,
+      env: params.runtimeBaseEnv,
     });
     const liveOwnerPluginIds =
       liveProviderIds.length > 0
@@ -1364,10 +1385,12 @@ export async function startQaGatewayChild(params: {
         cfg,
         stateDir,
         providerIds: liveProviderIds,
+        env: params.runtimeBaseEnv,
       });
       cfg = await stageQaLiveAnthropicSetupToken({
         cfg,
         stateDir,
+        env: params.runtimeBaseEnv,
       });
       const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
       if (mockAuthProviders && mockAuthProviders.length > 0) {
@@ -1567,6 +1590,7 @@ export async function startQaGatewayChild(params: {
             stagedBundledPluginsRoot,
             compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
             providerMode,
+            baseEnv: params.runtimeBaseEnv,
             runtimeEnvPatch: {
               ...params.runtimeEnvPatch,
               ...buildQaForcedRuntimeEnvPatch({

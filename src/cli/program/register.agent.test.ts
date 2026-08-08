@@ -116,6 +116,36 @@ describe("agent command registration", () => {
     );
   });
 
+  it("forwards the hidden frontier run nonce without advertising it", async () => {
+    const program = new Command();
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    const agent = program.commands.find((command) => command.name() === "agent");
+    const exec = agent?.commands.find((command) => command.name() === "exec");
+    expect(exec?.helpInformation()).not.toContain("--frontier-evidence-run-nonce");
+
+    await runCli([
+      "agent",
+      "exec",
+      "inspect",
+      "--frontier-evidence-policy",
+      "policy.json",
+      "--frontier-evidence-policy-sha256",
+      "a".repeat(64),
+      "--frontier-evidence-run-nonce",
+      "b".repeat(64),
+    ]);
+
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "inspect",
+      expect.objectContaining({
+        frontierEvidencePolicy: "policy.json",
+        frontierEvidencePolicySha256: "a".repeat(64),
+        frontierEvidenceRunNonce: "b".repeat(64),
+      }),
+      runtime,
+    );
+  });
+
   it("runs agent command with verbose enabled for --verbose on", async () => {
     await runCli(["agent", "--message", "hi", "--verbose", "ON", "--json"]);
 

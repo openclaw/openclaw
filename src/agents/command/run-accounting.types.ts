@@ -23,6 +23,7 @@ export type AgentCommandRunAccountingCoverageReason =
   | "unknown_runtime"
   | "missing_usage"
   | "partial_usage"
+  | "provider_attempt_usage_unattributed"
   | "missing_pricing"
   | "tiered_pricing_aggregate"
   | "acp_runtime"

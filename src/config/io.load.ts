@@ -33,14 +33,15 @@ import { validateConfigObjectWithPlugins } from "./validation.js";
 
 export function loadConfigFromContext(
   context: ConfigIoContext,
-  options: { skipSuspiciousRecovery?: boolean } = {},
+  options: { raw?: string; rejectIncludes?: boolean; skipSuspiciousRecovery?: boolean } = {},
 ): OpenClawConfig {
   const { deps, configPath } = context;
+  const hasPinnedRaw = options.raw !== undefined;
   let envBeforeRead: Record<string, string | undefined> | undefined;
   try {
     maybeLoadDotEnvForConfig(deps.env);
     envBeforeRead = snapshotEnv(deps.env);
-    if (!deps.fs.existsSync(configPath)) {
+    if (!hasPinnedRaw && !deps.fs.existsSync(configPath)) {
       loggedConfigWarningFingerprints.delete(configPath);
       if (
         context.options.shellEnvFallback !== "defer" &&
@@ -57,8 +58,11 @@ export function loadConfigFromContext(
       }
       return migratePersistedImplicitMainRoster({}).config as OpenClawConfig;
     }
-    const raw = deps.fs.readFileSync(configPath, "utf-8");
+    const raw = options.raw ?? deps.fs.readFileSync(configPath, "utf-8");
     const parsed = deps.json5.parse(raw);
+    if (options.rejectIncludes && containsConfigIncludeDirective(parsed)) {
+      throw new Error("frontier evidence pinned config cannot use $include");
+    }
     const readResolution = resolveConfigForRead(
       resolveConfigIncludesForRead(parsed, configPath, deps),
       deps.env,
@@ -147,6 +151,7 @@ export function loadConfigFromContext(
     }
     if (
       deps.observe &&
+      !hasPinnedRaw &&
       !options.skipSuspiciousRecovery &&
       !containsConfigIncludeDirective(parsed)
     ) {

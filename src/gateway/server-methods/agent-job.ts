@@ -32,7 +32,7 @@ import type { DedupeEntry } from "../server-shared.js";
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 
-type AgentJobTerminalSnapshot = {
+type AgentJobTerminalFields = {
   status: "ok" | "error" | "timeout";
   startedAt?: number;
   endedAt?: number;
@@ -47,6 +47,19 @@ type AgentJobTerminalSnapshot = {
   terminalReceipt?: AgentRunTerminalReceipt;
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
+
+type AgentJobRuntimeIdentity = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+};
+
+type AgentJobTerminalSnapshot = AgentJobTerminalFields & {
+  runtimeIdentity?: AgentJobRuntimeIdentity;
+  runtimeIdentityConflict?: true;
+};
+
+type AgentJobPublicSnapshot = AgentJobTerminalFields & Partial<AgentJobRuntimeIdentity>;
 
 type AgentJobSource = "agent" | "chat" | "lifecycle";
 type AgentRunObservation = AgentJobTerminalSnapshot & {
@@ -167,6 +180,29 @@ function shouldPreserveTerminalSnapshot(
   return mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome;
 }
 
+function mergeRuntimeIdentity(
+  existing: AgentJobTerminalSnapshot,
+  incoming: AgentJobTerminalSnapshot,
+): Pick<AgentJobTerminalSnapshot, "runtimeIdentity" | "runtimeIdentityConflict"> {
+  if (existing.runtimeIdentityConflict || incoming.runtimeIdentityConflict) {
+    return { runtimeIdentityConflict: true };
+  }
+  if (!existing.runtimeIdentity) {
+    return incoming.runtimeIdentity ? { runtimeIdentity: incoming.runtimeIdentity } : {};
+  }
+  if (!incoming.runtimeIdentity) {
+    return { runtimeIdentity: existing.runtimeIdentity };
+  }
+  if (
+    existing.runtimeIdentity.agentId !== incoming.runtimeIdentity.agentId ||
+    existing.runtimeIdentity.sessionKey !== incoming.runtimeIdentity.sessionKey ||
+    existing.runtimeIdentity.sessionId !== incoming.runtimeIdentity.sessionId
+  ) {
+    return { runtimeIdentityConflict: true };
+  }
+  return { runtimeIdentity: existing.runtimeIdentity };
+}
+
 function mergeSnapshot(
   existing: AgentRunSnapshot | undefined,
   incoming: AgentRunSnapshot,
@@ -181,10 +217,16 @@ function mergeSnapshot(
   const terminalDelivery = incoming.terminalDelivery ?? existing.terminalDelivery;
   const terminalReceipt = incoming.terminalReceipt ?? existing.terminalReceipt;
   const canonical = shouldPreserveTerminalSnapshot(existing, incoming) ? existing : incoming;
+  const {
+    runtimeIdentity: _runtimeIdentity,
+    runtimeIdentityConflict: _runtimeIdentityConflict,
+    ...canonicalWithoutIdentity
+  } = canonical;
   // Terminal status precedence and producer reply evidence are independent;
-  // a late sticky timeout must not erase the final reply (or vice versa).
+  // a late sticky timeout must not erase the final reply or runtime identity.
   return {
-    ...canonical,
+    ...canonicalWithoutIdentity,
+    ...mergeRuntimeIdentity(existing, incoming),
     ...(terminalDelivery ? { terminalDelivery } : {}),
     ...(terminalReceipt ? { terminalReceipt } : {}),
     ...(terminalReply ? { terminalReply } : {}),
@@ -288,6 +330,8 @@ function createPendingErrorTimeoutSnapshot(
     startedAt: snapshot.startedAt,
     error: snapshot.error,
     pendingError: true,
+    ...(snapshot.runtimeIdentity ? { runtimeIdentity: snapshot.runtimeIdentity } : {}),
+    ...(snapshot.runtimeIdentityConflict ? { runtimeIdentityConflict: true } : {}),
     ...(snapshot.providerStarted !== undefined
       ? { providerStarted: snapshot.providerStarted }
       : {}),
@@ -296,11 +340,19 @@ function createPendingErrorTimeoutSnapshot(
 }
 
 function createSnapshotFromLifecycleEvent(params: {
+  agentId?: string;
   runId: string;
   phase: "end" | "error";
+  sessionId?: string;
+  sessionKey?: string;
   data?: Record<string, unknown>;
 }): AgentRunObservation {
   const { runId, phase, data } = params;
+  const agentId = asString(params.agentId);
+  const sessionKey = asString(params.sessionKey);
+  const sessionId = asString(params.sessionId);
+  const runtimeIdentity =
+    agentId && sessionKey && sessionId ? { agentId, sessionKey, sessionId } : undefined;
   const startedAt =
     typeof data?.startedAt === "number" ? data.startedAt : agentRunStarts.get(runId);
   const endedAt = typeof data?.endedAt === "number" ? data.endedAt : undefined;
@@ -337,6 +389,7 @@ function createSnapshotFromLifecycleEvent(params: {
     ...(terminalDelivery ? { terminalDelivery } : {}),
     ...(terminalReply ? { terminalReply } : {}),
     ...(terminalReceipt ? { terminalReceipt } : {}),
+    ...(runtimeIdentity ? { runtimeIdentity } : {}),
     version: nextAgentRunVersion(),
   };
 }
@@ -360,8 +413,11 @@ function ensureAgentRunListener() {
       return;
     }
     const snapshot = createSnapshotFromLifecycleEvent({
+      agentId: evt.agentId,
       runId: evt.runId,
       phase,
+      sessionId: evt.sessionId,
+      sessionKey: evt.sessionKey,
       data: evt.data,
     });
     agentRunStarts.delete(evt.runId);
@@ -569,7 +625,7 @@ function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
   };
 }
 
-function publicSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapshot {
+function publicSnapshot(snapshot: AgentRunObservation): AgentJobPublicSnapshot {
   return {
     status: snapshot.status,
     startedAt: snapshot.startedAt,
@@ -584,6 +640,9 @@ function publicSnapshot(snapshot: AgentRunObservation): AgentJobTerminalSnapshot
     ...(snapshot.terminalDelivery ? { terminalDelivery: snapshot.terminalDelivery } : {}),
     terminalReceipt: snapshot.terminalReceipt,
     terminalReply: snapshot.terminalReply,
+    ...(snapshot.runtimeIdentityConflict || !snapshot.runtimeIdentity
+      ? {}
+      : snapshot.runtimeIdentity),
   };
 }
 
@@ -592,7 +651,7 @@ export async function waitForAgentJob(params: {
   timeoutMs: number;
   ignoreCachedSnapshot?: boolean;
   source?: "chat";
-}): Promise<AgentJobTerminalSnapshot | null> {
+}): Promise<AgentJobPublicSnapshot | null> {
   ensureAgentRunListener();
   const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
   const cached = getAgentRunSnapshot({
@@ -610,7 +669,7 @@ export async function waitForAgentJob(params: {
   return await new Promise((resolve) => {
     let settled = false;
     let removeWaiter = () => {};
-    const finish = (snapshot: AgentJobTerminalSnapshot | null) => {
+    const finish = (snapshot: AgentJobPublicSnapshot | null) => {
       if (settled) {
         return;
       }
@@ -641,7 +700,7 @@ export async function waitForAgentJob(params: {
           finish(
             isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
               ? publicSnapshot(pendingError)
-              : createPendingErrorTimeoutSnapshot(pendingError),
+              : publicSnapshot(createPendingErrorTimeoutSnapshot(pendingError)),
           );
           return;
         }

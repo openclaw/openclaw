@@ -29,7 +29,9 @@ export { createQaRunnerRuntime } from "./src/harness-runtime.js";
 export {
   buildScriptEvidenceSummary,
   QA_EVIDENCE_FILENAME,
+  type QaEvidenceClass,
   type QaEvidencePackageSource,
+  type QaEvidenceProviderMode,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
   validateQaEvidenceSummaryJson,

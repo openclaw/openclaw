@@ -2,6 +2,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import "@openclaw/ai/transports";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
@@ -547,12 +548,18 @@ describe("applyExtraParamsToAgent", () => {
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
+    payloadFactory?: (
+      model: Parameters<StreamFn>[0],
+      context: Parameters<StreamFn>[1],
+      options: Parameters<StreamFn>[2],
+    ) => Record<string, unknown>;
     thinkingLevel?: Parameters<typeof applyExtraParamsToAgent>[5];
   }) {
     // Mutates a caller-owned payload through onPayload, matching how the runtime
     // finalizes provider request bodies.
-    const payload = params.payload ?? { store: false };
-    const baseStreamFn: StreamFn = (model, _context, options) => {
+    let payload = params.payload ?? { store: false };
+    const baseStreamFn: StreamFn = (model, context, options) => {
+      payload = params.payloadFactory?.(model, context, options) ?? payload;
       options?.onPayload?.(payload, model);
       return {} as ReturnType<StreamFn>;
     };
@@ -2042,6 +2049,91 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.parallel_tool_calls).toBe(true);
     expect(payload.text).toEqual({ verbosity: "low" });
+  });
+
+  it("composes Agent high thinking options through the actual Responses request builder", () => {
+    const buildRequest =
+      globalThis.openclawOpenAIResponsesTransportTestApi?.buildOpenAIResponsesParams;
+    if (!buildRequest) {
+      throw new Error("OpenAI Responses transport test API is unavailable");
+    }
+    const responseModel = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5.4",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-responses">;
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: responseModel.id,
+      model: responseModel,
+      thinkingLevel: "high",
+      options: {
+        promptCacheKey: "session:0",
+        reasoning: "high",
+        sessionId: "session",
+      },
+      payloadFactory: (model, context, options) =>
+        buildRequest(model, context, options as never, {
+          openclaw_session_id: "session",
+          openclaw_transport: "stream",
+          openclaw_turn_attempt: "1",
+          openclaw_turn_id: "turn",
+        }) as Record<string, unknown>,
+    });
+
+    expect(payload).toEqual({
+      model: "gpt-5.4",
+      input: [],
+      stream: true,
+      prompt_cache_key: "session:0",
+      prompt_cache_retention: undefined,
+      metadata: {
+        openclaw_session_id: "session",
+        openclaw_transport: "stream",
+        openclaw_turn_attempt: "1",
+        openclaw_turn_id: "turn",
+      },
+      max_output_tokens: 8192,
+      reasoning: { effort: "high", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+      store: true,
+      text: { verbosity: "low" },
+      context_management: [{ type: "compaction", compact_threshold: 140_000 }],
+      parallel_tool_calls: true,
+    });
+    expect(payload).not.toHaveProperty("tool_choice");
+  });
+
+  it("removes reasoning and encrypted replay when the composed Responses level is off", () => {
+    const buildRequest =
+      globalThis.openclawOpenAIResponsesTransportTestApi?.buildOpenAIResponsesParams;
+    if (!buildRequest) {
+      throw new Error("OpenAI Responses transport test API is unavailable");
+    }
+    const responseModel = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5.4",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    } as unknown as Model<"openai-responses">;
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: responseModel.id,
+      model: responseModel,
+      thinkingLevel: "off",
+      payloadFactory: (model, context, options) =>
+        buildRequest(model, context, options as never) as Record<string, unknown>,
+    });
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("include");
   });
 
   it("injects GPT-5 default parallel tool calls for Codex Responses payloads", () => {

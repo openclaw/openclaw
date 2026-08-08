@@ -21,6 +21,7 @@ import type {
   ProviderTransportAccountingCollector,
   ProviderTransportAccountingCoverageReason,
   ProviderTransportAccountingObserver,
+  ProviderTransportAccountingSnapshot,
   ProviderTransportLogicalCallStarted,
 } from "./provider-transport-accounting.types.js";
 
@@ -41,6 +42,41 @@ export type {
 const MAX_MODEL_TRANSPORT_LOGICAL_CALLS = 64;
 const MAX_MODEL_TRANSPORT_EVENTS = 128;
 const MAX_MODEL_TRANSPORT_EVENT_IDENTITIES = 256;
+
+export function resolveExactProviderTransportAttemptCount(
+  snapshot: ProviderTransportAccountingSnapshot,
+  callId: string,
+): number | undefined {
+  if (
+    snapshot.logicalCalls.totalKind !== "exact" ||
+    snapshot.logicalCalls.entriesTruncated ||
+    snapshot.logicalCalls.entries.length !== snapshot.logicalCalls.total ||
+    snapshot.logicalCalls.entries.filter((call) => call.callId === callId).length !== 1 ||
+    snapshot.attempts.totalKind !== "exact" ||
+    snapshot.events.totalKind !== "exact" ||
+    snapshot.events.entriesTruncated ||
+    snapshot.events.entries.length !== snapshot.events.total
+  ) {
+    return undefined;
+  }
+  const attempts = snapshot.events.entries.filter((event) => event.type === "attempt");
+  if (attempts.length !== snapshot.attempts.total) {
+    return undefined;
+  }
+  return attempts.filter((event) => event.callId === callId).length;
+}
+
+export function hasUnattributedProviderAttemptUsage(
+  snapshot: ProviderTransportAccountingSnapshot | undefined,
+): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  return snapshot.logicalCalls.entries.some((call) => {
+    const attempts = resolveExactProviderTransportAttemptCount(snapshot, call.callId);
+    return attempts !== undefined && attempts > 1;
+  });
+}
 
 type RequestedRoute = Omit<ProviderTransportLogicalCallStarted, "callId">;
 type TrackedLogicalCall = ProviderTransportProjectionCall;

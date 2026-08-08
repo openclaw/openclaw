@@ -4,6 +4,7 @@
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
+import { bindFrontierEvidenceTransport } from "../../frontier-evidence-transport.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import type { SandboxContext } from "../../sandbox/types.js";
@@ -106,6 +107,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedApiKey: transportApiKey,
   });
+  const streamAuthProfileId = resolveAttemptStreamAuthProfileId(attempt);
   session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: defaultSessionStreamFn,
     providerStreamFn,
@@ -115,7 +117,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedApiKey: attempt.resolvedApiKey,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
-    authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+    authProfileId: streamAuthProfileId,
     authStorage: attempt.authStorage,
   });
   // Install inside provider/config wrappers so their full onPayload chain runs
@@ -180,6 +182,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
       codeModeToolSurfaceEnabled: true,
     });
   }
+  const frontierEvidence = bindFrontierEvidenceTransport({
+    attempt,
+    agentId: input.sessionAgentId,
+    authProfileId: streamAuthProfileId,
+    effectiveExtraParams,
+    streamFn: session.agent.streamFn,
+  });
+  session.agent.streamFn = frontierEvidence.streamFn;
   const effectivePromptCacheRetention = resolveCacheRetention(
     effectiveExtraParams,
     attempt.provider,

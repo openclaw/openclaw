@@ -75,6 +75,7 @@ export {
   resolvePersistedAuthProfileOwnerAgentDir,
   withEnvOnlyAuthProfileStore,
   withAuthProfileStoreAgentDir,
+  withAuthProfileStoreSnapshot,
 } from "./auth-profiles/store.js";
 export type {
   ApiKeyCredential,

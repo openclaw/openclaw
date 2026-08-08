@@ -7,6 +7,7 @@ import {
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   buildPlaywrightEvidenceSummary,
   buildQaSuiteEvidenceSummary,
+  buildScriptEvidenceSummary,
   buildVitestEvidenceSummary,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
@@ -482,5 +483,82 @@ describe("evidence summary", () => {
         },
       },
     });
+  });
+
+  it("records dispatched diagnostic evidence as live without making it Beta evidence", () => {
+    const evidence = buildScriptEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: "summary.json" }],
+      evidenceClass: "diagnostic_only",
+      generatedAt: "2026-08-07T00:00:00.000Z",
+      primaryModel: "ollama/qwen3.5:9b",
+      providerLive: true,
+      providerMode: "diagnostic-only",
+      results: [{ id: "diagnostic-cell", status: "pass" }],
+      targets: [
+        {
+          id: "diagnostic-cell",
+          sourcePath: "scripts/code-mode-model-matrix.ts",
+          title: "OpenClaw Code Mode diagnostic",
+        },
+      ],
+    });
+
+    expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+    expect(evidence.entries[0]?.evidenceClass).toBe("diagnostic_only");
+    expect(evidence.entries[0]?.execution?.provider).toEqual({
+      id: "ollama",
+      live: true,
+      model: {
+        name: "qwen3.5:9b",
+        ref: "ollama/qwen3.5:9b",
+      },
+    });
+    expect(evidence.entries[0]?.execution?.provider).not.toHaveProperty("auth");
+    expect(evidence.entries[0]?.execution?.provider).not.toHaveProperty("fixture");
+
+    const preDispatch = buildScriptEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: "summary.json" }],
+      evidenceClass: "diagnostic_only",
+      generatedAt: "2026-08-07T00:00:00.000Z",
+      primaryModel: "ollama/qwen3.5:9b",
+      providerLive: false,
+      providerMode: "diagnostic-only",
+      results: [{ id: "diagnostic-cell", status: "fail" }],
+      targets: [
+        {
+          id: "diagnostic-cell",
+          sourcePath: "scripts/code-mode-model-matrix.ts",
+          title: "OpenClaw Code Mode diagnostic",
+        },
+      ],
+    });
+    expect(preDispatch.entries[0]?.execution?.provider).toMatchObject({
+      id: "ollama",
+      live: false,
+    });
+    expect(preDispatch.entries[0]?.execution?.provider).not.toHaveProperty("fixture");
+
+    const slimEvidence = buildScriptEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: "summary.json" }],
+      evidenceClass: "diagnostic_only",
+      evidenceMode: "slim",
+      generatedAt: "2026-08-07T00:00:00.000Z",
+      primaryModel: "ollama/qwen3.5:9b",
+      providerLive: true,
+      providerMode: "diagnostic-only",
+      results: [{ id: "diagnostic-cell", status: "pass" }],
+      targets: [
+        {
+          id: "diagnostic-cell",
+          sourcePath: "scripts/code-mode-model-matrix.ts",
+          title: "OpenClaw Code Mode diagnostic",
+        },
+      ],
+    });
+    expect(slimEvidence.entries[0]).toMatchObject({
+      evidenceClass: "diagnostic_only",
+      test: { id: "diagnostic-cell" },
+    });
+    expect(slimEvidence.entries[0]).not.toHaveProperty("execution");
   });
 });

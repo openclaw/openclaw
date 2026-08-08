@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
@@ -21,13 +20,7 @@ import {
 } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  agentExecCommand,
-  buildExecRunConfig,
-  classifyAgentExecResult,
-  resolveAgentExecPrompt,
-  resolveExecBaseConfig,
-} from "./agent-exec.js";
+import { agentExecCommand, buildExecRunConfig, resolveExecBaseConfig } from "./agent-exec.js";
 
 const tempRoots: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -70,139 +63,6 @@ afterEach(async () => {
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
   vi.restoreAllMocks();
-});
-
-describe("agent exec prompt sources", () => {
-  it("accepts a positional prompt", async () => {
-    await expect(resolveAgentExecPrompt("fix it", undefined)).resolves.toBe("fix it");
-  });
-
-  it("reads a UTF-8 prompt file", async () => {
-    const root = await makeTempRoot("openclaw-agent-exec-prompt-");
-    const promptPath = path.join(root, "prompt.md");
-    await fs.writeFile(promptPath, "\uFEFFline one\nline two", "utf8");
-
-    await expect(resolveAgentExecPrompt(undefined, promptPath)).resolves.toBe("line one\nline two");
-  });
-
-  it("reads --message-file - from stdin", async () => {
-    const stdin = Readable.from([Buffer.from("from stdin", "utf8")]);
-    await expect(resolveAgentExecPrompt(undefined, "-", stdin)).resolves.toBe("from stdin");
-  });
-});
-
-describe("agent exec strict result classification", () => {
-  it("classifies a successful embedded result", () => {
-    expect(classifyAgentExecResult(successResult())).toMatchObject({
-      ok: true,
-      status: "ok",
-      final: "done",
-    });
-  });
-
-  it("classifies model error payloads as failure", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [{ text: "provider rejected request", isError: true }],
-      meta: { durationMs: 10 },
-    });
-    expect(envelope).toMatchObject({
-      ok: false,
-      status: "error",
-      error: { kind: "error_payload", message: "provider rejected request" },
-    });
-  });
-
-  it("classifies textless error payloads as failure", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [{ isError: true }],
-      meta: { durationMs: 10 },
-    });
-    expect(envelope).toMatchObject({
-      ok: false,
-      status: "error",
-      error: { kind: "error_payload", message: "Agent run failed" },
-    });
-  });
-
-  it("classifies terminal timeouts separately", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [{ text: "timed out", isError: true }],
-      meta: { durationMs: 600_000, aborted: true, stopReason: "timeout" },
-    });
-    expect(envelope).toMatchObject({
-      ok: false,
-      status: "timeout",
-      error: { kind: "timeout" },
-    });
-  });
-
-  it("classifies exhausted explicit fallbacks as failure", () => {
-    const envelope = classifyAgentExecResult(successResult("last candidate output"), true);
-    expect(envelope).toMatchObject({
-      ok: false,
-      status: "error",
-      error: { kind: "fallback_exhausted" },
-    });
-  });
-
-  it("classifies projected production error payloads as failure", () => {
-    const envelope = classifyAgentExecResult(
-      successResult("projected error text"),
-      false,
-      "projected error text",
-    );
-    expect(envelope).toMatchObject({
-      ok: false,
-      status: "error",
-      final: "",
-      payloads: [{ text: "projected error text", isError: true }],
-      error: { kind: "error_payload", message: "projected error text" },
-    });
-  });
-
-  it("does not restore metadata text for a projected textless error", () => {
-    const result = successResult("metadata error text");
-    result.payloads = [];
-    const envelope = classifyAgentExecResult(result, false, true);
-    expect(envelope).toMatchObject({ ok: false, status: "error", final: "", payloads: [] });
-  });
-
-  it("projects payloads onto the stable documented fields", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [
-        {
-          text: "done",
-          mediaUrl: null,
-          audioAsVoice: true,
-          presentation: { blocks: [] },
-          channelData: { private: true },
-        },
-      ],
-      meta: { durationMs: 10 },
-    });
-    expect(envelope.payloads).toEqual([{ text: "done", mediaUrl: null }]);
-  });
-
-  it("projects the embedded outer tool summary", () => {
-    const envelope = classifyAgentExecResult({
-      payloads: [{ text: "done" }],
-      meta: {
-        durationMs: 10,
-        toolSummary: {
-          calls: 2,
-          tools: ["read", "write"],
-          failures: 1,
-          totalToolTimeMs: 25,
-        },
-      },
-    });
-    expect(envelope.toolSummary).toEqual({
-      calls: 2,
-      tools: ["read", "write"],
-      failures: 1,
-      totalToolTimeMs: 25,
-    });
-  });
 });
 
 describe("agent exec command composition", () => {

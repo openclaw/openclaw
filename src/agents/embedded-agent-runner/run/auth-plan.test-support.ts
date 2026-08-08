@@ -8,6 +8,15 @@ type EmbeddedRunAuthPlanTestApi = {
     config: RunEmbeddedAgentParams["config"];
     externalCliProviderIds: Iterable<string>;
   }): AuthProfileStore;
+  resolveEmbeddedRunAuthInputs(params: {
+    runParams: Pick<RunEmbeddedAgentParams, "authProfileId" | "authProfileIdSource">;
+    provider: string;
+    modelId: string;
+  }): {
+    env: NodeJS.ProcessEnv;
+    sessionAuthProfileId: string | undefined;
+    sessionAuthProfileSource: RunEmbeddedAgentParams["authProfileIdSource"];
+  };
 };
 
 function getTestApi(): EmbeddedRunAuthPlanTestApi {
@@ -18,4 +27,5 @@ function getTestApi(): EmbeddedRunAuthPlanTestApi {
 
 export const testing: EmbeddedRunAuthPlanTestApi = {
   loadEmbeddedRunAuthProfileStore: (params) => getTestApi().loadEmbeddedRunAuthProfileStore(params),
+  resolveEmbeddedRunAuthInputs: (params) => getTestApi().resolveEmbeddedRunAuthInputs(params),
 };

@@ -26,6 +26,14 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
     env: context.deps.env,
     loadConfig: (loadOptions?: { skipSuspiciousRecovery?: boolean }) =>
       loadConfigFromContext(context, loadOptions),
+    // Frontier evidence pins the root config bytes before parsing so admission
+    // and execution cannot observe different versions of the same path.
+    loadConfigFromRaw: (raw: string, rawOptions?: { rejectIncludes?: boolean }) =>
+      loadConfigFromContext(context, {
+        raw,
+        rejectIncludes: rawOptions?.rejectIncludes,
+        skipSuspiciousRecovery: true,
+      }),
     readBestEffortConfig: async () =>
       (await readBestEffortConfigSnapshotFromContext(context)).config,
     readBestEffortConfigSnapshot: () => readBestEffortConfigSnapshotFromContext(context),

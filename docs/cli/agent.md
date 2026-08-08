@@ -117,17 +117,41 @@ The agent run-stat fields appear on `meta.agentMeta` in the `openclaw agent --js
 
 ### Code Mode model matrix
 
-From a source checkout, run the bounded evaluation matrix against any explicit model reference:
+Run a model-specific diagnostic without frontier qualification:
 
 ```bash
-pnpm qa:code-mode-models -- --model ollama/qwen3.5:9b
+pnpm qa:code-mode-models -- \
+  --model ollama/qwen3.5:9b \
+  --mode code \
+  --task read \
+  --repetitions 1
 ```
 
-Repeat `--model` to compare models, or use `--mode`, `--task`, and `--repetitions` to narrow the default direct/automatic/forced Code Mode matrix. Each cell runs an isolated `agent exec` task and records model/provider identity, timing, result status, failure class, outer tool calls, Code Mode bridge calls, and verified output/effects.
+Diagnostic runs execute the requested model directly, retain model-specific environment and local-route behavior, and record a real provider dispatch as `execution.provider.live: true` without inventing a fixture. They are still always classified `diagnostic_only`: provider liveness is an execution fact, while `evidenceClass` controls Beta eligibility. Diagnostic runs do not create frontier receipts or become Beta-eligible.
 
-The output directory contains canonical QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity.
+From a source checkout, run the bounded frontier matrix against one explicit model and frozen config:
 
-This is evaluation-only evidence, not a CI or release gate. Results do not change model capabilities, runtime routing, fallback, or repair policy.
+```bash
+pnpm qa:code-mode-models -- \
+  --model openai/gpt-5.6 \
+  --config ./frozen-code-mode.json5 \
+  --task dependent-read-write \
+  --repetitions 2 \
+  --thinking high \
+  --conversation-proof
+```
+
+The frontier path accepts exactly one model assertion and runs matched direct/Code Mode cells in serial ABBA order. The command reads the pinned root config bytes once; parsing, execution, policy admission, and the receipt use that same immutable snapshot. Frontier configs cannot use `$include`, because a root-file digest cannot freeze independently mutable child files. Qualification requires both a frozen receipt proving the bundled model catalog marks that exact model `compat.codeMode: "preferred"` and separate attestation that the frozen run explicitly activated Code Mode. It derives cold/warm status from exact trace metrics and applies conjunctive Beta bars: accuracy must not regress, effective turns and tokens must fall, underlying calls and wall latency must not regress, and matched traces and cache status must remain auditable. A failed or unknown bar blocks a Beta recommendation.
+
+`betaGate.diagnostics.retry_regression` reports known OpenClaw Code Mode retry growth as non-blocking, lower-confidence context. It is not a Beta bar because retry incidence is provider-sensitive. Missing or inexact retry metrics still invalidate the frontier receipt audit and block qualification.
+
+`--conversation-proof` opts into the frozen OpenAI frontier policy, frontier Beta qualification evidence, and a required separate behavior gate with three real-model scenarios: exact, ambiguous, and incomplete. Each uses fresh isolated QA Gateway, registry, and session state with the same frozen model, prompt, config, profile, credential, agent id, and mock channel surface. One deterministic JavaScript/TypeScript exec cell lists up to 100 query-visible rows, compares the full channel/account/kind/target/thread tuple, and sends only for one exact match from a complete result. A missing, blocked, or failed proof makes the qualification command exit nonzero. The sidecar calls are excluded from matched performance totals and can only mark the run ready for the frozen representative benchmark; they never establish Beta promotion by themselves.
+
+Run the same exact command with `--dry-run` first. It validates the frozen route and records the planned four matched cells plus three behavior cells without starting a provider or sidecar.
+
+The output directory contains canonical QA Lab `qa-evidence.json`. `summary.json` and `results.jsonl` are supporting aggregate and per-cell artifacts; `manifest.json` records the requested matrix and source identity. Qualification runs write the required behavior artifact to `conversation-proof/summary.json` and expose it as a separate QA evidence gate. Runs without `--conversation-proof` are explicitly classified `diagnostic_only` and are not Beta-eligible.
+
+This is evaluation-only evidence, not a CI or release gate. Results do not change model capabilities, runtime routing, fallback, or repair policy. Local-model qualification remains a separate non-Beta lane and does not use the frontier behavior sidecar.
 
 ### `agent exec` options
 
