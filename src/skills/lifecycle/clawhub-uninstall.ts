@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { resolveWorkspaceSkillInstallDir } from "./archive-install.js";
-import { formatClawHubSkillRef, parseRequestedClawHubSkillRef } from "./clawhub-store.js";
-import { resolveClawHubSkillStatusLinkSync, untrackClawHubSkill } from "./clawhub.js";
+import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
+import {
+  formatClawHubSkillRef,
+  parseRequestedClawHubSkillRef,
+  untrackClawHubSkill,
+} from "./clawhub-store.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,
@@ -44,6 +48,19 @@ export async function planClawHubSkillUninstall(params: {
   } catch (error) {
     return { ok: false, code: "ambiguous", error: String(error) };
   }
+  return await planTrackedClawHubSkillState({
+    workspaceDir: params.workspaceDir,
+    requestedRef,
+    expectedVersion: params.expectedVersion,
+  });
+}
+
+export async function planTrackedClawHubSkillState(params: {
+  workspaceDir: string;
+  requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
+  expectedVersion: string;
+}): Promise<ClawHubSkillUninstallPlanResult> {
+  const requestedRef = params.requestedRef;
   const slug = requestedRef.slug;
   const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, slug);
   const link = resolveClawHubSkillStatusLinkSync({
