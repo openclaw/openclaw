@@ -325,7 +325,7 @@ describe("attemptRecoveryMemoryFlush", () => {
     );
   });
 
-  it("clears inherited delivery/progress callbacks from the nested maintenance turn", async () => {
+  it("clears inherited delivery/progress and logical-turn state from the nested maintenance turn", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       compactionCount: 2,
       memoryFlush: undefined,
@@ -344,6 +344,14 @@ describe("attemptRecoveryMemoryFlush", () => {
       onUserMessagePersisted: vi.fn(),
     };
     const outerEnqueue = vi.fn();
+    const outerLogicalTurnLease = {
+      begin: vi.fn(),
+      selectForHost: vi.fn(),
+      degradeBeforeStart: vi.fn(),
+      deferDisposalUntil: vi.fn(),
+      dispose: vi.fn(),
+    };
+    const outerOnContextEngineTurnCandidate = vi.fn();
     const outerFastModeAutoProgressState = { offAnnounced: false, resetAnnounced: false };
     const runParamsWithDelivery = {
       ...runParams,
@@ -360,6 +368,8 @@ describe("attemptRecoveryMemoryFlush", () => {
       replyOperation: outerReplyOperation,
       userTurnTranscriptRecorder: outerRecorder,
       enqueue: outerEnqueue,
+      contextEngineLogicalTurnLease: outerLogicalTurnLease,
+      onContextEngineTurnCandidate: outerOnContextEngineTurnCandidate,
       streamParams: { stream: true },
       internalEvents: [{ kind: "turn_started" }],
       inputProvenance: { source: "user" },
@@ -420,6 +430,8 @@ describe("attemptRecoveryMemoryFlush", () => {
     expect(nestedParams.onToolResult).toBeUndefined();
     expect(nestedParams.onAgentToolResult).toBeUndefined();
     expect(nestedParams.onUserMessagePersisted).toBeUndefined();
+    expect(nestedParams.contextEngineLogicalTurnLease).toBeUndefined();
+    expect(nestedParams.onContextEngineTurnCandidate).toBeUndefined();
     expect(nestedParams.userTurnTranscriptRecorder).toBeUndefined();
     expect(nestedParams.enqueue).toBeUndefined();
     expect(nestedParams.streamParams).toBeUndefined();
@@ -464,6 +476,9 @@ describe("attemptRecoveryMemoryFlush", () => {
     expect(outerShouldEmitToolResult).not.toHaveBeenCalled();
     expect(outerRecorder.complete).not.toHaveBeenCalled();
     expect(outerEnqueue).not.toHaveBeenCalled();
+    expect(outerLogicalTurnLease.begin).not.toHaveBeenCalled();
+    expect(outerLogicalTurnLease.selectForHost).not.toHaveBeenCalled();
+    expect(outerOnContextEngineTurnCandidate).not.toHaveBeenCalled();
   });
 
   it("does not mutate the outer fast-mode progress state across the nested flush turn", async () => {

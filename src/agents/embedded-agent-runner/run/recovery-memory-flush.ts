@@ -87,6 +87,10 @@ const RECOVERY_FLUSH_NESTED_RUN_OMIT_KEYS = [
   "onUserMessagePersisted",
   "onUserMessagePersistenceInvalidated",
   "onAssistantErrorMessagePersisted",
+  // Outer logical-turn ownership — the active user turn's context-engine lease
+  // and attempt-facts callback must not reach the ephemeral maintenance run.
+  "contextEngineLogicalTurnLease",
+  "onContextEngineTurnCandidate",
   // Outer reply / delivery / lifecycle state.
   "replyOperation",
   "shouldEmitToolResult",
