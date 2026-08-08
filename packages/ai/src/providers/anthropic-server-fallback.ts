@@ -11,6 +11,28 @@ export const ANTHROPIC_SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07
 /** Let Anthropic select the recommended model for each refusal category. */
 export const ANTHROPIC_SERVER_SIDE_FALLBACKS = "default" as const;
 
+export function anthropicRequestEnablesServerFallback(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const fallbacks = (payload as { fallbacks?: unknown }).fallbacks;
+  return (
+    fallbacks === ANTHROPIC_SERVER_SIDE_FALLBACKS ||
+    (Array.isArray(fallbacks) && fallbacks.length > 0)
+  );
+}
+
+export function assertAnthropicServerFallbackPayloadAuthorized(params: {
+  authorized: boolean;
+  payload: unknown;
+}): void {
+  if (anthropicRequestEnablesServerFallback(params.payload) && !params.authorized) {
+    throw new Error(
+      "Anthropic server fallback requires a supported model, first-party endpoint, beta header, and guarded dispatch",
+    );
+  }
+}
+
 // Anthropic's current default routes serve fallback output on Opus 5 or 4.8,
 // which share the same standard and fast-mode rates.
 export const CLAUDE_OPUS_FALLBACK_MODEL_COST = {
@@ -25,7 +47,7 @@ export type AnthropicFallbackBoundary = {
   toModel: string | null;
 };
 
-function resolveFallbackModelIdentity(modelId: string | null): string | null {
+export function resolveAnthropicFallbackModelIdentity(modelId: string | null): string | null {
   if (!modelId?.trim()) {
     return null;
   }
@@ -53,8 +75,8 @@ export function resolveAnthropicFallbackServingModelCost(params: {
   servingModelId: string | null;
   requestedCost: Model["cost"];
 }): Model["cost"] {
-  const requestedModelId = resolveFallbackModelIdentity(params.requestedModelId);
-  const servingModelId = resolveFallbackModelIdentity(params.servingModelId);
+  const requestedModelId = resolveAnthropicFallbackModelIdentity(params.requestedModelId);
+  const servingModelId = resolveAnthropicFallbackModelIdentity(params.servingModelId);
   if (
     !servingModelId ||
     servingModelId === requestedModelId ||
@@ -104,12 +126,33 @@ export function applyAnthropicFallbackBoundary(params: {
   boundary: AnthropicFallbackBoundary;
   provider: string;
 }): void {
-  const { output, boundary } = params;
+  const { output } = params;
+  applyAnthropicFallbackContentBoundary(output);
+  applyAnthropicFallbackServingModel(params);
+}
+
+/** Drops pre-fallback executable content while retaining the continuation text prefix. */
+export function applyAnthropicFallbackContentBoundary(output: {
+  content: Array<{ type: string }>;
+}): void {
   const survivors = output.content.filter((block) => block.type === "text");
   for (const survivor of survivors) {
     delete (survivor as { textSignature?: string }).textSignature;
   }
   output.content.splice(0, output.content.length, ...survivors);
+}
+
+/** Records one authoritative serving-model transition without rewriting content. */
+export function applyAnthropicFallbackServingModel(params: {
+  output: {
+    content: Array<{ type: string }>;
+    responseModel?: string;
+    diagnostics?: AssistantMessageDiagnostic[];
+  };
+  boundary: AnthropicFallbackBoundary;
+  provider: string;
+}): void {
+  const { output, boundary } = params;
   if (boundary.toModel) {
     output.responseModel = boundary.toModel;
   }

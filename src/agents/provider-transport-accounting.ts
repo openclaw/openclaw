@@ -53,11 +53,9 @@ type EventIdentityDecision = "accepted" | "exact_duplicate" | "rejected";
 type PreparedEventIdentity = {
   decision: EventIdentityDecision;
   identityKey?: string;
-  record?: {
-    aggregateKey?: ProviderTransportAggregateLowerBoundKey;
-    fingerprint: string;
-    type: AiModelTransportEvent["type"];
-  };
+  record?: MutableProviderTransportAccounting["eventFingerprints"] extends Map<string, infer T>
+    ? T
+    : never;
 };
 type MutableProviderTransportAccounting = ProviderTransportProjectionState;
 
@@ -590,13 +588,22 @@ function applyCoverage(
     return false;
   }
   if (!call.lastAttempt) {
-    if (event.scope !== "transport_semantics") {
+    if (
+      event.scope === "provider_fallbacks" &&
+      call.unattestedAuthorityTransport === event.transport
+    ) {
+      // Endpoint-authority coverage established this call and transport even though
+      // the injected client cannot attest the physical submission.
+    } else if (event.scope !== "transport_semantics") {
       return rejectFact(state, "transport_event_conflict", "event");
-    }
-    if (!bindOrValidateCurrentTransport(call, event.transport, state)) {
+    } else if (!bindOrValidateCurrentTransport(call, event.transport, state)) {
       return false;
+    } else {
+      if (event.reason === "transport_endpoint_authority_partial") {
+        call.unattestedAuthorityTransport = event.transport;
+      }
+      state.aggregateLowerBounds.attempts = true;
     }
-    state.aggregateLowerBounds.attempts = true;
   } else if (
     !validateEventTransport(event, call.lastAttempt.transport, state) ||
     (call.currentTransport !== undefined &&
@@ -802,13 +809,11 @@ export function createProviderTransportAccountingCollector(): ProviderTransportA
           return;
         }
         const identity = prepareEventIdentity(event, correlation.identityScope, state);
-        if (identity.decision !== "accepted") {
+        if (identity.decision !== "accepted" || !applyTransportEvent(event, state)) {
           return;
         }
-        if (!applyTransportEvent(event, state)) {
-          return;
-        }
-        // Rejected observations must not poison a later valid replay using the same ID.
+        // Only semantically accepted facts reserve event identity. A rejected
+        // observation must not poison a later valid replay using the same ID.
         commitEventIdentity(identity, state);
         if (correlation.call) {
           correlation.call.acceptedCallEventCount += 1;

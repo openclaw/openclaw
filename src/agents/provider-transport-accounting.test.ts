@@ -10,9 +10,9 @@ import {
   ANTHROPIC_ROUTE,
   emitAttempt,
   emitProviderFallbackCoverage,
+  emitZeroSubmission,
   emitTransportSemanticCoverage,
   emitTransportFallback,
-  emitZeroSubmission,
   observeMalformedTransportEvent,
   ROUTE,
   startCall,
@@ -700,7 +700,7 @@ describe("provider transport accounting", () => {
     });
   });
 
-  it("scopes repeated public call and event ids to finalized lifecycles", () => {
+  it("scopes repeated public call and event ids to completed lifecycles", () => {
     const collector = createProviderTransportAccountingCollector();
     runWithProviderTransportAccountingObserver(collector.observer, () => {
       startCall("call-reused-lifecycle");

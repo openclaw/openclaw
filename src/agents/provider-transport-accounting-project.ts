@@ -44,6 +44,8 @@ export type ProviderTransportProjectionCall = {
   model: string;
   api: string;
   currentTransport?: string;
+  // Endpoint-authority coverage may bind a route without proving a submission.
+  unattestedAuthorityTransport?: string;
   currentServingModel?: string;
   currentServingModelConfirmedByProviderFallback?: boolean;
   nextConnectionOrdinal: number;

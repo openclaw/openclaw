@@ -11,6 +11,7 @@ import {
   emitConnection,
   emitProviderFallbackCoverage,
   emitServerFallback,
+  emitTransportSemanticCoverage,
   emitTransportFallback,
   emitZeroSubmission,
   ROUTE,
@@ -648,7 +649,7 @@ describe("provider transport accounting transitions", () => {
     });
   });
 
-  it("keeps a confirmed serving model after a fallback chain returns to the request", () => {
+  it("keeps a content-confirmed serving model after a fallback chain returns to the request", () => {
     const collector = createProviderTransportAccountingCollector();
     runWithProviderTransportAccountingObserver(collector.observer, () => {
       startCall("call-confirmed-serving-cycle", ANTHROPIC_ROUTE);
@@ -688,6 +689,145 @@ describe("provider transport accounting transitions", () => {
         attempts: { total: 1, totalKind: "exact" },
         providerFallbacks: { total: 2, totalKind: "lower_bound" },
         events: { total: 4, totalKind: "exact" },
+      },
+    });
+  });
+
+  it("accepts fallback coverage after unattested endpoint coverage on the same transport", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-unattested-provider-coverage", ANTHROPIC_ROUTE);
+      emitTransportSemanticCoverage({
+        callId: "call-unattested-provider-coverage",
+        reason: "transport_endpoint_authority_partial",
+      });
+      emitProviderFallbackCoverage({
+        callId: "call-unattested-provider-coverage",
+      });
+      observeProviderTransportLogicalCallSettled("call-unattested-provider-coverage", "completed");
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: ["transport_endpoint_authority_partial", "transport_totals_lower_bound"],
+      },
+      snapshot: {
+        attempts: { total: 0, totalKind: "lower_bound" },
+        providerFallbacks: { total: 0, totalKind: "lower_bound" },
+        events: { total: 2, totalKind: "exact" },
+      },
+    });
+  });
+
+  it("rejects unattested fallback coverage before endpoint authority is established", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-unattested-provider-coverage-first", ANTHROPIC_ROUTE);
+      emitProviderFallbackCoverage({
+        callId: "call-unattested-provider-coverage-first",
+      });
+      observeProviderTransportLogicalCallSettled(
+        "call-unattested-provider-coverage-first",
+        "completed",
+      );
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "unavailable",
+        reasons: expect.arrayContaining(["transport_event_conflict"]),
+      },
+      snapshot: {
+        providerFallbacks: { total: 0, totalKind: "lower_bound" },
+        events: { total: 0, totalKind: "lower_bound" },
+      },
+    });
+  });
+
+  it("does not treat terminal uncertainty as unattested endpoint authority", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-terminal-only-provider-coverage", ANTHROPIC_ROUTE);
+      emitTransportSemanticCoverage({
+        callId: "call-terminal-only-provider-coverage",
+        reason: "transport_terminal_unverified",
+      });
+      emitProviderFallbackCoverage({
+        callId: "call-terminal-only-provider-coverage",
+      });
+      observeProviderTransportLogicalCallSettled(
+        "call-terminal-only-provider-coverage",
+        "completed",
+      );
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: expect.arrayContaining([
+          "transport_event_conflict",
+          "transport_terminal_unverified",
+        ]),
+      },
+      snapshot: {
+        providerFallbacks: { total: 0, totalKind: "lower_bound" },
+        events: { total: 1, totalKind: "lower_bound" },
+      },
+    });
+  });
+
+  it("does not carry unattested endpoint authority across transports", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-cross-transport-coverage", ANTHROPIC_ROUTE);
+      emitTransportSemanticCoverage({
+        callId: "call-cross-transport-coverage",
+        reason: "transport_endpoint_authority_partial",
+      });
+      emitProviderFallbackCoverage({
+        callId: "call-cross-transport-coverage",
+        transport: "http",
+      });
+      observeProviderTransportLogicalCallSettled("call-cross-transport-coverage", "completed");
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: expect.arrayContaining(["transport_event_conflict"]),
+      },
+      snapshot: {
+        providerFallbacks: { total: 0, totalKind: "lower_bound" },
+        events: { total: 1, totalKind: "lower_bound" },
+      },
+    });
+  });
+
+  it("does not carry unattested endpoint authority across calls", () => {
+    const collector = createProviderTransportAccountingCollector();
+    runWithProviderTransportAccountingObserver(collector.observer, () => {
+      startCall("call-authority-source", ANTHROPIC_ROUTE);
+      emitTransportSemanticCoverage({
+        callId: "call-authority-source",
+        reason: "transport_endpoint_authority_partial",
+      });
+      startCall("call-authority-target", ANTHROPIC_ROUTE);
+      emitProviderFallbackCoverage({
+        callId: "call-authority-target",
+      });
+      observeProviderTransportLogicalCallSettled("call-authority-source", "completed");
+      observeProviderTransportLogicalCallSettled("call-authority-target", "completed");
+    });
+
+    expect(collector.project()).toMatchObject({
+      coverage: {
+        state: "partial",
+        reasons: expect.arrayContaining(["transport_event_conflict"]),
+      },
+      snapshot: {
+        providerFallbacks: { total: 0, totalKind: "lower_bound" },
+        events: { total: 1, totalKind: "lower_bound" },
       },
     });
   });

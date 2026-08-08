@@ -20,6 +20,7 @@ import {
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
+import { snapshotProviderEndpointResolver } from "../transports/host-policy.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
@@ -54,6 +55,10 @@ import {
   usesFoundryBearerAuth,
 } from "./anthropic-auth-headers.js";
 import {
+  buildAnthropicGuardedFetch,
+  canGuardAnthropicServerFallbackDispatch,
+} from "./anthropic-guarded-fetch.js";
+import {
   applyClaudeRequestContract,
   ANTHROPIC_CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
   ANTHROPIC_CLAUDE_CODE_VERSION,
@@ -72,10 +77,19 @@ import { applyAnthropicRefusal } from "./anthropic-refusal.js";
 import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
-  applyAnthropicFallbackBoundary,
+  applyAnthropicFallbackContentBoundary,
+  applyAnthropicFallbackServingModel,
+  assertAnthropicServerFallbackPayloadAuthorized,
   readAnthropicFallbackBoundary,
   resolveAnthropicFallbackServingModelCost,
 } from "./anthropic-server-fallback.js";
+import {
+  anthropicSseTailHasModelFragment,
+  classifyUnknownAnthropicSseFrame,
+  createAnthropicEndpointAuthority,
+  createAnthropicStreamTerminalCompleteness,
+  type AnthropicEndpointAuthoritySnapshot,
+} from "./anthropic-stream-terminal.js";
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
@@ -89,6 +103,12 @@ import {
   toClaudeCodeToolName,
   type AnthropicToolProjection,
 } from "./anthropic-tool-projection.js";
+import {
+  createAnthropicTransportAccounting,
+  inheritAnthropicTransportAccountingContext,
+  type AnthropicFallbackResolution,
+  type AnthropicTransportAccounting,
+} from "./anthropic-transport-accounting.js";
 import {
   applyAnthropicMessageDeltaUsage,
   applyAnthropicMessageStartUsage,
@@ -262,47 +282,139 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
   "content_block_stop",
 ]);
 
+const ANTHROPIC_SSE_EVENT_BOUNDARY = /(?:\r\n|\r|\n)(?:\r\n|\r|\n)/gu;
+
+function trackAnthropicSseTail(
+  response: Response,
+  observeStructuralIncomplete: () => void,
+): Response {
+  if (!response.body) {
+    return response;
+  }
+  const decoder = new TextDecoder();
+  let pending = "";
+  const observeText = (text: string): void => {
+    pending += text;
+    let boundaryEnd = 0;
+    for (const match of pending.matchAll(ANTHROPIC_SSE_EVENT_BOUNDARY)) {
+      boundaryEnd = (match.index ?? 0) + match[0].length;
+    }
+    if (boundaryEnd > 0) {
+      pending = pending.slice(boundaryEnd);
+    }
+  };
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        observeText(decoder.decode(chunk, { stream: true }));
+        controller.enqueue(chunk);
+      },
+      flush() {
+        observeText(decoder.decode());
+        if (anthropicSseTailHasModelFragment(pending)) {
+          observeStructuralIncomplete();
+        }
+      },
+    }),
+  );
+  return new Response(body, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
 async function* iterateAnthropicEvents(
   response: Response,
-  requireMessageStop = false,
+  terminal: {
+    observeMessageStop: () => void;
+    observeStandaloneDone: () => void;
+    observeStructuralIncomplete: () => void;
+  },
 ): AsyncGenerator<RawMessageStreamEvent> {
   if (!response.body) {
     throw new Error("Attempted to iterate over an Anthropic response with no body");
   }
 
-  let sawMessageStart = false;
-  let sawMessageEnd = false;
-
-  for await (const sse of Stream.rawEvents(response)) {
-    if (sse.event === "error") {
-      throw new Error(sse.data);
-    }
-
-    if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
-      continue;
-    }
-
-    try {
-      const event = parseJsonWithRepair(sse.data) as RawMessageStreamEvent;
-      if (event.type === "message_start") {
-        sawMessageStart = true;
-      } else if (event.type === "message_stop") {
-        sawMessageEnd = true;
+  const events = Stream.rawEvents(
+    trackAnthropicSseTail(response, terminal.observeStructuralIncomplete),
+  )[Symbol.asyncIterator]();
+  let completed = false;
+  try {
+    while (true) {
+      const next = await events.next();
+      if (next.done) {
+        completed = true;
+        return;
       }
-      yield event;
-    } catch (error) {
-      // Frame payloads carry model output, so surface the shared malformed-fragment
-      // error instead of echoing them. The SyntaxError stays reachable on `cause`.
-      if (error instanceof SyntaxError) {
-        throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
+      const sse = next.value;
+      if (sse.event === "error") {
+        throw new Error(sse.data);
       }
-      throw error;
+      if (sse.event === null && sse.data.trim() === "[DONE]") {
+        terminal.observeStandaloneDone();
+        return;
+      }
+      if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
+        if (classifyUnknownAnthropicSseFrame(sse.data, JSON.parse) === "model_event") {
+          terminal.observeStructuralIncomplete();
+        }
+        continue;
+      }
+      try {
+        const event = parseJsonWithRepair(sse.data) as RawMessageStreamEvent;
+        if (event.type !== sse.event) {
+          terminal.observeStructuralIncomplete();
+          continue;
+        }
+        if (event.type === "message_stop") {
+          terminal.observeMessageStop();
+        }
+        yield event;
+      } catch (error) {
+        // Frame payloads carry model output, so surface the shared malformed-fragment
+        // error instead of echoing them. The SyntaxError stays reachable on `cause`.
+        if (error instanceof SyntaxError) {
+          throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
+        }
+        throw error;
+      }
+    }
+  } finally {
+    if (!completed) {
+      try {
+        await events.return?.();
+      } catch {
+        // Stream cleanup is best-effort and must not override terminal authority.
+      }
     }
   }
+}
 
-  if ((sawMessageStart || requireMessageStop) && !sawMessageEnd) {
-    throw new Error("Anthropic stream ended before message_stop");
+function applyAnthropicFallbackResolution(params: {
+  model: Model<"anthropic-messages">;
+  output: AssistantMessage;
+  resolution: AnthropicFallbackResolution;
+}): Model<"anthropic-messages"> {
+  for (const transition of params.resolution.productTransitions) {
+    applyAnthropicFallbackServingModel({
+      output: params.output,
+      boundary: transition,
+      provider: params.model.provider,
+    });
   }
+  const servingModel =
+    params.resolution.servingModel ?? params.resolution.productTransitions.at(-1)?.toModel ?? null;
+  const costModel = {
+    ...params.model,
+    cost: resolveAnthropicFallbackServingModelCost({
+      requestedModelId: params.model.id,
+      servingModelId: servingModel,
+      requestedCost: params.model.cost,
+    }),
+  };
+  calculateCost(costModel, params.output.usage);
+  return costModel;
 }
 
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOptions> = (
@@ -344,10 +456,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
     // swaps this to the fallback model's cost table.
     let costModel = model;
     let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
+    let transportAccounting: AnthropicTransportAccounting | undefined;
+    const effectiveMaxRetries = requestOptions?.maxRetries ?? 0;
+    let getEndpointAuthority: (() => AnthropicEndpointAuthoritySnapshot) | undefined;
 
     try {
       let client: Anthropic;
       let isOAuth: boolean;
+      let observeProvisionalEndpoint = () => {};
       // The beta-gated fallbacks param may only ship on clients we built,
       // where the matching beta header is guaranteed; injected clients carry
       // caller-owned headers.
@@ -356,8 +472,27 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       if (requestOptions?.client) {
         client = requestOptions.client;
         isOAuth = false;
+        transportAccounting = createAnthropicTransportAccounting({
+          fallbackBoundaryAuthority: "client_provisional",
+          maxRetries: effectiveMaxRetries,
+          model,
+          options: requestOptions,
+          serverFallbackEnabled: false,
+        });
+        const resolveProviderEndpoint = snapshotProviderEndpointResolver();
+        const endpointAuthority = createAnthropicEndpointAuthority({
+          provider: model.provider,
+          resolveEndpointClass: (url) => resolveProviderEndpoint(url).endpointClass,
+        });
+        observeProvisionalEndpoint = () =>
+          endpointAuthority.observeProvisional(client.baseURL ?? model.baseUrl);
+        getEndpointAuthority = () => endpointAuthority.snapshot();
       } else {
         const apiKey = requestOptions?.apiKey ?? getEnvApiKey(model.provider) ?? "";
+        const effectiveModel = {
+          ...model,
+          baseUrl: resolveAnthropicSdkBaseUrl(model.baseUrl),
+        };
 
         let copilotDynamicHeaders: Record<string, string> | undefined;
         if (model.provider === "github-copilot") {
@@ -371,8 +506,21 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         const cacheRetention = requestOptions?.cacheRetention ?? resolveCacheRetention();
         const cacheSessionId = cacheRetention === "none" ? undefined : requestOptions?.sessionId;
 
-        const created = createClient(
+        serverSideFallback =
+          !isOAuthToken(apiKey) &&
+          supportsAnthropicServerSideFallback(effectiveModel) &&
+          canGuardAnthropicServerFallbackDispatch();
+        transportAccounting = createAnthropicTransportAccounting({
+          fallbackBoundaryAuthority: serverSideFallback
+            ? "server_authoritative"
+            : "client_provisional",
+          maxRetries: effectiveMaxRetries,
           model,
+          options: requestOptions,
+          serverFallbackEnabled: serverSideFallback,
+        });
+        const created = createClient(
+          effectiveModel,
           apiKey,
           requestOptions?.thinkingEnabled === true,
           requestOptions?.interleavedThinking ?? true,
@@ -380,10 +528,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           requestOptions?.headers,
           copilotDynamicHeaders,
           cacheSessionId,
+          serverSideFallback,
+          requestOptions?.requestId ? transportAccounting : undefined,
         );
         client = created.client;
         isOAuth = created.isOAuthToken;
         serverSideFallback = created.serverSideFallback;
+        getEndpointAuthority = created.getEndpointAuthority;
       }
       const builtParams = await buildParams(
         model,
@@ -399,14 +550,24 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         params = nextParams as MessageCreateParamsStreaming;
       }
       applyClaudeRequestContract(params as unknown as Record<string, unknown>, model);
+      assertAnthropicServerFallbackPayloadAuthorized({
+        authorized: serverSideFallback,
+        payload: params,
+      });
+      transportAccounting?.observeFinalRequestPayload(params);
+      observeProvisionalEndpoint();
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
-        maxRetries: requestOptions?.maxRetries ?? 0,
+        maxRetries: effectiveMaxRetries,
       };
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
         .asResponse();
+      const endpointAuthority = getEndpointAuthority();
+      if (endpointAuthority.traceState !== "exact") {
+        transportAccounting?.observeSemanticCoverage("transport_endpoint_authority_partial");
+      }
       await requestOptions?.onResponse?.(
         { status: response.status, headers: headersToRecord(response.headers) },
         model,
@@ -417,9 +578,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       };
       const blocks = output.content as Block[];
       const blockIndexes = new Map<number, number>();
+      const terminalCompleteness = createAnthropicStreamTerminalCompleteness({
+        requireMessageStop: endpointAuthority.requiresMessageStop || refusalBuffer !== undefined,
+      });
 
-      for await (const event of iterateAnthropicEvents(response, refusalBuffer !== undefined)) {
+      for await (const event of iterateAnthropicEvents(response, terminalCompleteness)) {
         if (event.type === "message_start") {
+          terminalCompleteness.observeMessageStart();
           output.responseId = event.message.id;
           output.responseModel = event.message.model;
           messageStartPromptUsage = applyAnthropicMessageStartUsage(
@@ -433,9 +598,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           // and allowing the thinking-block recovery retry to fire.
           eventSink.push({ type: "start", partial: output });
         } else if (event.type === "content_block_start") {
+          terminalCompleteness.observeContentBlockStart(event.index);
           const fallbackBoundary = refusalBuffer
             ? readAnthropicFallbackBoundary(event.content_block)
             : null;
+          if (!fallbackBoundary) {
+            transportAccounting.observeFallbackContent();
+          }
           if (fallbackBoundary) {
             // Server-side fallback boundary: pre-boundary thinking/tool blocks
             // must not replay or execute, and the buffered preview events
@@ -443,23 +612,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             // surviving text prefix the fallback model continued from.
             refusalBuffer?.discard();
             blockIndexes.clear();
-            applyAnthropicFallbackBoundary({
-              output,
-              boundary: fallbackBoundary,
-              provider: model.provider,
-            });
-            // Cost intentionally mirrors top-level usage (serving attempt at
-            // serving-model rates). A mid-stream decline's billed partial is
-            // only in usage.iterations and is not folded in here.
-            costModel = {
-              ...model,
-              cost: resolveAnthropicFallbackServingModelCost({
-                requestedModelId: model.id,
-                servingModelId: fallbackBoundary.toModel,
-                requestedCost: model.cost,
-              }),
-            };
-            calculateCost(costModel, output.usage);
+            applyAnthropicFallbackContentBoundary(output);
+            transportAccounting.observeFallbackBoundary(fallbackBoundary);
             eventSink.push({ type: "start", partial: output });
             for (const [i, block] of blocks.entries()) {
               if (block.type !== "text") {
@@ -544,6 +698,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             });
           }
         } else if (event.type === "content_block_delta") {
+          terminalCompleteness.observeContentBlockDelta(event.index);
           if (event.delta.type === "text_delta") {
             const index = blockIndexes.get(event.index);
             const block = index === undefined ? undefined : blocks[index];
@@ -590,6 +745,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             }
           }
         } else if (event.type === "content_block_stop") {
+          terminalCompleteness.observeContentBlockStop(event.index);
           const index = blockIndexes.get(event.index);
           const block = index === undefined ? undefined : blocks[index];
           if (index !== undefined && block) {
@@ -623,34 +779,74 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             }
           }
         } else if (event.type === "message_delta") {
+          terminalCompleteness.observeMessageDelta();
           if (event.delta.stop_reason) {
             if (event.delta.stop_reason === "refusal") {
               applyAnthropicRefusal(output, event.delta.stop_details, model.provider);
             } else {
               output.stopReason = mapAnthropicStopReason(event.delta.stop_reason);
             }
+            terminalCompleteness.observeMappedStopReason(event.delta.stop_reason);
           }
           // Only update usage fields if present (not null).
           // Preserves input_tokens from message_start when proxies omit it in message_delta.
           if (event.usage) {
             applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
           }
+          transportAccounting?.observeTerminalUsage(event.usage);
           calculateCost(costModel, output.usage);
         }
+      }
+      if (
+        blockIndexes.size > 0 ||
+        blocks.some(
+          (block) => block.type === "toolCall" && Object.hasOwn(block as object, "partialJson"),
+        )
+      ) {
+        terminalCompleteness.observeStructuralIncomplete();
+      }
+      const terminalEvidence = terminalCompleteness.assertComplete();
+      if (terminalEvidence.state === "unverified") {
+        transportAccounting?.observeSemanticCoverage("transport_terminal_unverified");
       }
 
       if (requestOptions?.signal?.aborted) {
         throw transportAbortError(requestOptions.signal);
       }
 
-      if (output.stopReason === "aborted" || output.stopReason === "error") {
-        throw new Error(output.errorMessage ?? "An unknown error occurred");
+      const terminalError =
+        output.stopReason === "aborted" || output.stopReason === "error"
+          ? new Error(output.errorMessage ?? "An unknown error occurred")
+          : undefined;
+      const fallbackResolution = terminalError
+        ? transportAccounting?.completeFailure(terminalError)
+        : transportAccounting?.completeSuccess();
+      if (fallbackResolution) {
+        costModel = applyAnthropicFallbackResolution({
+          model,
+          output,
+          resolution: fallbackResolution,
+        });
       }
-
+      if (terminalError) {
+        throw terminalError;
+      }
       refusalBuffer?.flush();
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      const endpointAuthority = getEndpointAuthority?.();
+      if (transportAccounting && (!endpointAuthority || endpointAuthority.traceState !== "exact")) {
+        transportAccounting?.observeSemanticCoverage("transport_endpoint_authority_partial");
+      }
+      const failureResolution = transportAccounting?.fail(error);
+      if (failureResolution) {
+        costModel = applyAnthropicFallbackResolution({
+          model,
+          output,
+          resolution: failureResolution,
+        });
+      }
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // partialJson is only a streaming scratch buffer; never persist it.
@@ -710,11 +906,12 @@ export const streamSimpleAnthropic: StreamFunction<
     throw new Error(`No API key for provider: ${model.provider}`);
   }
 
-  const base = {
+  const base = inheritAnthropicTransportAccountingContext(options, {
     ...buildBaseOptions(model, options, apiKey),
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
+    requestId: options?.requestId,
     toolChoice: options?.toolChoice,
-  };
+  });
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
     return streamAnthropic(model, context, {
@@ -794,6 +991,14 @@ function isAnthropicPublicEndpoint(baseUrl: string | undefined): boolean {
   }
 }
 
+const DEFAULT_ANTHROPIC_SDK_BASE_URL = "https://api.anthropic.com";
+
+function resolveAnthropicSdkBaseUrl(baseUrl: string | undefined): string {
+  return (
+    baseUrl?.trim() || process.env.ANTHROPIC_BASE_URL?.trim() || DEFAULT_ANTHROPIC_SDK_BASE_URL
+  );
+}
+
 /**
  * Server-side refusal fallback is a first-party Claude API beta: proxies and
  * Bedrock/Vertex/Foundry reject the `fallbacks` param, and OAuth (Claude Code
@@ -819,7 +1024,14 @@ function createClient(
   optionsHeaders?: Record<string, string>,
   dynamicHeaders?: Record<string, string>,
   sessionId?: string,
-): { client: Anthropic; isOAuthToken: boolean; serverSideFallback: boolean } {
+  serverSideFallback = false,
+  transportAccounting?: AnthropicTransportAccounting,
+): {
+  client: Anthropic;
+  getEndpointAuthority: () => AnthropicEndpointAuthoritySnapshot;
+  isOAuthToken: boolean;
+  serverSideFallback: boolean;
+} {
   // Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
   // The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
   const needsInterleavedBeta = interleavedThinking && !supportsClaudeAdaptiveThinking(model);
@@ -830,12 +1042,23 @@ function createClient(
   if (needsInterleavedBeta) {
     betaFeatures.push(INTERLEAVED_THINKING_BETA);
   }
-  const fetchOptions =
-    /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled
-      ? { sanitizeSse: false as const }
-      : undefined;
   // Anthropic supports custom fetch, so sentinels stay opaque until guarded egress.
-  const fetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
+  const guardedFetch = buildAnthropicGuardedFetch({
+    model,
+    sanitizeSse: /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled ? false : undefined,
+    serverSideFallback,
+    transportAccounting,
+  });
+  const finishClient = (
+    client: Anthropic,
+    isOAuthTokenResult: boolean,
+    fallbackEnabled: boolean,
+  ) => ({
+    client,
+    getEndpointAuthority: guardedFetch.getEndpointAuthority,
+    isOAuthToken: isOAuthTokenResult,
+    serverSideFallback: fallbackEnabled,
+  });
 
   if (model.provider === "cloudflare-ai-gateway") {
     const client = new Anthropic({
@@ -853,10 +1076,10 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
-      fetch,
+      fetch: guardedFetch.fetch,
     });
 
-    return { client, isOAuthToken: false, serverSideFallback: false };
+    return finishClient(client, false, false);
   }
 
   // Copilot: Bearer auth, selective betas.
@@ -876,10 +1099,10 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
-      fetch,
+      fetch: guardedFetch.fetch,
     });
 
-    return { client, isOAuthToken: false, serverSideFallback: false };
+    return finishClient(client, false, false);
   }
 
   if (
@@ -903,10 +1126,10 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
-      fetch,
+      fetch: guardedFetch.fetch,
     });
 
-    return { client, isOAuthToken: false, serverSideFallback: false };
+    return finishClient(client, false, false);
   }
 
   // OAuth: Bearer auth, Claude Code identity headers
@@ -927,14 +1150,13 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
-      fetch,
+      fetch: guardedFetch.fetch,
     });
 
-    return { client, isOAuthToken: true, serverSideFallback: false };
+    return finishClient(client, true, false);
   }
 
   // API key auth
-  const serverSideFallback = supportsAnthropicServerSideFallback(model);
   if (serverSideFallback) {
     betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
   }
@@ -957,10 +1179,10 @@ function createClient(
       model.headers,
       optionsHeaders,
     ),
-    fetch,
+    fetch: guardedFetch.fetch,
   });
 
-  return { client, isOAuthToken: false, serverSideFallback };
+  return finishClient(client, false, serverSideFallback);
 }
 
 async function buildParams(
