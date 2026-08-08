@@ -20,6 +20,7 @@ import {
 import {
   dismissSubagentCompletionDelivery,
   resolveCorrelatedSubagentDelivery,
+  retryExpirySuspendedSubagentCompletionsForRequester,
   retrySubagentCompletionDelivery,
 } from "./subagent-completion-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -120,6 +121,38 @@ describe("atomic subagent completion admission store", () => {
     database.db.exec(
       "DELETE FROM delivery_queue_entries; DELETE FROM subagent_runs; DELETE FROM task_runs;",
     );
+  }
+
+  function persistSuspendedCompletion(params: {
+    suffix: string;
+    requesterSessionKey: string;
+    suspendedReason: "expiry" | "permanent_failure";
+  }) {
+    ensureTaskRegistryReady();
+    const input = records();
+    input.task.taskId = `task-${params.suffix}`;
+    input.task.runId = `task-run-${params.suffix}`;
+    input.task.requesterSessionKey = params.requesterSessionKey;
+    input.task.ownerKey = params.requesterSessionKey;
+    input.task.childSessionKey = `agent:main:subagent:${params.suffix}`;
+    input.task.deliveryStatus = "failed";
+    input.task.terminalOutcome = "blocked";
+    input.subagent.runId = `completion-run-${params.suffix}`;
+    input.subagent.taskRunId = input.task.runId;
+    input.subagent.requesterSessionKey = params.requesterSessionKey;
+    input.subagent.requesterDisplayKey = params.requesterSessionKey;
+    input.subagent.childSessionKey = input.task.childSessionKey;
+    input.subagent.delivery = {
+      status: "suspended",
+      disposition: "permanent_failure",
+      generation: 1,
+      suspendedAt: Date.now(),
+      suspendedReason: params.suspendedReason,
+    };
+    settleSubagentCompletionDelivery({ ...input, databaseOptions: { database } });
+    subagentRuns.set(input.subagent.runId, input.subagent);
+    publishTaskRecordAfterAtomicStore(input.task);
+    return input;
   }
 
   it.each(["queue", "subagent", "task"] as const)(
@@ -400,6 +433,49 @@ describe("atomic subagent completion admission store", () => {
         terminalOutcome: "blocked",
         progressSummary: "canonical result",
       });
+    });
+  });
+
+  it("redrives only matching expiry-suspended successful completions", async () => {
+    const matching = persistSuspendedCompletion({
+      suffix: "matching-expiry",
+      requesterSessionKey: "agent:main:main",
+      suspendedReason: "expiry",
+    });
+    const otherRequester = persistSuspendedCompletion({
+      suffix: "other-requester",
+      requesterSessionKey: "agent:main:other",
+      suspendedReason: "expiry",
+    });
+    const permanentFailure = persistSuspendedCompletion({
+      suffix: "permanent-failure",
+      requesterSessionKey: "agent:main:main",
+      suspendedReason: "permanent_failure",
+    });
+    resumeSubagentRun.mockClear();
+
+    await expect(
+      retryExpirySuspendedSubagentCompletionsForRequester("agent:main:main", { database }),
+    ).resolves.toEqual({ matched: 1, retried: 1 });
+
+    expect(resumeSubagentRun).toHaveBeenCalledTimes(1);
+    expect(resumeSubagentRun).toHaveBeenCalledWith(matching.subagent.runId);
+    expect(subagentRuns.get(matching.subagent.runId)?.delivery).toMatchObject({
+      status: "pending",
+      disposition: "retryable",
+      generation: 2,
+      attemptCount: 0,
+    });
+    expect(subagentRuns.get(matching.subagent.runId)?.completion?.resultText).toBe(
+      "canonical result",
+    );
+    expect(subagentRuns.get(otherRequester.subagent.runId)?.delivery).toMatchObject({
+      status: "suspended",
+      generation: 1,
+    });
+    expect(subagentRuns.get(permanentFailure.subagent.runId)?.delivery).toMatchObject({
+      status: "suspended",
+      generation: 1,
     });
   });
 });

@@ -417,16 +417,17 @@ process.stdout.write(JSON.stringify({
 }) + "\\n");`);
       const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
       const calls: Array<{ method: string; params: unknown }> = [];
+      const env = { ...process.env, [descriptorEnv]: "3" } as Record<string, string>;
+      delete env.ANTHROPIC_API_KEY;
+      delete env.CLAUDE_CODE_OAUTH_TOKEN;
+      delete env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB;
       const result = await runClaudeCliNodeCommand({
         client: client(calls),
         frame: frame(request),
         request,
         argv: [executable, ...request.argv],
         cwd: undefined,
-        env: {
-          ...process.env,
-          [descriptorEnv]: "3",
-        } as Record<string, string>,
+        env,
         secretInput: {
           fd: 3,
           createData: () => Buffer.from("selected-node-secret"),

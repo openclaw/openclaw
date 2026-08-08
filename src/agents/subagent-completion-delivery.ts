@@ -309,6 +309,50 @@ export async function retrySubagentCompletionDelivery(
   return { ok: true, task: getTaskById(taskId), duplicateRisk: true };
 }
 
+/** Redrives successful completion deliveries that expired behind a requester session lock. */
+export async function retryExpirySuspendedSubagentCompletionsForRequester(
+  requesterSessionKey: string,
+  databaseOptions?: OpenClawStateDatabaseOptions,
+): Promise<{ matched: number; retried: number }> {
+  const normalizedRequesterSessionKey = requesterSessionKey.trim();
+  if (!normalizedRequesterSessionKey) {
+    return { matched: 0, retried: 0 };
+  }
+  const taskIds = new Set<string>();
+  for (const entry of subagentRuns.values()) {
+    if (
+      entry.requesterSessionKey !== normalizedRequesterSessionKey ||
+      entry.expectsCompletionMessage !== true ||
+      entry.execution.outcome?.status !== "ok" ||
+      entry.delivery?.status !== "suspended" ||
+      entry.delivery.suspendedReason !== "expiry"
+    ) {
+      continue;
+    }
+    const task = resolveTask(entry);
+    if (task?.runtime === "subagent") {
+      taskIds.add(task.taskId);
+    }
+  }
+
+  let retried = 0;
+  const failures: unknown[] = [];
+  for (const taskId of taskIds) {
+    try {
+      const result = await retrySubagentCompletionDelivery(taskId, databaseOptions);
+      if (result.ok) {
+        retried += 1;
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "failed to redrive suspended subagent completions");
+  }
+  return { matched: taskIds.size, retried };
+}
+
 export function dismissSubagentCompletionDelivery(taskId: string): {
   ok: boolean;
   reason?: string;
