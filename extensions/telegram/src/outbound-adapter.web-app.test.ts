@@ -22,7 +22,7 @@ describe("Telegram outbound web app presentation", () => {
       const rendered = await telegramOutbound.renderPresentation?.({
         payload: { text: "Open app:" },
         presentation: webAppPresentation,
-        ctx: { to } as never,
+        ctx: { to, cfg: {} } as never,
       });
 
       expect(rendered).toEqual({
