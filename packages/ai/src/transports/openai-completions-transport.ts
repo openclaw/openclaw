@@ -2031,6 +2031,12 @@ export function buildOpenAICompletionsParams(
     }
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
+  // An explicit "off"/"none" request must fully suppress reasoning_effort/reasoning
+  // below -- without this, a model configured with reasoning: true always emits a
+  // resolved effort value (defaulting to "high") regardless of the requested level.
+  const completionsReasoningEnabled = isOpenAICompletionsThinkingEnabled(
+    completionsReasoningEffort,
+  );
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort
     ? resolveOpenAIReasoningEffortForModel({
         model,
@@ -2067,7 +2073,8 @@ export function buildOpenAICompletionsParams(
   } else if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
-    resolvedCompletionsReasoningEffort
+    resolvedCompletionsReasoningEffort &&
+    completionsReasoningEnabled
   ) {
     params.reasoning = {
       effort: resolvedCompletionsReasoningEffort,
@@ -2077,7 +2084,8 @@ export function buildOpenAICompletionsParams(
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
-    !omitChatCompletionsToolReasoningEffort
+    !omitChatCompletionsToolReasoningEffort &&
+    completionsReasoningEnabled
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;
   }
