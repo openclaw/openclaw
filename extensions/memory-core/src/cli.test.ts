@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
@@ -149,6 +153,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
   process.exitCode = undefined;
   setVerbose(false);
 });
@@ -513,6 +519,153 @@ describe("memory cli", () => {
     expectLogged(log, "FTS: ready");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
     expect(close).toHaveBeenCalled();
+  });
+
+  it("counts the canonical SQLite session corpus in overall and per-source status totals", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const stateDir = path.join(workspaceDir, "state");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Memory\n", "utf-8");
+
+      const agentId = "main";
+      const sessionsDir = resolveTestSessionTranscriptsDirForAgent(agentId);
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionId = "sqlite-status";
+      const sessionKey = `agent:${agentId}:chat:${sessionId}`;
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await upsertSessionEntry({
+        agentId,
+        sessionKey,
+        storePath,
+        entry: { sessionId, updatedAt: 1 },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        agentId,
+        sessionId,
+        sessionKey,
+        storePath,
+        message: { role: "user", content: "SQLite-only status transcript" },
+      });
+      await fs.writeFile(
+        path.join(sessionsDir, `${sessionId}.jsonl.reset.2026-08-05T00-00-00.000Z`),
+        "",
+      );
+      await fs.writeFile(
+        path.join(sessionsDir, `${sessionId}.jsonl.deleted.2026-08-05T00-01-00.000Z`),
+        "",
+      );
+      await expectPathMissing(path.join(sessionsDir, `${sessionId}.jsonl`));
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () =>
+          makeMemoryStatus({
+            files: 4,
+            chunks: 8,
+            workspaceDir,
+            sources: ["memory", "sessions"],
+            sourceCounts: [
+              { source: "memory", files: 1, chunks: 2 },
+              { source: "sessions", files: 3, chunks: 6 },
+            ],
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expectLogged(log, "Indexed: 4/4 files · 8 chunks");
+      expectLogged(log, "memory · 1/1 files · 2 chunks");
+      expectLogged(log, "sessions · 3/3 files · 6 chunks");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("keeps a missing sessions-directory diagnostic while counting a configured SQLite store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const stateDir = path.join(workspaceDir, "state");
+      const storePath = path.join(workspaceDir, "configured-sessions", "sessions.json");
+      const configPath = path.join(workspaceDir, "openclaw.json");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }));
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+
+      const agentId = "main";
+      const sessionId = "configured-status";
+      const sessionKey = `agent:${agentId}:chat:${sessionId}`;
+      await upsertSessionEntry({
+        agentId,
+        sessionKey,
+        storePath,
+        entry: { sessionId, updatedAt: 1 },
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        agentId,
+        sessionId,
+        sessionKey,
+        storePath,
+        message: { role: "user", content: "Configured SQLite status transcript" },
+      });
+      const sessionsDir = resolveTestSessionTranscriptsDirForAgent(agentId);
+      await expectPathMissing(sessionsDir);
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () =>
+          makeMemoryStatus({
+            files: 1,
+            chunks: 1,
+            workspaceDir,
+            sources: ["sessions"],
+            sourceCounts: [{ source: "sessions", files: 1, chunks: 1 }],
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expectLogged(log, "Indexed: 1/1 files · 1 chunks");
+      expectLogged(log, "sessions · 1/1 files · 1 chunks");
+      expectLogged(log, "sessions directory missing (");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("keeps inaccessible session directories as an unknown status total", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
+      vi.spyOn(fs, "readdir").mockRejectedValueOnce(
+        Object.assign(new Error("permission denied"), { code: "EACCES" }),
+      );
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () =>
+          makeMemoryStatus({
+            files: 1,
+            chunks: 1,
+            workspaceDir,
+            sources: ["sessions"],
+            sourceCounts: [{ source: "sessions", files: 1, chunks: 1 }],
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expectLogged(log, "Indexed: 1/? files · 1 chunks");
+      expectLogged(log, "sessions · 1/? files · 1 chunks");
+      expectLogged(log, "sessions directory not accessible (");
+      expectLogged(log, "EACCES");
+      expect(close).toHaveBeenCalled();
+    });
   });
 
   it("still aborts status when its own memory SecretRef cannot be resolved", async () => {

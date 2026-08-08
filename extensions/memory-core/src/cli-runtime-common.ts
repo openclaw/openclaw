@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
-import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -246,22 +246,20 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   const issues: string[] = [];
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
-    const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-    const totalFiles = entries.filter(
-      (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
-    ).length;
-    return { source: "sessions", totalFiles, issues };
+    await fs.readdir(sessionsDir);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
       issues.push(`sessions directory missing (${shortenHomePath(sessionsDir)})`);
-      return { source: "sessions", totalFiles: 0, issues };
+    } else {
+      issues.push(
+        `sessions directory not accessible (${shortenHomePath(sessionsDir)}): ${code ?? "error"}`,
+      );
+      return { source: "sessions", totalFiles: null, issues };
     }
-    issues.push(
-      `sessions directory not accessible (${shortenHomePath(sessionsDir)}): ${code ?? "error"}`,
-    );
-    return { source: "sessions", totalFiles: null, issues };
   }
+  const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(agentId);
+  return { source: "sessions", totalFiles: corpusEntries.length, issues };
 }
 async function scanMemoryFiles(
   workspaceDir: string,
