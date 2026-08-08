@@ -461,7 +461,7 @@ describe("Bedrock stop reasons", () => {
 describe("Bedrock thinking effort mapping", () => {
   it.each([
     { reasoning: undefined, expected: "high", maxTokens: 128_000, fields: true },
-    { reasoning: "off" as const, expected: "off", maxTokens: undefined, fields: false },
+    { reasoning: "off" as const, expected: "off", maxTokens: 128_000, fields: false },
   ])(
     "uses the Opus 5 default for reasoning=$reasoning",
     ({ reasoning, expected, maxTokens, fields }) => {
@@ -486,6 +486,19 @@ describe("Bedrock thinking effort mapping", () => {
       );
     },
   );
+
+  it("does not forward the model cap for non-Opus reasoning-off requests", () => {
+    const model = bedrockModel({
+      id: "anthropic.claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      reasoning: true,
+      maxTokens: 128_000,
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "off" });
+
+    expect(options).toMatchObject({ reasoning: "off" });
+    expect(options.maxTokens).toBeUndefined();
+  });
 
   it.each([
     { reasoning: undefined, expected: "high" },
