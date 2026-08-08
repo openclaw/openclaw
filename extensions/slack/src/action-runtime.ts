@@ -353,7 +353,6 @@ async function assertSlackReadTargetAllowed(params: {
   account: ResolvedSlackAccount;
   cfg: OpenClawConfig;
   channelId: string;
-  routingTarget?: string;
   teamId?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   context?: SlackActionContext;
@@ -363,7 +362,9 @@ async function assertSlackReadTargetAllowed(params: {
   };
   const currentConversation = isCurrentSlackReadTarget({
     account: params.account,
-    target: params.routingTarget ?? params.channelId,
+    target: params.teamId
+      ? formatSlackTeamTarget({ teamId: params.teamId, kind: "channel", id: params.channelId })
+      : params.channelId,
     context: params.context,
   });
   const directOperator = params.conversationReadOrigin === "direct-operator";
@@ -479,7 +480,6 @@ function isSlackGroupDmTargetConfigured(account: ResolvedSlackAccount, channelId
 
 type SlackActionChannelTarget = {
   channelId: string;
-  routingTarget: string;
   teamId?: string;
 };
 
@@ -545,7 +545,6 @@ function resolveSlackActionChannelTarget(
   const channelId = resolveSlackChannelId(raw);
   return {
     channelId,
-    routingTarget: resolved.routingTarget,
     ...(resolved.teamId ? { teamId: resolved.teamId } : {}),
   };
 }
@@ -586,15 +585,12 @@ export async function handleSlackAction(
 
   const readOpts = buildActionOpts("read");
   const writeOpts = buildActionOpts("write");
-  const assertReadTargetAllowed = async (target: string | SlackActionChannelTarget) => {
-    const resolved =
-      typeof target === "string" ? { channelId: target, routingTarget: target } : target;
+  const assertReadTargetAllowed = async (target: SlackActionChannelTarget) => {
     await assertSlackReadTargetAllowed({
       account,
       cfg,
-      channelId: resolved.channelId,
-      routingTarget: resolved.routingTarget,
-      ...(resolved.teamId ? { teamId: resolved.teamId } : {}),
+      channelId: target.channelId,
+      ...(target.teamId ? { teamId: target.teamId } : {}),
       conversationReadOrigin: context?.conversationReadOrigin,
       context,
     });
