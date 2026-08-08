@@ -1075,6 +1075,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     source: "app_mention" | "message";
     mentionType: "explicit" | "implicit" | "regex";
     bindingOwner: "none" | "plugin" | "runtime";
+    enterpriseTeamId?: string;
     expectRootMentioned?: boolean;
     expectFollowUpMentioned?: boolean;
   };
@@ -1197,9 +1198,22 @@ describe("slack prepareSlackMessage inbound contract", () => {
         opts: {
           source: scenario.source,
           ...(scenario.source === "app_mention" ? { wasMentioned: true } : {}),
+          ...(scenario.enterpriseTeamId
+            ? {
+                eventScope: {
+                  apiAppId: "A_ENTERPRISE",
+                  enterpriseId: "E_ENTERPRISE",
+                  isEnterpriseInstall: true,
+                  teamId: scenario.enterpriseTeamId,
+                  client: slackCtx.app.client,
+                },
+              }
+            : {}),
         },
       });
-      recordSlackThreadParticipation("default", channelId, rootTs);
+      recordSlackThreadParticipation("default", channelId, rootTs, {
+        ...(scenario.enterpriseTeamId ? { teamId: scenario.enterpriseTeamId } : {}),
+      });
       const followUp = await prepareSlackMessage({
         ctx: slackCtx,
         account,
@@ -1212,7 +1226,20 @@ describe("slack prepareSlackMessage inbound contract", () => {
           ts: "1777244714.000100",
           thread_ts: rootTs,
         } as SlackMessageEvent,
-        opts: { source: "message" },
+        opts: {
+          source: "message",
+          ...(scenario.enterpriseTeamId
+            ? {
+                eventScope: {
+                  apiAppId: "A_ENTERPRISE",
+                  enterpriseId: "E_ENTERPRISE",
+                  isEnterpriseInstall: true,
+                  teamId: scenario.enterpriseTeamId,
+                  client: slackCtx.app.client,
+                },
+              }
+            : {}),
+        },
       });
       const expectedAgentId =
         scenario.bindingOwner === "runtime"
@@ -3677,6 +3704,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       source: "app_mention",
       mentionType: "explicit",
       bindingOwner: "none",
+      expectFollowUpMentioned: true,
+    },
+    {
+      name: "keeps a Grid root app mention and unmentioned thread follow-up on one parent session",
+      source: "app_mention",
+      mentionType: "explicit",
+      bindingOwner: "none",
+      enterpriseTeamId: "T_ENTERPRISE",
       expectFollowUpMentioned: true,
     },
     {
