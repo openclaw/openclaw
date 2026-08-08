@@ -2893,6 +2893,24 @@ describe("package artifact reuse", () => {
       candidate.name?.startsWith("Run ${{ matrix.label }}"),
     );
     expect(runCodexSuite?.if).toContain("steps.codex_compat.outputs.run_lane != 'false'");
+    const configureCodexSuite = workflowStep(providerSuites, "Configure suite-specific env");
+    expect(configureCodexSuite.run).toMatch(
+      /live-codex-harness-gpt56-oauth-smoke-docker\)[\s\S]*?OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth/u,
+    );
+    const oauthSmoke = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_docker_provider_suites",
+      "live-codex-harness-gpt56-oauth-smoke-docker",
+    );
+    expectTextToIncludeAll(oauthSmoke.command, [
+      "openai/gpt-5.6-sol=ultra",
+      "openai/gpt-5.6-terra=ultra",
+      "openai/gpt-5.6-luna=max",
+      "OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0",
+      "OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0",
+      "OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0",
+      "OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0",
+    ]);
     for (const [model, thinking] of [
       ["sol", "ultra"],
       ["terra", "ultra"],
@@ -2909,6 +2927,7 @@ describe("package artifact reuse", () => {
       "live-codex-harness-gpt56-sol-docker",
       "live-codex-harness-gpt56-terra-docker",
       "live-codex-harness-gpt56-luna-docker",
+      "live-codex-harness-gpt56-oauth-smoke-docker",
       "live-codex-harness-gpt56-docker",
     ]) {
       expect(workflow).toContain(`add_profile_suite ${suiteId} "stable full"`);

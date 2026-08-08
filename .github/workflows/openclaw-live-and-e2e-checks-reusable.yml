@@ -863,6 +863,7 @@ jobs:
               add_profile_suite live-codex-harness-gpt56-sol-docker "stable full"
               add_profile_suite live-codex-harness-gpt56-terra-docker "stable full"
               add_profile_suite live-codex-harness-gpt56-luna-docker "stable full"
+              add_profile_suite live-codex-harness-gpt56-oauth-smoke-docker "stable full"
               add_profile_suite live-codex-harness-gpt56-docker "stable full"
               add_profile_suite live-subagent-announce-docker "stable full"
 
@@ -3778,6 +3779,13 @@ jobs:
             timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
+          - suite_id: live-codex-harness-gpt56-oauth-smoke-docker
+            suite_group: live-codex-harness-gpt56-docker
+            label: Docker live Codex GPT-5.6 ChatGPT OAuth smoke
+            command: OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-sol=ultra,openai/gpt-5.6-terra=ultra,openai/gpt-5.6-luna=max OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh
+            timeout_minutes: 40
+            profile_env_only: false
+            profiles: stable full
           - suite_id: live-subagent-announce-docker
             label: Docker live subagent announce
             command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh
@@ -3942,6 +3950,15 @@ jobs:
                 echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
               fi
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
+              echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
+              echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
+              ;;
+            live-codex-harness-gpt56-oauth-smoke-docker)
+              # This smoke exercises every GPT-5.6 model through the managed Codex
+              # ChatGPT route. API-key lanes cannot detect version requirements
+              # enforced by chatgpt.com for individual models.
+              echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth" >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CODEX_HARNESS_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
               ;;
