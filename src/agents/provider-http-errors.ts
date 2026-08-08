@@ -12,7 +12,7 @@ import {
   readResponseWithLimit,
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
@@ -67,21 +67,25 @@ function redactProviderErrorBody(body: string): string {
 export async function readResponseTextLimited(
   response: Response,
   limitBytes = 16 * 1024,
-  options?: ReadResponseTextPrefixOptions,
+  options?: ReadResponseTextPrefixOptions & { exactSecretValues?: readonly string[] },
 ): Promise<string> {
   if (limitBytes <= 0) {
     return "";
   }
-  return (
-    await readResponseTextPrefix(response, limitBytes, {
-      chunkTimeoutMs: options?.chunkTimeoutMs ?? 10_000,
-      onIdleTimeout:
-        options?.onIdleTimeout ??
-        (({ chunkTimeoutMs }) => new Error(`error body read stalled for ${chunkTimeoutMs}ms`)),
-      timeoutMs: options?.timeoutMs,
-      onTimeout: options?.onTimeout,
-    })
-  ).text;
+  const result = await readResponseTextPrefix(response, limitBytes, {
+    chunkTimeoutMs: options?.chunkTimeoutMs ?? 10_000,
+    onIdleTimeout:
+      options?.onIdleTimeout ??
+      (({ chunkTimeoutMs }) => new Error(`error body read stalled for ${chunkTimeoutMs}ms`)),
+    timeoutMs: options?.timeoutMs,
+    onTimeout: options?.onTimeout,
+  });
+  return options?.exactSecretValues?.some(Boolean)
+    ? redactToolPayloadText(result.text, {
+        exactSecretValues: options.exactSecretValues,
+        sourceTruncated: result.truncated,
+      })
+    : result.text;
 }
 
 /** Reads a successful provider text response under a byte cap. */

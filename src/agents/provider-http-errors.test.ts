@@ -272,6 +272,41 @@ describe("provider error utils", () => {
     await expect(readResponseTextLimited(response, 3)).resolves.toBe("ab");
   });
 
+  it.each([8 * 1024, 64_000])(
+    "redacts raw, URL, and form secret prefixes crossing the %i-byte cap",
+    async (limitBytes) => {
+      const safeMarker = "provider unavailable: ";
+      const secret = "orchid/River+17=glass~Moth92cabin";
+      const variants = [
+        secret,
+        encodeURIComponent(secret).replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase()),
+        new URLSearchParams([["value", secret]])
+          .toString()
+          .slice("value=".length)
+          .replace(/%[0-9A-F]{2}/gu, (escape, offset: number) =>
+            offset % 2 === 0 ? escape.toLowerCase() : escape,
+          ),
+      ];
+
+      for (const reflected of variants) {
+        const retainedPrefix = reflected.slice(0, -5);
+        const paddingLength = limitBytes - safeMarker.length - retainedPrefix.length;
+        const response = new Response(
+          `${safeMarker}${"x".repeat(paddingLength)}${reflected} trailing provider text`,
+        );
+
+        const detail = await readResponseTextLimited(response, limitBytes, {
+          exactSecretValues: [secret],
+        });
+
+        expect(detail).toContain(safeMarker);
+        expect(detail.endsWith("***")).toBe(true);
+        expect(detail).not.toContain(retainedPrefix);
+        expect(detail).not.toContain(reflected);
+      }
+    },
+  );
+
   it("attaches structured provider error metadata", async () => {
     // API-key-like substrings must be redacted from stored error bodies.
     const response = new Response(

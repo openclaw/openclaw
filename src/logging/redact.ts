@@ -23,7 +23,10 @@ import {
   PAYMENT_CREDENTIAL_QUERY_KEYS,
   SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES,
 } from "./redact-patterns.js";
-import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
+import {
+  redactRegisteredSecretValues,
+  redactSuppliedSecretValues,
+} from "./secret-redaction-registry.js";
 
 export type RedactSensitiveMode = "off" | "tools";
 export type RedactPattern = string | RegExp;
@@ -130,6 +133,13 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
 export type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: RedactPattern[];
+};
+
+export type ToolPayloadRedactionOptions = {
+  /** Exact secret values to mask even when their field or header names are unknown. */
+  exactSecretValues?: readonly string[];
+  /** The supplied text ends at a byte cap that may split an exact secret representation. */
+  sourceTruncated?: boolean;
 };
 
 export type ResolvedRedactOptions = {
@@ -903,8 +913,13 @@ function resolveToolPayloadRedaction(
 // Forces tools-mode so UI/tool payloads never inherit a caller-supplied "off"
 // mode, and merges user `logging.redactPatterns` with the built-in defaults so
 // both apply.
-export function redactToolPayloadText(text: string): string {
-  return redactToolPayloadTextWithConfig(text, readLoggingConfig());
+export function redactToolPayloadText(text: string, options?: ToolPayloadRedactionOptions): string {
+  return redactToolPayloadTextWithConfig(
+    redactSuppliedSecretValues(text, options?.exactSecretValues, maskToken, {
+      sourceTruncated: options?.sourceTruncated,
+    }),
+    readLoggingConfig(),
+  );
 }
 
 export function redactToolPayloadTextWithConfig(

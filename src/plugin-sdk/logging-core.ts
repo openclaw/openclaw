@@ -19,5 +19,6 @@ export {
   redactSensitiveFieldValue,
   redactSensitiveText,
   redactToolPayloadText,
+  type ToolPayloadRedactionOptions,
 } from "../logging/redact.js";
 export { redactIdentifier } from "../logging/redact-identifier.js";

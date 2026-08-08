@@ -353,6 +353,34 @@ describe("ollama web search provider", () => {
     expectHostedRequest("cloud-config-secret");
   });
 
+  it("redacts a reflected hosted bearer credential from non-404 error detail", async () => {
+    const bearerCredential = "web-search-configured-bearer-secret";
+    const authorization = `Bearer ${bearerCredential}`;
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guardedResponse(
+        {
+          error: "rate limit exceeded",
+          authorizationEcho: authorization,
+          bearerEcho: bearerCredential,
+        },
+        { status: 429 },
+      ),
+    );
+
+    const error = await runOllamaWebSearch(
+      createOllamaConfig({ baseUrl: "https://ollama.com", apiKey: bearerCredential }),
+    ).catch((caught: unknown) => caught);
+    if (!(error instanceof Error)) {
+      throw new Error("expected Ollama web search error");
+    }
+
+    expectHostedRequest(bearerCredential);
+    expect(error.message).toContain("Ollama web search failed (429)");
+    expect(error.message).toContain("rate limit exceeded");
+    expect(error.message).not.toContain(authorization);
+    expect(error.message).not.toContain(bearerCredential);
+  });
+
   it("uses an env Ollama key only for the cloud fallback from a local host", async () => {
     await withEnvAsync({ OLLAMA_API_KEY: "cloud-secret" }, async () => {
       mockLocalMissesThenCloudSearch();

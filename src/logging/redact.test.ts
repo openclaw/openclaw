@@ -13,6 +13,7 @@ import {
   redactSensitiveLines,
   redactSensitiveText,
   redactToolDetail,
+  redactToolPayloadText,
   redactToolPayloadTextWithConfig,
   resolveRedactOptions,
 } from "./redact.js";
@@ -75,8 +76,27 @@ describe("registered exact secret values", () => {
     registerSecretValueForRedaction(secret);
 
     const encoded = encodeURIComponent(secret);
-    expect(redactSensitiveText(`url path ${encoded}`, { mode: "off" })).not.toContain(encoded);
+    const lowerEncoded = encoded.replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase());
+    const mixedEncoded = encoded.replace(/%[0-9A-F]{2}/gu, (escape, offset: number) =>
+      offset % 2 === 0 ? escape.toLowerCase() : escape,
+    );
+    for (const reflected of [encoded, lowerEncoded, mixedEncoded]) {
+      expect(redactSensitiveText(`url path ${reflected}`, { mode: "off" })).not.toContain(
+        reflected,
+      );
+    }
     expect(redactSensitiveText(`raw ${secret}`, { mode: "off" })).not.toContain(secret);
+  });
+
+  it("keeps raw values case-sensitive while scoping percent-escape case folding", () => {
+    registerSecretValueForRedaction("CaseSensitive%abValue");
+
+    expect(redactSensitiveText("casesensitive%abvalue", { mode: "off" })).toBe(
+      "casesensitive%abvalue",
+    );
+    expect(redactSensitiveText("CaseSensitive%ABValue", { mode: "off" })).toBe(
+      "CaseSensitive%ABValue",
+    );
   });
 
   it("masks JSON-escaped registered values", () => {
@@ -114,6 +134,101 @@ describe("registered exact secret values", () => {
 
     expect(redactSensitiveText(first, { mode: "off" })).not.toContain(first);
     expect(redactSensitiveText(second, { mode: "off" })).toBe(second);
+  });
+
+  it("does not let request-only form variants evict registered raw secrets", () => {
+    const first = 'registry secret 000~"value';
+    registerSecretValueForRedaction(first);
+    for (let index = 1; index < 129; index += 1) {
+      registerSecretValueForRedaction(
+        `registry secret ${index.toString().padStart(3, "0")}~"value`,
+      );
+    }
+
+    expect(redactSensitiveText(first, { mode: "off" })).not.toContain(first);
+  });
+});
+
+describe("supplied exact secret values", () => {
+  it("masks raw and serialized values without relying on a recognized field name", () => {
+    const secret = 'proxy-credential-with-"quoted"-value';
+    const payload = JSON.stringify({ upstreamEcho: secret });
+
+    const redacted = redactToolPayloadText(payload, { exactSecretValues: [secret] });
+
+    expect(redacted).toContain("upstreamEcho");
+    expect(redacted).not.toContain(secret);
+    expect(redacted).not.toContain(JSON.stringify(secret).slice(1, -1));
+  });
+
+  it("masks form-serialized values without relying on a recognized field name", () => {
+    const secret = "proxy credential~with spaces";
+    const formEncoded = new URLSearchParams([["value", secret]]).toString().slice("value=".length);
+    const payload = JSON.stringify({ upstreamEcho: formEncoded });
+
+    const redacted = redactToolPayloadText(payload, { exactSecretValues: [secret] });
+
+    expect(formEncoded).toBe("proxy+credential%7Ewith+spaces");
+    expect(redacted).toContain("upstreamEcho");
+    expect(redacted).not.toContain(formEncoded);
+  });
+
+  it("masks lower- and mixed-case percent escapes only for encoded variants", () => {
+    const secret = "proxy/River+17=glass~Moth";
+    const encodedVariants = [
+      encodeURIComponent(secret),
+      new URLSearchParams([["value", secret]]).toString().slice("value=".length),
+    ];
+
+    for (const encoded of encodedVariants) {
+      const lower = encoded.replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase());
+      const mixed = encoded.replace(/%[0-9A-F]{2}/gu, (escape, offset: number) =>
+        offset % 2 === 0 ? escape.toLowerCase() : escape,
+      );
+      for (const reflected of [lower, mixed]) {
+        expect(
+          redactToolPayloadText(`upstream echo: ${reflected}`, {
+            exactSecretValues: [secret],
+          }),
+        ).not.toContain(reflected);
+      }
+    }
+
+    expect(
+      redactToolPayloadText("upstream echo: PROXY/RIVER+17=GLASS~MOTH", {
+        exactSecretValues: [secret],
+      }),
+    ).toContain("PROXY/RIVER+17=GLASS~MOTH");
+  });
+
+  it.each(["raw", "url", "form"] as const)(
+    "masks a truncated %s secret prefix only at the source boundary",
+    (kind) => {
+      const secret = "orchid/River+17=glass~Moth92cabin";
+      const encoded =
+        kind === "raw"
+          ? secret
+          : kind === "url"
+            ? encodeURIComponent(secret)
+            : new URLSearchParams([["value", secret]]).toString().slice("value=".length);
+      const reflected = encoded.replace(/%[0-9A-F]{2}/gu, (escape) => escape.toLowerCase());
+      const retainedPrefix = reflected.slice(0, -5);
+      const input = `provider unavailable: ${retainedPrefix}`;
+
+      expect(
+        redactToolPayloadText(input, {
+          exactSecretValues: [secret],
+          sourceTruncated: true,
+        }),
+      ).toBe("provider unavailable: ***");
+      expect(redactToolPayloadText(input, { exactSecretValues: [secret] })).toBe(input);
+    },
+  );
+
+  it("masks explicitly supplied short values", () => {
+    expect(redactToolPayloadText("upstream echo: abc", { exactSecretValues: ["abc"] })).toBe(
+      "upstream echo: ***",
+    );
   });
 });
 
