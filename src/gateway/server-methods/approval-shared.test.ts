@@ -6,6 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  SYSTEM_AGENT_APPROVAL_DECISIONS,
+  type SystemAgentApprovalRequestPayload,
+} from "../../infra/system-agent-approvals.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -299,6 +303,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -345,6 +350,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -413,6 +419,74 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
+  // Regression: a system-agent approval carries command AND title+description, so
+  // a channel subscriber resolving ownership off the payload rejects it. Publishing
+  // one onto the exec/plugin bus logged "does not identify exactly one owner" and
+  // left the operator with no approval binding (#118899).
+  it("keeps system-agent approvals off the channel approval bus", async () => {
+    const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      approvalKind: "system-agent",
+    });
+    const record = manager.create(
+      {
+        // Field-for-field the payload queueDelegatedApproval builds: carrying
+        // command AND title+description is what makes the channel-side owner
+        // resolution ambiguous.
+        title: "OpenClaw change",
+        description: "Persist model default",
+        command: "Persist model default",
+        proposalHash: "proposal-hash",
+        allowedDecisions: SYSTEM_AGENT_APPROVAL_DECISIONS,
+        agentId: null,
+        sessionKey: null,
+        sessionId: "system-agent-session",
+        turnSourceChannel: null,
+        turnSourceAccountId: null,
+      },
+      60_000,
+      "system-agent-not-channel-routable",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const publishRequested = vi.fn(() => 1);
+    const getApprovalClientConnIds = vi.fn(() => new Set<string>(["operator-ui"]));
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond: vi.fn(),
+      context: {
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getApprovalClientConnIds,
+        hasExecApprovalClients: () => false,
+        approvalEvents: { publishRequested, publishResolved: vi.fn() },
+      } as unknown as GatewayRequestContext,
+      requestEventName: "openclaw.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      approvalKind: "system-agent",
+      deliverRequest: () => false,
+      keepPendingWithoutRoute: true,
+      requireDeliveryRoute: false,
+    });
+
+    await Promise.resolve();
+    expect(publishRequested).not.toHaveBeenCalled();
+    expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+    // Operator clients must still be selected: the fix must not silence Control UI.
+    expect(getApprovalClientConnIds).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "system-agent" }),
+    );
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
   it("targets requested approval events to visible approval clients when available", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -463,6 +537,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -532,6 +607,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -600,6 +676,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -667,6 +744,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -722,6 +800,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => delivery,
     });
 
@@ -776,6 +855,7 @@ describe("handlePendingApprovalRequest", () => {
           expiresAtMs: record.expiresAtMs,
         },
         twoPhase: true,
+        approvalKind: "exec",
         deliverRequest: () => delivery,
       });
 
@@ -834,6 +914,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       requireDeliveryRoute: false,
       deliverRequest: () => false,
     });
@@ -907,6 +988,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -982,6 +1064,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -1057,6 +1140,7 @@ describe("handlePendingApprovalRequest", () => {
         expiresAtMs: record.expiresAtMs,
       },
       twoPhase: true,
+      approvalKind: "exec",
       deliverRequest: () => false,
     });
 
@@ -1657,6 +1741,7 @@ describe("handlePendingApprovalRequest", () => {
           expiresAtMs: record.expiresAtMs,
         },
         twoPhase: true,
+        approvalKind: "exec",
         deliverRequest: () => false,
       });
 

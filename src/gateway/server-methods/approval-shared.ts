@@ -3,6 +3,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ValidationError } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayApprovalEventKind } from "../../infra/approval-gateway-runtime.types.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type {
@@ -458,7 +459,7 @@ export async function handlePendingApprovalRequest<
   requestEventName: string;
   requestEvent: RequestedApprovalEvent<TPayload>;
   twoPhase: boolean;
-  approvalKind?: "exec" | "plugin";
+  approvalKind: "exec" | "plugin" | "system-agent";
   deliverRequest: () => boolean | Promise<boolean>;
   afterDecision?: (
     decision: ExecApprovalDecision | null,
@@ -474,10 +475,18 @@ export async function handlePendingApprovalRequest<
   const releaseHandoff = params.manager.retainForHandoff(params.record.id);
   try {
     const suppressDelivery = params.suppressDelivery === true;
+    // Only exec/plugin approvals have a channel-native payload and a turn source.
+    // Publishing operator-owned system-agent approvals here makes channel subscribers
+    // reject the payload and silently drops the operator's binding. Allowlist, so a
+    // new kind stays non-routable until deliberately added.
+    const channelApprovalKind: GatewayApprovalEventKind | null =
+      params.approvalKind === "exec" || params.approvalKind === "plugin"
+        ? params.approvalKind
+        : null;
     const approvalClientConnIds = suppressDelivery
       ? null
       : resolveApprovalRequestRecipientConnIds({
-          approvalKind: params.approvalKind ?? "exec",
+          approvalKind: params.approvalKind,
           context: params.context,
           record: params.record,
           excludeConnId: params.clientConnId,
@@ -498,12 +507,10 @@ export async function handlePendingApprovalRequest<
         });
       }
     }
-    const internalApprovalSubscriberCount = suppressDelivery
-      ? 0
-      : (params.context.approvalEvents?.publishRequested(
-          params.approvalKind ?? "exec",
-          params.requestEvent,
-        ) ?? 0);
+    const channelBusKind = suppressDelivery ? null : channelApprovalKind;
+    const internalApprovalSubscriberCount = channelBusKind
+      ? (params.context.approvalEvents?.publishRequested(channelBusKind, params.requestEvent) ?? 0)
+      : 0;
 
     const hasApprovalClients = suppressDelivery
       ? false
@@ -518,10 +525,11 @@ export async function handlePendingApprovalRequest<
     const hasTurnSourceRoute =
       !hasApprovalClients &&
       !delivered &&
+      channelApprovalKind !== null &&
       hasApprovalTurnSourceRoute({
         turnSourceChannel: params.record.request.turnSourceChannel,
         turnSourceAccountId: params.record.request.turnSourceAccountId,
-        approvalKind: params.approvalKind ?? "exec",
+        approvalKind: channelApprovalKind,
       });
     const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
       ? "forwarder"
