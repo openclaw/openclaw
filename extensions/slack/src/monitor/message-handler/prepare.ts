@@ -1194,7 +1194,7 @@ export async function prepareSlackMessage(params: {
     ? formatSlackTeamTarget({
         teamId: opts.eventScope.teamId,
         kind: isDirectMessage ? "user" : "channel",
-        id: isDirectMessage ? message.user : message.channel,
+        id: isDirectMessage ? senderId : message.channel,
       })
     : isDirectMessage
       ? `user:${message.user}`
