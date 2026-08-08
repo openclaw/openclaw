@@ -1,9 +1,8 @@
 // Nextcloud Talk plugin module implements send behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  readProviderJsonResponse,
-  readResponseTextLimited,
-} from "openclaw/plugin-sdk/provider-http";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   FormatCapabilityProfile,
   renderMarkdownWithMarkers,
@@ -31,6 +30,17 @@ const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
 const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
 
+// Internal test hook: allows fast regression tests for the error-body idle
+// timeout without waiting the full 10 seconds in CI. Evaluated at call time so
+// tests can set it after module load.
+function getErrorSnippetIdleTimeoutMs(): number {
+  const override = process.env.OPENCLAW_TEST_NEXTCLOUD_TALK_ERROR_IDLE_TIMEOUT_MS;
+  if (override) {
+    return Number(override);
+  }
+  return 10_000;
+}
+
 const NEXTCLOUD_TALK_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
   chunk: { limit: 4000, unit: "chars", hardCap: 32_000 },
@@ -54,14 +64,45 @@ function collapseErrorSnippet(text: string): string {
 }
 
 /** Reads a bounded, collapsed error-body snippet without buffering hostile responses. */
-async function readNextcloudTalkErrorSnippet(response: Response): Promise<string> {
+async function readNextcloudTalkErrorSnippet(
+  response: Response,
+  opts?: { extraRedactions?: readonly string[] },
+): Promise<string> {
   try {
-    // readResponseTextLimited caps the read at the byte budget and cancels the
+    // readResponseTextPrefix caps the read at the byte budget and cancels the
     // upstream stream once full, so a hostile endpoint cannot stream an
-    // unbounded body into memory. Collapse the bounded prefix locally to keep a
-    // short, log-safe error snippet (no new plugin SDK surface required).
-    const text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
-    return collapseErrorSnippet(text);
+    // unbounded body into memory. Use the full result (not just .text) so we
+    // can detect truncation: an exact-value replacement below cannot match a
+    // secret that straddles the byte-cap boundary, so omit the snippet when
+    // the read was incomplete. Preserve the prior 10-second chunk idle timeout
+    // so a server that sends a 4xx header and then holds the body open cannot
+    // delay send/reaction failures until the outer request timeout.
+    const prefix = await readResponseTextPrefix(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES, {
+      chunkTimeoutMs: getErrorSnippetIdleTimeoutMs(),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Nextcloud Talk error body read stalled for ${chunkTimeoutMs}ms`),
+    });
+    if (prefix.truncated) {
+      return "";
+    }
+    let text = prefix.text;
+    // Scrub plugin-generated secret values that a misbehaving upstream may
+    // reflect in error bodies (e.g. the HMAC signature sent in
+    // X-Nextcloud-Talk-Bot-Signature). Scrub before generic redaction so exact
+    // known values are removed even when the generic redactor has no pattern
+    // for this header.
+    if (opts?.extraRedactions) {
+      for (const value of opts.extraRedactions) {
+        if (value) {
+          text = text.replaceAll(value, "[redacted]");
+        }
+      }
+    }
+    // Redact credentials that a misbehaving upstream may reflect in error bodies
+    // (e.g. Authorization headers echoed back in the response).
+    // Redact before collapsing so a credential that crosses the snippet-length
+    // cutoff is fully matched and scrubbed, not left as a raw partial prefix.
+    return collapseErrorSnippet(redactToolPayloadText(text));
   } catch {
     return "";
   }
@@ -217,7 +258,9 @@ export async function sendMessageNextcloudTalk(
 
   try {
     if (!response.ok) {
-      const errorBody = await readNextcloudTalkErrorSnippet(response);
+      const errorBody = await readNextcloudTalkErrorSnippet(response, {
+        extraRedactions: [signature],
+      });
       const status = response.status;
       let errorMsg = `Nextcloud Talk send failed (${status})`;
 
@@ -317,7 +360,9 @@ export async function sendReactionNextcloudTalk(
 
   try {
     if (!response.ok) {
-      const errorBody = await readNextcloudTalkErrorSnippet(response);
+      const errorBody = await readNextcloudTalkErrorSnippet(response, {
+        extraRedactions: [signature],
+      });
       throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
     }
 
