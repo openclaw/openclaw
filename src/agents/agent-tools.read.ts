@@ -738,12 +738,19 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         sandbox: options.sandbox,
         signal,
       });
+      // The wrapper inherits the base write tool's declared outputSchema via
+      // `{ ...tool }`, so the details it returns must satisfy that same
+      // contract. Append-only metadata here made the code-mode bridge reject
+      // the result after a successful append (openclaw/openclaw#120385).
+      //
+      // `created` is deliberately omitted: any pre-append existence probe is a
+      // TOCTOU guess (another writer can create or remove the target between the
+      // probe and the append), and the append path cannot report creation
+      // authoritatively. The declared schema permits the bare `{ changed: true }`
+      // shape, so report only what this call actually knows.
       return {
         content: [{ type: "text", text: `Appended content to ${options.relativePath}.` }],
-        details: {
-          path: options.relativePath,
-          appendOnly: true,
-        },
+        details: { changed: true },
       };
     },
   };
