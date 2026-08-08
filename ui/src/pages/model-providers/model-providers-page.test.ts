@@ -27,6 +27,7 @@ type ModelProvidersPageTestElement = HTMLElement & {
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
   routeData: ModelProvidersRouteData | undefined;
+  refresh: (opts: { force: boolean }) => Promise<void>;
   saveDefaultModels: () => Promise<void>;
   saveKey: (provider: string, configKey: string) => Promise<void>;
   selectedAgentId: string;
@@ -158,6 +159,28 @@ function createHarness(initialScopeId: string) {
   };
 }
 
+function publishableGateway(initial: ApplicationGatewaySnapshot) {
+  let current = initial;
+  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
+  return {
+    gateway: {
+      get snapshot() {
+        return current;
+      },
+      subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    publish(next: ApplicationGatewaySnapshot) {
+      current = next;
+      for (const listener of listeners) {
+        listener(next);
+      }
+    },
+  };
+}
+
 function appendPage(context: ApplicationContext) {
   const page = document.createElement(
     "openclaw-model-providers-page",
@@ -165,6 +188,26 @@ function appendPage(context: ApplicationContext) {
   page.context = context;
   document.body.append(page);
   return page;
+}
+
+function requestCount(request: ReturnType<typeof vi.fn>, method: string): number {
+  return request.mock.calls.filter(([candidate]) => candidate === method).length;
+}
+
+function loadedData(providerUsage: ModelProvidersData["providerUsage"]): ModelProvidersData {
+  return {
+    ...EMPTY_MODEL_PROVIDERS_DATA,
+    config: {},
+    providerUsage,
+    updatedAt: Date.now(),
+  };
+}
+
+function expectProviderUsageLoaded(page: ModelProvidersPageTestElement) {
+  expect(page.data).toMatchObject({
+    providerUsage: { providers: expect.any(Array) },
+    updatedAt: expect.any(Number),
+  });
 }
 
 afterEach(() => {
@@ -558,6 +601,272 @@ describe("ModelProvidersPage agent scope", () => {
     );
     expect(page.selectedAgentId).toBe("writer");
     expect(page.data).not.toBe(staleData);
+  });
+
+  it("recovers a failed direct usage load on focus", async () => {
+    const { context, request } = createHarness("main");
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const original = request.getMockImplementation()!;
+    let failUsage = true;
+    request.mockImplementation(async (method: string) => {
+      if (method === "usage.status" && failUsage) {
+        throw new Error("usage.status unavailable");
+      }
+      return original(method);
+    });
+    const page = appendPage(context);
+    await vi.waitFor(() =>
+      expect(page.data).toMatchObject({
+        providerUsage: null,
+        updatedAt: expect.any(Number),
+      }),
+    );
+    const before = requestCount(request, "models.authStatus");
+    failUsage = false;
+
+    window.dispatchEvent(new Event("focus"));
+
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(before + 1));
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+  });
+
+  it("recovers a failed direct usage load on a same-client reconnect", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    const source = publishableGateway(snapshot);
+    (context as { gateway: unknown }).gateway = source.gateway;
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const original = request.getMockImplementation()!;
+    let failUsage = true;
+    request.mockImplementation(async (method: string) => {
+      if (method === "usage.status" && failUsage) {
+        throw new Error("usage.status unavailable");
+      }
+      return original(method);
+    });
+    const page = appendPage(context);
+    await vi.waitFor(() =>
+      expect(page.data).toMatchObject({
+        providerUsage: null,
+        updatedAt: expect.any(Number),
+      }),
+    );
+    const before = requestCount(request, "models.authStatus");
+    failUsage = false;
+
+    source.publish({ ...snapshot, phase: "reconnecting" });
+    source.publish({ ...snapshot, phase: "connected" });
+
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(before + 1));
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+  });
+
+  it("defers failed-load reconnect recovery while hidden until focus", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    const source = publishableGateway(snapshot);
+    (context as { gateway: unknown }).gateway = source.gateway;
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const original = request.getMockImplementation()!;
+    let failUsage = true;
+    request.mockImplementation(async (method: string) => {
+      if (method === "usage.status" && failUsage) {
+        throw new Error("usage.status unavailable");
+      }
+      return original(method);
+    });
+    const page = appendPage(context);
+    await vi.waitFor(() =>
+      expect(page.data).toMatchObject({
+        providerUsage: null,
+        updatedAt: expect.any(Number),
+      }),
+    );
+    const before = requestCount(request, "models.authStatus");
+    failUsage = false;
+
+    source.publish({ ...snapshot, phase: "reconnecting" });
+    source.publish({ ...snapshot, phase: "connected" });
+    await Promise.resolve();
+    expect(requestCount(request, "models.authStatus")).toBe(before);
+
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(before + 1));
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+  });
+
+  it("keeps fresh direct data across a same-client reconnect", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    const source = publishableGateway(snapshot);
+    (context as { gateway: unknown }).gateway = source.gateway;
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const page = appendPage(context);
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+    const before = requestCount(request, "models.authStatus");
+
+    source.publish({ ...snapshot, phase: "reconnecting" });
+    source.publish({ ...snapshot, phase: "connected" });
+    await page.updateComplete;
+    await Promise.resolve();
+
+    expect(requestCount(request, "models.authStatus")).toBe(before);
+  });
+
+  it("keeps a successful route preload fresh across focus and reconnect", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    const source = publishableGateway(snapshot);
+    (context as { gateway: unknown }).gateway = source.gateway;
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const page = document.createElement(
+      "openclaw-model-providers-page",
+    ) as ModelProvidersPageTestElement;
+    page.context = context;
+    page.routeData = {
+      data: loadedData({ updatedAt: 1, providers: [] }),
+      client: snapshot.client,
+      agentId: "main",
+    };
+    document.body.append(page);
+    await page.updateComplete;
+
+    window.dispatchEvent(new Event("focus"));
+    source.publish({ ...snapshot, phase: "reconnecting" });
+    source.publish({ ...snapshot, phase: "connected" });
+    await page.updateComplete;
+    await Promise.resolve();
+
+    expect(requestCount(request, "models.authStatus")).toBe(0);
+  });
+
+  it("keeps a failed route preload cold and recovers on focus", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const page = document.createElement(
+      "openclaw-model-providers-page",
+    ) as ModelProvidersPageTestElement;
+    page.context = context;
+    page.routeData = {
+      data: loadedData(null),
+      client: snapshot.client,
+      agentId: "main",
+    };
+    document.body.append(page);
+    await page.updateComplete;
+    expect(requestCount(request, "models.authStatus")).toBe(0);
+
+    window.dispatchEvent(new Event("focus"));
+
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(1));
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+  });
+
+  it("supersedes a hung load on disconnect so reconnect can replace it", async () => {
+    const { context, request, snapshot, deferNextAuthStatus } = createHarness("main");
+    const source = publishableGateway(snapshot);
+    (context as { gateway: unknown }).gateway = source.gateway;
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const page = appendPage(context);
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+    const before = requestCount(request, "models.authStatus");
+    deferNextAuthStatus();
+    void page.refresh({ force: true });
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(before + 1));
+
+    source.publish({ ...snapshot, phase: "reconnecting" });
+    source.publish({ ...snapshot, phase: "connected" });
+
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(before + 2));
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+  });
+
+  it("supersedes a hung load across host detach and reattach", async () => {
+    const { context, request, deferNextAuthStatus } = createHarness("main");
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const page = appendPage(context);
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+    const before = requestCount(request, "models.authStatus");
+    deferNextAuthStatus();
+    void page.refresh({ force: true });
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(before + 1));
+
+    page.remove();
+    document.body.append(page);
+
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(before + 2));
+    await vi.waitFor(() => expectProviderUsageLoaded(page));
+  });
+
+  it("discards a hung completion after the gateway client changes", async () => {
+    const { context, request, snapshot, deferNextAuthStatus } = createHarness("main");
+    const source = publishableGateway(snapshot);
+    (context as { gateway: unknown }).gateway = source.gateway;
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.data?.authStatus?.ts).toBe(1));
+    const release = deferNextAuthStatus();
+    const before = requestCount(request, "models.authStatus");
+    void page.refresh({ force: true });
+    await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(before + 1));
+    const replacementRequest = vi.fn(async (method: string) => {
+      if (method === "models.authStatus") {
+        return { ts: 2, providers: [] };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "config.get") {
+        return { config: {}, hash: "replacement" };
+      }
+      if (method === "usage.status") {
+        return { updatedAt: 2, providers: [] };
+      }
+      if (method === "sessions.usage") {
+        return { aggregates: { byProvider: [] } };
+      }
+      return {};
+    });
+    const replacementClient = {
+      request: replacementRequest,
+    } as unknown as GatewayBrowserClient;
+
+    source.publish({ ...snapshot, client: replacementClient });
+
+    await vi.waitFor(() => expect(page.data?.authStatus?.ts).toBe(2));
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.data?.authStatus?.ts).toBe(2);
+  });
+
+  it("forces a manual refresh even while route data is fresh", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    const page = document.createElement(
+      "openclaw-model-providers-page",
+    ) as ModelProvidersPageTestElement;
+    page.context = context;
+    page.routeData = {
+      data: loadedData({ updatedAt: 1, providers: [] }),
+      client: snapshot.client,
+      agentId: "main",
+    };
+    document.body.append(page);
+    await page.updateComplete;
+
+    await page.refresh({ force: true });
+
+    expect(request).toHaveBeenCalledWith(
+      "models.authStatus",
+      { agentId: "main", refresh: true },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("probes credentials in the selected agent scope", async () => {

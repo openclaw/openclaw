@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { initialState, Task, TaskStatus } from "@lit/task";
+import { initialState, Task } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -15,8 +15,10 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import {
   modelProviderErrorMessage,
   runModelProviderConfigMutation,
@@ -43,6 +45,7 @@ import {
   buildProviderApiKeyPatch,
   DEFAULT_MODELS_REPLACE_PATHS,
 } from "./mutations.ts";
+import { mergeProbeResults } from "./probe-merge.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
 
 const MODEL_PROVIDERS_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
@@ -59,39 +62,6 @@ function isMissingMethodError(error: unknown): boolean {
   return /method (?:not found|not supported)|unknown method/iu.test(
     modelProviderErrorMessage(error),
   );
-}
-
-const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
-  "auth",
-  "billing",
-  "rate_limit",
-  "timeout",
-  "format",
-  "no_model",
-  "unknown",
-];
-
-function mergeProbeResults(cardId: string, results: ModelsProbeResult[]): ModelsProbeResult {
-  if (results.length === 1) {
-    return results[0]!;
-  }
-  const status = results.some((result) => result.status === "ok")
-    ? "ok"
-    : (PROBE_FAILURE_PRIORITY.find((candidate) =>
-        results.some((result) => result.status === candidate),
-      ) ?? "unknown");
-  const error = results.find((result) => result.status === status)?.error;
-  return {
-    provider: cardId,
-    status,
-    ...(error ? { error } : {}),
-    results: results.flatMap((result) =>
-      result.results.map((target) => ({
-        ...target,
-        label: `${result.provider}: ${target.label}`,
-      })),
-    ),
-  };
 }
 
 export class ModelProvidersPage extends OpenClawLightDomElement {
@@ -116,7 +86,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
-  private observedClient: GatewayBrowserClient | null = null;
+  // Null Task runs supersede stale work without counting as a real load.
+  private loadClient: GatewayBrowserClient | null = null;
+  private routeDataObserved = false;
   private clientEpoch = 0;
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
@@ -131,24 +103,43 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.selectedAgentId,
         false as boolean,
       ] as const,
-    task: ([client, agentId, force], { signal }) =>
-      client
-        ? loadModelProvidersData(client, {
-            agentId,
-            ...(force ? { refresh: true } : {}),
-            signal,
-          }).then((data) => ({ client, data }))
-        : initialState,
+    task: ([client, agentId, force], { signal }) => {
+      if (!client) {
+        return initialState;
+      }
+      this.refreshPolicy.beginLoad();
+      return loadModelProvidersData(client, {
+        agentId,
+        ...(force ? { refresh: true } : {}),
+        signal,
+      }).then((data) => ({ client, data }));
+    },
     onComplete: ({ client, data }) => {
-      this.data = data;
-      this.dataClient = client;
+      this.loadClient = null;
+      this.adoptLoadedData(client, data);
+      this.refreshPolicy.flushPending();
     },
   });
+  private readonly refreshPolicy = new UsageRefreshPolicy({
+    isLoading: () => this.loadClient !== null,
+    reload: () => void this.refresh({ force: false }),
+  });
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => this.resetClientState(),
+    invalidateRequests: () => this.invalidateRequests(),
+    ensureInitialData: () => this.ensureInitialData(),
+    onSnapshot: (change) => {
+      if (change.initial) {
+        this.resetClientState();
+      }
+      if (change.becameConnected && !change.initial) {
+        this.refreshPolicy.request("reconnect");
+      }
+    },
+    onPageActivation: () => this.refreshPolicy.request("focus"),
+  });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
     .watch(
       () => this.context?.runtimeConfig,
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
@@ -173,50 +164,59 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
-    void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
   override willUpdate(changed: PropertyValues) {
-    if (changed.has("routeData") && this.routeData) {
+    if (changed.has("routeData") && this.routeData !== undefined) {
+      this.routeDataObserved = true;
       const selectedAgentId = this.resolveSelectedAgentId();
       this.setSelectedAgent(selectedAgentId);
       if (this.routeData.agentId === selectedAgentId) {
-        this.data = this.routeData.data;
-        this.dataClient = this.routeData.client;
+        this.adoptLoadedData(this.routeData.client, this.routeData.data);
       } else {
         this.data = null;
         this.dataClient = null;
+        this.refreshPolicy.resetPayload();
       }
+      this.ensureInitialData();
     }
   }
 
-  override updated() {
-    const snapshot = this.context.gateway.snapshot;
-    if (snapshot.client !== this.observedClient) {
-      this.resetClientState(snapshot.client);
-    }
+  private ensureInitialData() {
     if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
       void this.context.agents.ensureList();
     }
+    if (!this.routeDataObserved && this.routeData !== undefined) {
+      return;
+    }
+    const client = this.gateway.client;
     if (
-      snapshot.phase !== "connected" ||
-      !snapshot.client ||
-      this.refreshTask.status === TaskStatus.PENDING
+      !this.gateway.connected ||
+      !client ||
+      this.loadClient !== null ||
+      (this.data !== null && this.data.updatedAt !== null && client === this.dataClient)
     ) {
       return;
     }
-    const stale = this.data === null || this.data.updatedAt === null;
-    if (stale || snapshot.client !== this.dataClient) {
-      void this.refresh({ force: false });
-    }
+    void this.refresh({ force: false });
   }
 
-  private resetClientState(client: GatewayBrowserClient | null) {
-    this.observedClient = client;
-    this.clientEpoch += 1;
+  private adoptLoadedData(client: GatewayBrowserClient | null, data: ModelProvidersData) {
+    this.data = data;
+    this.dataClient = client;
+    this.refreshPolicy.setLastLoadedAtMs(data.providerUsage === null ? null : data.updatedAt);
+  }
+
+  private invalidateRequests() {
+    this.refreshPolicy.interrupt();
+    this.loadClient = null;
     void this.refreshTask.run([null, this.selectedAgentId, false]);
+  }
+
+  private resetClientState() {
+    this.clientEpoch += 1;
     this.busy = {};
     this.messages = {};
     this.probeResults = {};
@@ -229,15 +229,15 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.addProviderId = "";
     this.addProviderKey = "";
     this.defaultsDraft = null;
-    if (client !== this.dataClient) {
-      this.data = null;
-    }
+    this.data = null;
+    this.dataClient = null;
+    this.refreshPolicy.resetPayload();
   }
 
   private isCurrentClient(client: GatewayBrowserClient, epoch: number): boolean {
     return (
       this.clientEpoch === epoch &&
-      this.observedClient === client &&
+      this.gateway.client === client &&
       this.context.gateway.snapshot.client === client
     );
   }
@@ -271,19 +271,24 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!this.setSelectedAgent(agentId)) {
       return;
     }
-    void this.refreshTask.run([null, agentId, false]);
+    this.invalidateRequests();
     this.data = null;
+    this.dataClient = null;
+    this.refreshPolicy.resetPayload();
     // probeEpochs stays: per-card counters must remain monotonic across agent
     // switches, or an in-flight probe from the old agent can reuse an epoch
     // and clobber a newer probe's state (A->B->A ABA race).
     this.requestUpdate();
+    this.ensureInitialData();
   }
 
   private refresh(opts: { force: boolean }): Promise<void> {
-    const client = this.context.gateway.snapshot.client;
-    if (!client) {
+    const client = this.gateway.client;
+    if (!this.gateway.connected || !client) {
+      this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
+    this.loadClient = client;
     return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
   }
 
@@ -627,7 +632,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null,
-      refreshing: this.refreshTask.status === TaskStatus.PENDING,
+      refreshing: this.loadClient !== null,
       error: data.error,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
