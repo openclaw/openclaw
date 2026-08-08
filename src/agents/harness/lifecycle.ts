@@ -35,7 +35,7 @@ import { applyAgentHarnessResultClassification } from "./result-classification.j
 import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
   AgentHarness,
-  AgentHarnessAttemptParams,
+  AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
   AgentHarnessSettledTurnFinalizationResult,
 } from "./types.js";
@@ -62,7 +62,7 @@ function buildAgentHarnessContextEngineHostSupport(
 
 function assertAgentHarnessContextEngineSupport(
   harness: AgentHarness,
-  params: AgentHarnessAttemptParams,
+  params: AgentHarnessAttemptParamsV2,
 ): void {
   if (!params.contextEngine || params.contextEngine.info.id === "legacy") {
     return;
@@ -76,7 +76,7 @@ function assertAgentHarnessContextEngineSupport(
 
 function agentHarnessDiagnosticBase(
   harness: AgentHarness,
-  params: AgentHarnessAttemptParams,
+  params: AgentHarnessAttemptParamsV2,
   trace?: DiagnosticTraceContext,
 ) {
   const diagnosticTrace = trace ?? getActiveDiagnosticTraceContext();
@@ -158,11 +158,14 @@ function shouldEmitAgentRunDiagnostics(harness: AgentHarness): boolean {
   return harness.id !== "openclaw";
 }
 
-function diagnosticChannel(params: AgentHarnessAttemptParams): string | undefined {
+function diagnosticChannel(params: AgentHarnessAttemptParamsV2): string | undefined {
   return params.messageChannel ?? params.messageProvider;
 }
 
-function agentRunDiagnosticBase(params: AgentHarnessAttemptParams, trace: DiagnosticTraceContext) {
+function agentRunDiagnosticBase(
+  params: AgentHarnessAttemptParamsV2,
+  trace: DiagnosticTraceContext,
+) {
   const channel = diagnosticChannel(params);
   return {
     runId: params.runId,
@@ -218,7 +221,7 @@ function withFallbackFinalizationDiagnosticTrace(
 
 function emitAgentHarnessRunStarted(
   harness: AgentHarness,
-  params: AgentHarnessAttemptParams,
+  params: AgentHarnessAttemptParamsV2,
   trace?: DiagnosticTraceContext,
 ): void {
   emitTrustedDiagnosticEvent({
@@ -229,7 +232,7 @@ function emitAgentHarnessRunStarted(
 
 function emitAgentHarnessRunCompleted(params: {
   harness: AgentHarness;
-  attemptParams: AgentHarnessAttemptParams;
+  attemptParams: AgentHarnessAttemptParamsV2;
   result: AgentHarnessCanonicalAttemptResult;
   startedAt: number;
   trace?: DiagnosticTraceContext;
@@ -259,7 +262,7 @@ function emitAgentHarnessRunCompleted(params: {
 
 function emitAgentHarnessRunError(params: {
   harness: AgentHarness;
-  attemptParams: AgentHarnessAttemptParams;
+  attemptParams: AgentHarnessAttemptParamsV2;
   startedAt: number;
   phase: AgentHarnessLifecyclePhase;
   error: unknown;
@@ -282,8 +285,8 @@ function emitAgentHarnessRunError(params: {
 /** Runs one harness attempt with diagnostics, tracing, and result classification. */
 export async function runAgentHarnessLifecycleAttempt(
   harness: AgentHarness,
-  params: AgentHarnessAttemptParams,
-  execute: (params: AgentHarnessAttemptParams) => Promise<AgentHarnessAttemptResult> = (
+  params: AgentHarnessAttemptParamsV2,
+  execute: (params: AgentHarnessAttemptParamsV2) => Promise<AgentHarnessAttemptResult> = (
     attemptParams,
   ) => harness.runAttempt(attemptParams),
 ): Promise<AgentHarnessCanonicalAttemptResult> {
@@ -372,7 +375,7 @@ export async function runAgentHarnessLifecycleAttempt(
 /** Runs one isolated finalization with diagnostics and its narrow result validator. */
 export async function runAgentHarnessLifecycleFinalization(
   harness: AgentHarness,
-  params: AgentHarnessAttemptParams,
+  params: AgentHarnessAttemptParamsV2,
   execute: () => Promise<AgentHarnessSettledTurnFinalizationResult>,
 ): Promise<AgentHarnessSettledTurnFinalizationResult> {
   let phase: AgentHarnessLifecyclePhase = "prepare";

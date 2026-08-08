@@ -669,14 +669,14 @@ function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
   harness: AgentHarness,
 ): {
-  params: import("./types.js").AgentHarnessAttemptParams;
+  params: import("./types.js").AgentHarnessAttemptParamsV2;
   closeHostCapabilities: () => void;
 } {
   if (harness.id === "openclaw") {
     return {
       // The built-in harness is the internal owner of this authority. Only
       // plugin handoffs receive the projected public attempt shape below.
-      params: params as import("./types.js").AgentHarnessAttemptParams,
+      params: params as import("./types.js").AgentHarnessAttemptParamsV2,
       closeHostCapabilities: () => {},
     };
   }
@@ -698,8 +698,8 @@ function withoutInternalHarnessAuthority(
 }
 
 function preparePluginHarnessParams(
-  params: import("./types.js").AgentHarnessAttemptParams,
-): import("./types.js").AgentHarnessAttemptParams {
+  params: import("./types.js").AgentHarnessAttemptParamsV2,
+): import("./types.js").AgentHarnessAttemptParamsV2 {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
     ? unwrapSecretSentinelsForProviderEgress(params.resolvedApiKey, boundary)
@@ -716,8 +716,8 @@ function preparePluginHarnessParams(
 }
 
 function applyPluginHarnessDenyAllToolPolicy(
-  params: import("./types.js").AgentHarnessAttemptParams,
-): import("./types.js").AgentHarnessAttemptParams {
+  params: import("./types.js").AgentHarnessAttemptParamsV2,
+): import("./types.js").AgentHarnessAttemptParamsV2 {
   if (
     isHostScopedAgentToolActive("openclaw") &&
     params.toolsAllow?.length === 1 &&

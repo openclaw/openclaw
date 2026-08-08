@@ -4,7 +4,7 @@ import {
   embeddedAgentLog,
   loadCodexBundleMcpThreadConfig,
   supportsModelTools,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
