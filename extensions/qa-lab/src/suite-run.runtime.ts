@@ -90,6 +90,9 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
         params?.concurrency,
         selectedScenarios.length,
         params?.channelDriverSelection ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
+        // Crabline 0.1.13's Windows publication claims span sibling output ancestors.
+        // Serial workers prevent contention when their leaf dirs share a suite root.
+        channelDriver === "crabline" ? 1 : undefined,
       );
   const progressEnabled = shouldLogQaSuiteProgress();
   const context: QaSuiteResolvedRunContext = {

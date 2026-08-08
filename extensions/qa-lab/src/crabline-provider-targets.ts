@@ -8,15 +8,47 @@ import type { QaBusInboundMessageInput } from "./runtime-api.js";
 
 const TELEGRAM_QA_DRIVER_ID = "100001";
 const TELEGRAM_QA_OBSERVER_ID = "100002";
+const TELEGRAM_QA_ID_RANGE = 4_000_000_000_000_000n;
+const TELEGRAM_QA_MAX_NATIVE_ID = (1n << 52n) - 1n;
+const MATTERMOST_ID_PATTERN = /^[a-z0-9]{26}$/u;
 const MATRIX_QA_SERVER_NAME = "matrix-qa.test";
 const MATRIX_QA_DRIVER_ID = `@driver:${MATRIX_QA_SERVER_NAME}`;
+
+function resolveQaNumericId(value: string, range: bigint) {
+  const digest = BigInt(`0x${createHash("sha256").update(value).digest("hex").slice(0, 16)}`);
+  return 1n + (digest % range);
+}
+
+function resolveTelegramQaConversationId(value: string, kind: "direct" | "group") {
+  const trimmed = value.trim();
+  if (/^-?\d+$/u.test(trimmed)) {
+    const numeric = BigInt(trimmed);
+    if (
+      numeric !== 0n &&
+      numeric >= -TELEGRAM_QA_MAX_NATIVE_ID &&
+      numeric <= TELEGRAM_QA_MAX_NATIVE_ID &&
+      (kind === "direct" ? numeric > 0n : numeric < 0n)
+    ) {
+      return numeric.toString();
+    }
+  }
+  const numeric = resolveQaNumericId(`${kind}:${trimmed}`, TELEGRAM_QA_ID_RANGE);
+  return String(kind === "direct" ? numeric : -numeric);
+}
+
+function resolveMattermostQaId(value: string) {
+  const trimmed = value.trim();
+  return MATTERMOST_ID_PATTERN.test(trimmed)
+    ? trimmed
+    : createHash("sha256").update(trimmed).digest("hex").slice(0, 26);
+}
 
 export function resolveTelegramQaSenderId(senderId: string) {
   return senderId === "driver"
     ? TELEGRAM_QA_DRIVER_ID
     : senderId === "observer"
       ? TELEGRAM_QA_OBSERVER_ID
-      : senderId;
+      : resolveTelegramQaConversationId(senderId, "direct");
 }
 
 function resolveMatrixQaSenderId(senderId: string) {
@@ -103,6 +135,45 @@ function resolveMatrixQaText(text: string, botUserId: string) {
   );
 }
 
+function resolveTelegramQaTarget(target: string) {
+  const normalized = target.trim();
+  if (normalized.startsWith("thread:")) {
+    const threadTarget = normalized.slice("thread:".length);
+    const separator = threadTarget.indexOf("/");
+    if (separator > 0) {
+      return `thread:${resolveTelegramQaConversationId(threadTarget.slice(0, separator), "group")}/${threadTarget.slice(separator + 1)}`;
+    }
+  }
+  for (const prefix of ["channel:", "group:"]) {
+    if (normalized.startsWith(prefix)) {
+      return `${prefix}${resolveTelegramQaConversationId(normalized.slice(prefix.length), "group")}`;
+    }
+  }
+  for (const prefix of ["dm:", "user:"]) {
+    if (normalized.startsWith(prefix)) {
+      return `dm:${resolveTelegramQaConversationId(normalized.slice(prefix.length), "direct")}`;
+    }
+  }
+  return resolveTelegramQaConversationId(normalized, "direct");
+}
+
+function resolveMattermostQaTarget(target: string) {
+  const normalized = target.trim();
+  if (normalized.startsWith("thread:")) {
+    const threadTarget = normalized.slice("thread:".length);
+    const separator = threadTarget.indexOf("/");
+    if (separator > 0) {
+      return `thread:${resolveMattermostQaId(threadTarget.slice(0, separator))}/${resolveMattermostQaId(threadTarget.slice(separator + 1))}`;
+    }
+  }
+  for (const prefix of ["channel:", "group:", "dm:", "user:"]) {
+    if (normalized.startsWith(prefix)) {
+      return `${prefix}${resolveMattermostQaId(normalized.slice(prefix.length))}`;
+    }
+  }
+  return resolveMattermostQaId(normalized);
+}
+
 export function createCrablineProviderInboundInput(
   adapter: StartedOpenClawCrablineAdapter,
   input: QaBusInboundMessageInput,
@@ -113,9 +184,13 @@ export function createCrablineProviderInboundInput(
     conversation: {
       ...input.conversation,
       id:
-        adapter.channel === "matrix"
-          ? resolveMatrixQaConversationId(input.conversation.id)
-          : input.conversation.id,
+        adapter.channel === "telegram"
+          ? resolveTelegramQaConversationId(input.conversation.id, kind)
+          : adapter.channel === "matrix"
+            ? resolveMatrixQaConversationId(input.conversation.id)
+            : adapter.channel === "mattermost"
+              ? resolveMattermostQaId(input.conversation.id)
+              : input.conversation.id,
       kind,
     },
     senderId:
@@ -123,7 +198,9 @@ export function createCrablineProviderInboundInput(
         ? resolveTelegramQaSenderId(input.senderId)
         : adapter.channel === "matrix"
           ? resolveMatrixQaSenderId(input.senderId)
-          : input.senderId,
+          : adapter.channel === "mattermost"
+            ? resolveMattermostQaId(input.senderId)
+            : input.senderId,
     text:
       adapter.channel === "matrix" && adapter.manifest.provider === "matrix"
         ? resolveMatrixQaText(input.text, adapter.manifest.botUserId)
@@ -136,7 +213,7 @@ export function resolveCrablineStateConversation(params: {
   input: QaBusInboundMessageInput;
   providerInbound: OpenClawCrablineInbound;
 }) {
-  return params.adapter.channel === "matrix"
+  return ["mattermost", "matrix", "telegram"].includes(params.adapter.channel)
     ? params.input.conversation
     : params.providerInbound.stateConversation;
 }
@@ -146,7 +223,14 @@ export function createCrablineProviderDelivery(
   target: string,
 ) {
   const delivery = adapter.createAgentDelivery({
-    target: adapter.channel === "matrix" ? resolveMatrixQaTarget(target) : target,
+    target:
+      adapter.channel === "telegram"
+        ? resolveTelegramQaTarget(target)
+        : adapter.channel === "matrix"
+          ? resolveMatrixQaTarget(target)
+          : adapter.channel === "mattermost"
+            ? resolveMattermostQaTarget(target)
+            : target,
   });
   return {
     delivery,

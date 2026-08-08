@@ -69,6 +69,7 @@ describe("qa suite planning helpers", () => {
     try {
       expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(10);
       expect(normalizeQaSuiteConcurrency(undefined, 80)).toBe(64);
+      expect(normalizeQaSuiteConcurrency(80, 80)).toBe(80);
       expect(
         normalizeQaSuiteConcurrency(
           undefined,
@@ -79,6 +80,7 @@ describe("qa suite planning helpers", () => {
       expect(normalizeQaSuiteConcurrency(2.8, 10)).toBe(2);
       expect(normalizeQaSuiteConcurrency(20, 3)).toBe(3);
       expect(normalizeQaSuiteConcurrency(0, 3)).toBe(1);
+      expect(normalizeQaSuiteConcurrency(8, 10, 4, 1)).toBe(1);
 
       process.env.OPENCLAW_QA_SUITE_CONCURRENCY = "3";
       expect(normalizeQaSuiteConcurrency(undefined, 10)).toBe(3);

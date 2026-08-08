@@ -1,4 +1,4 @@
-// Qa Lab tests cover Crabline local-provider transport integration behavior.
+// Qa Lab tests cover Crabline channel-driver integration with local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
@@ -14,10 +14,10 @@ afterEach(() => {
 
 function createSelection(channel: OpenClawCrablineChannelDriverSelection["channel"] = "telegram") {
   return {
-    capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+    capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
     channel,
     channelDriver: "crabline",
-    smokeArtifactPath: "crabline-fake-provider-smoke.json",
+    providerReadinessArtifactPath: "crabline-provider-readiness.json",
   } as const;
 }
 
@@ -97,7 +97,7 @@ describe("crabline transport", () => {
         expect(delivery.replyTo).toBe(delivery.to);
 
         await expect(
-          fs.access(path.join(outputDir, "crabline-fake-provider-server.json")),
+          fs.access(path.join(outputDir, "crabline-provider-server.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
         await expect(
           transport.sendInbound({
@@ -241,6 +241,13 @@ describe("crabline transport", () => {
       });
 
       try {
+        await transport.state.addInboundMessage({
+          conversation: { id: "-1001234567890", kind: "group" },
+          senderId: "100001",
+          text: "Provision forum topic.",
+          threadId: "42",
+        });
+        await transport.state.reset();
         const config = transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" });
         const telegram = config.channels?.telegram as
           | { apiRoot?: string; botToken?: string }
@@ -429,7 +436,9 @@ describe("crabline transport", () => {
         const env = transport.createRuntimeEnvPatch?.() ?? {};
         expect(env).toMatchObject({
           CRABLINE_WHATSAPP_ADMIN_TOKEN: expect.any(String),
-          CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(/whatsapp-fake-provider\.jsonl$/u),
+          CRABLINE_WHATSAPP_RECORDER_PATH: expect.stringMatching(
+            /whatsapp-provider-server\.jsonl$/u,
+          ),
           CRABLINE_WHATSAPP_SELF_JID: "15550000000@s.whatsapp.net",
           OPENCLAW_WHATSAPP_WEB_SOCKET_URL: expect.stringMatching(
             /^ws:\/\/127\.0\.0\.1:\d+\/ws\/chat\?access_token=/u,
@@ -773,7 +782,7 @@ describe("crabline transport", () => {
         ).resolves.toMatchObject({
           conversation: { id: roomId, kind: "group" },
           direction: "inbound",
-          id: expect.stringMatching(/^\$[a-f0-9]{16}:matrix\.test$/u),
+          id: expect.stringMatching(/^\$[A-Za-z0-9_-]{43}$/u),
           senderId: "driver",
           text: "Matrix baseline marker check.",
         });
@@ -922,7 +931,7 @@ describe("crabline transport", () => {
       });
 
       try {
-        const inbound = await transport.state.addInboundMessage({
+        await transport.state.addInboundMessage({
           conversation: {
             id: "telegram-command-room",
             kind: "channel",
@@ -938,11 +947,14 @@ describe("crabline transport", () => {
           | undefined;
         expect(telegram?.apiRoot).toBeTruthy();
         expect(telegram?.botToken).toBeTruthy();
+        const groupDelivery = transport.buildAgentDelivery({
+          target: "channel:telegram-command-room",
+        });
         const { response, release } = await fetchWithSsrFGuard({
           url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
-              chat_id: inbound.conversation.id,
+              chat_id: groupDelivery.to,
               text: "assistant via fake telegram",
             }),
             headers: { "content-type": "application/json" },

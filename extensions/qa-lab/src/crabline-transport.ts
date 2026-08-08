@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements Crabline local-provider transport behavior.
+// Qa Lab plugin module implements Crabline channel-driver transport behavior against local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -262,9 +262,26 @@ function createCrablineState(params: {
       }
     },
     async addInboundMessage(input: QaBusInboundMessageInput) {
-      const providerInbound = params.adapter.createInbound({
+      let providerInbound = params.adapter.createInbound({
         input: createCrablineProviderInboundInput(params.adapter, input),
       });
+      if (
+        params.adapter.channel === "telegram" &&
+        input.threadId &&
+        input.conversation.kind !== "direct" &&
+        isRecord(providerInbound.providerBody)
+      ) {
+        // Crabline's Telegram server requires provider-native forum metadata before accepting a
+        // topic. Scenario inputs carry only portable thread identity, so add that server fact here.
+        providerInbound = {
+          ...providerInbound,
+          providerBody: {
+            ...providerInbound.providerBody,
+            chatType: "supergroup",
+            isForum: true,
+          },
+        };
+      }
       // Providers may coerce channel conversations to groups; preserve the scenario's logical
       // target so outbound waits and assertions still match the original input.
       targetByProviderTarget.set(providerInbound.providerTargetKey, formatLogicalQaTarget(input));
@@ -395,7 +412,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     return delivery;
   };
 
-  createRuntimeEnvPatch = () => this.#adapter.createChannelDriverSmokeEnv({});
+  createRuntimeEnvPatch = () => this.#adapter.createProviderReadinessEnv({});
 
   handleAction = async (_params: {
     action: QaTransportActionName;
@@ -403,7 +420,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    throw new Error(`Crabline local-provider transport does not support ${_params.action} yet.`);
+    throw new Error(`Crabline channel-driver transport does not support ${_params.action} yet.`);
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
@@ -434,7 +451,7 @@ export async function createQaCrablineTransportAdapter(params: {
     params.outputDir,
     "artifacts",
     "crabline",
-    `${params.selection.channel}-fake-provider.jsonl`,
+    `${params.selection.channel}-provider-server.jsonl`,
   );
   await fs.mkdir(path.dirname(recorderPath), { recursive: true });
   let observeEvent = (_event: unknown) => {};
