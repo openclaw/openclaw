@@ -83,6 +83,7 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+let resolveProviderAuthProfile: typeof import("./provider-usage.auth.js").resolveProviderAuthProfile;
 
 function resolveProviderAuthsForTest(
   params: Parameters<typeof resolveProviderAuths>[0],
@@ -112,7 +113,8 @@ function providerCalls(mockFn: { mock: { calls: unknown[][] } }): unknown[] {
 
 describe("resolveProviderAuths plugin boundary", () => {
   beforeAll(async () => {
-    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
+    ({ resolveProviderAuthProfile, resolveProviderAuths } =
+      await import("./provider-usage.auth.js"));
   });
 
   beforeEach(() => {
@@ -407,6 +409,141 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledTimes(1);
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
     expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves only the requested profile without refresh or external overlays", async () => {
+    const store = {
+      version: 1,
+      profiles: {
+        "zai:work": {
+          type: "api_key",
+          provider: "zai",
+          keyRef: { source: "env", provider: "default", id: "ZAI_API_KEY" },
+        },
+        "zai:fallback": {
+          type: "api_key",
+          provider: "zai",
+          key: "fallback-key",
+        },
+      },
+    };
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(store);
+    resolveApiKeyForProfileMock.mockResolvedValueOnce({
+      apiKey: "materialized-zai-key",
+      provider: "zai",
+    });
+
+    await expect(
+      resolveProviderAuthProfile({
+        provider: "zai",
+        authProfileId: "zai:work",
+        config: {},
+      }),
+    ).resolves.toEqual({
+      provider: "zai",
+      token: "materialized-zai-key",
+      authProfileId: "zai:work",
+      credentialType: "api_key",
+    });
+
+    expect(ensureAuthProfileStoreWithoutExternalProfilesMock).toHaveBeenCalledTimes(1);
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        store,
+        profileId: "zai:work",
+        allowRefresh: false,
+      }),
+    );
+    expect(resolveAuthProfileOrderMock).not.toHaveBeenCalled();
+    expect(resolveProviderUsageAuthWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { storedProvider: "claude-cli", requestedProvider: "anthropic" },
+    { storedProvider: "minimax-portal", requestedProvider: "minimax" },
+  ])(
+    "accepts $storedProvider exact profiles for canonical $requestedProvider usage",
+    async ({ storedProvider, requestedProvider }) => {
+      const profileId = `${storedProvider}:work`;
+      ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: storedProvider,
+            access: "profile-access",
+            refresh: "profile-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      resolveApiKeyForProfileMock.mockResolvedValueOnce({
+        apiKey: "profile-access",
+        provider: storedProvider,
+      });
+
+      await expect(
+        resolveProviderAuthProfile({
+          provider: requestedProvider,
+          authProfileId: profileId,
+          config: {},
+        }),
+      ).resolves.toEqual({
+        provider: requestedProvider,
+        token: "profile-access",
+        authProfileId: profileId,
+        credentialType: "oauth",
+      });
+      expect(resolveApiKeyForProfileMock).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId, allowRefresh: false }),
+      );
+    },
+  );
+
+  it("fails closed when the requested profile belongs to another provider", async () => {
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({
+      profiles: {
+        "shared:profile": {
+          type: "oauth",
+          provider: "openai",
+          access: "openai-access",
+          refresh: "openai-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
+
+    await expect(
+      resolveProviderAuthProfile({
+        provider: "zai",
+        authProfileId: "shared:profile",
+        config: {},
+      }),
+    ).resolves.toBeNull();
+    expect(resolveApiKeyForProfileMock).not.toHaveBeenCalled();
+    expect(resolveAuthProfileOrderMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back when the requested profile is missing", async () => {
+    ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({
+      profiles: {
+        "zai:fallback": {
+          type: "api_key",
+          provider: "zai",
+          key: "fallback-key",
+        },
+      },
+    });
+
+    await expect(
+      resolveProviderAuthProfile({
+        provider: "zai",
+        authProfileId: "zai:missing",
+        config: {},
+      }),
+    ).resolves.toBeNull();
+    expect(resolveApiKeyForProfileMock).not.toHaveBeenCalled();
+    expect(resolveAuthProfileOrderMock).not.toHaveBeenCalled();
   });
 
   it("does not fall back to standard Anthropic API keys for usage auth", async () => {

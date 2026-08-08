@@ -14,22 +14,14 @@ import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
-import type {
-  ProviderUsageSnapshot,
-  UsageProviderId,
-  UsageSummary,
-} from "../../infra/provider-usage.types.js";
+import type { UsageProviderId, UsageSummary } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listProviderUsagePluginDescriptors } from "../../plugins/provider-runtime.js";
 import { formatForLog } from "../ws-log.js";
+import type { ProfileUsageStatus, ProviderUsageStatus } from "./models-auth-status-usage.js";
 
 const log = createSubsystemLogger("provider-usage-cache");
 const USAGE_CACHE_TTL_MS = 60_000;
-
-export type ProviderUsageStatus = Pick<
-  ProviderUsageSnapshot,
-  "windows" | "summary" | "plan" | "billing" | "accountEmail"
->;
 
 type ProviderUsageCacheEntry = {
   agentDir: string;
@@ -39,6 +31,7 @@ type ProviderUsageCacheEntry = {
   refreshedAt: number;
   summary: UsageSummary;
   usageByProvider: Map<string, ProviderUsageStatus>;
+  usageByProfile: Map<string, ProfileUsageStatus>;
 };
 
 type ProviderUsageRefresh = {
@@ -140,6 +133,7 @@ function scopeProviderUsageCredentialKey(
 
 function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSummary>>) {
   const usageByProvider = new Map<string, ProviderUsageStatus>();
+  const usageByProfile = new Map<string, ProfileUsageStatus>();
   for (const snap of usage.providers) {
     usageByProvider.set(snap.provider, {
       windows: snap.windows,
@@ -149,7 +143,16 @@ function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSumm
       ...(snap.accountEmail ? { accountEmail: snap.accountEmail } : {}),
     });
   }
-  return usageByProvider;
+  for (const snap of usage.profiles ?? []) {
+    usageByProfile.set(snap.authProfileId, {
+      providerId: snap.provider,
+      windows: snap.windows,
+      ...(snap.summary ? { summary: snap.summary } : {}),
+      ...(snap.plan ? { plan: snap.plan } : {}),
+      ...(snap.billing?.length ? { billing: snap.billing } : {}),
+    });
+  }
+  return { usageByProvider, usageByProfile };
 }
 
 function scheduleProviderUsageRefresh(params: {
@@ -180,6 +183,7 @@ function scheduleProviderUsageRefresh(params: {
         publishGeneration === cacheGeneration &&
         usageRefreshByAgentId.get(params.agentId) === refresh
       ) {
+        const mapped = mapProviderUsage(usage);
         usageCacheByAgentId.set(params.agentId, {
           agentDir: params.agentDir,
           configRef: params.configRef,
@@ -187,7 +191,7 @@ function scheduleProviderUsageRefresh(params: {
           providerKey: params.providerKey,
           refreshedAt: Date.now(),
           summary: usage,
-          usageByProvider: mapProviderUsage(usage),
+          ...mapped,
         });
       }
       return usage;
@@ -245,12 +249,13 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   return { credentialKey, matching, needsRefresh, providerIds, providerKey };
 }
 
-export function readProviderUsageStaleWhileRevalidate(
-  params: ProviderUsageCacheParams,
-): Map<string, ProviderUsageStatus> {
+export function readProviderUsageStaleWhileRevalidate(params: ProviderUsageCacheParams): {
+  usageByProvider: Map<string, ProviderUsageStatus>;
+  usageByProfile: Map<string, ProfileUsageStatus>;
+} {
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(params.agentId);
-    return new Map();
+    return { usageByProvider: new Map(), usageByProfile: new Map() };
   }
   const { credentialKey, matching, needsRefresh, providerIds, providerKey } =
     resolveProviderUsageCacheRead(params);
@@ -266,7 +271,10 @@ export function readProviderUsageStaleWhileRevalidate(
       providerKey,
     }).catch(() => {});
   }
-  return matching?.usageByProvider ?? new Map();
+  return {
+    usageByProvider: matching?.usageByProvider ?? new Map(),
+    usageByProfile: matching?.usageByProfile ?? new Map(),
+  };
 }
 
 /** Returns cached provider usage, awaiting only a cold miss and refreshing stale data in place. */

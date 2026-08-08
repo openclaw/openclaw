@@ -23,7 +23,7 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { isOAuthOnlyUsageProvider } from "./provider-usage.shared.js";
+import { isOAuthOnlyUsageProvider, resolveUsageProviderId } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -31,6 +31,7 @@ export type ProviderAuth = {
   token: string;
   accountId?: string;
   authProfileId?: string;
+  credentialType?: "api_key" | "token" | "oauth";
   hookProvider?: string;
   /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
   subscriptionType?: string;
@@ -472,6 +473,81 @@ function hasAuthProfileCredentialSource(params: {
     }
   }
   return false;
+}
+
+export async function resolveProviderAuthProfile(params: {
+  provider: UsageProviderId;
+  authProfileId: string;
+  agentDir?: string;
+  config?: OpenClawConfig;
+}): Promise<ProviderAuth | null> {
+  const provider = normalizeProviderId(params.provider);
+  const authProfileId = params.authProfileId.trim();
+  if (!provider || !authProfileId) {
+    return null;
+  }
+
+  const cfg = params.config ?? getRuntimeConfig();
+  const store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+    allowKeychainPrompt: false,
+    readOnly: true,
+    syncExternalCli: false,
+  });
+  const credential = store.profiles[authProfileId];
+  const credentialProvider = credential
+    ? (resolveUsageProviderId(credential.provider, { credentialType: credential.type }) ??
+      normalizeProviderId(credential.provider))
+    : undefined;
+  if (!credential || credentialProvider !== provider) {
+    return null;
+  }
+
+  let resolved: Awaited<ReturnType<typeof resolveApiKeyForProfile>>;
+  try {
+    resolved = await resolveApiKeyForProfile({
+      cfg,
+      store,
+      profileId: authProfileId,
+      agentDir: params.agentDir,
+      allowRefresh: false,
+    });
+  } catch {
+    return null;
+  }
+  const resolvedProvider = resolveUsageProviderId(resolved?.provider, {
+    credentialType: credential.type,
+  });
+  if (!resolved || (resolvedProvider ?? normalizeProviderId(resolved.provider)) !== provider) {
+    return null;
+  }
+
+  const accountId =
+    credential.type === "oauth" &&
+    "accountId" in credential &&
+    typeof credential.accountId === "string"
+      ? credential.accountId.trim() || undefined
+      : undefined;
+  const subscriptionType =
+    credential.type === "oauth" && typeof credential.subscriptionType === "string"
+      ? credential.subscriptionType.trim() || undefined
+      : undefined;
+  const rateLimitTier =
+    credential.type === "oauth" && typeof credential.rateLimitTier === "string"
+      ? credential.rateLimitTier.trim() || undefined
+      : undefined;
+  const email =
+    typeof credential.email === "string" ? credential.email.trim() || undefined : undefined;
+
+  return {
+    provider,
+    token: resolved.apiKey,
+    authProfileId,
+    credentialType: credential.type,
+    ...(accountId ? { accountId } : {}),
+    ...(subscriptionType ? { subscriptionType } : {}),
+    ...(rateLimitTier ? { rateLimitTier } : {}),
+    ...(email ? { email } : {}),
+  };
 }
 
 export async function resolveProviderAuths(params: {

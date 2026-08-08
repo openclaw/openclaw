@@ -129,12 +129,16 @@ export function formatUsageSummaryLine(
 }
 
 export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: number }): string[] {
-  if (summary.providers.length === 0) {
+  if (summary.providers.length === 0 && !summary.profiles?.length) {
     return ["Usage: no provider usage available."];
   }
 
   const lines: string[] = ["Usage:"];
+  const profileProviders = new Set(summary.profiles?.map((entry) => entry.provider) ?? []);
   for (const entry of summary.providers) {
+    if (profileProviders.has(entry.provider)) {
+      continue;
+    }
     const planSuffix = entry.plan ? ` (${entry.plan})` : "";
     if (entry.error) {
       lines.push(`  ${entry.displayName}${planSuffix}: ${entry.error}`);
@@ -156,6 +160,42 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
     }
     for (const billing of entry.billing ?? []) {
       lines.push(`    ${formatBillingEntry(billing)}`);
+    }
+  }
+  const profilesByProvider = new Map<string, NonNullable<UsageSummary["profiles"]>>();
+  for (const entry of summary.profiles ?? []) {
+    const profiles = profilesByProvider.get(entry.provider);
+    if (profiles) {
+      profiles.push(entry);
+    } else {
+      profilesByProvider.set(entry.provider, [entry]);
+    }
+  }
+  for (const profiles of profilesByProvider.values()) {
+    const first = profiles[0];
+    if (!first) {
+      continue;
+    }
+    lines.push(`  ${first.displayName}`);
+    for (const entry of profiles) {
+      const planSuffix = entry.plan ? ` (${entry.plan})` : "";
+      if (entry.error) {
+        lines.push(`    ${entry.authProfileId}${planSuffix}: ${entry.error}`);
+        continue;
+      }
+      lines.push(`    ${entry.authProfileId}${planSuffix}`);
+      if (entry.summary?.trim()) {
+        lines.push(`      ${entry.summary.trim()}`);
+      }
+      for (const window of entry.windows) {
+        const remaining = clampPercent(100 - window.usedPercent);
+        const reset = formatResetRemaining(window.resetAt, opts?.now);
+        const resetSuffix = reset ? ` · resets ${reset}` : "";
+        lines.push(`      ${window.label}: ${remaining.toFixed(0)}% left${resetSuffix}`);
+      }
+      for (const billing of entry.billing ?? []) {
+        lines.push(`      ${formatBillingEntry(billing)}`);
+      }
     }
   }
   return lines;

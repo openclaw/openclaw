@@ -146,5 +146,6 @@ export function mergeUsageSummaries(
   return {
     updatedAt: base.updatedAt,
     providers: [...providersById.values()],
+    ...(base.profiles ? { profiles: base.profiles } : {}),
   };
 }

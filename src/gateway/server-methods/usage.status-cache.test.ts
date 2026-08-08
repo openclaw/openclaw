@@ -151,7 +151,7 @@ describe("usage.status provider usage cache", () => {
       providerIds: ["openai"],
       now,
     });
-    expect(usage.get("openai")?.windows[0]?.usedPercent).toBe(10);
+    expect(usage.usageByProvider.get("openai")?.windows[0]?.usedPercent).toBe(10);
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
 
     store.profiles["openai:default"].access = "access-two";

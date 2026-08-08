@@ -59,9 +59,13 @@ import {
 import {
   clearModelAuthStatusUsageCache,
   fingerprintProviderUsageCredentials,
-  type ProviderUsageStatus,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
+import {
+  buildProfileUsagePayload,
+  type ProfileUsageStatus,
+  type ProviderUsageStatus,
+} from "./models-auth-status-usage.js";
 import type {
   ModelAuthExpiry,
   ModelAuthLogoutResult,
@@ -261,6 +265,7 @@ export function aggregateRefreshableAuthStatus(
 function mapProvider(
   prov: AuthProviderHealth,
   usageByProvider: Map<string, ProviderUsageStatus>,
+  usageByProfile: Map<string, ProfileUsageStatus>,
   expectsOAuthSet: Set<string>,
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
   logoutProfileIds: ReadonlySet<string>,
@@ -288,18 +293,23 @@ function mapProvider(
     status:
       apiKey && !hasRefreshableProfile && rollup.status === "missing" ? "static" : rollup.status,
     expiry: buildExpiry(rollup.remainingMs, rollup.expiresAt),
-    profiles: prov.profiles.map((prof) => ({
-      profileId: prof.profileId,
-      type: prof.type,
-      status: prof.status,
-      reasonCode: prof.reasonCode,
-      expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
-      ...((prof.type === "oauth" || prof.type === "token") &&
-      logoutProfileIds.has(prof.profileId) &&
-      !configBoundProfileIds.has(prof.profileId)
-        ? { logoutSupported: true }
-        : {}),
-    })),
+    profiles: prov.profiles.map((prof) => {
+      const profileUsage = usageByProfile.get(prof.profileId);
+      const profileUsagePayload = buildProfileUsagePayload(profileUsage);
+      return {
+        profileId: prof.profileId,
+        type: prof.type,
+        status: prof.status,
+        reasonCode: prof.reasonCode,
+        expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
+        ...((prof.type === "oauth" || prof.type === "token") &&
+        logoutProfileIds.has(prof.profileId) &&
+        !configBoundProfileIds.has(prof.profileId)
+          ? { logoutSupported: true }
+          : {}),
+        ...(profileUsagePayload ? { usage: profileUsagePayload } : {}),
+      };
+    }),
     ...(apiKey ? { apiKey } : {}),
     usage:
       usage && usageKey
@@ -625,7 +635,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ),
       ];
 
-      const usageByProvider = readProviderUsageStaleWhileRevalidate({
+      const { usageByProvider, usageByProfile } = readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
         configRef: cfg,
@@ -654,6 +664,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         mapProvider(
           prov,
           usageByProvider,
+          usageByProfile,
           configured.expectsOAuth,
           apiKeys,
           logoutProfileIds,

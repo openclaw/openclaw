@@ -485,6 +485,7 @@ export async function buildStatusReplyParts(
         loadProviderUsageSummary({
           timeoutMs: usageSummaryTimeoutMs,
           providers: [currentUsageProvider],
+          includeProfiles: false,
           agentDir: statusAgentDir,
           workspaceDir: statusWorkspaceDir,
           config: cfg,
