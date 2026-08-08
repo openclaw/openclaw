@@ -341,13 +341,13 @@ export function listChangedPathsFromGit(params) {
 }
 
 function runGitNameOnlyDiff(extraArgs, cwd = process.cwd()) {
-  const output = execFileSync("git", ["diff", "--name-only", ...extraArgs], {
+  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return output.split("\0").map(normalizeChangedPath).filter(Boolean);
 }
 
 function isGitNoMergeBaseError(error) {
@@ -362,26 +362,30 @@ function isGitNoMergeBaseError(error) {
 }
 
 function runGitLsFiles(extraArgs, cwd = process.cwd()) {
-  const output = execFileSync("git", ["ls-files", ...extraArgs], {
+  const output = execFileSync("git", ["ls-files", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
   });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  return output.split("\0").map(normalizeChangedPath).filter(Boolean);
 }
 
 /**
  * Lists staged changed paths for pre-commit checks.
  */
 export function listStagedChangedPaths(cwd = process.cwd()) {
-  const output = execFileSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
-  });
-  return output.split("\n").map(normalizeChangedPath).filter(Boolean);
+  const output = execFileSync(
+    "git",
+    ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMRD"],
+    {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+    },
+  );
+  return output.split("\0").map(normalizeChangedPath).filter(Boolean);
 }
 
 /**
