@@ -872,7 +872,6 @@ async function scanSlackConversationForDelivery(params: {
 
 export async function reconcileSlackUnknownSend(
   ctx: ChannelMessageUnknownSendContext,
-  opts?: { client?: SlackConversationLookupClient },
 ): Promise<ChannelMessageUnknownSendReconciliationResult> {
   const cfg = requireRuntimeConfig(ctx.cfg, "Slack delivery reconciliation");
   const account = resolveSlackAccount({
@@ -914,12 +913,10 @@ export async function reconcileSlackUnknownSend(
       retryable: false,
     };
   }
-  const suppliedClient = recipient.teamId ? undefined : opts?.client;
-  const readClient =
-    suppliedClient ?? createSlackReadClient(readToken, { teamId: recipient.teamId });
-  const writeClient =
-    suppliedClient ??
-    (writeToken ? getSlackWriteClient(writeToken, { teamId: recipient.teamId }) : undefined);
+  const readClient = createSlackReadClient(readToken, { teamId: recipient.teamId });
+  const writeClient = writeToken
+    ? getSlackWriteClient(writeToken, { teamId: recipient.teamId })
+    : undefined;
   const payloadReplyToId = ctx.payloads[0]?.replyToId;
   const effectiveReplyToId = Object.hasOwn(ctx, "effectiveReplyToId")
     ? normalizeOptionalString(ctx.effectiveReplyToId)
@@ -950,9 +947,12 @@ export async function reconcileSlackUnknownSend(
       accountId: account.accountId,
       token: channelToken,
     });
-    const lookupClients = suppliedClient
-      ? [suppliedClient]
-      : [readClient, ...(writeClient && writeToken !== readToken ? [writeClient] : [])];
+    const lookupClients = [
+      readClient,
+      ...(writeClient && writeClient !== readClient && writeToken !== readToken
+        ? [writeClient]
+        : []),
+    ];
     let lookupError: unknown;
     let bestUnresolvedScan: SlackConversationDeliveryScan | undefined;
     for (const lookupClient of lookupClients) {
