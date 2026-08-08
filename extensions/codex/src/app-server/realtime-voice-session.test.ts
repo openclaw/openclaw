@@ -105,6 +105,32 @@ describe("Codex app-server realtime voice bridge", () => {
     expect(onClose).toHaveBeenCalledWith("completed");
   });
 
+  it("settles completion when the close callback throws", async () => {
+    const client = { request: vi.fn(async () => ({})) } as unknown as CodexAppServerClient;
+    const bridge = realtimeVoiceSessionTesting.createBridge(
+      client,
+      "thread-1",
+      {
+        providerConfig: { version: "v2" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onClose: () => {
+          throw new Error("host teardown failed");
+        },
+      },
+      new AbortController().signal,
+    );
+    await bridge.connect();
+
+    expect(() =>
+      bridge.handleNotification({
+        method: "thread/realtime/closed",
+        params: { threadId: "thread-1", reason: "remote" },
+      }),
+    ).toThrow("host teardown failed");
+    await expect(bridge.completion.promise).resolves.toBe("completed");
+  });
+
   it("supports Codex Realtime V2 on the bound thread for public API models", async () => {
     const requestRpc = vi.fn(async () => ({}));
     const client = { request: requestRpc } as unknown as CodexAppServerClient;

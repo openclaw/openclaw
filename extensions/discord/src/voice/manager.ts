@@ -780,6 +780,55 @@ export class DiscordVoiceManager {
     const player = voiceSdk.createAudioPlayer();
     connection.subscribe(player);
     let stopped = false;
+    const speakingHandler = (userId: string) => {
+      void this.handleSpeakingStart(entry, userId).catch((err: unknown) => {
+        logger.warn(`discord voice: capture failed: ${formatErrorMessage(err)}`);
+      });
+    };
+    const speakingEndHandler = (userId: string) => {
+      this.scheduleCaptureFinalize(entry, userId, "speaker end");
+    };
+    const disconnectedHandler = () => {
+      void (async () => {
+        try {
+          logVoiceVerbose(
+            `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
+          );
+          await Promise.race([
+            voiceSdk.entersState(
+              connection,
+              voiceSdk.VoiceConnectionStatus.Signalling,
+              reconnectGraceMs,
+            ),
+            voiceSdk.entersState(
+              connection,
+              voiceSdk.VoiceConnectionStatus.Connecting,
+              reconnectGraceMs,
+            ),
+          ]);
+          logVoiceVerbose(`disconnected: recovery started guild ${guildId} channel ${channelId}`);
+        } catch (err) {
+          logger.warn(
+            `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
+          );
+          clearSessionIfCurrent();
+          stopEntry(entry, {
+            destroyConnection: true,
+            reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
+          });
+        }
+      })();
+    };
+    const destroyedHandler = () => {
+      clearSessionIfCurrent();
+      stopEntry(entry, {
+        destroyConnection: false,
+        reason: `destroyed guild ${guildId} channel ${channelId}`,
+      });
+    };
+    const playerErrorHandler = (err: Error) => {
+      logger.warn(`discord voice: playback error: ${formatErrorMessage(err)}`);
+    };
     const clearSessionIfCurrent = () => {
       const active = this.sessions.get(guildId);
       if (active?.connection === connection) {
@@ -890,57 +939,6 @@ export class DiscordVoiceManager {
         channelId,
       };
     }
-
-    const speakingHandler: ((userId: string) => void) | undefined = (userId: string) => {
-      void this.handleSpeakingStart(entry, userId).catch((err: unknown) => {
-        logger.warn(`discord voice: capture failed: ${formatErrorMessage(err)}`);
-      });
-    };
-    const speakingEndHandler: ((userId: string) => void) | undefined = (userId: string) => {
-      this.scheduleCaptureFinalize(entry, userId, "speaker end");
-    };
-
-    const disconnectedHandler: (() => void) | undefined = () => {
-      void (async () => {
-        try {
-          logVoiceVerbose(
-            `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
-          );
-          await Promise.race([
-            voiceSdk.entersState(
-              connection,
-              voiceSdk.VoiceConnectionStatus.Signalling,
-              reconnectGraceMs,
-            ),
-            voiceSdk.entersState(
-              connection,
-              voiceSdk.VoiceConnectionStatus.Connecting,
-              reconnectGraceMs,
-            ),
-          ]);
-          logVoiceVerbose(`disconnected: recovery started guild ${guildId} channel ${channelId}`);
-        } catch (err) {
-          logger.warn(
-            `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
-          );
-          clearSessionIfCurrent();
-          stopEntry(entry, {
-            destroyConnection: true,
-            reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
-          });
-        }
-      })();
-    };
-    const destroyedHandler: (() => void) | undefined = () => {
-      clearSessionIfCurrent();
-      stopEntry(entry, {
-        destroyConnection: false,
-        reason: `destroyed guild ${guildId} channel ${channelId}`,
-      });
-    };
-    const playerErrorHandler: ((err: Error) => void) | undefined = (err: Error) => {
-      logger.warn(`discord voice: playback error: ${formatErrorMessage(err)}`);
-    };
 
     this.enableDaveReceivePassthrough(
       entry,
