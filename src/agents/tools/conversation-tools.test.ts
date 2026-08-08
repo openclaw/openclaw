@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ConversationListResultSchema,
   ConversationSendResultSchema,
@@ -15,6 +15,11 @@ import {
   createConversationsSendTool,
   createConversationsTurnTool,
 } from "./conversation-tools.js";
+import { resetTurnSendLedgerForTest } from "./turn-send-ledger.js";
+
+afterEach(() => {
+  resetTurnSendLedgerForTest();
+});
 
 const conversation = {
   conversationRef: "conv_0123456789abcdef0123456789abcdef",
@@ -288,5 +293,109 @@ describe("conversation tools", () => {
       expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain(name);
       expect(DEFAULT_GATEWAY_HTTP_TOOL_DENY).toContain(name);
     }
+  });
+});
+
+describe("conversations_send per-turn send budget", () => {
+  const budgetOptions = {
+    agentId: "main",
+    agentSessionKey: "agent:main:reef:direct:operator",
+    runId: "run-conv-1",
+    config: {},
+  } as const;
+
+  function softNotice(result: { content: Array<{ type: string; text?: string }> }) {
+    return result.content
+      .filter((entry): entry is { type: "text"; text: string } => entry.type === "text")
+      .map((entry) => entry.text)
+      .find((text) => text.includes("already sent"));
+  }
+
+  it("appends a soft reminder from the second send to the same conversation this turn", async () => {
+    const deps = createDeps();
+    const tool = createConversationsSendTool(budgetOptions, deps);
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    const first = await tool.execute("c1", args);
+    const second = await tool.execute("c2", args);
+    expect(softNotice(first)).toBeUndefined();
+    expect(softNotice(second)).toContain("already sent 2 messages");
+    expect(second.details).toMatchObject({ status: "sent" });
+  });
+
+  it("does not count a suppressed Gateway result", async () => {
+    const deps = createDeps();
+    deps.callGatewayMock.mockResolvedValueOnce({
+      status: "suppressed",
+      conversationRef: conversation.conversationRef,
+      channel: "reef",
+    } as never);
+    const tool = createConversationsSendTool(budgetOptions, deps);
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    await tool.execute("c1", args);
+    const second = await tool.execute("c2", args);
+    // The suppressed first send did not reach the peer, so this is the first success.
+    expect(softNotice(second)).toBeUndefined();
+  });
+
+  it("resets the count for a new turn (new runId)", async () => {
+    const deps = createDeps();
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    await createConversationsSendTool(budgetOptions, deps).execute("c1", args);
+    const nextTurn = createConversationsSendTool({ ...budgetOptions, runId: "run-conv-2" }, deps);
+    const result = await nextTurn.execute("c1", args);
+    expect(softNotice(result)).toBeUndefined();
+  });
+
+  it("blocks before the Gateway call once the opt-in hard cap is reached", async () => {
+    const deps = createDeps();
+    const tool = createConversationsSendTool(
+      { ...budgetOptions, config: { tools: { message: { maxMessagesPerTurnPerTarget: 1 } } } },
+      deps,
+    );
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    await tool.execute("c1", args);
+    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    const blocked = await tool.execute("c2", args);
+    expect(blocked.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
+    // The blocked send never reached the Gateway.
+    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses the soft reminder when turnSendNudge is disabled", async () => {
+    const deps = createDeps();
+    const tool = createConversationsSendTool(
+      { ...budgetOptions, config: { tools: { message: { turnSendNudge: false } } } },
+      deps,
+    );
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    await tool.execute("c1", args);
+    const second = await tool.execute("c2", args);
+    // The nudge is gated off, but both sends still reached the Gateway.
+    expect(softNotice(second)).toBeUndefined();
+    expect(deps.callGatewayMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("still enforces the hard cap when turnSendNudge is disabled", async () => {
+    const deps = createDeps();
+    const tool = createConversationsSendTool(
+      {
+        ...budgetOptions,
+        config: { tools: { message: { maxMessagesPerTurnPerTarget: 1, turnSendNudge: false } } },
+      },
+      deps,
+    );
+    const args = { conversationRef: conversation.conversationRef, message: "hi" };
+    await tool.execute("c1", args);
+    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
+    const blocked = await tool.execute("c2", args);
+    // Counting still ran past the first send, so the cap blocks the second.
+    expect(blocked.details).toMatchObject({
+      status: "suppressed",
+      reason: "turn_send_budget_exhausted",
+    });
+    expect(deps.callGatewayMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -12,6 +12,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveEffectiveMessageToolsConfig } from "../../infra/outbound/outbound-policy.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -22,6 +23,7 @@ import {
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
+import { peekTurnSendCount, recordTurnSend } from "./turn-send-ledger.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -55,6 +57,8 @@ type ConversationToolOptions = {
   agentId?: string;
   agentSessionId?: string;
   agentSessionKey?: string;
+  /** Current agent run; scopes the per-turn send ledger to one turn. */
+  runId?: string;
   config?: OpenClawConfig;
   senderIsOwner?: boolean;
 };
@@ -136,6 +140,17 @@ export function createConversationsListTool(
   };
 }
 
+function resolveConversationBudgetContext(
+  options: ConversationToolOptions,
+  conversationRef: string,
+): { sessionKey: string; runId: string; targetKey: string } | undefined {
+  const sessionKey = options.agentSessionKey?.trim() || undefined;
+  if (!sessionKey || !options.runId) {
+    return undefined;
+  }
+  return { sessionKey, runId: options.runId, targetKey: conversationRef };
+}
+
 /** Sends directly to one external conversation without invoking its backing local session. */
 export function createConversationsSendTool(
   options: ConversationToolOptions = {},
@@ -162,6 +177,25 @@ export function createConversationsSendTool(
         toolName: "conversations_send",
         conversationRef,
       });
+      // Per-turn send budget, shared with the message tool: count successful sends
+      // per (turn, conversationRef) so a reworded resend to the same conversation is
+      // visible even though the loop detector hashes full params and can't see it.
+      const budgetContext = resolveConversationBudgetContext(options, conversationRef);
+      // Optional hard cap (opt-in via tools.message.maxMessagesPerTurnPerTarget):
+      // block before the Gateway call once the cap is reached this turn.
+      if (budgetContext && options.config) {
+        const maxPerTurn = resolveEffectiveMessageToolsConfig({
+          cfg: options.config,
+          agentId: resolveToolAgentId(options),
+        })?.maxMessagesPerTurnPerTarget;
+        if (maxPerTurn !== undefined && peekTurnSendCount(budgetContext) >= maxPerTurn) {
+          return jsonResult({
+            status: "suppressed",
+            reason: "turn_send_budget_exhausted",
+            message: `Blocked: already sent ${maxPerTurn} message(s) to this conversation this turn (maxMessagesPerTurnPerTarget). Finalize your reply instead of sending another message.`,
+          });
+        }
+      }
       const result = await deps.callGateway<ConversationSendResult>({
         method: "conversations.send",
         params: {
@@ -174,7 +208,32 @@ export function createConversationsSendTool(
         ...(options.config ? { config: options.config } : {}),
         ...(signal ? { signal } : {}),
       });
-      return jsonResult(result);
+      const base = jsonResult(result);
+      // Only actual delivery/enqueue counts; a suppressed or unknown status did not
+      // reach the peer. Counting always happens; the soft reminder is appended from
+      // the second send onward unless turnSendNudge is explicitly disabled.
+      if (budgetContext && (result.status === "sent" || result.status === "queued")) {
+        const sendCount = recordTurnSend(budgetContext);
+        const nudgeEnabled =
+          !options.config ||
+          resolveEffectiveMessageToolsConfig({
+            cfg: options.config,
+            agentId: resolveToolAgentId(options),
+          })?.turnSendNudge !== false;
+        if (sendCount >= 2 && nudgeEnabled) {
+          return {
+            ...base,
+            content: [
+              ...base.content,
+              {
+                type: "text" as const,
+                text: `You have already sent ${sendCount} messages to this conversation this turn; if this is a rewrite of the same reply, finalize now instead of sending another variant.`,
+              },
+            ],
+          };
+        }
+      }
+      return base;
     },
   };
 }
