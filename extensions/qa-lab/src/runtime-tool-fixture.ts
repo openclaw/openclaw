@@ -1000,9 +1000,7 @@ export async function runRuntimeToolFixture(
         sessionKey: happySessionKey,
         message: happyPrompt,
         timeoutMs: liveTurnTimeoutMs(env, 45_000),
-        ...(happyPathOutputRequired &&
-        requireTranscriptEvidence &&
-        !requireNativePatchTranscriptEvidence
+        ...(happyPathOutputRequired && requireTranscriptEvidence
           ? { transcriptToolName: toolName, requireSuccessfulTranscriptToolResult: true }
           : {}),
       });
@@ -1045,9 +1043,7 @@ export async function runRuntimeToolFixture(
         sessionKey: failureSessionKey,
         message: failurePrompt,
         timeoutMs: liveTurnTimeoutMs(env, 45_000),
-        ...(requireTranscriptEvidence && !requireNativePatchTranscriptEvidence
-          ? { transcriptToolName: toolName }
-          : {}),
+        ...(requireTranscriptEvidence ? { transcriptToolName: toolName } : {}),
       });
     if (toolName !== "apply_patch") {
       return runFailurePrompt();
