@@ -459,23 +459,19 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 
 ## Acknowledgment reactions
 
-`channels.whatsapp.ackReaction` sends an immediate reaction on inbound receipt, gated by `reactionLevel` (suppressed when `"off"`):
+`messages.ackReaction` sends an immediate reaction on inbound receipt, gated by `channels.whatsapp.reactionLevel` (suppressed when `"off"`). `messages.ackReactionScope` selects which conversations get one:
 
 ```json5
 {
-  channels: {
-    whatsapp: {
-      ackReaction: {
-        emoji: "👀",
-        direct: true,
-        group: "mentions", // always | mentions | never
-      },
-    },
+  messages: {
+    ackReaction: "👀",
+    // group-mentions | group-all | direct | all | off | none
+    ackReactionScope: "group-mentions",
   },
 }
 ```
 
-Notes: sent immediately after inbound is accepted (pre-reply); if `ackReaction` is present without `emoji`, WhatsApp uses the routed agent's identity emoji falling back to "👀" (omit `ackReaction` or set `emoji: ""` for no ack); failures are logged but do not block reply delivery; group mode `mentions` reacts only on mention-triggered turns, while group activation `always` bypasses that check; WhatsApp uses `channels.whatsapp.ackReaction` only (legacy `messages.ackReaction` does not apply here).
+Notes: sent immediately after inbound is accepted (pre-reply); leaving `messages.ackReaction` unset (or setting it to `""`) sends no ack reaction at all, and `ackReactionScope: "off"` also disables it; when a value is set but blank after trimming, WhatsApp falls back to the routed agent's identity emoji and then to "👀"; failures are logged but do not block reply delivery; scope `group-mentions` reacts only on mention-triggered group turns, while `group-all` acks every group message.
 
 ## Lifecycle status reactions
 
@@ -491,7 +487,7 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 }
 ```
 
-Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the ack after the final done/error state.
+Notes: `messages.ackReaction` and `messages.ackReactionScope` still control eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the ack after the final done/error state.
 
 ## Active-turn typing
 
