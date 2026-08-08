@@ -55,7 +55,7 @@ import type {
  * CLI runtimes and OpenClaw-native compaction stay on the embedded runner path; plugin harnesses
  * can opt in through their `compact` hook.
  */
-type NativeCompactionRequest = "after_context_engine";
+type NativeCompactionRequest = "after_context_engine" | "required_preflight";
 
 type InternalAgentHarnessCompactionOptions = {
   nativeCompactionRequest?: NativeCompactionRequest;
@@ -490,8 +490,12 @@ export async function maybeCompactAgentHarnessSession(
   resolvedRuntimeAuthPlan = resolved.runtimeAuthPlan ?? resolvedRuntimeAuthPlan;
   const internalHarness = harness as InternalAgentHarness;
   const shouldCompactAfterContextEngine =
-    options.nativeCompactionRequest === "after_context_engine";
-  if (shouldCompactAfterContextEngine && !internalHarness.compactAfterContextEngine) {
+    options.nativeCompactionRequest === "after_context_engine" ||
+    options.nativeCompactionRequest === "required_preflight";
+  if (
+    options.nativeCompactionRequest === "after_context_engine" &&
+    !internalHarness.compactAfterContextEngine
+  ) {
     return undefined;
   }
   if (!options.nativeCompactionRequest && !harness.compact) {
@@ -554,7 +558,17 @@ export async function maybeCompactAgentHarnessSession(
         }
       : handoffCompactParams;
   if (shouldCompactAfterContextEngine) {
-    return internalHarness.compactAfterContextEngine?.(resolvedCompactParams);
+    if (internalHarness.compactAfterContextEngine) {
+      return internalHarness.compactAfterContextEngine({
+        ...resolvedCompactParams,
+        ...(options.nativeCompactionRequest
+          ? { nativeCompactionRequest: options.nativeCompactionRequest }
+          : {}),
+      });
+    }
+    if (!harness.compact) {
+      return undefined;
+    }
   }
   return harness.compact?.(resolvedCompactParams);
 }

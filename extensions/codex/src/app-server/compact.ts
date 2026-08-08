@@ -57,6 +57,7 @@ type CodexAppServerCompactOptions = {
   pluginConfig?: unknown;
   clientFactory?: CodexAppServerClientFactory;
   allowNonManualNativeRequest?: boolean;
+  nativeCompactionRequest?: "required_preflight" | "after_context_engine";
   nativeCompletionTimeoutMs?: number;
   nativeInterruptGraceMs?: number;
 };
@@ -664,12 +665,13 @@ async function compactCodexNativeThread(
                       code: "aborted_before_native_compaction",
                       expectedThreadId: binding.threadId,
                       currentThreadId: currentBinding?.threadId,
+                      request: options.nativeCompactionRequest ?? "after_context_engine",
                     }),
                   };
                 }
                 if (!currentBinding || !isSameNativeCompactionBinding(currentBinding, binding)) {
                   embeddedAgentLog.warn(
-                    "skipping codex app-server compaction because the thread binding changed",
+                    "codex app-server compaction could not use the thread binding because it changed",
                     {
                       sessionId: params.sessionId,
                       sessionKey: params.sessionKey,
@@ -679,11 +681,15 @@ async function compactCodexNativeThread(
                   );
                   return {
                     started: false as const,
-                    result: skippedCodexNativeCompactionResult(params, {
+                    // A binding change between the initial read and the native
+                    // request is a stale-binding race, not a benign skip. Report
+                    // it as the canonical recoverable failure so preflight and
+                    // CLI callers fall back to the context engine instead of
+                    // treating an uncompacted ok:true result as a dropped turn.
+                    result: failedCodexThreadBindingCompactionResult(params, {
                       reason: "codex app-server binding changed before native compaction",
-                      code: "binding_changed_before_native_compaction",
-                      expectedThreadId: binding.threadId,
-                      currentThreadId: currentBinding?.threadId,
+                      recovery: "stale_thread_binding",
+                      threadId: currentBinding?.threadId ?? binding.threadId,
                     }),
                   };
                 }
@@ -805,7 +811,7 @@ async function compactCodexNativeThread(
           completed: true,
           ...(options.allowNonManualNativeRequest
             ? {
-                request: "after_context_engine",
+                request: options.nativeCompactionRequest ?? "after_context_engine",
                 trigger: params.trigger ?? "unknown",
               }
             : {}),
@@ -821,6 +827,7 @@ async function compactCodexNativeThread(
           code: "aborted_before_native_compaction",
           expectedThreadId: initialBinding.threadId,
           currentThreadId: binding.threadId,
+          request: options.nativeCompactionRequest ?? "after_context_engine",
         });
       }
       return {
@@ -857,6 +864,7 @@ function skippedCodexNativeCompactionResult(
     code: string;
     expectedThreadId?: string;
     currentThreadId?: string;
+    request?: "required_preflight" | "after_context_engine";
   },
 ): EmbeddedAgentCompactResult {
   return codexNativeCompactionResult(params, {
@@ -866,7 +874,7 @@ function skippedCodexNativeCompactionResult(
       backend: "codex-app-server",
       skipped: true,
       reason: skipped.code,
-      request: "after_context_engine",
+      request: skipped.request ?? "after_context_engine",
       trigger: params.trigger ?? "unknown",
       ...(skipped.expectedThreadId ? { expectedThreadId: skipped.expectedThreadId } : {}),
       ...(skipped.currentThreadId ? { currentThreadId: skipped.currentThreadId } : {}),

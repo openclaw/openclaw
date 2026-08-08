@@ -235,10 +235,16 @@ export function createCodexAppServerAgentHarness(options: {
     },
     compactAfterContextEngine: async (params) => {
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+      const nativeCompactionRequest = (
+        params as {
+          nativeCompactionRequest?: "required_preflight" | "after_context_engine";
+        }
+      ).nativeCompactionRequest;
       return maybeCompactCodexAppServerSession(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
         allowNonManualNativeRequest: true,
+        ...(nativeCompactionRequest ? { nativeCompactionRequest } : {}),
       });
     },
     reset: async (params) => {
