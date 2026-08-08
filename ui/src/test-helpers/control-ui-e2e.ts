@@ -1065,6 +1065,7 @@ function installControlUiMockGateway(
       "thinkingLevel",
       "fastMode",
       "category",
+      "boardFace",
       "pinned",
       "toolOverrides",
     ] as const) {
