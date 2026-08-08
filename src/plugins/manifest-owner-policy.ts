@@ -76,26 +76,17 @@ export function resolveManifestOwnerBasePolicyBlock(params: {
   return null;
 }
 
-/** Resolves the effective activation state, including explicit selection, of a manifest owner. */
-export function resolveManifestOwnerActivationState(params: {
-  plugin: OwnerPlugin;
-  normalizedConfig: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-}): ReturnType<typeof resolveEffectivePluginActivationState> {
-  return resolveEffectivePluginActivationState({
-    id: params.plugin.id,
-    origin: params.plugin.origin,
-    config: params.normalizedConfig,
-    rootConfig: params.rootConfig,
-    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
-  });
-}
-
 /** Resolves whether a manifest owner plugin is effectively activated. */
 export function isActivatedManifestOwner(params: {
   plugin: OwnerPlugin;
   normalizedConfig: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
 }): boolean {
-  return resolveManifestOwnerActivationState(params).activated;
+  return resolveEffectivePluginActivationState({
+    id: params.plugin.id,
+    origin: params.plugin.origin,
+    config: params.normalizedConfig,
+    rootConfig: params.rootConfig,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
+  }).activated;
 }

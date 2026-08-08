@@ -158,6 +158,23 @@ export function hasMaterialPluginEntryConfig(entry: unknown): boolean {
   );
 }
 
+/**
+ * True when config explicitly selects a plugin the way auto-enable's `preferOver` policy honors:
+ * an allowlist entry or a material `plugins.entries` record. Auto-enable refuses to disable such a
+ * plugin for a replacement, so every policy that mirrors channel replacement must read this one
+ * definition. The activation resolver's explicit set is deliberately wider — it also counts bundled
+ * channel enablement and slot selection, which do not stop a replacement from taking the channel.
+ */
+export function isPluginExplicitlySelected(
+  plugins: OpenClawConfig["plugins"],
+  pluginId: string,
+): boolean {
+  return (
+    (Array.isArray(plugins?.allow) && plugins.allow.includes(pluginId)) ||
+    hasMaterialPluginEntryConfig(plugins?.entries?.[pluginId])
+  );
+}
+
 export function applyTestPluginDefaults(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

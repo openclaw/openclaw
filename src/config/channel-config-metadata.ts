@@ -4,11 +4,10 @@
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasMaterialPluginEntryConfig, normalizePluginsConfig } from "../plugins/config-state.js";
-import { resolveManifestOwnerActivationState } from "../plugins/manifest-owner-policy.js";
+import { isPluginExplicitlySelected, normalizePluginsConfig } from "../plugins/config-state.js";
+import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -28,7 +27,7 @@ type ChannelSchemaClaim = {
   preferOver?: readonly string[];
   originRank: number;
   activated: boolean;
-  explicitlyEnabled: boolean;
+  explicitlySelected: boolean;
   behindCloserDeclaration: boolean;
 };
 
@@ -154,17 +153,28 @@ function keepHighestRanked<T>(claims: readonly T[], rank: (claim: T) => number):
   return claims.filter((claim) => rank(claim) === best);
 }
 
-/** Ranks a claim above the claims it supersedes and below the claims that supersede it. */
+/**
+ * Ranks a claim above the claims it supersedes and below the claims that supersede it. Only an
+ * implicitly selected claim can be displaced: auto-enable leaves an explicitly selected plugin
+ * enabled and reports duplicate channel diagnostics, and channel registration then keeps the first
+ * registrant, so `preferOver` decides nothing once the operator selected both plugins.
+ */
 function channelReplacementRank(
   claim: ChannelSchemaClaim,
   claims: readonly ChannelSchemaClaim[],
 ): number {
   const supersedes = claims.some(
-    (other) => other !== claim && declaresChannelPreferenceOver(claim.preferOver, other.record.id),
+    (other) =>
+      other !== claim &&
+      !other.explicitlySelected &&
+      declaresChannelPreferenceOver(claim.preferOver, other.record.id),
   );
-  const superseded = claims.some(
-    (other) => other !== claim && declaresChannelPreferenceOver(other.preferOver, claim.record.id),
-  );
+  const superseded =
+    !claim.explicitlySelected &&
+    claims.some(
+      (other) =>
+        other !== claim && declaresChannelPreferenceOver(other.preferOver, claim.record.id),
+    );
   return (supersedes ? 1 : 0) - (superseded ? 1 : 0);
 }
 
@@ -180,7 +190,7 @@ function channelReplacementRank(
 function selectChannelSchemaOwner(claims: readonly ChannelSchemaClaim[]): PluginManifestRecord {
   let eligible = keepHighestRanked(claims, (claim) => (claim.activated ? 1 : 0));
   eligible = keepHighestRanked(eligible, (claim) => -claim.originRank);
-  eligible = keepHighestRanked(eligible, (claim) => (claim.explicitlyEnabled ? 1 : 0));
+  eligible = keepHighestRanked(eligible, (claim) => (claim.explicitlySelected ? 1 : 0));
   const contenders = eligible;
   eligible = keepHighestRanked(contenders, (claim) => channelReplacementRank(claim, contenders));
   const owners = keepHighestRanked(eligible, (claim) => (claim.behindCloserDeclaration ? 0 : 1));
@@ -195,15 +205,6 @@ function selectChannelSchemaOwners(
   // Without config every plugin counts as an equally eligible owner, which keeps registry-only
   // callers (docs baseline, contract tests) on pure manifest metadata.
   const normalizedPlugins = config ? normalizePluginsConfig(config.plugins) : undefined;
-  // The activation resolver marks only enabled entries, bundled channel enablement, slots, and
-  // allowlist entries explicit. Auto-enable also refuses to supersede a materially configured
-  // plugin, so the explicit tier reads that same policy or a replacement takes the schema that
-  // validates the configured plugin's existing channel keys.
-  const materiallySelectedPluginIds = new Set(
-    Object.entries(config?.plugins?.entries ?? {})
-      .filter(([, entry]) => hasMaterialPluginEntryConfig(entry))
-      .map(([pluginId]) => normalizePluginPolicyId(pluginId)),
-  );
   const claimsByChannelId = new Map<string, ChannelSchemaClaim[]>();
   const closestDeclaredRank = new Map<string, number>();
   const declareChannel = (channelId: string, originRank: number): void => {
@@ -222,23 +223,25 @@ function selectChannelSchemaOwners(
     if (channelConfigs.length === 0) {
       continue;
     }
-    const activation = normalizedPlugins
-      ? resolveManifestOwnerActivationState({
+    const activated = normalizedPlugins
+      ? isActivatedManifestOwner({
           plugin: record,
           normalizedConfig: normalizedPlugins,
           rootConfig: config,
         })
-      : { activated: true, explicitlyEnabled: false };
-    const explicitlyEnabled =
-      activation.explicitlyEnabled ||
-      materiallySelectedPluginIds.has(normalizePluginPolicyId(record.id));
+      : true;
+    // Auto-enable's replacement policy owns "did the operator choose this plugin?", so the explicit
+    // tier reads that predicate. The activation resolver's wider explicit set also counts bundled
+    // channel enablement and slots, which auto-enable still supersedes — reading it would keep the
+    // schema of a plugin the runtime disables and reject the replacement's own channel keys.
+    const explicitlySelected = isPluginExplicitlySelected(config?.plugins, record.id);
     for (const [channelId, channelConfig] of channelConfigs) {
       const claim: ChannelSchemaClaim = {
         record,
         preferOver: channelConfig.preferOver,
         originRank,
-        activated: activation.activated,
-        explicitlyEnabled,
+        activated,
+        explicitlySelected,
         // A closer-origin plugin that declared this channel id first keeps the incumbent owner,
         // so a farther-origin claim behind it cannot take a schema that closer metadata shadows.
         behindCloserDeclaration: (closestDeclaredRank.get(channelId) ?? originRank) < originRank,

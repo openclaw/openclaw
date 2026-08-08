@@ -13,11 +13,13 @@ function createChannelPlugin(params: {
   channelId?: string;
   extraProperty?: string;
   preferOver?: string[];
+  enabledByDefault?: boolean;
 }): PluginManifestRecord {
   const channelId = params.channelId ?? "slack";
   return {
     id: params.id,
     channels: [channelId],
+    ...(params.enabledByDefault ? { enabledByDefault: true } : {}),
     configSchema: {
       type: "object",
       properties: { workspace: { type: "string" } },
@@ -115,6 +117,35 @@ const MATERIAL_PLUGIN_ENTRIES = [
   ["apiKey", { apiKey: "op://slack/token" }],
 ] as const;
 
+// Every `plugins.entries` form auto-enable's replacement policy honors as an explicit selection.
+const EXPLICIT_PLUGIN_ENTRIES = [
+  ["enabled", { enabled: true }],
+  ...MATERIAL_PLUGIN_ENTRIES,
+] as const;
+const CANONICAL_EXPLICIT_PLUGIN_ENTRIES = EXPLICIT_PLUGIN_ENTRIES.filter(
+  ([entryKey]) => entryKey !== "apiKey",
+);
+
+function bothSlackPluginsSelected(entry: Record<string, unknown>): OpenClawConfig {
+  return {
+    plugins: {
+      entries: { "openclaw-slack": entry, "acme-slack-thread-guard": entry },
+    },
+  } as OpenClawConfig;
+}
+
+// A bundled successor superseding the bundled channel plugin: the only shape where two claims
+// reach the explicit tier at equal origin, since `channels.<id>.enabled` marks a bundled plugin
+// explicit for the activation resolver but not for auto-enable's replacement policy.
+const BUNDLED_SLACK = createChannelPlugin({ id: "slack", origin: "bundled" });
+const BUNDLED_REPLACEMENT_SLACK = createChannelPlugin({
+  id: "openclaw-slack-thread-guard",
+  origin: "bundled",
+  extraProperty: "threadGuard",
+  preferOver: ["slack"],
+  enabledByDefault: true,
+});
+
 describe("collectChannelSchemaMetadataWithOwnership", () => {
   for (const [order, plugins] of TRAVERSAL_ORDERS) {
     it(`keeps the preferOver replacement schema at equal origin (${order})`, () => {
@@ -158,6 +189,41 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
         ).toBe("openclaw-slack");
       });
     }
+
+    // Selecting both plugins keeps both active with duplicate channel diagnostics, and channel
+    // registration keeps the first registrant, so preferOver decides nothing. Ownership must stay
+    // on the deterministic last-claim order instead of switching to replacement-only validation.
+    for (const [entryKey, entry] of EXPLICIT_PLUGIN_ENTRIES) {
+      it(`keeps last-claim ownership when both plugins are selected through entries.${entryKey} (${order})`, () => {
+        expect(
+          selectSlackSchemaOwner([...plugins], bothSlackPluginsSelected(entry)).schemaPluginId,
+        ).toBe(plugins.at(-1)?.id);
+      });
+    }
+
+    it(`keeps last-claim ownership when both plugins are allowlisted (${order})`, () => {
+      expect(
+        selectSlackSchemaOwner([...plugins], {
+          plugins: { allow: ["openclaw-slack", "acme-slack-thread-guard"] },
+        } as OpenClawConfig).schemaPluginId,
+      ).toBe(plugins.at(-1)?.id);
+    });
+  }
+
+  // `channels.<id>.enabled` is not an explicit plugin selection for auto-enable's replacement
+  // policy, so it still disables the superseded bundled plugin and the replacement serves the
+  // channel. The collector must not read a broader explicit set and hand the schema back.
+  for (const [order, plugins] of [
+    ["replacement first", [BUNDLED_REPLACEMENT_SLACK, BUNDLED_SLACK]],
+    ["replacement last", [BUNDLED_SLACK, BUNDLED_REPLACEMENT_SLACK]],
+  ] as const) {
+    it(`lets a replacement supersede a bundled plugin enabled only by channel config (${order})`, () => {
+      expect(
+        selectSlackSchemaOwner([...plugins], {
+          channels: { slack: { enabled: true } },
+        } as OpenClawConfig).schemaPluginId,
+      ).toBe("openclaw-slack-thread-guard");
+    });
   }
 
   for (const [order, plugins] of [
@@ -286,6 +352,26 @@ describe("config validate channel schema ownership", () => {
         }),
       ).toEqual([]);
     });
+  }
+
+  // Selecting both plugins must not narrow validation to the replacement's schema: the runtime
+  // keeps both active, so the operator's existing keys stay valid under the last-claim owner.
+  for (const [order, plugins, acceptedKey] of [
+    ["replacement first", [REPLACEMENT_ACME, REPLACED_ACME], "legacyOption"],
+    ["replacement last", [REPLACED_ACME, REPLACEMENT_ACME], "threadGuard"],
+  ] as const) {
+    // `apiKey` is not a canonical `plugins.entries` key, so it stays in the collector-level table.
+    for (const [entryKey, entry] of CANONICAL_EXPLICIT_PLUGIN_ENTRIES) {
+      it(`keeps last-claim validation when both plugins are selected through entries.${entryKey} (${order})`, () => {
+        expect(
+          validateAcmeChatKeys({
+            plugins: [...plugins],
+            channel: { [acceptedKey]: {} },
+            entries: { "openclaw-acmechat": entry, "acme-chat-thread-guard": entry },
+          }),
+        ).toEqual([]);
+      });
+    }
   }
 
   it("accepts an active farther-origin plugin's channel keys while the closer origin is disabled", () => {
