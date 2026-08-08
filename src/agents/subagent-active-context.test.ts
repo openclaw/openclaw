@@ -3,24 +3,108 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildActiveSubagentSystemPromptAddition } from "./subagent-active-context.js";
+
+/** Keep in sync with module-private RECENT_PROMPT_MAX_ENTRIES. */
+const RECENT_PROMPT_MAX_ENTRIES = 8;
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecordOverrides } from "./subagent-test-fixtures.test-helpers.js";
 
 beforeEach(() => {
   resetSubagentRegistryForTests();
 });
 
 describe("buildActiveSubagentSystemPromptAddition", () => {
-  it("returns nothing without active children", () => {
+  it("returns nothing without active or recently completed children", () => {
     expect(
       buildActiveSubagentSystemPromptAddition({
         cfg: {} as OpenClawConfig,
         controllerSessionKey: "agent:main:main",
       }),
     ).toBeUndefined();
+  });
+
+  it("summarizes recently completed children when no active runs remain", () => {
+    const endedAt = Date.now() - 60_000;
+    const run = {
+      runId: "run-recent-context",
+      childSessionKey: "agent:main:subagent:recent-context",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "read email MSG_ID:1546",
+      taskName: "read_email",
+      label: "Email reader",
+      cleanup: "keep",
+      createdAt: endedAt - 120_000,
+      startedAt: endedAt - 120_000,
+      endedAt,
+      outcome: { status: "ok" as const },
+    } satisfies SubagentRunRecordOverrides;
+    addSubagentRunForTests(run);
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+      hasSessionsYield: true,
+    });
+
+    expect(prompt).toBeDefined();
+    expect(prompt).not.toContain("## Active Subagents");
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("last 30m");
+    expect(prompt).toContain("taskName=read_email");
+    expect(prompt).toContain("session=agent:main:subagent:recent-context");
+    expect(prompt).toContain("status=done");
+    expect(prompt).toContain("execution-complete only");
+    expect(prompt).toContain("avoid blind duplicate spawns");
+    expect(prompt).toContain("do not treat status=done alone as proof");
+    expect(prompt).not.toContain("treat the work as finished");
+    expect(prompt).not.toContain("non-success terminal entries");
+    expect(prompt).not.toContain("sessions_yield");
+  });
+
+  it("includes both active and recently completed sections when mixed", () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-mixed-active",
+      childSessionKey: "agent:main:subagent:mixed-active",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "still working",
+      taskName: "active_task",
+      cleanup: "keep",
+      createdAt: now,
+      startedAt: now,
+    } satisfies SubagentRunRecordOverrides);
+    addSubagentRunForTests({
+      runId: "run-mixed-recent",
+      childSessionKey: "agent:main:subagent:mixed-recent",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "already finished",
+      taskName: "recent_task",
+      cleanup: "keep",
+      createdAt: now - 180_000,
+      startedAt: now - 180_000,
+      endedAt: now - 30_000,
+      outcome: { status: "ok" as const },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+      hasSessionsYield: true,
+    });
+
+    expect(prompt).toContain("## Active Subagents");
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("taskName=active_task");
+    expect(prompt).toContain("taskName=recent_task");
   });
 
   it("summarizes active child state for the current requester", () => {
@@ -36,7 +120,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
@@ -64,7 +148,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
@@ -89,7 +173,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
@@ -118,7 +202,7 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cleanup: "keep",
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
-    } satisfies SubagentRunRecord;
+    } satisfies SubagentRunRecordOverrides;
     addSubagentRunForTests(run);
 
     const prompt = buildActiveSubagentSystemPromptAddition({
@@ -129,5 +213,139 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
 
     expect(prompt).not.toContain("call `sessions_yield`");
     expect(prompt).toContain("wait for runtime completion events");
+  });
+
+  it("keeps retry/recovery guidance for non-success terminal recent children", () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-recent-failed",
+      childSessionKey: "agent:main:subagent:recent-failed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "failed fetch",
+      taskName: "failed_task",
+      cleanup: "keep",
+      createdAt: now - 180_000,
+      startedAt: now - 180_000,
+      endedAt: now - 90_000,
+      outcome: { status: "error" as const, error: "boom" },
+    } satisfies SubagentRunRecordOverrides);
+    addSubagentRunForTests({
+      runId: "run-recent-timeout",
+      childSessionKey: "agent:main:subagent:recent-timeout",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "timed out fetch",
+      taskName: "timeout_task",
+      cleanup: "keep",
+      createdAt: now - 170_000,
+      startedAt: now - 170_000,
+      endedAt: now - 80_000,
+      outcome: { status: "timeout" as const },
+    } satisfies SubagentRunRecordOverrides);
+    addSubagentRunForTests({
+      runId: "run-recent-ok-mixed",
+      childSessionKey: "agent:main:subagent:recent-ok-mixed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "already finished",
+      taskName: "ok_task",
+      cleanup: "keep",
+      createdAt: now - 160_000,
+      startedAt: now - 160_000,
+      endedAt: now - 70_000,
+      outcome: { status: "ok" as const },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("status=failed");
+    expect(prompt).toContain("status=timeout");
+    expect(prompt).toContain("status=done");
+    expect(prompt).toContain("non-success terminal entries");
+    expect(prompt).toContain("you may retry or recover that work");
+    expect(prompt).toContain("execution-complete only");
+    expect(prompt).toContain("avoid blind duplicate spawns");
+    expect(prompt).toContain("do not treat status=done alone as proof");
+    // Absolute task-success / no-respawn wording must not remain.
+    expect(prompt).not.toContain("treat the work as finished");
+    expect(prompt).not.toContain("work already finished — do not re-spawn the same task");
+  });
+
+  it("keeps execution-complete done children recoverable from Result evidence", () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-recent-done-incomplete",
+      childSessionKey: "agent:main:subagent:recent-done-incomplete",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "partial write",
+      taskName: "done_incomplete_task",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      startedAt: now - 120_000,
+      endedAt: now - 30_000,
+      outcome: { status: "ok" as const },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("status=done");
+    expect(prompt).toContain("execution-complete only");
+    expect(prompt).toContain("completion Result or current task state");
+    expect(prompt).toContain("you may retry or recover");
+    expect(prompt).not.toContain("treat the work as finished — do not re-spawn");
+  });
+
+  it("caps recently completed prompt entries to the newest subset", () => {
+    const now = Date.now();
+    const total = RECENT_PROMPT_MAX_ENTRIES + 4;
+    for (let i = 0; i < total; i += 1) {
+      const endedAt = now - (total - i) * 60_000;
+      addSubagentRunForTests({
+        runId: `run-recent-cap-${i}`,
+        childSessionKey: `agent:main:subagent:recent-cap-${i}`,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: `finished task ${i}`,
+        taskName: `cap_task_${i}`,
+        cleanup: "keep",
+        createdAt: endedAt - 30_000,
+        startedAt: endedAt - 30_000,
+        endedAt,
+        outcome: { status: "ok" as const },
+      } satisfies SubagentRunRecordOverrides);
+    }
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain(
+      `Showing the newest ${RECENT_PROMPT_MAX_ENTRIES} of ${total} completed in-window.`,
+    );
+    // Newest entries (highest i) retained; oldest dropped.
+    // Match with trailing ";" so cap_task_1 does not false-positive on cap_task_10/11.
+    expect(prompt).toContain(`taskName=cap_task_${total - 1};`);
+    expect(prompt).toContain(`taskName=cap_task_${total - RECENT_PROMPT_MAX_ENTRIES};`);
+    for (const dropped of [0, 1, 2, 3]) {
+      expect(prompt).not.toContain(`taskName=cap_task_${dropped};`);
+    }
   });
 });
