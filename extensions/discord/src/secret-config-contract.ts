@@ -13,6 +13,10 @@ import {
   type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectNestedChannelTtsAssignments } from "openclaw/plugin-sdk/channel-secret-tts-runtime";
+import {
+  canonicalizeRealtimeVoiceProviderId,
+  normalizeRealtimeVoiceProviderId,
+} from "openclaw/plugin-sdk/realtime-voice";
 
 export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
@@ -120,10 +124,26 @@ function collectRealtimeProviderApiKeyAssignments(params: {
   if (!isRecord(params.realtime) || !isRecord(params.realtime.providers)) {
     return;
   }
-  const selectedProvider =
-    typeof params.realtime.provider === "string" ? params.realtime.provider.trim() : "";
+  const selectedProviderId =
+    typeof params.realtime.provider === "string"
+      ? normalizeRealtimeVoiceProviderId(params.realtime.provider)
+      : undefined;
+  const configuredProviderIds = new Set(
+    Object.keys(params.realtime.providers).flatMap((providerId) => {
+      const normalized = normalizeRealtimeVoiceProviderId(providerId);
+      return normalized ? [normalized] : [];
+    }),
+  );
+  const selectedProvider = selectedProviderId
+    ? configuredProviderIds.has(selectedProviderId)
+      ? selectedProviderId
+      : canonicalizeRealtimeVoiceProviderId(selectedProviderId, params.context.sourceConfig)
+    : undefined;
   for (const [providerId, providerConfig] of Object.entries(params.realtime.providers)) {
-    if ((selectedProvider && providerId !== selectedProvider) || !isRecord(providerConfig)) {
+    if (
+      (selectedProvider && normalizeRealtimeVoiceProviderId(providerId) !== selectedProvider) ||
+      !isRecord(providerConfig)
+    ) {
       continue;
     }
     collectSecretInputAssignment({

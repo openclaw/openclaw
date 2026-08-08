@@ -1,10 +1,22 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createResolverContext } from "openclaw/plugin-sdk/secret-ref-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectRuntimeConfigAssignments,
   secretTargetRegistryEntries,
 } from "./secret-config-contract.js";
+
+const { canonicalizeRealtimeVoiceProviderIdMock } = vi.hoisted(() => ({
+  canonicalizeRealtimeVoiceProviderIdMock: vi.fn((providerId: string | undefined) =>
+    providerId === "codex-realtime" ? "codex" : providerId,
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/realtime-voice", () => ({
+  canonicalizeRealtimeVoiceProviderId: canonicalizeRealtimeVoiceProviderIdMock,
+  normalizeRealtimeVoiceProviderId: (providerId: string | undefined) =>
+    providerId?.trim().toLowerCase() || undefined,
+}));
 
 describe("Discord secret config contract", () => {
   it("registers root and account voice provider API keys with provider ids", () => {
@@ -137,6 +149,44 @@ describe("Discord secret config contract", () => {
       "channels.discord.voice.realtime.providers.codex.apiKey",
       "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
     ]);
+    expect(context.warnings).toStrictEqual([]);
+  });
+
+  it("collects the canonical provider API key when selected through an alias", () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          voice: {
+            realtime: {
+              provider: "codex-realtime",
+              providers: {
+                codex: {
+                  apiKey: { source: "env", provider: "default", id: "ROOT_CODEX" },
+                },
+                openai: {
+                  apiKey: { source: "env", provider: "default", id: "ROOT_OPENAI" },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig, env: {} });
+
+    collectRuntimeConfigAssignments({
+      config: structuredClone(sourceConfig),
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments.map(({ path }) => path)).toEqual([
+      "channels.discord.voice.realtime.providers.codex.apiKey",
+    ]);
+    expect(canonicalizeRealtimeVoiceProviderIdMock).toHaveBeenCalledWith(
+      "codex-realtime",
+      sourceConfig,
+    );
     expect(context.warnings).toStrictEqual([]);
   });
 });

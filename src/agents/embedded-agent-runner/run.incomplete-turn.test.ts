@@ -1980,6 +1980,28 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("incomplete turn detected");
   });
 
+  it("completes a closed realtime voice operation without retrying an empty terminal", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        currentAttemptAssistant: undefined,
+        lastAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(
+      makeRunParams("run-realtime-voice-close", {
+        realtimeVoice: {} as NonNullable<RunParams["realtimeVoice"]>,
+      }),
+    );
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
+    expectNoWarnMessageWith("missing assistant terminal message detected");
+    expectNoWarnMessageWith("empty response detected");
+    expectNoWarnMessageWith("reasoning-only assistant turn detected");
+  });
+
   it("waits for asynchronous user persistence before retrying a missing terminal turn", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const persistedMessage = { role: "user" as const, content: "test prompt", timestamp: 1 };

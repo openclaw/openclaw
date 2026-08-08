@@ -218,6 +218,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         ? [silentToolResultReplyPayload]
         : input.payloadsWithToolMedia;
   const payloadCount = payloadsForTerminalPath?.length ?? 0;
+  const isRealtimeVoiceOperation = runParams.realtimeVoice !== undefined;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
   const settledTurnFinalizationAttempted = input.settledTurnFinalizationAttempted;
@@ -231,7 +232,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     attempt,
   });
   const nextReasoningOnlyRetryInstruction =
-    emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
+    isRealtimeVoiceOperation || emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
       ? null
       : resolveReasoningOnlyRetryInstruction({
           provider: input.activeErrorContext.provider,
@@ -243,7 +244,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           attempt,
         });
   const nextEmptyResponseRetryInstruction =
-    emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
+    isRealtimeVoiceOperation || emptyAssistantReplyIsSilent || settledTurnFinalizationAttempted
       ? null
       : resolveEmptyResponseRetryInstruction({
           provider: input.activeErrorContext.provider,
@@ -272,6 +273,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     nextReasoningOnlyRetryInstruction &&
     retryState.reasoningOnlyAttempts >= input.maxReasoningOnlyRetryAttempts;
   if (
+    !isRealtimeVoiceOperation &&
     !emptyAssistantReplyIsSilent &&
     !settledTurnFinalizationAttempted &&
     shouldRetryMissingAssistantTurn({
@@ -306,16 +308,17 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
-  const incompleteTurnText = emptyAssistantReplyIsSilent
-    ? null
-    : resolveIncompleteTurnPayloadText({
-        payloadCount,
-        aborted: terminalAborted,
-        externalAbort: externalAbort || signalOwnedInterruption,
-        timedOut: terminalTimedOut,
-        hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
-        attempt,
-      });
+  const incompleteTurnText =
+    isRealtimeVoiceOperation || emptyAssistantReplyIsSilent
+      ? null
+      : resolveIncompleteTurnPayloadText({
+          payloadCount,
+          aborted: terminalAborted,
+          externalAbort: externalAbort || signalOwnedInterruption,
+          timedOut: terminalTimedOut,
+          hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
+          attempt,
+        });
   const incompleteTurnFallbackSafe = Boolean(
     incompleteTurnText &&
     !terminalInterrupted &&
@@ -328,6 +331,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     ? availableTerminalToolPresentation
     : undefined;
   if (
+    !isRealtimeVoiceOperation &&
     !emptyAssistantReplyIsSilent &&
     !settledTurnFinalizationAttempted &&
     input.attemptCompactionCount > 0 &&
@@ -403,6 +407,7 @@ export async function resolveEmbeddedRunTerminal(input: {
 
   const beforeFinalizeRevisionReason = attempt.beforeAgentFinalizeRevisionReason;
   if (
+    !isRealtimeVoiceOperation &&
     beforeFinalizeRevisionReason &&
     !settledTurnFinalizationAttempted &&
     !terminalInterrupted &&

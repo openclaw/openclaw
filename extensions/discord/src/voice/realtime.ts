@@ -735,12 +735,16 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.lastRealtimeError.suppressed = 0;
   }
 
-  beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
+  acceptsSpeaker(context: VoiceRealtimeSpeakerContext, userId: string): boolean {
     const directAgentSenderId = this.params.requester?.senderId.trim();
-    if (
-      this.providerHandlesAgentTurns &&
-      (!context.senderIsOwner || !directAgentSenderId || userId !== directAgentSenderId)
-    ) {
+    return (
+      !this.providerHandlesAgentTurns ||
+      (context.senderIsOwner && Boolean(directAgentSenderId) && userId === directAgentSenderId)
+    );
+  }
+
+  beginSpeakerTurn(context: VoiceRealtimeSpeakerContext, userId: string): VoiceRealtimeSpeakerTurn {
+    if (!this.acceptsSpeaker(context, userId)) {
       logger.warn(
         `discord voice: direct-agent audio denied guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${userId} speaker=${context.speakerLabel}`,
       );

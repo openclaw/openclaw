@@ -564,8 +564,10 @@ export class DiscordVoiceManager {
     const voiceConfig = this.params.discordConfig.voice;
     const voiceMode = resolveDiscordVoiceMode(voiceConfig);
     const existing = this.sessions.get(guildId);
-    const requester = options?.requester ?? existing?.requester;
+    const requester =
+      options?.requester ?? (existing?.channelId === channelId ? existing.requester : undefined);
     if (
+      !options?.transcripts &&
       isDiscordRealtimeVoiceMode(voiceMode) &&
       (!requester?.senderId.trim() || !requester.senderIsOwner)
     ) {
@@ -1712,6 +1714,12 @@ export class DiscordVoiceManager {
     if (realtime && !realtimeIngress) {
       logVoiceVerbose(
         `realtime capture unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+      );
+      return;
+    }
+    if (realtime && realtimeIngress && !realtime.acceptsSpeaker(realtimeIngress, userId)) {
+      logger.warn(
+        `discord voice: direct-agent audio denied guild=${entry.guildId} channel=${entry.channelId} user=${userId} speaker=${realtimeIngress.speakerLabel}`,
       );
       return;
     }

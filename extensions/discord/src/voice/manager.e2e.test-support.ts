@@ -26,6 +26,10 @@ export type TestRealtimeSessionEntry = {
   };
   processingQueue: Promise<void>;
   realtime?: {
+    acceptsSpeaker: (
+      context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+      userId: string,
+    ) => boolean;
     beginSpeakerTurn: (
       context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
       userId: string,

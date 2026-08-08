@@ -46,6 +46,7 @@ export type VoiceRealtimeSpeakerTurn = {
 };
 
 export type VoiceRealtimeSession = {
+  acceptsSpeaker: (context: VoiceRealtimeSpeakerContext, userId: string) => boolean;
   beginSpeakerTurn: (
     context: VoiceRealtimeSpeakerContext,
     userId: string,
