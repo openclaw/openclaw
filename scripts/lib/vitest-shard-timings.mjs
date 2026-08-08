@@ -15,7 +15,10 @@ function sanitizeTimingLabel(value) {
 }
 
 function hashIncludePatterns(includePatterns) {
-  return createHash("sha1").update(JSON.stringify(includePatterns)).digest("hex").slice(0, 12);
+  return createHash("sha1")
+    .update(JSON.stringify([...includePatterns].toSorted()))
+    .digest("hex")
+    .slice(0, 12);
 }
 
 function shouldUseShardTimings(env = process.env) {
