@@ -1547,6 +1547,7 @@
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",
+                  "providers/neon",
                   "providers/novita",
                   "providers/nvidia",
                   "providers/ollama",
