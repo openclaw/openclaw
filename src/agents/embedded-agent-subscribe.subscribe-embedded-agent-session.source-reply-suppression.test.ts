@@ -49,6 +49,7 @@ async function emitMessageToolLifecycle(params: {
   message: string;
   media?: string;
   to?: string | null;
+  final?: boolean;
   result: unknown;
 }) {
   // Message tool sends are modeled as normal tool start/end events because the
@@ -62,6 +63,7 @@ async function emitMessageToolLifecycle(params: {
       ...(params.to === null ? {} : { to: params.to ?? "+1555" }),
       message: params.message,
       media: params.media,
+      ...(params.final !== undefined ? { final: params.final } : {}),
     },
   });
   // Wait for async handler to complete.
@@ -121,6 +123,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-continue",
       message: "Starting the requested work.",
       to: null,
+      final: true,
       result: { details: { deliveryStatus: "sent" } },
     });
     emitAssistantMessageEnd(emit, "Done.");
@@ -141,10 +144,76 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-bridged-source-reply",
       message: "Visible source reply from Code Mode.",
       to: null,
+      final: true,
       result: { details: { deliveryStatus: "sent" } },
     });
 
     expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps progress delivery non-terminal until a final source reply exists", async () => {
+    const onDeliveredMessageToolOnlySourceReply = vi.fn();
+    const { emit, onBlockReply, subscription } = createBlockReplyHarness("message_end", {
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredMessageToolOnlySourceReply,
+    });
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-progress",
+      message: "Working…",
+      to: null,
+      final: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "Working…" },
+        },
+      },
+    });
+    emitAssistantMessageEnd(emit, "Terminal fallback after progress.");
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+
+    expect(onDeliveredMessageToolOnlySourceReply).not.toHaveBeenCalled();
+    expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
+      { text: "Working…", sourceReplyFinal: false },
+    ]);
+  });
+
+  it("treats omitted source-reply finality as terminal for compatibility", async () => {
+    const onDeliveredMessageToolOnlySourceReply = vi.fn();
+    const { emit, onBlockReply, subscription } = createBlockReplyHarness("message_end", {
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredMessageToolOnlySourceReply,
+    });
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-omitted-finality",
+      message: "Starting the requested work.",
+      to: null,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "Starting the requested work." },
+        },
+      },
+    });
+    emitAssistantMessageEnd(emit, "Follow-up tool work completed.");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledTimes(1);
+    expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
+      { text: "Starting the requested work.", sourceReplyFinal: true },
+    ]);
   });
 
   it("suppresses later text_end block replies after message-tool-only delivery", async () => {
@@ -157,6 +226,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-text-end-continue",
       message: "Starting the requested work.",
       to: null,
+      final: true,
       result: { details: { deliveryStatus: "sent" } },
     });
     emitAssistantTextEndBlock(emit, "Done.");
@@ -219,6 +289,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-before-compaction",
       message: "Starting the requested work.",
       to: null,
+      final: true,
       result: { details: { deliveryStatus: "sent" } },
     });
     emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
@@ -265,6 +336,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-before-partial",
       message: "Starting the requested work.",
       to: null,
+      final: true,
       result: { details: { deliveryStatus: "sent" } },
     });
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -290,6 +362,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-before-reasoning",
       message: "Starting the requested work.",
       to: null,
+      final: true,
       result: { details: { deliveryStatus: "sent" } },
     });
     emit({
@@ -323,6 +396,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-before-tagged-reasoning",
       message: "Starting the requested work.",
       to: null,
+      final: true,
       result: { details: { deliveryStatus: "sent" } },
     });
     emit({ type: "message_start", message: { role: "assistant" } });

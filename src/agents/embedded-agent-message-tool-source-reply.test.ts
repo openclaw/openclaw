@@ -4,7 +4,9 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  readMessageToolSourceReplyFinal,
   readMessageToolSourceReplyText,
+  resolveMessageToolSourceReplyFinal,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingToolDeliveryAction,
@@ -337,6 +339,28 @@ describe("isDeliveredMessagingToolResult", () => {
         },
       }),
     ).toBe(true);
+  });
+});
+
+describe("message-tool source reply finality", () => {
+  it("defaults omission to terminal and reserves explicit false for progress", () => {
+    expect(resolveMessageToolSourceReplyFinal(undefined)).toBe(true);
+    expect(resolveMessageToolSourceReplyFinal(true)).toBe(true);
+    expect(resolveMessageToolSourceReplyFinal(false)).toBe(false);
+  });
+
+  it("reads producer-owned markers from result envelopes", () => {
+    expect(
+      readMessageToolSourceReplyFinal({
+        content: [{ type: "text", text: '{"sourceReplyFinal":false}' }],
+      }),
+    ).toBe(false);
+    expect(
+      readMessageToolSourceReplyFinal({ details: { payload: { sourceReplyFinal: true } } }),
+    ).toBe(true);
+    expect(
+      readMessageToolSourceReplyFinal({ details: { deliveryStatus: "sent" } }),
+    ).toBeUndefined();
   });
 });
 

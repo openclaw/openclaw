@@ -596,6 +596,16 @@ export function extractMessagingToolSourceReplyPayload(
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
+/** Treat marked progress as non-terminal while preserving legacy unmarked payload behavior. */
+export function hasCompletedMessagingToolSourceReplyPayloads(
+  payloads: readonly MessagingToolSourceReplyPayload[],
+): boolean {
+  const finalMarkers = payloads.flatMap((payload) =>
+    typeof payload.sourceReplyFinal === "boolean" ? [payload.sourceReplyFinal] : [],
+  );
+  return finalMarkers.length > 0 ? finalMarkers.some(Boolean) : payloads.length > 0;
+}
+
 // Core tool names that are allowed to emit trusted local media artifacts.
 // Plugin tools must be explicitly passed as trusted run-local names by the caller.
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([

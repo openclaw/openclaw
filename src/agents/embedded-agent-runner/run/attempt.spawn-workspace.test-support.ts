@@ -994,6 +994,7 @@ type MutableSession = {
   ) => Promise<void>;
   getActiveToolNames: () => string[];
   setActiveToolsByName: (toolNames: string[]) => void;
+  setActiveToolTransform: (transform: (tools: unknown[]) => unknown[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
@@ -1214,6 +1215,7 @@ export function createDefaultEmbeddedSession(params?: {
     setActiveToolsByName: (toolNames) => {
       activeToolNames = [...toolNames];
     },
+    setActiveToolTransform: () => {},
     setBaseSystemPrompt: (systemPrompt) => {
       session.agent.state.systemPrompt = systemPrompt;
     },

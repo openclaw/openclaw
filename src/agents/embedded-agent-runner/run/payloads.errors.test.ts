@@ -210,7 +210,9 @@ describe("buildEmbeddedRunPayloads", () => {
         content: [],
       }),
       didSendViaMessagingTool: true,
-      didDeliverSourceReplyViaMessageTool: true,
+      // Progress is not terminal completion evidence even when it is the only
+      // successful message-tool delivery before the error.
+      didDeliverSourceReplyViaMessageTool: false,
       messagingToolSentTargets: [
         {
           tool: "message",
@@ -219,14 +221,17 @@ describe("buildEmbeddedRunPayloads", () => {
           sourceReplyFinal: false,
         },
       ],
+      messagingToolSourceReplyPayloads: [{ text: "Working…", sourceReplyFinal: false }],
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
-    expectSinglePayloadSummary(payloads, {
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({ text: "Working…" });
+    expect(payloads[1]).toMatchObject({
       text: "LLM request failed.",
       isError: true,
     });
-    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
       deliverDespiteSourceReplySuppression: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");

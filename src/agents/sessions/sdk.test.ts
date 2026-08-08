@@ -597,6 +597,38 @@ describe("createAgentSession tool defaults", () => {
     ]);
   });
 
+  it("retains a runtime tool transform when the active surface is rebuilt", async () => {
+    const customTool: ToolDefinition = {
+      name: "custom_lookup",
+      label: "Custom Lookup",
+      description: "Looks up a test value.",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+      }),
+    };
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [customTool],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    session.setActiveToolTransform((tools) =>
+      tools.map((tool) => ({ ...tool, description: `guarded: ${tool.description}` })),
+    );
+    expect(session.agent.state.tools[0]?.description).toBe("guarded: Looks up a test value.");
+
+    session.setActiveToolsByName([]);
+    session.setActiveToolsByName(["custom_lookup"]);
+
+    expect(session.agent.state.tools[0]?.description).toBe("guarded: Looks up a test value.");
+  });
+
   it("preserves an exact base system prompt when active tools change", async () => {
     const customTool: ToolDefinition = {
       name: "custom_lookup",

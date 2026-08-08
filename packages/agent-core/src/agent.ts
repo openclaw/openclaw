@@ -137,6 +137,8 @@ export interface AgentOptions {
     context: AfterToolOutcomeContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  /** Decide whether the agent loop should stop after the completed turn. */
+  shouldStopAfterTurn?: AgentLoopConfig["shouldStopAfterTurn"];
   /** Hook that may update model, reasoning, or context after a turn. */
   prepareNextTurn?: (
     signal?: AbortSignal,
@@ -243,6 +245,8 @@ export class Agent {
     context: AfterToolOutcomeContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  /** Decide whether the agent loop should stop after the completed turn. */
+  public shouldStopAfterTurn?: AgentLoopConfig["shouldStopAfterTurn"];
   public prepareNextTurn?: (
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
@@ -275,6 +279,7 @@ export class Agent {
     this.resolveDeferredTool = options.resolveDeferredTool;
     this.afterToolCall = options.afterToolCall;
     this.afterToolOutcome = options.afterToolOutcome;
+    this.shouldStopAfterTurn = options.shouldStopAfterTurn;
     this.prepareNextTurn = options.prepareNextTurn;
     this.prepareNextTurnWithContext = options.prepareNextTurnWithContext;
     this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
@@ -518,6 +523,7 @@ export class Agent {
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
       afterToolOutcome: this.afterToolOutcome,
+      shouldStopAfterTurn: this.shouldStopAfterTurn,
       prepareNextTurn:
         this.prepareNextTurnWithContext || this.prepareNextTurn
           ? async (context) => {

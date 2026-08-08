@@ -653,11 +653,15 @@ describe("runMessageAction core send routing", () => {
       sessionKey: "agent:main:slack:channel:C123",
       defaultAccountId: "default",
       sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplyFinal: true,
       dryRun: false,
     });
 
     expect(result.kind).toBe("send");
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+    expect(result.payload).toMatchObject({
+      sourceReplyRoute: "current-source",
+      sourceReplyFinal: true,
+    });
   });
 
   it("marks automatic-mode Slack sends to the trusted current source conversation", async () => {

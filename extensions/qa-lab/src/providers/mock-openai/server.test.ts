@@ -720,6 +720,59 @@ describe("qa mock openai server", () => {
     expect(outputItems(finalBody).some((item) => item.type === "function_call")).toBe(false);
   });
 
+  it("plans progress then one explicit terminal message-tool reply", async () => {
+    const server = await startMockServer();
+    const prompt = "qa message-tool progress final check. exact marker: `QA-MESSAGE-TOOL-FINAL-OK`";
+
+    const progressBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const progressCall = outputToolCall(progressBody, "message");
+    expect(outputToolArgsFromItem(progressCall)).toEqual({
+      action: "send",
+      message: "QA-MESSAGE-TOOL-PROGRESS",
+      final: false,
+    });
+
+    const finalBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        progressCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(progressCall, "call_message_tool_progress"),
+          JSON.stringify({ ok: true }),
+        ),
+      ],
+    });
+    const finalCall = outputToolCall(finalBody, "message");
+    expect(outputToolArgsFromItem(finalCall)).toEqual({
+      action: "send",
+      message: "QA-MESSAGE-TOOL-FINAL-OK",
+      final: true,
+    });
+
+    const settledBody = await expectOpenAiNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        makeUserInput(prompt),
+        progressCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(progressCall, "call_message_tool_progress"),
+          JSON.stringify({ ok: true }),
+        ),
+        finalCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(finalCall, "call_message_tool_final"),
+          JSON.stringify({ ok: true }),
+        ),
+      ],
+    });
+    expect(outputItems(settledBody).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(settledBody)).toBe("");
+  });
+
   it("keeps the retry-failure stranded-final fixture as text without a message tool call", async () => {
     const server = await startMockServer();
 

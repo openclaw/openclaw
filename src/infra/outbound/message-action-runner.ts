@@ -346,14 +346,19 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
   }
   const payload = asResultRecord(result.payload);
   const details = asResultRecord(result.toolResult?.details);
+  const sourceReplyFinal = params.input.sourceReplyFinal;
+  const sourceReplyMarkers = {
+    sourceReplyRoute: "current-source" as const,
+    ...(typeof sourceReplyFinal === "boolean" ? { sourceReplyFinal } : {}),
+  };
   return {
     ...result,
-    payload: payload ? { ...payload, sourceReplyRoute: "current-source" } : result.payload,
+    payload: payload ? { ...payload, ...sourceReplyMarkers } : result.payload,
     ...(result.toolResult
       ? {
           toolResult: {
             ...result.toolResult,
-            details: { ...details, sourceReplyRoute: "current-source" },
+            details: { ...details, ...sourceReplyMarkers },
           },
         }
       : {}),

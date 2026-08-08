@@ -35,6 +35,7 @@ import type {
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
+import { hasCompletedMessagingToolSourceReplyPayloads } from "./embedded-agent-subscribe.tools.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -308,7 +309,9 @@ function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): b
     ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
     (ctx.state.messageToolOnlySourceReplyDelivered ||
       ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
-      (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0)
+      hasCompletedMessagingToolSourceReplyPayloads(
+        ctx.state.messagingToolSourceReplyPayloads ?? [],
+      ))
   );
 }
 

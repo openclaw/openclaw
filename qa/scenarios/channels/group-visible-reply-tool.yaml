@@ -17,6 +17,7 @@ scenario:
   successCriteria:
     - Agent receives a synthetic shared-room turn.
     - Mock provider calls the shared message tool instead of relying on final-answer delivery.
+    - The ordinary omitted-final call stops without another provider continuation.
     - The visible reply lands once in the same group transcript.
     - The source turn settles with a durably recorded successful message-tool result.
   docsRefs:
@@ -54,6 +55,9 @@ flow:
         - set: sessionKey
           value:
             expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
         - set: requestCursorBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
@@ -67,20 +71,6 @@ flow:
             senderName: Alice
             text:
               expr: config.prompt
-        - call: waitForCondition
-          args:
-            - lambda:
-                async: true
-                params: []
-                expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : true"
-            - expr: liveTurnTimeoutMs(env, 180000)
-        - set: scenarioRequests
-          value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
-        - assert:
-            expr: "!env.mock || scenarioRequests.some((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === config.expectedMarker)"
-            message:
-              expr: "`expected message(action=send) with marker, saw ${JSON.stringify(scenarioRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, toolOutput: request.toolOutput ?? '', tools: Array.isArray(request.body?.tools) ? request.body.tools.map((tool) => tool?.name ?? tool?.function?.name ?? tool?.type ?? null).filter(Boolean).slice(0, 25) : [] })))} `"
         - call: waitForOutboundMessage
           saveAs: outbound
           args:
@@ -89,6 +79,8 @@ flow:
                 params: [candidate]
                 expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'group' && !candidate.threadId && candidate.text.includes(config.expectedMarker)"
             - expr: liveTurnTimeoutMs(env, 180000)
+            - sinceIndex:
+                ref: startIndex
         - call: waitForCondition
           args:
             - lambda:
@@ -96,6 +88,16 @@ flow:
                 expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
             - expr: liveTurnTimeoutMs(env, 180000)
             - 100
+        - call: sleep
+          args:
+            - 2000
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - assert:
+            expr: "!env.mock || (scenarioRequests.length === 1 && scenarioRequests[0]?.plannedToolName === 'message' && scenarioRequests[0]?.plannedToolArgs?.action === 'send' && scenarioRequests[0]?.plannedToolArgs?.message === config.expectedMarker && scenarioRequests[0]?.plannedToolArgs?.final === undefined)"
+            message:
+              expr: "`expected one omitted-final message(action=send) request and no continuation, saw ${JSON.stringify(scenarioRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, toolOutput: request.toolOutput ?? '', tools: Array.isArray(request.body?.tools) ? request.body.tools.map((tool) => tool?.name ?? tool?.function?.name ?? tool?.type ?? null).filter(Boolean).slice(0, 25) : [] })))} `"
         - call: readSessionTranscriptSummary
           saveAs: transcriptSummary
           args:
@@ -104,11 +106,11 @@ flow:
         - assert:
             expr: "transcriptSummary.successfulToolCallCounts.message === 1"
             message: visible group reply did not persist exactly one successful message-tool result
-        - set: matchingOutbound
+        - set: scenarioOutbound
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'group' && String(message.text ?? '').includes(config.expectedMarker))"
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'group')"
         - assert:
-            expr: matchingOutbound.length === 1
+            expr: "scenarioOutbound.length === 1 && scenarioOutbound[0]?.text === config.expectedMarker && !scenarioOutbound[0]?.threadId"
             message:
-              expr: "`expected exactly one visible group reply, saw ${matchingOutbound.length}`"
-      detailsExpr: "`${outbound.conversation.kind}:${outbound.conversation.id}:${outbound.text}`"
+              expr: "`expected the complete outbound transcript to contain one exact visible group reply, saw ${JSON.stringify(scenarioOutbound)}`"
+      detailsExpr: "`outboundMessages=${scenarioOutbound.length}; providerRequests=${scenarioRequests.length}; successfulMessageCalls=${transcriptSummary.successfulToolCallCounts.message}`"

@@ -88,6 +88,7 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
+import { resolveMessageToolSourceReplyFinal } from "../embedded-agent-message-tool-source-reply.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import {
   channelTargetSchema,
@@ -1953,7 +1954,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           // Only an admitted channel source can arm terminal restart reconciliation.
           // Source-less scheduled and ambient sends remain ordinary message actions.
-          sourceReplyFinal: hasExactSourceTurn ? (requestedSourceReplyFinal ?? true) : undefined,
+          sourceReplyFinal: hasExactSourceTurn
+            ? resolveMessageToolSourceReplyFinal(requestedSourceReplyFinal)
+            : undefined,
           sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,

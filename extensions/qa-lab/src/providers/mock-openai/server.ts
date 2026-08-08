@@ -50,6 +50,7 @@ import {
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
+  QA_MESSAGE_TOOL_PROGRESS_FINAL_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
   QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE,
@@ -1640,6 +1641,27 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("message", {
         action: "send",
         message: marker,
+      });
+    }
+    return buildAssistantEvents("");
+  }
+  if (QA_MESSAGE_TOOL_PROGRESS_FINAL_PROMPT_RE.test(allInputText)) {
+    const completedMessageArgs =
+      completedToolName === "message" && completedToolCall
+        ? parseToolCallArguments(completedToolCall)
+        : null;
+    if (!completedMessageArgs && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: "QA-MESSAGE-TOOL-PROGRESS",
+        final: false,
+      });
+    }
+    if (completedMessageArgs?.final === false && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: exactMarkerDirective ?? "QA-MESSAGE-TOOL-FINAL-OK",
+        final: true,
       });
     }
     return buildAssistantEvents("");

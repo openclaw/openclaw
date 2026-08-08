@@ -106,6 +106,40 @@ describe("agentLoop EventStream failures", () => {
     expectTerminalFailure(events, result);
   });
 
+  it("forwards the Agent should-stop-after-turn hook into the loop", async () => {
+    const shouldStopAfterTurn = vi.fn(() => true);
+    const agent = new Agent({
+      initialState: { model },
+      convertToLlm: (messages) => messages as Message[],
+      shouldStopAfterTurn,
+      streamFn: async () => {
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({
+            type: "done",
+            reason: "stop",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              usage: TEST_USAGE,
+              stopReason: "stop",
+              timestamp: 1,
+            },
+          });
+          stream.end();
+        });
+        return stream;
+      },
+    });
+
+    await agent.prompt("hello");
+
+    expect(shouldStopAfterTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("persists and replays interruption guidance after Agent aborts a rejected run", async () => {
     let markStarted = () => {};
     const started = new Promise<void>((resolve) => {

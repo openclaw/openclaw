@@ -121,6 +121,7 @@ export abstract class AgentSessionBase {
 
   // Tool registry for extension getTools/setTools
   protected toolRegistry: Map<string, AgentTool> = new Map();
+  private activeToolTransform?: (tools: AgentTool[]) => AgentTool[];
   protected toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
   protected toolPromptSnippets: Map<string, string> = new Map();
   protected toolPromptGuidelines: Map<string, string[]> = new Map();
@@ -667,6 +668,12 @@ export abstract class AgentSessionBase {
     return this.toolDefinitions.get(name)?.definition;
   }
 
+  /** Apply a runtime-owned transform whenever the active tool surface is rebuilt. */
+  setActiveToolTransform(transform: (tools: AgentTool[]) => AgentTool[]): void {
+    this.activeToolTransform = transform;
+    this.agent.state.tools = transform([...this.agent.state.tools]);
+  }
+
   /**
    * Set active tools by name.
    * Only tools in the registry can be enabled. Unknown tool names are ignored.
@@ -683,7 +690,7 @@ export abstract class AgentSessionBase {
         validToolNames.push(name);
       }
     }
-    this.agent.state.tools = tools;
+    this.agent.state.tools = this.activeToolTransform ? this.activeToolTransform(tools) : tools;
 
     // Rebuild base system prompt with new tool set
     this.baseSystemPrompt = this.rebuildSystemPrompt(validToolNames);

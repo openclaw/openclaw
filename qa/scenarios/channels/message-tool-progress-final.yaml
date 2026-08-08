@@ -1,0 +1,135 @@
+title: Message-tool progress then explicit final
+
+scenario:
+  id: message-tool-progress-final
+  surface: channel
+  coverage:
+    primary:
+      - channels.message-final-reply
+    secondary:
+      - channels.outbound-group-reply
+      - channels.qa-channel-outbound
+  objective: Verify a message-tool-only source turn can send progress with final=false, then exactly one terminal source reply with final=true, without a later model-generated reply.
+  gatewayConfigPatch:
+    messages:
+      groupChat:
+        visibleReplies: message_tool
+  successCriteria:
+    - The mock provider first calls message(action=send, final=false) with a progress marker.
+    - The same real Gateway turn continues and calls message(action=send, final=true) with the final marker.
+    - The QA channel receives the progress and final markers exactly once each, in that order.
+    - The source session stops after the terminal tool result without another provider continuation or automatic final.
+  codeRefs:
+    - packages/agent-core/src/agent.ts
+    - src/agents/embedded-agent-runner/run/message-tool-terminal.ts
+    - src/agents/embedded-agent-runner/run/attempt.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    summary: Send one group turn through the real Gateway and QA channel, then prove finality-aware message-tool continuation and termination.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-message-tool-progress-final-room
+      promptSnippet: qa message-tool progress final check
+      progressMarker: QA-MESSAGE-TOOL-PROGRESS
+      finalMarker: QA-MESSAGE-TOOL-FINAL-OK
+      prompt: "@openclaw qa message-tool progress final check. exact marker: `QA-MESSAGE-TOOL-FINAL-OK`"
+
+flow:
+  steps:
+    - name: continues after progress and stops after one explicit final
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `group:${config.conversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: group
+              title: QA Message Tool Progress Final Room
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: progressOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && String(candidate.text ?? '') === config.progressMarker"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - sinceIndex:
+                ref: startIndex
+        - call: waitForOutboundMessage
+          saveAs: finalOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && String(candidate.text ?? '') === config.finalMarker"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - sinceIndex:
+                ref: startIndex
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 100
+        - call: sleep
+          args:
+            - 2000
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - set: messageRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'message')"
+        - assert:
+            expr: "messageRequests.length === 2 && messageRequests[0]?.plannedToolArgs?.action === 'send' && messageRequests[0]?.plannedToolArgs?.message === config.progressMarker && messageRequests[0]?.plannedToolArgs?.final === false && messageRequests[1]?.plannedToolArgs?.action === 'send' && messageRequests[1]?.plannedToolArgs?.message === config.finalMarker && messageRequests[1]?.plannedToolArgs?.final === true"
+            message:
+              expr: "`expected progress(final=false) then final(final=true), saw ${JSON.stringify(messageRequests.map((request) => request.plannedToolArgs ?? null))}`"
+        - assert:
+            expr: scenarioRequests.length === 2
+            message:
+              expr: "`terminal delivery should stop before another provider continuation, saw ${scenarioRequests.length} requests`"
+        - set: scenarioOutbound
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId)"
+        - assert:
+            expr: "scenarioOutbound.length === 2 && scenarioOutbound[0]?.text === config.progressMarker && scenarioOutbound[1]?.text === config.finalMarker"
+            message:
+              expr: "`expected the complete outbound transcript to contain only one ordered progress and final message, saw ${JSON.stringify(scenarioOutbound)}`"
+        - call: readSessionTranscriptSummary
+          saveAs: transcriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+        - assert:
+            expr: transcriptSummary.successfulToolCallCounts.message === 2
+            message: source session did not persist exactly two successful message-tool results
+      detailsExpr: "`progress=${progressOutbound.text}; final=${finalOutbound.text}; outboundMessages=${scenarioOutbound.length}; providerRequests=${scenarioRequests.length}; successfulMessageCalls=${transcriptSummary.successfulToolCallCounts.message}`"

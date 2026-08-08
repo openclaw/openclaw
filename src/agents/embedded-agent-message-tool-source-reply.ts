@@ -42,6 +42,49 @@ function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
   return asRecord(asRecord(value).details).sourceReplyRoute === "current-source";
 }
 
+/** Resolve the source-reply contract: only explicit `false` means progress. */
+export function resolveMessageToolSourceReplyFinal(value: unknown): boolean {
+  return value !== false;
+}
+
+/** Read the producer-owned finality marker from a message-tool result envelope. */
+export function readMessageToolSourceReplyFinal(value: unknown, depth = 0): boolean | undefined {
+  if (!value || typeof value !== "object" || depth > 4) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const marker = readMessageToolSourceReplyFinal(item, depth + 1);
+      if (marker !== undefined) {
+        return marker;
+      }
+    }
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.sourceReplyFinal === "boolean") {
+    return record.sourceReplyFinal;
+  }
+  if (typeof record.text === "string") {
+    const parsed = parseJsonRecord(record.text);
+    const marker = parsed ? readMessageToolSourceReplyFinal(parsed, depth + 1) : undefined;
+    if (marker !== undefined) {
+      return marker;
+    }
+  }
+  const contentMarker = readMessageToolSourceReplyFinal(record.content, depth + 1);
+  if (contentMarker !== undefined) {
+    return contentMarker;
+  }
+  for (const key of RESULT_ENVELOPE_KEYS) {
+    const marker = readMessageToolSourceReplyFinal(record[key], depth + 1);
+    if (marker !== undefined) {
+      return marker;
+    }
+  }
+  return undefined;
+}
+
 function hasStringValue(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }

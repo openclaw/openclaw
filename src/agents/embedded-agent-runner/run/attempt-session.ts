@@ -196,6 +196,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
+    setActiveToolTransform: (transform) => activeSession.setActiveToolTransform(transform),
   });
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
     installCodeModeRepairHook({ agent: activeSession.agent });

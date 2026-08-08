@@ -56,6 +56,7 @@ import {
   buildToolLifecycleErrorResult,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  hasCompletedMessagingToolSourceReplyPayloads,
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import {
@@ -1090,7 +1091,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     params.sourceReplyDeliveryMode === "message_tool_only" &&
     (state.messageToolOnlySourceReplyDelivered ||
       params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
-      messagingToolSourceReplyPayloads.length > 0);
+      hasCompletedMessagingToolSourceReplyPayloads(messagingToolSourceReplyPayloads));
 
   const emitBlockChunk = (
     text: string,

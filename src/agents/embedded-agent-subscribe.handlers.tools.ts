@@ -55,7 +55,9 @@ import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  readMessageToolSourceReplyFinal,
   readMessageToolSourceReplyText,
+  resolveMessageToolSourceReplyFinal,
 } from "./embedded-agent-message-tool-source-reply.js";
 import {
   isMessagingTool,
@@ -1548,6 +1550,21 @@ export async function handleToolExecutionEnd(
         hasRepliedRef: startData?.hasRepliedRef,
       })
     : undefined;
+  const deliveredCurrentSourceReply =
+    didDeliverMessagingResult &&
+    isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
+      toolName,
+      args: startArgs,
+      result,
+      isError: isToolError,
+    });
+  const currentSourceReplyFinal = deliveredCurrentSourceReply
+    ? ctx.params.sourceReplyDeliveryMode === "message_tool_only"
+      ? (readMessageToolSourceReplyFinal(result) ??
+        resolveMessageToolSourceReplyFinal(startArgs.final))
+      : true
+    : undefined;
   const committedMediaUrls =
     didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
@@ -1566,23 +1583,20 @@ export async function handleToolExecutionEnd(
     const confirmedTarget = extractMessagingToolSendResult(messageTarget, extractionResult);
     ctx.state.messagingToolSentTargets.push({
       ...confirmedTarget,
+      ...(currentSourceReplyFinal !== undefined
+        ? { sourceReplyFinal: currentSourceReplyFinal }
+        : {}),
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       ...(hasRichContent ? { hasRichContent: true as const } : {}),
     });
     ctx.trimMessagingToolSent();
   }
-  const deliveredCurrentSourceReply =
-    didDeliverMessagingResult &&
-    isDeliveredMessageToolOnlySourceReplyResult({
-      sourceReplyDeliveryMode: ctx.params.sourceReplyDeliveryMode,
-      toolName,
-      args: startArgs,
-      result,
-      isError: isToolError,
-    });
   if (deliveredCurrentSourceReply) {
-    ctx.state.messageToolOnlySourceReplyDelivered = true;
+    if (currentSourceReplyFinal) {
+      ctx.state.messageToolOnlySourceReplyDelivered = true;
+      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
+    }
     const sourceReplyText = readMessageToolSourceReplyText(startArgs);
     const normalizedSourceReplyText = sourceReplyText
       ? normalizeTextForComparison(sourceReplyText)
@@ -1591,7 +1605,6 @@ export async function handleToolExecutionEnd(
       ctx.state.currentSourceMessagingToolSentTextsNormalized.push(normalizedSourceReplyText);
       ctx.trimMessagingToolSent();
     }
-    ctx.params.onDeliveredMessageToolOnlySourceReply?.();
   }
   if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
@@ -1600,7 +1613,12 @@ export async function handleToolExecutionEnd(
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
-      ctx.state.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+      ctx.state.messagingToolSourceReplyPayloads.push({
+        ...sourceReplyPayload,
+        ...(currentSourceReplyFinal !== undefined
+          ? { sourceReplyFinal: currentSourceReplyFinal }
+          : {}),
+      });
       ctx.trimMessagingToolSent();
     }
   }
