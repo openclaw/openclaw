@@ -2050,6 +2050,7 @@ describe("agentLoop tool termination", () => {
 
   it("marks argument validation failures with typed provenance", async () => {
     const executed: string[] = [];
+    const beforeToolCall = vi.fn();
     const afterToolOutcome = vi.fn(async () => ({
       details: { observed: "pre-execution" },
     }));
@@ -2082,7 +2083,7 @@ describe("agentLoop tool termination", () => {
       agentLoop(
         [{ role: "user", content: "hello", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
-        { ...config, afterToolOutcome },
+        { ...config, beforeToolCall, afterToolOutcome },
         undefined,
         streamFn,
       ),
@@ -2093,6 +2094,10 @@ describe("agentLoop tool termination", () => {
     );
 
     expect(executed).toEqual([]);
+    expect(beforeToolCall).not.toHaveBeenCalled();
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: "tool_execution_start", toolCallId: "call-edit" }),
+    );
     expect(endEvent).toMatchObject({
       executionStarted: false,
       errorKind: "argument-validation",
@@ -2110,6 +2115,211 @@ describe("agentLoop tool termination", () => {
       }),
       undefined,
     );
+  });
+
+  it("rejects malformed provider arguments before empty-object preparation", async () => {
+    const executed: string[] = [];
+    const prepareArguments = vi.fn(() => ({}));
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                {
+                  type: "toolCall",
+                  id: "call-malformed-optional",
+                  name: "optional",
+                  arguments: undefined as never,
+                },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const tool: AgentTool = {
+      ...makeTool("optional", executed),
+      parameters: Type.Object({}, { additionalProperties: false }),
+      prepareArguments,
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        config,
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(executed).toEqual([]);
+    expect(prepareArguments).not.toHaveBeenCalled();
+    expect(
+      events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+          event.type === "tool_execution_end",
+      ),
+    ).toMatchObject({
+      executionStarted: false,
+      errorKind: "argument-validation",
+      result: {
+        details: {
+          classification: "invalid_tool_arguments",
+          validation: { argumentShape: "undefined" },
+        },
+      },
+    });
+  });
+
+  it("routes unresolved source batches through whole-batch admission", async () => {
+    const beforeToolBatch = vi.fn(async () => undefined);
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-missing", name: "missing_tool", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [] },
+        { ...config, beforeToolBatch },
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(turn).toBe(2);
+    expect(beforeToolBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        calls: [],
+        rejections: [],
+        assistantMessage: expect.objectContaining({
+          content: [expect.objectContaining({ id: "call-missing", name: "missing_tool" })],
+        }),
+      }),
+      undefined,
+    );
+    expect(
+      events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+          event.type === "tool_execution_end",
+      ),
+    ).toMatchObject({ executionStarted: false, isError: true });
+  });
+
+  it("continues after blocking siblings in an original rejected recovery batch", async () => {
+    const executed: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "invalid", name: "edit", arguments: {} },
+                { type: "toolCall", id: "sibling", name: "read", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "correcting" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const edit = makeTool("edit", executed);
+    edit.parameters = Type.Object({ path: Type.String() }, { additionalProperties: false });
+
+    await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [edit, makeTool("read", executed)] },
+        {
+          ...config,
+          beforeToolBatch: async ({ rejections }) =>
+            rejections?.length
+              ? {
+                  intervention: {
+                    kind: "invalid-tool-arguments-recovery",
+                    toolCallId: "invalid",
+                    toolName: "edit",
+                    reason: "correct once",
+                    rejection: { classification: "invalid_tool_arguments" },
+                    continueRecovery: true,
+                  },
+                }
+              : undefined,
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+
+    expect(turn).toBe(2);
+    expect(executed).toEqual([]);
+  });
+
+  it("does not resolve or prepare an uncached call after cancellation", async () => {
+    const controller = new AbortController();
+    const resolveDeferredTool = vi.fn(async () => makeTool("deferred", []));
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-cancelled", name: "deferred", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        controller.abort(new Error("cancelled after response"));
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [] },
+        { ...config, beforeToolBatch: async () => undefined, resolveDeferredTool },
+        controller.signal,
+        streamFn,
+      ),
+    );
+
+    expect(resolveDeferredTool).not.toHaveBeenCalled();
+    expect(
+      events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+          event.type === "tool_execution_end",
+      ),
+    ).toMatchObject({ executionStarted: false, isError: true });
   });
 
   it("runs the finalized-outcome hook after the executed-only hook", async () => {

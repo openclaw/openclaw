@@ -7,6 +7,7 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookToolCallRejectedEvent,
   PluginHookToolContext,
 } from "./types.js";
 
@@ -564,5 +565,113 @@ describe("before_tool_call matcher scoping", () => {
       { ...stubCtx, toolName: "web_search" },
     );
     expect(handler).toHaveBeenCalledOnce();
+  });
+});
+
+describe("tool_call_rejected observation", () => {
+  it("is immutable and honors canonical tool matchers", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn((event: PluginHookToolCallRejectedEvent) => {
+      expect(Object.isFrozen(event)).toBe(true);
+      expect(Object.isFrozen(event.recovery)).toBe(true);
+    });
+    addTestHook({
+      registry,
+      pluginId: "failure-observer",
+      hookName: "tool_call_rejected",
+      matcher: ["apply_patch"],
+      handler: handler as never,
+    });
+    const runner = createHookRunner(registry);
+    const event = {
+      classification: "invalid_tool_arguments" as const,
+      executionStarted: false as const,
+      reason: "schema_validation_failed" as const,
+      correlation: {
+        turnId: "turn-1",
+        intendedTool: "apply_patch",
+        providerToolCallId: "call-1",
+        providerToolCallIdOrigin: "provider" as const,
+        provider: "openai",
+        transport: "openai-responses",
+      },
+      recovery: {
+        recoveryId: "recovery-1",
+        attempt: 1 as const,
+        maxAttempts: 2 as const,
+        remainingAttempts: 1 as const,
+        state: "retry_available" as const,
+      },
+      validation: {
+        argumentShape: "object" as const,
+        issueCount: 1,
+        issues: [{ code: "required" as const, path: "path" }],
+        truncated: false,
+      },
+    };
+
+    await runner.runToolCallRejected(event, { ...stubCtx, toolName: "apply_patch" });
+    await runner.runToolCallRejected(
+      {
+        ...event,
+        correlation: { ...event.correlation, intendedTool: "read" },
+      },
+      { ...stubCtx, toolName: "read" },
+    );
+    expect(handler).toHaveBeenCalledOnce();
+    expect(event.recovery.state).toBe("retry_available");
+  });
+
+  it("times out a never-settling observer by default", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createEmptyPluginRegistry();
+      addTestHook({
+        registry,
+        pluginId: "failure-observer",
+        hookName: "tool_call_rejected",
+        handler: vi.fn(() => new Promise<void>(() => {})) as never,
+      });
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      const runner = createHookRunner(registry, { logger });
+      const run = runner.runToolCallRejected(
+        {
+          classification: "invalid_tool_arguments",
+          executionStarted: false,
+          reason: "schema_validation_failed",
+          correlation: {
+            turnId: "turn-1",
+            intendedTool: "apply_patch",
+            providerToolCallId: "call-1",
+            providerToolCallIdOrigin: "provider",
+            provider: "openai",
+            transport: "openai-responses",
+          },
+          recovery: {
+            recoveryId: "recovery-1",
+            attempt: 1,
+            maxAttempts: 2,
+            remainingAttempts: 1,
+            state: "retry_available",
+          },
+          validation: {
+            argumentShape: "object",
+            issueCount: 1,
+            issues: [{ code: "required", path: "path" }],
+            truncated: false,
+          },
+        },
+        { ...stubCtx, toolName: "apply_patch" },
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] tool_call_rejected handler from failure-observer failed: timed out after 5000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

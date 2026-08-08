@@ -1,7 +1,7 @@
 // LLM Core tests cover validation behavior.
 import { describe, expect, it } from "vitest";
 import type { Tool } from "./types.js";
-import { validateToolArguments } from "./validation.js";
+import { ToolArgumentValidationError, validateToolArguments } from "./validation.js";
 
 const decimalTool = {
   name: "decimal-tool",
@@ -189,5 +189,82 @@ describe("validateToolArguments — stringified JSON coercion", () => {
         arguments: { config: hugeObj },
       }),
     ).toThrow(/Validation failed for tool "object-tool"/);
+  });
+});
+
+describe("ToolArgumentValidationError", () => {
+  it.each([
+    {
+      name: "missing required fields",
+      arguments: { amount: 1 },
+      code: "required",
+      shape: "object",
+    },
+    {
+      name: "incorrect types",
+      arguments: { amount: "not-a-number", count: 2 },
+      code: "type",
+      shape: "object",
+    },
+    {
+      name: "additional properties",
+      arguments: { amount: 1, count: 2, extra: true },
+      code: "additionalProperties",
+      shape: "object",
+    },
+    {
+      name: "malformed transport sentinel",
+      arguments: undefined,
+      code: "type",
+      shape: "undefined",
+    },
+  ] as const)("normalizes $name", ({ arguments: args, code, shape }) => {
+    let caught: unknown;
+    try {
+      validateToolArguments(decimalTool, {
+        type: "toolCall",
+        id: "call-invalid",
+        name: "decimal-tool",
+        arguments: args as never,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ToolArgumentValidationError);
+    const validationError = caught as ToolArgumentValidationError;
+    expect(validationError.evidence.argumentShape).toBe(shape);
+    expect(validationError.evidence.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code })]),
+    );
+  });
+
+  it("exposes bounded schema evidence without rejected values", () => {
+    let caught: unknown;
+    try {
+      validateToolArguments(decimalTool, {
+        type: "toolCall",
+        id: "call-secret",
+        name: "decimal-tool",
+        arguments: { amount: "sk-secret-canary", extra: "Bearer secret-value" },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ToolArgumentValidationError);
+    const validationError = caught as ToolArgumentValidationError;
+    expect(validationError.code).toBe("invalid_tool_arguments");
+    expect(validationError.evidence).toMatchObject({
+      argumentShape: "object",
+      truncated: false,
+    });
+    expect(validationError.evidence.issueCount).toBeGreaterThan(0);
+    expect(validationError.evidence.issues.length).toBeLessThanOrEqual(8);
+    expect(
+      JSON.stringify({ message: validationError.message, evidence: validationError.evidence }),
+    ).not.toContain("secret-canary");
+    expect(
+      JSON.stringify({ message: validationError.message, evidence: validationError.evidence }),
+    ).not.toContain("secret-value");
   });
 });

@@ -29,6 +29,7 @@ import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-regist
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
+  PluginHookToolCallRejectedEvent,
   PluginHookAgentContext,
   PluginHookAgentTrigger,
   PluginHookAgentEndEvent,
@@ -161,6 +162,9 @@ type HookRunnerOptions = {
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   agent_end: 30_000,
   channel_pairing_requested: 2_000,
+  // Recovery awaits this read-only observer on session-critical paths. Bound
+  // it so a hung plugin cannot stall startup or consume the correction turn.
+  tool_call_rejected: 5_000,
   // Defensive default for the compaction lifecycle hooks. Without a budget an
   // unresponsive handler runs fully unbounded, and in the codex agent harness
   // these hooks fire on the serialized notification queue
@@ -283,7 +287,7 @@ function getHooksForName<K extends PluginHookName>(
 
 export function getToolHookMatcherScope(
   registry: HookRunnerRegistry,
-  hookName: "before_tool_call" | "after_tool_call",
+  hookName: "before_tool_call" | "after_tool_call" | "tool_call_rejected",
 ): PluginToolMatcherScope | undefined {
   return createPluginToolMatcherScope(
     getHooksForName(registry, hookName).map((registration) => registration.matcher),
@@ -1333,6 +1337,21 @@ export function createHookRunner(
     return runVoidHook("after_tool_call", event, ctx, {}, event.toolName);
   }
 
+  /** Run the secret-safe pre-execution tool rejection observer hook. */
+  async function runToolCallRejected(
+    event: PluginHookToolCallRejectedEvent,
+    ctx: PluginHookToolContext,
+  ): Promise<void> {
+    const immutableEvent = deepFreezeHookValue(structuredClone(event));
+    return runVoidHook(
+      "tool_call_rejected",
+      immutableEvent,
+      ctx,
+      {},
+      immutableEvent.correlation.intendedTool,
+    );
+  }
+
   /**
    * Run tool_result_persist hook.
    *
@@ -1678,6 +1697,7 @@ export function createHookRunner(
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runToolCallRejected,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,
