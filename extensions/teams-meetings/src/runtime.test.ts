@@ -347,16 +347,37 @@ describe("Microsoft Teams meeting session flow", () => {
     });
     const joined = await runtime.join({ url: URL, mode: "transcribe" });
     joined.session.chrome!.health = {
+      inCall: true,
+      captioning: true,
       manualAction: {
         reason: "teams-admission-required",
         message: "This cached action must be rechecked after a missing recovery.",
       },
     };
+    joined.session.updatedAt = "2020-01-01T00:00:00.000Z";
     harness.closeTab();
 
     const status = await runtime.status(joined.session.id);
 
+    expect(status.session).toMatchObject({
+      browserLeft: true,
+      updatedAt: expect.not.stringMatching(/^2020-/),
+      chrome: {
+        health: {
+          inCall: false,
+          captioning: false,
+          status: "browser-tab-missing",
+        },
+      },
+    });
+    expect(status.session?.chrome?.browserTab).toBeUndefined();
     expect(status.session?.chrome?.health?.manualAction).toBeUndefined();
+    expect(status.session?.chrome?.health?.notes).toEqual(
+      expect.arrayContaining([expect.stringContaining("No existing Teams meeting tab matched")]),
+    );
+    expect(status.session?.notes).toEqual(
+      expect.arrayContaining([expect.stringContaining("No existing Teams meeting tab matched")]),
+    );
   });
 
   it("clears stale manual actions from ordinary status after a thrown recovery", async () => {
@@ -369,16 +390,32 @@ describe("Microsoft Teams meeting session flow", () => {
     });
     const joined = await runtime.join({ url: URL, mode: "transcribe" });
     joined.session.chrome!.health = {
+      inCall: true,
+      captioning: true,
       manualAction: {
         reason: "teams-admission-required",
         message: "This cached action must be rechecked after a thrown recovery.",
       },
     };
+    joined.session.updatedAt = "2020-01-01T00:00:00.000Z";
     harness.failNextTabLists();
 
     const status = await runtime.status(joined.session.id);
 
+    expect(status.session).toMatchObject({
+      updatedAt: expect.not.stringMatching(/^2020-/),
+      chrome: {
+        browserTab: { targetId: "teams-tab" },
+        health: {
+          inCall: true,
+          captioning: true,
+          status: "browser-control",
+        },
+      },
+    });
     expect(status.session?.chrome?.health?.manualAction).toBeUndefined();
+    expect(status.session?.chrome?.health?.notes).toContain("browser node unavailable");
+    expect(status.session?.notes).toContain("browser node unavailable");
   });
 
   it("keeps retrying stale listening health until a missing tab recovers", async () => {

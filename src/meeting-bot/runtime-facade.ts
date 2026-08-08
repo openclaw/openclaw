@@ -24,6 +24,7 @@ import { createMeetingSession } from "./session-factory.js";
 import {
   getMeetingSessionRuntimeRecoveryFailure,
   getMeetingSessionRuntimeProbeAccess,
+  recordNonAuthoritativeMeetingBrowserRecoveryFailure,
   registerMeetingSessionRuntimeRecoveryFailure,
   registerMeetingSessionRuntimeHealthRefresh,
   type MeetingBrowserHealthRefreshOutcome,
@@ -458,10 +459,16 @@ export function createMeetingRuntimeFacade<
             };
           }
           if (!result.browser) {
-            if (refreshOptions.force) {
-              session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+            const failure = { kind: "error" as const, message: result.message };
+            const manualActionIsAuthoritative =
+              getMeetingSessionRuntimeRecoveryFailure<Session>(this.#sessions)?.(
+                session,
+                failure,
+              ) === "authoritative";
+            if (!manualActionIsAuthoritative && refreshOptions.force) {
+              recordNonAuthoritativeMeetingBrowserRecoveryFailure(session, failure);
             }
-            return { browserHealthChecked: false, manualActionIsAuthoritative: false };
+            return { browserHealthChecked: false, manualActionIsAuthoritative };
           }
           const refreshedHealth = { ...session.chrome.health, ...result.browser };
           if (!Object.hasOwn(result.browser, "manualAction")) {
@@ -472,13 +479,12 @@ export function createMeetingRuntimeFacade<
           session.updatedAt = nowIso();
           return { browserHealthChecked: true, manualActionIsAuthoritative: true };
         } else if (session.chrome) {
+          const failure = { kind: "missing" as const, message: result.message };
           const manualActionIsAuthoritative =
-            getMeetingSessionRuntimeRecoveryFailure<Session>(this.#sessions)?.(session, {
-              kind: "missing",
-              message: result.message,
-            }) === "authoritative";
+            getMeetingSessionRuntimeRecoveryFailure<Session>(this.#sessions)?.(session, failure) ===
+            "authoritative";
           if (!manualActionIsAuthoritative && refreshOptions.force) {
-            session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+            recordNonAuthoritativeMeetingBrowserRecoveryFailure(session, failure);
           }
           return { browserHealthChecked: false, manualActionIsAuthoritative };
         }
@@ -500,7 +506,10 @@ export function createMeetingRuntimeFacade<
           );
         }
         if (!manualActionIsAuthoritative && refreshOptions.force && session.chrome) {
-          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+          recordNonAuthoritativeMeetingBrowserRecoveryFailure(session, {
+            kind: "error",
+            message,
+          });
         }
         return { browserHealthChecked: false, manualActionIsAuthoritative };
       }

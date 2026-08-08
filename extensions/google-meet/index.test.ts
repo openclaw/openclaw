@@ -6016,6 +6016,11 @@ describe("google-meet plugin", () => {
         browser: { inCall: true },
       },
       preserveManualAction: false,
+      expectedStatus: undefined,
+      expectedTargetId: "meet-tab",
+      expectedInCall: true,
+      expectedCaptioning: true,
+      expectedNote: undefined,
     },
     {
       label: "a missing tab result",
@@ -6025,6 +6030,11 @@ describe("google-meet plugin", () => {
         message: "Meet tab is missing.",
       },
       preserveManualAction: false,
+      expectedStatus: "browser-tab-missing",
+      expectedTargetId: undefined,
+      expectedInCall: false,
+      expectedCaptioning: false,
+      expectedNote: "Meet tab is missing.",
     },
     {
       label: "a found tab without browser health",
@@ -6035,52 +6045,85 @@ describe("google-meet plugin", () => {
         message: "Meet tab health was unavailable.",
       },
       preserveManualAction: false,
+      expectedStatus: "browser-control",
+      expectedTargetId: "meet-tab",
+      expectedInCall: true,
+      expectedCaptioning: true,
+      expectedNote: "Meet tab health was unavailable.",
     },
     {
       label: "a thrown recovery error",
       recovery: new Error("browser recovery failed"),
       preserveManualAction: false,
+      expectedStatus: "browser-control",
+      expectedTargetId: "meet-tab",
+      expectedInCall: true,
+      expectedCaptioning: true,
+      expectedNote: "Google Meet browser readiness refresh failed: browser recovery failed",
     },
-  ])("handles stale manual actions after $label", async ({ recovery, preserveManualAction }) => {
-    const staleManualAction = {
-      reason: "meet-admission-required" as const,
-      message: "Admit the OpenClaw browser participant in Google Meet.",
-    };
-    const { launch: launchChromeMeet } = mockChromeMeetLifecycle({
-      launches: [
-        {
-          launched: false,
-          tab: { targetId: "meet-tab", openedByPlugin: false },
-          browser: { inCall: false, manualAction: staleManualAction },
-        },
-      ],
-    });
-    const recoverCurrentMeetTab = vi
-      .spyOn(chromeTransport, "recoverCurrentMeetTab")
-      .mockImplementation(async () => {
-        if (recovery instanceof Error) {
-          throw recovery;
+  ])(
+    "handles stale manual actions after $label",
+    async ({
+      recovery,
+      preserveManualAction,
+      expectedStatus,
+      expectedTargetId,
+      expectedInCall,
+      expectedCaptioning,
+      expectedNote,
+    }) => {
+      const staleManualAction = {
+        reason: "meet-admission-required" as const,
+        message: "Admit the OpenClaw browser participant in Google Meet.",
+      };
+      const { launch: launchChromeMeet } = mockChromeMeetLifecycle({
+        launches: [
+          {
+            launched: false,
+            tab: { targetId: "meet-tab", openedByPlugin: false },
+            browser: { inCall: true, captioning: true, manualAction: staleManualAction },
+          },
+        ],
+      });
+      const recoverCurrentMeetTab = vi
+        .spyOn(chromeTransport, "recoverCurrentMeetTab")
+        .mockImplementation(async () => {
+          if (recovery instanceof Error) {
+            throw recovery;
+          }
+          return recovery;
+        });
+      try {
+        const runtime = createChromeLifecycleRuntime({
+          defaultMode: "transcribe",
+          chrome: { launch: false },
+        });
+        const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
+        expect(joined.session.chrome?.health?.manualAction).toEqual(staleManualAction);
+        joined.session.updatedAt = "2020-01-01T00:00:00.000Z";
+
+        const status = await runtime.status(joined.session.id);
+
+        expect(status.session?.chrome?.health?.manualAction).toEqual(
+          preserveManualAction ? staleManualAction : undefined,
+        );
+        expect(status.session?.chrome?.browserTab?.targetId).toBe(expectedTargetId);
+        expect(status.session?.chrome?.health).toMatchObject({
+          inCall: expectedInCall,
+          captioning: expectedCaptioning,
+          ...(expectedStatus ? { status: expectedStatus } : {}),
+        });
+        if (expectedNote) {
+          expect(status.session?.chrome?.health?.notes).toContain(expectedNote);
+          expect(status.session?.notes).toContain(expectedNote);
+          expect(status.session?.updatedAt).not.toMatch(/^2020-/);
         }
-        return recovery;
-      });
-    try {
-      const runtime = createChromeLifecycleRuntime({
-        defaultMode: "transcribe",
-        chrome: { launch: false },
-      });
-      const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
-      expect(joined.session.chrome?.health?.manualAction).toEqual(staleManualAction);
-
-      const status = await runtime.status(joined.session.id);
-
-      expect(status.session?.chrome?.health?.manualAction).toEqual(
-        preserveManualAction ? staleManualAction : undefined,
-      );
-    } finally {
-      recoverCurrentMeetTab.mockRestore();
-      launchChromeMeet.mockRestore();
-    }
-  });
+      } finally {
+        recoverCurrentMeetTab.mockRestore();
+        launchChromeMeet.mockRestore();
+      }
+    },
+  );
 
   it("still leaves the browser when the Chrome bridge stop fails", async () => {
     const stop = vi.fn(async () => {

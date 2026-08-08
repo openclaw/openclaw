@@ -1,4 +1,9 @@
-import type { MeetingPluginJoinResult } from "./session-types.js";
+import type {
+  MeetingBrowserHealth,
+  MeetingBrowserTab,
+  MeetingPluginJoinResult,
+  MeetingPluginProbeHealth,
+} from "./session-types.js";
 
 export type MeetingBrowserHealthRefreshOutcome = {
   /** True when the current browser health was inspected and applied. */
@@ -6,6 +11,73 @@ export type MeetingBrowserHealthRefreshOutcome = {
   /** Whether the resulting manual action is fresh enough to expose to the caller. */
   manualActionIsAuthoritative: boolean;
 };
+
+export type MeetingBrowserRecoveryFailure = {
+  kind: "missing" | "error";
+  message: string;
+};
+
+type MeetingBrowserRecoveryHealth = MeetingBrowserHealth &
+  MeetingPluginProbeHealth & {
+    audioInputActive?: boolean;
+    audioInputRouted?: boolean;
+    audioOutputRouted?: boolean;
+    providerConnected?: boolean;
+    realtimeReady?: boolean;
+    status?: string;
+    notes?: string[];
+  };
+
+type MeetingBrowserRecoverySession<THealth extends MeetingBrowserRecoveryHealth> = {
+  browserLeft?: boolean;
+  updatedAt: string;
+  notes: string[];
+  chrome?: {
+    browserTab?: MeetingBrowserTab;
+    health?: THealth;
+  };
+};
+
+function appendRecoveryNote(notes: string[] | undefined, message: string): string[] {
+  return [...(notes ?? []).filter((note) => note !== message), message];
+}
+
+export function recordNonAuthoritativeMeetingBrowserRecoveryFailure<
+  THealth extends MeetingBrowserRecoveryHealth,
+>(session: MeetingBrowserRecoverySession<THealth>, failure: MeetingBrowserRecoveryFailure): void {
+  const chrome = session.chrome;
+  if (!chrome) {
+    return;
+  }
+  const { manualAction: _manualAction, ...previousHealth } = chrome.health ?? {};
+  const notes = appendRecoveryNote(chrome.health?.notes, failure.message);
+  if (failure.kind === "missing") {
+    chrome.browserTab = undefined;
+    session.browserLeft = true;
+    chrome.health = {
+      ...previousHealth,
+      inCall: false,
+      micMuted: undefined,
+      captioning: false,
+      audioInputActive: false,
+      audioInputRouted: false,
+      audioOutputActive: false,
+      audioOutputRouted: false,
+      providerConnected: false,
+      realtimeReady: false,
+      status: "browser-tab-missing",
+      notes,
+    } as THealth;
+  } else {
+    chrome.health = {
+      ...previousHealth,
+      status: "browser-control",
+      notes,
+    } as THealth;
+  }
+  session.notes = appendRecoveryNote(session.notes, failure.message);
+  session.updatedAt = new Date().toISOString();
+}
 
 export function normalizeMeetingBrowserHealthRefreshOutcome(
   result: MeetingBrowserHealthRefreshOutcome | boolean | void,
@@ -35,7 +107,7 @@ type MeetingSessionRuntimeHealthRefresh<TSession> = (
 
 type MeetingSessionRuntimeRecoveryFailure<TSession> = (
   session: TSession,
-  failure: { kind: "missing" | "error"; message: string },
+  failure: MeetingBrowserRecoveryFailure,
 ) => "authoritative" | void;
 
 const runtimeProbeAccess = new WeakMap<object, unknown>();

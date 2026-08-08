@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { recordNonAuthoritativeMeetingBrowserRecoveryFailureForProbe } from "openclaw/plugin-sdk/meeting-runtime-probes";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig } from "./config.js";
 import { recoverCurrentMeetTab, recoverCurrentMeetTabOnNode } from "./transports/chrome.js";
@@ -58,7 +59,10 @@ export async function refreshGoogleMeetBrowserHealth(params: {
       }
       if (!result.browser) {
         if (options.force) {
-          session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+          recordNonAuthoritativeMeetingBrowserRecoveryFailureForProbe(session, {
+            kind: "error",
+            message: result.message,
+          });
         }
         return false;
       }
@@ -70,13 +74,20 @@ export async function refreshGoogleMeetBrowserHealth(params: {
       return true;
     }
     if (options.force && session.chrome) {
-      session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+      recordNonAuthoritativeMeetingBrowserRecoveryFailureForProbe(session, {
+        kind: "missing",
+        message: result.message,
+      });
     }
     return false;
   } catch (error) {
-    logger.debug?.(`[google-meet] browser readiness refresh ignored: ${formatErrorMessage(error)}`);
+    const message = `Google Meet browser readiness refresh failed: ${formatErrorMessage(error)}`;
+    logger.debug?.(`[google-meet] ${message}`);
     if (options.force && session.chrome) {
-      session.chrome.health = clearNonAuthoritativeManualAction(session.chrome.health);
+      recordNonAuthoritativeMeetingBrowserRecoveryFailureForProbe(session, {
+        kind: "error",
+        message,
+      });
     }
     return false;
   }

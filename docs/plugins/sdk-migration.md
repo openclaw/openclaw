@@ -930,14 +930,15 @@ unchanged. The private probe results include two independent flags:
   `health.manualAction` is fresh enough to return immediately to an operator.
 
 An explicit `false` is preserved and is never inferred to be true merely because
-browser inspection succeeded. At the lifecycle boundary, a legacy `void`
-callback (or a bare boolean result) does not itself provide freshness or
-authority. The probe compatibility layer may infer successful completion for
-older callbacks that omit the structured outcome, but that fallback does not
-promote a cached manual action when the lifecycle owner reported an explicit
-failure. Failed, missing, or thrown browser recovery clears non-authoritative
-cached manual actions from the canonical session, so serialized session state
-cannot disagree with the probe result.
+browser inspection succeeded. At the lifecycle boundary, a bare `true` means
+browser health was checked and the resulting action is authoritative; bare
+`false` and legacy `void` results mean neither. The probe compatibility layer
+may infer successful completion for older direct probe callbacks that return
+`void` after refreshing, but that fallback does not promote a cached manual
+action when the lifecycle owner reported an explicit failure. Failed, missing,
+or thrown browser recovery clears non-authoritative cached manual actions and
+records the failed verification on the canonical session, so serialized session
+state cannot disagree with the probe result.
 
 All bundled surfaces run on the shared controller: browser relay,
 managed-room handoff, voice-call realtime, voice-call streaming STT, Google

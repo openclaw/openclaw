@@ -2,12 +2,23 @@
 
 import {
   getMeetingSessionRuntimeProbeAccess,
+  recordNonAuthoritativeMeetingBrowserRecoveryFailure,
   registerMeetingSessionRuntimeHealthRefresh,
   type MeetingBrowserHealthRefreshOutcome,
+  type MeetingBrowserRecoveryFailure,
   type MeetingSessionProbeJoinResult,
 } from "../meeting-bot/session-runtime-probes.js";
+import type {
+  MeetingBrowserHealth,
+  MeetingBrowserTab,
+  MeetingPluginProbeHealth,
+} from "../meeting-bot/session-types.js";
 
-export type { MeetingBrowserHealthRefreshOutcome, MeetingSessionProbeJoinResult };
+export type {
+  MeetingBrowserHealthRefreshOutcome,
+  MeetingBrowserRecoveryFailure,
+  MeetingSessionProbeJoinResult,
+};
 
 type MeetingSessionJoinRuntimeForProbe<TSession, TRequest> = {
   join(request: TRequest): Promise<{ session: TSession }>;
@@ -20,6 +31,36 @@ type MeetingSessionHealthRuntimeForProbe<TSession> = {
   ): Promise<void>;
   refreshCaptionHealth(session: TSession): Promise<void>;
 };
+
+type MeetingBrowserRecoveryHealthForProbe = MeetingBrowserHealth &
+  MeetingPluginProbeHealth & {
+    audioInputActive?: boolean;
+    audioInputRouted?: boolean;
+    audioOutputRouted?: boolean;
+    providerConnected?: boolean;
+    realtimeReady?: boolean;
+    status?: string;
+    notes?: string[];
+  };
+
+type MeetingBrowserRecoverySessionForProbe<THealth extends MeetingBrowserRecoveryHealthForProbe> = {
+  browserLeft?: boolean;
+  updatedAt: string;
+  notes: string[];
+  chrome?: {
+    browserTab?: MeetingBrowserTab;
+    health?: THealth;
+  };
+};
+
+export function recordNonAuthoritativeMeetingBrowserRecoveryFailureForProbe<
+  THealth extends MeetingBrowserRecoveryHealthForProbe,
+>(
+  session: MeetingBrowserRecoverySessionForProbe<THealth>,
+  failure: MeetingBrowserRecoveryFailure,
+): void {
+  recordNonAuthoritativeMeetingBrowserRecoveryFailure(session, failure);
+}
 
 export function joinMeetingSessionForProbe<TSession, TRequest>(
   runtime: MeetingSessionJoinRuntimeForProbe<TSession, TRequest>,
