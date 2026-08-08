@@ -391,6 +391,7 @@ async function runSetupWizardOnce(
   });
   const storedRemoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url);
   const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
+  const optionRemoteToken = normalizeOptionalString(opts.remoteToken);
   const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
   const remoteSeedConfig: OpenClawConfig =
     opts.remoteUrl === undefined && opts.remoteToken === undefined
@@ -403,7 +404,7 @@ async function runSetupWizardOnce(
               ...baseConfig.gateway?.remote,
               ...(opts.remoteUrl !== undefined ? { url: optionRemoteUrl } : {}),
               ...(opts.remoteToken !== undefined
-                ? { token: normalizeOptionalString(opts.remoteToken) }
+                ? { token: optionRemoteToken }
                 : remoteUrlChanged
                   ? { token: undefined }
                   : {}),
@@ -422,6 +423,10 @@ async function runSetupWizardOnce(
         cfg: remoteSeedConfig,
         env: process.env,
         mode: "remote",
+        explicitAuth: { token: optionRemoteToken },
+        ...(remoteUrlChanged
+          ? { urlOverride: optionRemoteUrl, urlOverrideSource: "cli" as const }
+          : {}),
       })
     : null;
   if (remoteProbeAuth?.warning) {
