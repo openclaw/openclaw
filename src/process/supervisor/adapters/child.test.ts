@@ -157,6 +157,10 @@ describe("createChildAdapter", () => {
       flush: () => "",
     }));
     delete process.env.OPENCLAW_SERVICE_MARKER;
+    delete process.env.OPENCLAW_SERVICE_KIND;
+    delete process.env.INVOCATION_ID;
+    delete process.env.SYSTEMD_EXEC_PID;
+    delete process.env.JOURNAL_STREAM;
     vi.useRealTimers();
   });
 
@@ -337,7 +341,8 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("passes detached:false in service-managed mode where useDetached is false from the start (#71662)", async () => {
+  it("passes detached:false in service-managed mode on launchd, which has no cgroup sweep (#71662)", async () => {
+    setPlatform("darwin");
     process.env.OPENCLAW_SERVICE_MARKER = "1";
     try {
       const { adapter, killMock } = await createAdapterHarness({ pid: 9999 });
@@ -351,6 +356,66 @@ describe("createChildAdapter", () => {
       expect(killMock).toHaveBeenCalledWith("SIGKILL");
     } finally {
       delete process.env.OPENCLAW_SERVICE_MARKER;
+    }
+  });
+
+  it("passes detached:true in confirmed systemd-supervised gateway mode on Linux, whose cgroup already sweeps the tree (#120386)", async () => {
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.env.INVOCATION_ID = "test-invocation";
+    try {
+      const { adapter, killMock } = await createAdapterHarness({ pid: 9998 });
+      adapter.kill();
+      await Promise.resolve();
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(
+        9998,
+        "SIGKILL",
+        expect.objectContaining({ detached: true }),
+      );
+      expect(killMock).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+      delete process.env.OPENCLAW_SERVICE_KIND;
+      delete process.env.INVOCATION_ID;
+    }
+  });
+
+  it("passes detached:false on Linux for a generic service marker that is not the confirmed gateway systemd lifecycle (#120398 review)", async () => {
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "1";
+    try {
+      const { adapter, killMock } = await createAdapterHarness({ pid: 9997 });
+      adapter.kill();
+      await Promise.resolve();
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(
+        9997,
+        "SIGKILL",
+        expect.objectContaining({ detached: false }),
+      );
+      expect(killMock).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+    }
+  });
+
+  it("passes detached:false on Linux for the canonical gateway marker without systemd's own invocation hint (#120398 review)", async () => {
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    try {
+      const { adapter, killMock } = await createAdapterHarness({ pid: 9996 });
+      adapter.kill();
+      await Promise.resolve();
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(
+        9996,
+        "SIGKILL",
+        expect.objectContaining({ detached: false }),
+      );
+      expect(killMock).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+      delete process.env.OPENCLAW_SERVICE_KIND;
     }
   });
 
@@ -649,10 +714,37 @@ describe("createChildAdapter", () => {
     await expect(waitPromise).resolves.toEqual({ code: 0, signal: null });
   });
 
-  it("disables detached mode in service-managed runtime", async () => {
+  it("disables detached mode in service-managed runtime on launchd, which has no cgroup sweep", async () => {
+    setPlatform("darwin");
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 
     await createAdapterHarness({ pid: 7777 });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
+  });
+
+  it("keeps detached mode in confirmed systemd-supervised gateway runtime on Linux, whose cgroup already sweeps the tree (#120386)", async () => {
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    process.env.INVOCATION_ID = "test-invocation";
+
+    await createAdapterHarness({ pid: 7778 });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.options?.detached).toBe(true);
+    expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
+  });
+
+  it("disables detached mode on Linux for a service marker that is not the confirmed gateway systemd lifecycle (#120398 review)", async () => {
+    setPlatform("linux");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "node";
+    process.env.INVOCATION_ID = "test-invocation";
+
+    await createAdapterHarness({ pid: 7779 });
 
     const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.detached).toBe(false);
