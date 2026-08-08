@@ -441,16 +441,38 @@ async function resolveMemoryManagerStatusSnapshot(
     return null;
   }
   try {
+    const currentStatus = manager.status();
+    // Capture the optional store probe bound to manager so TS can narrow
+    // the call and `this` context is preserved.
+    const storeProbeFn =
+      currentStatus.backend === "builtin"
+        ? manager.probeVectorStoreAvailability?.bind(manager)
+        : undefined;
+    const isStoreProbe = storeProbeFn != null;
+    // Store the probe result so the status can reflect a real failure
+    // even when internal state was not updated.
+    let probeAvailable: boolean | undefined;
     try {
-      const currentStatus = manager.status();
-      if (currentStatus.backend === "builtin" && manager.probeVectorStoreAvailability) {
-        // Built-in vector store has a store-level probe that avoids conflating index absence with plugin failure.
-        await manager.probeVectorStoreAvailability();
-      } else {
-        await manager.probeVectorAvailability();
-      }
-    } catch {}
+      probeAvailable = isStoreProbe
+        ? await storeProbeFn()
+        : await manager.probeVectorAvailability();
+    } catch {
+      probeAvailable = false;
+    }
     const status = manager.status();
+    // Harden vector fields when the probe is authoritative and negative,
+    // so the operator sees the degraded state. A failed store probe only
+    // clears store availability; a failed semantic/fallback probe clears
+    // semantic availability and the aggregate available flag, leaving any
+    // distinct store health intact.
+    if (!probeAvailable && status.vector) {
+      status.vector = {
+        ...status.vector,
+        storeAvailable: isStoreProbe ? false : status.vector.storeAvailable,
+        semanticAvailable: isStoreProbe ? status.vector.semanticAvailable : false,
+        available: isStoreProbe ? status.vector.available : false,
+      };
+    }
     return { agentId, ...status };
   } finally {
     // Status probes must not leak plugin resources such as SQLite handles.
