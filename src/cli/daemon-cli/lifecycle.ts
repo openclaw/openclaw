@@ -58,10 +58,10 @@ import {
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
 import { createDaemonActionContext, createNullWriter } from "./response.js";
+import { formatRestartFailure, resolveStillStartingMessage } from "./restart-health-diagnostics.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
-  type GatewayRestartSnapshot,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
@@ -80,33 +80,6 @@ function postRestartHealthAttempts(): number {
   return process.platform === "win32"
     ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / POST_RESTART_HEALTH_DELAY_MS)
     : POST_RESTART_HEALTH_ATTEMPTS;
-}
-
-function formatRestartFailure(params: {
-  health: GatewayRestartSnapshot;
-  port: number;
-  defaultTimeoutSeconds: number;
-}): { statusLine: string; failMessage: string } {
-  if (params.health.waitOutcome === "stopped-free") {
-    const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
-    return {
-      statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
-      failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
-    };
-  }
-
-  const timeoutSeconds = Math.max(
-    1,
-    Math.round(
-      params.health.elapsedMs === undefined
-        ? params.defaultTimeoutSeconds
-        : params.health.elapsedMs / 1000,
-    ),
-  );
-  return {
-    statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
-  };
 }
 
 async function resolveGatewayLifecycleContext(service = resolveGatewayService()): Promise<{
@@ -442,20 +415,21 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     delayMs: POST_RESTART_HEALTH_DELAY_MS,
     previousLockIdentity: signaled.previousLockIdentity,
     waitIndefinitelyForPreviousOwner: healthWait.waitIndefinitelyForPreviousOwner,
+    previousOwnerPid: signaled.pid,
   });
-  if (!health.healthy) {
+  if (!health.healthy && health.waitOutcome !== "still-starting") {
     const message = `Gateway restart timed out after ${healthWait.timeoutSeconds}s waiting for health checks.`;
     fail(message, renderGatewayPortHealthDiagnostics(health));
     return false;
   }
 
-  emit({
-    ok: true,
-    result: signaled.result,
-    message: signaled.message,
-  });
+  const message =
+    health.waitOutcome === "still-starting"
+      ? resolveStillStartingMessage(health, signaled.pid, healthWait.timeoutSeconds)
+      : signaled.message;
+  emit({ ok: true, result: signaled.result, message });
   if (!json) {
-    defaultRuntime.log(signaled.message);
+    defaultRuntime.log(theme.info(message));
   }
   return true;
 }
@@ -582,6 +556,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let unmanagedRestartHealthAttempts = restartHealthAttempts;
   let unmanagedRestartWaitIndefinitely = false;
   let unmanagedRestartWaitSeconds = restartWaitSeconds;
+  let unmanagedRestartPid: number | undefined;
 
   return await runServiceRestart({
     serviceNoun: "Gateway",
@@ -626,12 +601,15 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const handled = await restartUnmanaged(unmanagedPort, restartIntent, !mutationError);
       if (handled) {
         restartedWithoutServiceManager = true;
-        if (isGatewaySignalRestartResult(handled) && handled.previousLockIdentity) {
-          unmanagedPreviousLockIdentity = handled.previousLockIdentity;
-          const healthWait = await resolveRestartListenerHealthWait(restartIntent);
-          unmanagedRestartHealthAttempts = healthWait.attempts;
-          unmanagedRestartWaitIndefinitely = healthWait.waitIndefinitelyForPreviousOwner;
-          unmanagedRestartWaitSeconds = healthWait.timeoutSeconds;
+        if (isGatewaySignalRestartResult(handled)) {
+          unmanagedRestartPid = handled.pid;
+          if (handled.previousLockIdentity) {
+            unmanagedPreviousLockIdentity = handled.previousLockIdentity;
+            const healthWait = await resolveRestartListenerHealthWait(restartIntent);
+            unmanagedRestartHealthAttempts = healthWait.attempts;
+            unmanagedRestartWaitIndefinitely = healthWait.waitIndefinitelyForPreviousOwner;
+            unmanagedRestartWaitSeconds = healthWait.timeoutSeconds;
+          }
         }
         return handled;
       }
@@ -654,8 +632,24 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
                 waitIndefinitelyForPreviousOwner: unmanagedRestartWaitIndefinitely,
               }
             : {}),
+          ...(unmanagedRestartPid !== undefined ? { previousOwnerPid: unmanagedRestartPid } : {}),
         });
         if (health.healthy) {
+          return undefined;
+        }
+        if (health.waitOutcome === "still-starting" && unmanagedRestartPid !== undefined) {
+          const stillStartingLine = resolveStillStartingMessage(
+            health,
+            unmanagedRestartPid,
+            unmanagedRestartWaitSeconds,
+          );
+          if (stillStartingLine !== undefined) {
+            if (!jsonOutput) {
+              defaultRuntime.log(theme.info(stillStartingLine));
+            } else {
+              warnings.push(stillStartingLine);
+            }
+          }
           return undefined;
         }
 
