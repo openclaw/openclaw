@@ -3458,6 +3458,15 @@ export const en: TranslationMap = {
       lastChannelsRefresh: "Last Channels Refresh",
       lastError: "Last error",
     },
+    browserDevice: {
+      title: "Browser Device",
+      forget: "Forget this browser",
+      description:
+        "Remove this browser's operator credential for the current Gateway and reconnect.",
+      absent: "This browser has no stored operator credential for the current Gateway.",
+      confirm:
+        "Forget this browser's operator credential for the current Gateway and reconnect? Other Gateways and browser preferences will be preserved.",
+    },
     help: {
       title: "How to connect",
       step1: "Start the gateway on your host machine:",

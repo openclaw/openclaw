@@ -12,11 +12,22 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { loadGatewaySessionSelection, loadSettings, type UiSettings } from "../../app/settings.ts";
+import {
+  loadGatewaySessionSelection,
+  loadSettings,
+  persistSessionToken,
+  type UiSettings,
+} from "../../app/settings.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import {
+  clearDeviceAuthToken,
+  loadDeviceAuthToken,
+  peekStoredDeviceIdentityId,
+} from "../../lib/nodes/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -239,8 +250,37 @@ export class ConnectionPage extends OpenClawLightDomElement {
     });
   }
 
+  private async forgetBrowserDevice() {
+    if (
+      !(await showConfirmDialog({
+        title: t("connection.browserDevice.title"),
+        message: t("connection.browserDevice.confirm"),
+        confirmLabel: t("connection.browserDevice.forget"),
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+    const gateway = this.context.gateway;
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    const deviceId = peekStoredDeviceIdentityId();
+    if (deviceId) {
+      clearDeviceAuthToken({ deviceId, gatewayUrl, role: "operator" });
+    }
+    persistSessionToken(gatewayUrl, "");
+    this.settings = { ...this.settings, token: "" };
+    this.password = "";
+    this.resetSensitiveUi();
+    gateway.connect({ token: "", bootstrapToken: "", password: "" });
+  }
+
   override render() {
     const gateway = this.context.gateway.snapshot;
+    const gatewayUrl = this.context.gateway.connection.gatewayUrl;
+    const deviceId = peekStoredDeviceIdentityId();
+    const canForgetBrowser = Boolean(
+      deviceId && loadDeviceAuthToken({ deviceId, gatewayUrl, role: "operator" }),
+    );
     const body = renderConnection({
       connected: gateway.phase === "connected",
       hello: gateway.hello,
@@ -271,6 +311,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
         this.gatewayPasswordVisible = !this.gatewayPasswordVisible;
       },
       onConnect: () => this.connect(),
+      canForgetBrowser,
+      onForgetBrowser: () => void this.forgetBrowserDevice(),
       onRefresh: () => void this.context.channels.refresh(false),
     });
     return html`

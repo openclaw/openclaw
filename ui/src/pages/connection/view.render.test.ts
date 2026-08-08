@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { renderConnection } from "./view.ts";
 
@@ -38,6 +38,8 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
     onToggleGatewayTokenVisibility: () => undefined,
     onToggleGatewayPasswordVisibility: () => undefined,
     onConnect: () => undefined,
+    canForgetBrowser: false,
+    onForgetBrowser: () => undefined,
     onRefresh: () => undefined,
     ...overrides,
   };
@@ -72,6 +74,7 @@ describe("connection view rendering", () => {
       "Gateway Token",
       "Password (not stored)",
       "Default Session Key",
+      "Browser Device",
     ]);
     expect(container.textContent).not.toContain("Last error");
   });
@@ -112,6 +115,24 @@ describe("connection view rendering", () => {
     ).toBe("text");
   });
 
+  it("offers bounded browser credential removal only when one is stored", async () => {
+    const container = document.createElement("div");
+    const onForgetBrowser = vi.fn();
+    render(
+      renderConnection(createConnectionProps({ canForgetBrowser: true, onForgetBrowser })),
+      container,
+    );
+    await Promise.resolve();
+
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (candidate) => candidate.textContent?.trim() === "Forget this browser",
+    );
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    button?.click();
+    expect(onForgetBrowser).toHaveBeenCalledOnce();
+  });
+
   it("hides token and password fields for trusted-proxy auth", async () => {
     const container = document.createElement("div");
     const hello = {
@@ -121,7 +142,11 @@ describe("connection view rendering", () => {
     render(renderConnection(createConnectionProps({ connected: true, hello })), container);
     await Promise.resolve();
 
-    expect(accessRowTitles(container)).toEqual(["WebSocket URL", "Default Session Key"]);
+    expect(accessRowTitles(container)).toEqual([
+      "WebSocket URL",
+      "Default Session Key",
+      "Browser Device",
+    ]);
     expect(container.textContent).toContain("Authenticated via trusted proxy.");
     expect(container.textContent).toContain("30s");
     expect(container.textContent).not.toContain("Uptime");

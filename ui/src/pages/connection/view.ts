@@ -32,6 +32,8 @@ type ConnectionProps = {
   onToggleGatewayTokenVisibility: () => void;
   onToggleGatewayPasswordVisibility: () => void;
   onConnect: () => void;
+  canForgetBrowser: boolean;
+  onForgetBrowser: () => void;
   onRefresh: () => void;
 };
 
@@ -120,6 +122,21 @@ export function renderConnection(props: ConnectionProps) {
           .value=${props.settings.sessionKey}
           @input=${(e: Event) => props.onSessionKeyChange((e.target as HTMLInputElement).value)}
         />
+      `,
+    })}
+    ${renderSettingsRow({
+      title: t("connection.browserDevice.title"),
+      description: props.canForgetBrowser
+        ? t("connection.browserDevice.description")
+        : t("connection.browserDevice.absent"),
+      control: html`
+        <button
+          class="btn danger"
+          ?disabled=${!props.canForgetBrowser}
+          @click=${() => props.onForgetBrowser()}
+        >
+          ${t("connection.browserDevice.forget")}
+        </button>
       `,
     })}
     <div class="settings-row">
