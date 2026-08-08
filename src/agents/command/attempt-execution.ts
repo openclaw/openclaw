@@ -66,7 +66,7 @@ import {
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasClaudeLiveSessionForOwner } from "../cli-runner/claude-live-session.js";
-import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
+import { resolveCliSessionToolsAllow } from "../cli-runner/tool-policy.js";
 import {
   getCliSessionBinding,
   resolveCliSessionClearReason,
@@ -1071,10 +1071,11 @@ export function runAgentAttempt(params: {
             groupChannel: params.runContext.groupChannel,
             groupSpace: params.runContext.groupSpace,
             spawnedBy: params.spawnedBy,
-            toolsAllow: resolveCliRuntimeToolsAllow(
-              runtimeToolsAllow,
-              params.opts.toolsAllowIsDefault,
-            ),
+            toolsAllow: resolveCliSessionToolsAllow({
+              toolsAllow: runtimeToolsAllow,
+              toolsAllowIsDefault: params.opts.toolsAllowIsDefault,
+              sessionPolicy: params.sessionEntry?.runtimeToolPolicy,
+            }),
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
@@ -1219,6 +1220,8 @@ export function runAgentAttempt(params: {
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     media: params.opts.media,
     clientTools: params.opts.clientTools,
+    // Announce handoffs may replace opts.toolsAllow with a tighter runtime cap.
+    toolsAllow: runtimeToolsAllow,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
     modelFallbacksOverride: params.modelFallbacksOverride,
@@ -1245,7 +1248,6 @@ export function runAgentAttempt(params: {
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
-    toolsAllow: runtimeToolsAllow,
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
     trustedInternalHandoff: trustedSubagentAnnounceHandoff
       ? params.opts.trustedInternalHandoff
