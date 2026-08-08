@@ -4,6 +4,7 @@ import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
+import { CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND } from "./process-owned-task-liveness.js";
 import {
   CRON_HISTORY_KEEP_PER_JOB,
   getInspectableActiveTaskRestartBlockers,
@@ -18,6 +19,7 @@ import {
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
+  resetProcessOwnedTaskLivenessForTests,
   setDetachedTaskLifecycleRuntime,
 } from "./task-runtime.test-helpers.js";
 
@@ -50,6 +52,7 @@ afterEach(() => {
   stopTaskRegistryMaintenance();
   resetTaskRegistryMaintenanceRuntimeForTests();
   resetDetachedTaskLifecycleRuntimeForTests();
+  resetProcessOwnedTaskLivenessForTests();
 });
 
 function createTaskRegistryMaintenanceHarness(params: {
@@ -340,6 +343,36 @@ describe("task-registry maintenance issue #60299", () => {
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
     expectTaskStatus(currentTasks, task.taskId, "running");
     expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(1);
+  });
+
+  it("retains childless process-owned ACP tasks during non-authoritative inspection", async () => {
+    const staleAt = Date.now() - 40 * 60_000;
+    const task = makeStaleTask({
+      runtime: "acp",
+      taskKind: CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND,
+      sourceId: CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND,
+      runId: "run-process-owned-inspection",
+      childSessionKey: undefined,
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      runtimeAuthoritative: false,
+    });
+
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 0 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        decision: "retained",
+        reason: "acp_runtime_not_authoritative",
+      }),
+    );
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
   });
 
   it("does not reclaim a running ACP task from a non-authoritative process even with an empty live-turn map", async () => {

@@ -46,6 +46,10 @@ import {
 } from "./detached-task-runtime.js";
 import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
+  isNonResumableProcessOwnedTask,
+  isProcessOwnedTaskIdActive,
+} from "./process-owned-task-liveness.js";
+import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
   getTaskById,
@@ -417,6 +421,14 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
+    if (isNonResumableProcessOwnedTask(task)) {
+      // Ownership is process-local, so only the authoritative gateway can use
+      // an absent owner as proof that persisted work died with an earlier process.
+      if (!taskRegistryMaintenanceRuntime.isRuntimeAuthoritative()) {
+        return true;
+      }
+      return isProcessOwnedTaskIdActive(task.taskId);
+    }
     return !isHarnessOwnedSubagentTask(task);
   }
   if (task.runtime === "acp") {
@@ -446,6 +458,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+  if (isNonResumableProcessOwnedTask(task)) {
+    return "owning process exited";
+  }
   if (isHarnessOwnedSubagentTask(task)) {
     return "Native subagent stopped reporting progress";
   }
@@ -1049,7 +1064,10 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         continue;
       }
       const shouldRecheckFreshTask =
-        recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook);
+        recoveryHookRegistered ||
+        // Process ownership can be registered while the recovery await yields.
+        isNonResumableProcessOwnedTask(freshAfterHook) ||
+        hasTaskLostDecisionInputChanged(current, freshAfterHook);
       let lostContext = backingSessionContext;
       if (shouldRecheckFreshTask) {
         lostContext = createBackingSessionLookupContext();
