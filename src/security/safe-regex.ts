@@ -325,17 +325,25 @@ function hasNestedRepetition(source: string): boolean {
   return analyzeTokensForNestedRepetition(tokenizePattern(source));
 }
 
-export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
-  const trimmed = source.trim();
-  if (!trimmed) {
-    return { regex: null, source: trimmed, flags, reason: "empty" };
+type CompileSafeRegexMode = "trim" | "exact";
+
+function compileSafeRegexCore(
+  source: string,
+  flags: string,
+  mode: CompileSafeRegexMode,
+): SafeRegexCompileResult {
+  // Default "trim" matches config/model pattern callers (blank => empty).
+  // "exact" keeps JSON Schema patternProperties sources (whitespace significant).
+  const compileSource = mode === "exact" ? source : source.trim();
+  if (!compileSource) {
+    return { regex: null, source: compileSource, flags, reason: "empty" };
   }
-  const cacheKey = `${flags}::${trimmed}`;
+  const cacheKey = `${mode}::${flags}::${compileSource}`;
   if (safeRegexCache.has(cacheKey)) {
     return (
       safeRegexCache.get(cacheKey) ?? {
         regex: null,
-        source: trimmed,
+        source: compileSource,
         flags,
         reason: "invalid-regex",
       }
@@ -343,13 +351,18 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   }
 
   let result: SafeRegexCompileResult;
-  if (hasNestedRepetition(trimmed)) {
-    result = { regex: null, source: trimmed, flags, reason: "unsafe-nested-repetition" };
+  if (hasNestedRepetition(compileSource)) {
+    result = { regex: null, source: compileSource, flags, reason: "unsafe-nested-repetition" };
   } else {
     try {
-      result = { regex: new RegExp(trimmed, flags), source: trimmed, flags, reason: null };
+      result = {
+        regex: new RegExp(compileSource, flags),
+        source: compileSource,
+        flags,
+        reason: null,
+      };
     } catch {
-      result = { regex: null, source: trimmed, flags, reason: "invalid-regex" };
+      result = { regex: null, source: compileSource, flags, reason: "invalid-regex" };
     }
   }
 
@@ -358,6 +371,27 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   return result;
 }
 
+/** Public safe-regex entry: trims source (config/model pattern contract). */
+export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {
+  return compileSafeRegexCore(source, flags, "trim");
+}
+
 export function compileSafeRegex(source: string, flags = ""): RegExp | null {
   return compileSafeRegexDetailed(source, flags).regex;
+}
+
+/**
+ * Internal JSON Schema patternProperties compile path.
+ * Preserves exact source semantics; not re-exported through the public plugin SDK.
+ */
+export function compileJsonSchemaPatternRegex(source: string, flags = ""): RegExp | null {
+  return compileSafeRegexCore(source, flags, "exact").regex;
+}
+
+/** Detailed variant for pre-validation guards (internal JSON Schema path only). */
+export function compileJsonSchemaPatternRegexDetailed(
+  source: string,
+  flags = "",
+): SafeRegexCompileResult {
+  return compileSafeRegexCore(source, flags, "exact");
 }

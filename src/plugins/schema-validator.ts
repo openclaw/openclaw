@@ -4,6 +4,7 @@ import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { Format } from "typebox/format";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import { compileJsonSchemaPatternRegexDetailed } from "../security/safe-regex.js";
 import {
   applyJsonSchemaDefaults,
   findJsonSchemaShapeError,
@@ -81,7 +82,61 @@ function cloneValidationValue<T>(value: T): T {
   return structuredClone(value);
 }
 
+function findUnsafePatternProperty(schema: unknown, path = "$"): string | null {
+  if (!schema || typeof schema !== "object") {
+    return null;
+  }
+  if (Array.isArray(schema)) {
+    for (let i = 0; i < schema.length; i += 1) {
+      const nested = findUnsafePatternProperty(schema[i], `${path}[${i}]`);
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+  const record = schema as Record<string, unknown>;
+  const patterns = record.patternProperties;
+  if (patterns && typeof patterns === "object" && !Array.isArray(patterns)) {
+    for (const pattern of Object.keys(patterns as Record<string, unknown>)) {
+      const compiled = compileJsonSchemaPatternRegexDetailed(pattern);
+      if (!compiled.regex && compiled.reason === "unsafe-nested-repetition") {
+        return `${path}.patternProperties[${JSON.stringify(pattern)}]`;
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "patternProperties") {
+      // Patterns themselves already checked; still walk nested property schemas.
+      const nestedMap = value as Record<string, unknown>;
+      for (const [pattern, nestedSchema] of Object.entries(nestedMap)) {
+        const nested = findUnsafePatternProperty(
+          nestedSchema,
+          `${path}.patternProperties[${JSON.stringify(pattern)}]`,
+        );
+        if (nested) {
+          return nested;
+        }
+      }
+      continue;
+    }
+    const nested = findUnsafePatternProperty(value, `${path}.${key}`);
+    if (nested) {
+      return nested;
+    }
+  }
+  return null;
+}
+
 function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
+  const unsafePattern = findUnsafePatternProperty(schema);
+  if (unsafePattern) {
+    throw new Error(
+      sanitizeTerminalText(
+        `unsafe patternProperties pattern rejected before validation at ${unsafePattern}`,
+      ),
+    );
+  }
   return Compile(normalizeJsonSchemaForTypeBox(schema) as never);
 }
 
@@ -340,6 +395,23 @@ export function validateJsonSchemaValue(params: {
   const schemaError = findJsonSchemaShapeError(params.schema);
   if (schemaError) {
     throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+  }
+
+  const unsafePattern = findUnsafePatternProperty(params.schema);
+  if (unsafePattern) {
+    const message = sanitizeTerminalText(
+      `unsafe patternProperties pattern rejected before validation at ${unsafePattern}`,
+    );
+    return {
+      ok: false,
+      errors: [
+        {
+          path: "<root>",
+          message,
+          text: message,
+        },
+      ],
+    };
   }
 
   const useCache = params.cache !== false;

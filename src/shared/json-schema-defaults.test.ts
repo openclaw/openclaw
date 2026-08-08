@@ -196,3 +196,102 @@ describe("applyJsonSchemaDefaults prototype safety", () => {
     expect(readPollution()).toBeUndefined();
   });
 });
+
+describe("applyJsonSchemaDefaults patternProperties safety", () => {
+  it("skips nested-repetition patternProperties instead of compiling them", () => {
+    // Without compileSafeRegex, `(a+)+$` can hang on non-matching keys via
+    // catastrophic backtracking. Defaults must not apply through unsafe keys.
+    const schema = {
+      type: "object",
+      patternProperties: {
+        "(a+)+$": {
+          type: "object",
+          properties: {
+            mode: { type: "string", default: "applied" },
+          },
+        },
+      },
+    };
+    const value = { aaaaaaaaaaaaaaaaaaaaX: {} };
+
+    const started = Date.now();
+    const result = applyJsonSchemaDefaults(schema, value) as {
+      aaaaaaaaaaaaaaaaaaaaX: { mode?: string };
+    };
+    const elapsedMs = Date.now() - started;
+
+    expect(elapsedMs).toBeLessThan(250);
+    expect(result.aaaaaaaaaaaaaaaaaaaaX.mode).toBeUndefined();
+  });
+
+  it("still applies defaults through safe patternProperties", () => {
+    const schema = {
+      type: "object",
+      patternProperties: {
+        "^x": {
+          type: "object",
+          properties: {
+            mode: { type: "string", default: "auto" },
+          },
+        },
+      },
+    };
+
+    const result = applyJsonSchemaDefaults(schema, { x1: {} }) as {
+      x1: { mode?: string };
+    };
+
+    expect(result.x1.mode).toBe("auto");
+  });
+
+  it("preserves whitespace-significant patternProperties sources", () => {
+    // Exact "^x " must not trim to "^x", which would inject defaults into "xy".
+    const schema = {
+      type: "object",
+      patternProperties: {
+        "^x ": {
+          type: "object",
+          properties: {
+            mode: { type: "string", default: "space" },
+          },
+        },
+      },
+    };
+
+    const result = applyJsonSchemaDefaults(schema, {
+      "x y": {},
+      xy: {},
+    }) as {
+      "x y": { mode?: string };
+      xy: { mode?: string };
+    };
+
+    expect(result["x y"].mode).toBe("space");
+    expect(result.xy.mode).toBeUndefined();
+  });
+
+  it("keeps whitespace-only patternProperties matching a space key", () => {
+    const schema = {
+      type: "object",
+      patternProperties: {
+        " ": {
+          type: "object",
+          properties: {
+            mode: { type: "string", default: "blank" },
+          },
+        },
+      },
+    };
+
+    const result = applyJsonSchemaDefaults(schema, {
+      "a b": {},
+      ab: {},
+    }) as {
+      "a b": { mode?: string };
+      ab: { mode?: string };
+    };
+
+    expect(result["a b"].mode).toBe("blank");
+    expect(result.ab.mode).toBeUndefined();
+  });
+});

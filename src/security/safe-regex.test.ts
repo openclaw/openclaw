@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   compileSafeRegex,
+  compileJsonSchemaPatternRegex,
+  compileJsonSchemaPatternRegexDetailed,
   compileSafeRegexDetailed,
   testRegexWithBoundedInput,
 } from "./safe-regex.js";
@@ -46,6 +48,32 @@ describe("safe regex", () => {
     ["^agent:main$", null],
   ] as const)("returns structured reject reason for %s", (pattern, expected) => {
     expect(compileSafeRegexDetailed(pattern).reason).toBe(expected);
+  });
+
+  it("preserves exact JSON Schema sources without trimming", () => {
+    const space = compileJsonSchemaPatternRegexDetailed(" ");
+    expect(space.reason).toBeNull();
+    expect(space.regex).toBeInstanceOf(RegExp);
+    expect(space.source).toBe(" ");
+    expect(space.regex?.test(" ")).toBe(true);
+    expect(space.regex?.test("x")).toBe(false);
+
+    const trailing = compileJsonSchemaPatternRegexDetailed("^x ");
+    expect(trailing.reason).toBeNull();
+    expect(trailing.source).toBe("^x ");
+    expect(trailing.regex?.test("x ")).toBe(true);
+    // Trimmed "^x" would incorrectly match this key.
+    expect(trailing.regex?.test("xy")).toBe(false);
+
+    // Default trim contract still rejects blank sources.
+    expect(compileSafeRegexDetailed(" ").reason).toBe("empty");
+    expect(compileJsonSchemaPatternRegex(" ")).toBeInstanceOf(RegExp);
+  });
+
+  it("still rejects nested repetition with exact-source JSON Schema compile", () => {
+    expect(compileJsonSchemaPatternRegexDetailed(" (a+)+$ ").reason).toBe(
+      "unsafe-nested-repetition",
+    );
   });
 
   it.each([
