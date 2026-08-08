@@ -5730,6 +5730,57 @@ describe("DiscordVoiceManager", () => {
     });
   });
 
+  it("preserves transcript-only capture through DAVE receive recovery", async () => {
+    useDirectAgentRealtimeProvider();
+    joinVoiceChannelMock
+      .mockReturnValueOnce(createConnectionMock())
+      .mockReturnValueOnce(createConnectionMock());
+    const manager = createAgentProxyManager();
+    const onUtterance = vi.fn();
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { transcripts: { sessionId: "notes-1", onUtterance } },
+    );
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+
+    await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
+    const entry = getSessionEntry(manager);
+    expect(entry.transcripts).toEqual({ sessionId: "notes-1", onUtterance });
+    expect(entry.realtime).toBeUndefined();
+    expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
+    expectConnectedStatus(manager, "1001");
+  });
+
+  it("preserves realtime and transcripts through DAVE receive recovery", async () => {
+    useDirectAgentRealtimeProvider();
+    joinVoiceChannelMock
+      .mockReturnValueOnce(createConnectionMock())
+      .mockReturnValueOnce(createConnectionMock());
+    const manager = createAgentProxyManager();
+    const onUtterance = vi.fn();
+
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { requester: { senderId: "u-owner", senderIsOwner: true } },
+    );
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      { transcripts: { sessionId: "notes-1", onUtterance } },
+    );
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+    emitDecryptFailure(manager);
+
+    await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(2));
+    const entry = getSessionEntry(manager);
+    expect(entry.transcripts).toEqual({ sessionId: "notes-1", onUtterance });
+    expect(entry.realtime).toBeDefined();
+    expectConnectedStatus(manager, "1001");
+  });
+
   it("preserves follow ownership through DAVE receive recovery", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock

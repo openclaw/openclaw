@@ -2106,6 +2106,8 @@ export class DiscordVoiceManager {
       return;
     }
     const preserveFollowState = this.isFollowOwnedGuild(entry.guildId);
+    const transcripts = entry.transcripts;
+    const startRealtime = Boolean(transcripts && (entry.realtime || entry.pendingRealtime));
     logger.warn(
       `discord voice: repeated decrypt failures; attempting rejoin for guild ${entry.guildId} channel ${entry.channelId}`,
     );
@@ -2116,7 +2118,11 @@ export class DiscordVoiceManager {
     }
     const result = await this.join(
       { guildId: entry.guildId, channelId: entry.channelId },
-      { preserveFollowState, requester: entry.requester },
+      {
+        preserveFollowState,
+        requester: entry.requester,
+        ...(transcripts ? { startRealtime, transcripts } : {}),
+      },
     );
     if (!result.ok) {
       logger.warn(`discord voice: rejoin after decrypt failures failed: ${result.message}`);
