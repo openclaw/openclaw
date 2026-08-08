@@ -27,11 +27,31 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
+const effects = vi.hoisted(() => ({
+  workerPlacementError: vi.fn(),
+}));
+
+vi.mock("../../logging/subsystem.js", async () => {
+  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
+    "../../logging/subsystem.js",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/worker-placement"
+        ? { ...logger, error: effects.workerPlacementError }
+        : logger;
+    },
+  };
+});
+
 describe("forced worker environment abandonment", () => {
   let root: string;
   let database: OpenClawStateDatabase;
 
   beforeEach(async () => {
+    effects.workerPlacementError.mockClear();
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-force-worker-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   });
@@ -199,6 +219,9 @@ describe("forced worker environment abandonment", () => {
     });
     expect(store.listPendingWorkspaceResults()).toHaveLength(1);
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(effects.workerPlacementError).not.toHaveBeenCalledWith(
+      expect.stringContaining(`cloud workspace recovery deferred for ${active.sessionId}`),
+    );
     await sidecar?.stop();
 
     await forceAbandonWorkerEnvironment({

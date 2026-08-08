@@ -109,6 +109,7 @@ describe("worker placement workspace journal", () => {
       recoveryError: FORCED_WORKER_ABANDONMENT_ERROR,
     });
 
+    expect(store.isWorkspaceReconciliationRetainedForPendingResult(owner)).toBe(false);
     expect(prune()).toEqual([]);
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
   });
@@ -133,6 +134,7 @@ describe("worker placement workspace journal", () => {
         "workspace quiescence recovery timed out; lease retained for operator recovery",
     });
 
+    expect(store.isWorkspaceReconciliationRetainedForPendingResult(owner)).toBe(true);
     expect(prune()).toEqual([]);
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
   });
@@ -186,6 +188,7 @@ describe("worker placement workspace journal", () => {
       recoveryError: "terminal recovery retained for operator action",
     });
 
+    expect(store.isWorkspaceReconciliationRetainedForPendingResult(owner)).toBe(false);
     expect(prune()).toEqual([owner]);
     expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
   });

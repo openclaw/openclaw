@@ -134,6 +134,11 @@ export function createPlacementWorkspaceJournalOps(
       return row?.forced_abandonment_retained === 1;
     },
 
+    isWorkspaceReconciliationRetainedForPendingResult(owner: WorkerWorkspaceJournalOwner): boolean {
+      const db = read();
+      return deps.hasMatchingRetainedFailedResultOwner(db, find(db, owner.sessionId), owner);
+    },
+
     retainWorkspaceReconciliationForForcedAbandonment(owner: WorkerWorkspaceJournalOwner): void {
       write((db) => {
         const placement = find(db, owner.sessionId);

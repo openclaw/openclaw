@@ -482,6 +482,10 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     }
     for (const owner of params.placements.listWorkspaceReconciliationOwners()) {
       try {
+        if (params.placements.isWorkspaceReconciliationRetainedForPendingResult(owner)) {
+          // Terminal pending results own their journal until explicit forced abandonment.
+          continue;
+        }
         const placement = params.placements.get(owner.sessionId);
         if (
           (placement?.state !== "active" && placement?.state !== "draining") ||
