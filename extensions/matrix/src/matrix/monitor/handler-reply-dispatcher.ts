@@ -28,6 +28,7 @@ import {
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
+  logTypingFailure,
   type ReplyPayload,
   type RuntimeEnv,
 } from "./runtime-api.js";
@@ -99,7 +100,15 @@ export function createMatrixReplyDispatcher(config: {
           // Re-assert typing so the user still sees the indicator while
           // the next block generates.
           const { sendTypingMatrix } = await loadMatrixSendModule();
-          await sendTypingMatrix(roomId, true, undefined, client).catch(() => {});
+          await sendTypingMatrix(roomId, true, undefined, client).catch((error: unknown) => {
+            logTypingFailure({
+              log: logVerboseMessage,
+              channel: "matrix",
+              action: "start",
+              target: roomId,
+              error,
+            });
+          });
         }
         return result;
       };
