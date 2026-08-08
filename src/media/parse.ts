@@ -17,8 +17,10 @@ import { lineHasAcceptableMediaDirective } from "./fenced-media-accept.js";
 import {
   beginsIndependentMediaSource,
   cleanCandidate,
+  FILE_URL_PREFIX_RE,
   isAllowedRemoteMediaUrl,
   isValidMedia,
+  looksLikeLocalFilePath,
   normalizeMediaSource,
   splitUnquotedMediaDirectiveParts,
   unwrapQuoted,
