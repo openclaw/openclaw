@@ -118,6 +118,8 @@ function resolveSlackEventId(body: unknown): string | null {
 function resolveSlackIngressLane(body: unknown, eventId: string): string {
   const envelope = asOptionalRecord(body);
   const event = asOptionalRecord(envelope?.event);
+  const nestedMessage = asOptionalRecord(event?.message);
+  const previousMessage = asOptionalRecord(event?.previous_message);
   const item = asOptionalRecord(event?.item);
   const assistantThread = asOptionalRecord(event?.assistant_thread);
   const team = asOptionalRecord(envelope?.team);
@@ -139,7 +141,26 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
     ?.toString()
     .trim();
   if (channelId) {
-    return `team:${teamId}:conversation:${channelId}`;
+    const isDirectMessage = event?.channel_type === "im" || channelId.startsWith("D");
+    const isThreadableRoomMessage =
+      (event?.type === "message" || event?.type === "app_mention") && !isDirectMessage;
+    // A room message can become a thread root after admission. Anchor its own
+    // timestamp now so a later reply cannot overtake the still-running root.
+    const threadTs = isDirectMessage
+      ? undefined
+      : [
+          event?.thread_ts,
+          nestedMessage?.thread_ts,
+          previousMessage?.thread_ts,
+          assistantThread?.thread_ts,
+          ...(isThreadableRoomMessage
+            ? [event?.deleted_ts, nestedMessage?.ts, previousMessage?.ts, event?.ts]
+            : []),
+        ]
+          .find((value) => typeof value === "string" && value.trim())
+          ?.toString()
+          .trim();
+    return `team:${teamId}:conversation:${channelId}${threadTs ? `:thread:${threadTs}` : ""}`;
   }
   const userId = [event?.user, event?.user_id]
     .find((value) => typeof value === "string" && value.trim())

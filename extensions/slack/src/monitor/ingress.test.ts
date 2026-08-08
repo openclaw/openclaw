@@ -15,7 +15,11 @@ import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./i
 type SlackIngressQueue = NonNullable<Parameters<typeof createSlackDurableIngress>[0]["queue"]>;
 type SlackIngressPayload = Parameters<SlackIngressQueue["enqueue"]>[1];
 
-function createSlackEnvelope(eventId: string, ts = "1700000000.000100") {
+function createSlackEnvelope(
+  eventId: string,
+  ts = "1700000000.000100",
+  eventOverrides: Record<string, unknown> = {},
+) {
   return {
     team_id: "T_TEST",
     api_app_id: "A_TEST",
@@ -29,6 +33,7 @@ function createSlackEnvelope(eventId: string, ts = "1700000000.000100") {
       ts,
       client_msg_id: "client-message-1",
       text: "hello",
+      ...eventOverrides,
     },
   };
 }
@@ -75,10 +80,10 @@ function createReceiverHarness() {
 function createReceiverEvent(
   eventId: string,
   ack = vi.fn(async () => {}),
-  options: { retryNum?: number; ts?: string } = {},
+  options: { retryNum?: number; ts?: string; eventOverrides?: Record<string, unknown> } = {},
 ): ReceiverEvent {
   return {
-    body: createSlackEnvelope(eventId, options.ts),
+    body: createSlackEnvelope(eventId, options.ts, options.eventOverrides),
     ack,
     ...(options.retryNum === undefined ? {} : { retryNum: options.retryNum }),
   };
@@ -127,6 +132,176 @@ describe("Slack durable ingress", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
   });
+
+  it.each([
+    {
+      name: "top-level room messages",
+      eventOverrides: (threadTs: string) => ({ ts: threadTs }),
+    },
+    {
+      name: "threaded messages",
+      eventOverrides: (threadTs: string) => ({ thread_ts: threadTs }),
+    },
+    {
+      name: "nested message changes",
+      eventOverrides: (threadTs: string) => ({
+        subtype: "message_changed",
+        message: { thread_ts: threadTs },
+      }),
+    },
+    {
+      name: "assistant thread events",
+      eventOverrides: (threadTs: string) => ({
+        type: "assistant_thread_started",
+        assistant_thread: { channel_id: "C_TEST", thread_ts: threadTs },
+      }),
+    },
+  ])(
+    "dispatches independent $name in the same channel concurrently",
+    async ({ eventOverrides }) => {
+      await withQueue(async (queue) => {
+        let releaseFirst = () => {};
+        const firstDelivery = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        const dispatched: string[] = [];
+        const { ingress, receive } = attachIngress(queue, async (event) => {
+          const body = event.body as { event_id: string };
+          dispatched.push(body.event_id);
+          if (body.event_id === "Ev-thread-first") {
+            await firstDelivery;
+          }
+          await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
+        });
+        ingress.start();
+
+        try {
+          await receive(
+            createReceiverEvent("Ev-thread-first", undefined, {
+              eventOverrides: eventOverrides("1700000000.000001"),
+            }),
+          );
+          await vi.waitFor(() => expect(dispatched).toEqual(["Ev-thread-first"]));
+
+          await receive(
+            createReceiverEvent("Ev-thread-second", undefined, {
+              eventOverrides: eventOverrides("1700000000.000002"),
+            }),
+          );
+          await vi.waitFor(() =>
+            expect(dispatched).toEqual(["Ev-thread-first", "Ev-thread-second"]),
+          );
+        } finally {
+          releaseFirst();
+          await ingress.waitForIdle();
+          await ingress.stop();
+        }
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "the same Slack thread",
+      firstEventOverrides: { thread_ts: "1700000000.000001" },
+      secondEventOverrides: { thread_ts: "1700000000.000001" },
+    },
+    {
+      name: "a Slack thread root and its first reply",
+      firstEventOverrides: {},
+      secondEventOverrides: { thread_ts: "1700000000.000100" },
+    },
+    {
+      name: "a top-level Slack direct message",
+      firstEventOverrides: { channel: "D_TEST", channel_type: "im" },
+      secondEventOverrides: { channel: "D_TEST", channel_type: "im" },
+    },
+    {
+      name: "a Slack direct-message root and its first reply",
+      firstEventOverrides: { channel: "D_TEST", channel_type: "im" },
+      secondEventOverrides: {
+        channel: "D_TEST",
+        channel_type: "im",
+        thread_ts: "1700000000.000100",
+      },
+    },
+    {
+      name: "a Slack room root and its deletion",
+      firstEventOverrides: {},
+      secondEventOverrides: {
+        subtype: "message_deleted",
+        ts: "1700000000.000900",
+        deleted_ts: "1700000000.000100",
+      },
+    },
+    {
+      name: "a Slack room reply and its deletion",
+      firstEventOverrides: { thread_ts: "1700000000.000001" },
+      secondEventOverrides: {
+        subtype: "message_deleted",
+        ts: "1700000000.000900",
+        deleted_ts: "1700000000.000200",
+        previous_message: {
+          ts: "1700000000.000200",
+          thread_ts: "1700000000.000001",
+        },
+      },
+    },
+    {
+      name: "non-message channel events",
+      firstEventOverrides: { type: "reaction_added" },
+      secondEventOverrides: { type: "reaction_removed" },
+    },
+  ])(
+    "preserves durable delivery ordering within $name",
+    async ({ firstEventOverrides, secondEventOverrides }) => {
+      await withQueue(async (queue) => {
+        let releaseFirst = () => {};
+        const firstDelivery = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        const dispatched: string[] = [];
+        const { ingress, receive } = attachIngress(queue, async (event) => {
+          const body = event.body as { event_id: string };
+          dispatched.push(body.event_id);
+          if (body.event_id === "Ev-ordered-first") {
+            await firstDelivery;
+          }
+          await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
+        });
+        ingress.start();
+
+        try {
+          await receive(
+            createReceiverEvent("Ev-ordered-first", undefined, {
+              eventOverrides: firstEventOverrides,
+            }),
+          );
+          await vi.waitFor(() => expect(dispatched).toEqual(["Ev-ordered-first"]));
+
+          await receive(
+            createReceiverEvent("Ev-ordered-second", undefined, {
+              eventOverrides: secondEventOverrides,
+            }),
+          );
+          await vi.waitFor(async () => {
+            expect((await queue.listPending()).map((record) => record.id)).toContain(
+              "Ev-ordered-second",
+            );
+          });
+          expect(dispatched).toEqual(["Ev-ordered-first"]);
+
+          releaseFirst();
+          await ingress.waitForIdle();
+          expect(dispatched).toEqual(["Ev-ordered-first", "Ev-ordered-second"]);
+        } finally {
+          releaseFirst();
+          await ingress.waitForIdle();
+          await ingress.stop();
+        }
+      });
+    },
+  );
 
   it("does not acknowledge when the durable append fails", async () => {
     await withQueue(async (queue) => {
