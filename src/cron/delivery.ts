@@ -8,6 +8,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { resolveFailureDestination, resolveCronDeliveryPlan } from "./delivery-plan.js";
 import {
   resolveDeliveryTarget,
@@ -126,10 +127,25 @@ export async function sendCronAnnouncePayloadStrict(params: {
   target: CronAnnounceTarget;
   message: string;
   abortSignal: AbortSignal;
+  /**
+   * Reject targets that resolve to the internal (non-chat) channel instead of
+   * silently settling there. Failure alerts require this so an unroutable
+   * "last" target falls back to the owning agent's lane rather than
+   * disappearing into the internal sink with the cooldown already armed.
+   */
+  requireDeliverableChannel?: boolean;
 }): Promise<void> {
   const delivery = await resolveCronAnnounceDelivery(params);
   if (!delivery.ok) {
     throw delivery.error;
+  }
+  if (
+    params.requireDeliverableChannel &&
+    !isDeliverableMessageChannel(delivery.resolvedTarget.channel)
+  ) {
+    throw new Error(
+      `no deliverable channel route (resolved: ${String(delivery.resolvedTarget.channel)})`,
+    );
   }
   // Resolution can settle after its caller's deadline; never start plugin
   // delivery once the Gateway has released ownership of the timed-out work.

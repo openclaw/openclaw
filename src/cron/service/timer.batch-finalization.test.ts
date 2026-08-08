@@ -330,6 +330,9 @@ describe("cron batch outcome finalization", () => {
     });
     job.name = "Recurring report";
     job.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt - 60_000 };
+    // Opt out of default-on failure alerts; this test proves the auto-disable
+    // notification alone so the persist->notify->heartbeat order stays exact.
+    job.failureAlert = false;
     job.state.consecutiveErrors = 9;
     job.state.runningAtMs = dueAt;
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });

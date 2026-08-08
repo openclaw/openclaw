@@ -257,7 +257,8 @@ function createCronFailureAlertSchema(): TSchema {
         accountId: Type.Optional(Type.String()),
       },
       additionalProperties: true,
-      description: "Failure alert; false disables.",
+      description:
+        "Failure alert (default: on for jobs whose failures are not otherwise announced; 2 consecutive failures, 1h cooldown); false disables.",
     }),
   );
 }

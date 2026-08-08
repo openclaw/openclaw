@@ -28,6 +28,7 @@ import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-targe
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { toPublicCronJob } from "../../cron/public-job.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
+import { cronFailureAlertsGloballyEnabled } from "../../cron/service/failure-alerts.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
   isInvalidCronSessionTargetIdError,
@@ -217,10 +218,10 @@ async function assertValidCronUpdatePatch(params: {
   // route, so validate even when the enabling patch (`--failure-alert`,
   // `--failure-alert-after`) carries no routing key of its own. An alert is
   // already ON - so an object-only edit only changes threshold/cooldown - when it
-  // has per-job config or when global `cron.failureAlert.enabled` is true;
+  // has per-job config or when the global gate is on (the default);
   // resolveFailureAlert() treats those as active, so re-validating their inherited
   // route would block unrelated edits on a legacy channel that already delivers.
-  const globalAlertsEnabled = params.cfg.cron?.failureAlert?.enabled === true;
+  const globalAlertsEnabled = cronFailureAlertsGloballyEnabled(params.cfg.cron?.failureAlert);
   const currentAlertActive =
     params.currentJob.failureAlert !== false &&
     (params.currentJob.failureAlert !== undefined || globalAlertsEnabled);

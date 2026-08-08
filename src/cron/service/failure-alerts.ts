@@ -22,6 +22,13 @@ type ResolvedFailureAlert = {
   accountId?: string;
   threadId?: string | number;
   includeSkipped: boolean;
+  /**
+   * True when no job or global alert config exists and the alert is active
+   * purely by default. Default alerts cover otherwise-invisible failures;
+   * explicit config is an operator opt-in that alerts even when completion
+   * delivery already announces the failed run.
+   */
+  defaultInherited: boolean;
 };
 
 /** Returns the last failure-notification delivery trace persisted on a cron job. */
@@ -84,6 +91,33 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
   return floored >= 0 ? floored : fallback;
 }
 
+/**
+ * Global failure-alert gate: alerts are on by default so a failing scheduled
+ * job surfaces instead of going silent forever; `enabled: false` opts out.
+ * Destination-only global objects (the migrated legacy `cron.failureDestination`
+ * contract) stay destination-only: they already route per-run failure
+ * notifications without consulting `enabled`, so inheriting threshold alerts
+ * too would double every notification at that destination after upgrade.
+ * Every consumer of "are inherited alerts active" must use this predicate so
+ * mutation validation and runtime emission never diverge.
+ */
+export function cronFailureAlertsGloballyEnabled(
+  failureAlert:
+    | { enabled?: boolean; mode?: unknown; channel?: unknown; to?: unknown; accountId?: unknown }
+    | undefined,
+): boolean {
+  if (failureAlert?.enabled !== undefined) {
+    return failureAlert.enabled;
+  }
+  const destinationConfigured =
+    failureAlert !== undefined &&
+    (failureAlert.mode !== undefined ||
+      failureAlert.channel !== undefined ||
+      failureAlert.to !== undefined ||
+      failureAlert.accountId !== undefined);
+  return !destinationConfigured;
+}
+
 /** Resolves effective failure-alert policy from job config, delivery defaults, and global cron config. */
 export function resolveFailureAlert(
   state: { deps: Pick<CronServiceState["deps"], "cronConfig"> },
@@ -95,7 +129,7 @@ export function resolveFailureAlert(
   if (job.failureAlert === false) {
     return null;
   }
-  if (!jobConfig && globalConfig?.enabled !== true) {
+  if (!jobConfig && !cronFailureAlertsGloballyEnabled(globalConfig)) {
     return null;
   }
 
@@ -138,6 +172,17 @@ export function resolveFailureAlert(
   const inheritsDeliveryThread =
     mode !== "webhook" && inheritsDeliveryRoute && accountId === job.delivery?.accountId;
 
+  // A webhook-primary job with no configured alert route inherits its webhook
+  // URL as the alert target; the alert must inherit webhook mode with it, or
+  // the URL would be handed to chat-target resolution as a "last" recipient.
+  const inheritsWebhookPrimaryRoute =
+    mode === undefined &&
+    explicitTo === undefined &&
+    jobChannel === undefined &&
+    globalChannel === undefined &&
+    job.delivery?.mode === "webhook" &&
+    deliveryTo !== undefined;
+
   // Announce alerts inherit the job delivery target; webhook alerts require an
   // explicit alert target so chat recipients are not reused as URLs.
   return {
@@ -147,11 +192,22 @@ export function resolveFailureAlert(
       DEFAULT_FAILURE_ALERT_COOLDOWN_MS,
     ),
     channel,
-    to: mode === "webhook" ? explicitTo : (explicitTo ?? compatibleDeliveryTo),
-    mode,
+    to:
+      mode === "webhook"
+        ? explicitTo
+        : inheritsWebhookPrimaryRoute
+          ? deliveryTo
+          : (explicitTo ?? compatibleDeliveryTo),
+    mode: inheritsWebhookPrimaryRoute ? "webhook" : mode,
     accountId,
     threadId: inheritsDeliveryThread ? job.delivery?.threadId : undefined,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
+    // Default-inherited means "active because of the default, not because an
+    // operator asked for alerts". Threshold-only tuning (`after`/`cooldownMs`)
+    // rides the default path, so it must defer to a confirmed per-run notice
+    // exactly as an unconfigured job does; only `enabled: true` or per-job
+    // config is an explicit opt-in that stacks on top of that notice.
+    defaultInherited: !jobConfig && globalConfig?.enabled !== true,
   };
 }
 
@@ -184,6 +240,27 @@ function emitFailureAlert(
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
 
+  const notifyAgentLane = () => {
+    // Queue into the same lane the wake below targets; an agent-only enqueue
+    // with a session-scoped wake leaves the woken session with no event.
+    state.deps.enqueueSystemEvent(text, {
+      agentId: params.job.agentId,
+      sessionKey: params.job.sessionKey,
+    });
+    if (params.job.wakeMode === "now") {
+      // Scope the wake to the owner that just received the event; an unscoped
+      // wake fans out globally and can leave this job's event unprocessed
+      // while its alert cooldown is already armed.
+      state.deps.requestHeartbeat({
+        source: "cron",
+        intent: "immediate",
+        reason: `cron:${params.job.id}:failure-alert`,
+        agentId: params.job.agentId,
+        sessionKey: params.job.sessionKey,
+      });
+    }
+  };
+
   if (state.deps.sendCronFailureAlert) {
     void state.deps
       .sendCronFailureAlert({
@@ -201,18 +278,16 @@ function emitFailureAlert(
           { jobId: params.job.id, err: String(err) },
           "cron: failure alert delivery failed",
         );
+        // The cooldown is already armed, so a send that fails or is refused
+        // (rejected keyless "last" route, dead webhook) would otherwise
+        // silence the alert for the whole cooldown window. Keep a visible
+        // outcome by falling back to the owning agent's lane.
+        notifyAgentLane();
       });
     return;
   }
 
-  state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
-  if (params.job.wakeMode === "now") {
-    state.deps.requestHeartbeat({
-      source: "cron",
-      intent: "immediate",
-      reason: `cron:${params.job.id}:failure-alert`,
-    });
-  }
+  notifyAgentLane();
 }
 
 /** Emits a failure alert when threshold, best-effort, and cooldown policy allow it. */
@@ -229,6 +304,8 @@ export function maybeEmitFailureAlert(
     delivery?: "emit" | "record-only";
     occurredAtMs?: number;
     deferredNotifications?: DeferredCronNotifications;
+    /** True when completion delivery already owns a failure notification for this run. */
+    runFailureNotificationOwned?: boolean;
   },
 ) {
   const alertConfig = params.alertConfig;
@@ -242,6 +319,18 @@ export function maybeEmitFailureAlert(
   ) {
     // Completion delivery owns explicit failure routes and clear-only opt-outs.
     // Suppress failed-run duplicates without disabling global skipped alerts.
+    return;
+  }
+  if (
+    params.status === "error" &&
+    alertConfig.defaultInherited &&
+    params.runFailureNotificationOwned
+  ) {
+    // Default-inherited alerts cover otherwise-invisible failures only. When
+    // this run's failure notification is already owned by completion delivery
+    // (primary announce fallback or a failure destination), a default alert
+    // would deliver a second message to the same target. Explicit job/global
+    // alert config keeps both: that is an operator opt-in.
     return;
   }
   // Best-effort delivery suppresses inherited alert noise, not an independently

@@ -1495,7 +1495,7 @@ when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 {
   cron: {
     failureAlert: {
-      enabled: false,
+      enabled: true,
       after: 2,
       cooldownMs: 3600000,
       includeSkipped: false,
@@ -1512,7 +1512,7 @@ when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 destination for every job. The retired `cron.failureDestination` block is merged
 into it by [`openclaw doctor --fix`](/cli/doctor).
 
-- `enabled`: enable failure alerts for automation jobs (default: `false`).
+- `enabled`: enable failure alerts for automation jobs (default: `true`). Set to `false` to silence inherited alerts globally; per-job `failureAlert: false` opts out one job. By default an alert routes to the job's delivery target, falling back to the session's last channel. Default alerts cover failures that are otherwise invisible: a job whose completion delivery already sends a per-run failure notification (announced jobs, explicit failure destinations) does not get a second default message — set `enabled: true` (or per-job `failureAlert`) to add threshold alerts on top of per-run notifications. When `enabled` is omitted, the gate is: if the global object carries **any** destination field (`mode`, `channel`, `to`, `accountId`), inherited threshold alerts stay **off** — including when threshold fields are present alongside it, so `{ to: "…", after: 3 }` is off, not on. Such an object keeps routing per-run failure notifications (its pre-existing behavior) and needs `enabled: true` to add threshold alerts. A threshold-only object (`after`, `cooldownMs`, `includeSkipped`), or no `cron.failureAlert` key at all, uses the default-on behavior.
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.

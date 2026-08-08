@@ -2680,17 +2680,25 @@ describe("cron method validation", () => {
     }),
   );
 
-  // Enabling an alert with no routing key of its own makes it inherit the job
-  // delivery channel; a legacy-invalid one must be rejected, not persisted.
+  // With global alerts explicitly disabled, a --failure-alert-after edit is
+  // newly enabling; it makes the alert inherit the job delivery channel, so a
+  // legacy-invalid one must be rejected, not persisted.
   failureAlertUpdateRejected(
     "validates a newly enabled alert (--failure-alert-after) that inherits a legacy-invalid delivery channel",
     { failureAlert: { after: 3 } },
     createRoutedCronJob("c0legacyinvalid", "123"),
+    globalFailureAlertConfig(telegramSlackConfig(), { enabled: false }),
   );
 
-  // Global alerts are enabled, so a job with no per-job alert is already sending
+  // Alerts are on by default, so a job with no per-job alert is already sending
   // via its (legacy) delivery channel. A --failure-alert-after edit is not newly
   // enabling and must not be blocked by that pre-existing inherited channel.
+  failureAlertUpdateAccepted(
+    "does not block a threshold-only edit when default-on alerts already deliver via the inherited route",
+    { failureAlert: { after: 3 } },
+    createRoutedCronJob("c0legacyinvalid", "123"),
+  );
+
   failureAlertUpdateAccepted(
     "does not block a threshold-only edit when global alerts already deliver via the inherited route",
     { failureAlert: { after: 3 } },

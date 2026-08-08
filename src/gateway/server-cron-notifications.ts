@@ -372,41 +372,35 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
   const webhookToken = normalizeOptionalString(params.webhookToken);
 
-  if (params.mode === "webhook" && !params.to) {
-    params.logger.warn(
-      { jobId: params.job.id },
-      "cron: failure alert webhook mode requires URL, skipping",
-    );
-    return;
-  }
-
-  if (params.mode === "webhook" && params.to) {
+  if (params.mode === "webhook") {
+    // Throw on every non-delivered outcome: the emitter arms the alert
+    // cooldown before this send, so a swallowed failure would silence the
+    // alert for the whole window. The caller falls back to the agent's lane.
+    if (!params.to) {
+      throw new Error("cron failure alert webhook mode requires a URL");
+    }
     const webhookUrl = normalizeHttpWebhookUrl(params.to);
-    if (webhookUrl) {
-      await postCronWebhook({
-        webhookUrl,
-        webhookToken,
-        ssrfPolicy: params.ssrfPolicy,
-        payload: {
-          jobId: params.job.id,
-          jobName: params.job.name,
-          message: params.text,
-          runAtMs: params.runAtMs,
-        },
-        logContext: { jobId: params.job.id },
-        blockedLog: "cron: failure alert webhook blocked by SSRF guard",
-        failedLog: "cron: failure alert webhook failed",
-        logger: params.logger,
-      });
-    } else {
+    if (!webhookUrl) {
       params.logger.warn(
         {
           jobId: params.job.id,
           webhookUrl: redactWebhookUrl(params.to),
         },
-        "cron: failure alert webhook URL is invalid, skipping",
+        "cron: failure alert webhook URL is invalid",
       );
+      throw new Error("cron failure alert webhook URL is invalid");
     }
+    await postCronWebhookStrict({
+      webhookUrl,
+      webhookToken,
+      ssrfPolicy: params.ssrfPolicy,
+      payload: {
+        jobId: params.job.id,
+        jobName: params.job.name,
+        message: params.text,
+        runAtMs: params.runAtMs,
+      },
+    });
     return;
   }
 
@@ -419,6 +413,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       cfg: runtimeConfig,
       agentId,
       jobId: params.job.id,
+      requireDeliverableChannel: true,
       target: {
         channel: params.channel,
         to: params.to,

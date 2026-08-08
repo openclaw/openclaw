@@ -140,22 +140,31 @@ export function applyJobResult(
   // separate counter so opt-in skip alerts do not affect retry behavior.
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const alertConfig = resolveFailureAlert(state, job);
+  // Deferred until the auto-disable decision below: when this failure actually
+  // auto-disables the job, its notification (with the recovery command) is the
+  // single terminal message. Every other exit path fires the alert.
+  let emitErrorFailureAlert: (() => void) | undefined;
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
-    maybeEmitFailureAlert(state, {
-      job,
-      alertConfig,
-      status: "error",
-      error: result.error,
-      errorReason: job.state.lastErrorReason,
-      runAtMs: result.startedAt,
-      consecutiveCount: job.state.consecutiveErrors,
-      ...(opts?.replayFailureAlertAtMs !== undefined
-        ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
-        : {}),
-      deferredNotifications: opts?.deferredNotifications,
-    });
+    emitErrorFailureAlert = () =>
+      maybeEmitFailureAlert(state, {
+        job,
+        alertConfig,
+        status: "error",
+        error: result.error,
+        errorReason: job.state.lastErrorReason,
+        runAtMs: result.startedAt,
+        consecutiveCount: job.state.consecutiveErrors ?? 1,
+        // Only a CONFIRMED delivery owns this run's visible outcome. A failed or
+        // unknown completion notification must not suppress the alert, or the
+        // run ends with nothing delivered and nothing explaining why.
+        runFailureNotificationOwned: deliveryState.failureNotification.status === "delivered",
+        ...(opts?.replayFailureAlertAtMs !== undefined
+          ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
+          : {}),
+        deferredNotifications: opts?.deferredNotifications,
+      });
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
@@ -309,6 +318,9 @@ export function applyJobResult(
     ) {
       // Keep this after the ownership and force-preserve gates: those paths
       // restore schedule state and would otherwise silently undo the disable.
+      // The auto-disable notification is the single terminal message; drop the
+      // regular failure alert only when the disable actually happened.
+      emitErrorFailureAlert = undefined;
       state.deps.log.error(
         {
           jobId: job.id,
@@ -372,6 +384,7 @@ export function applyJobResult(
             },
             "cron: scheduling recurring retry after transient error",
           );
+          emitErrorFailureAlert?.();
           return shouldDelete;
         }
       }
@@ -473,6 +486,7 @@ export function applyJobResult(
     }
   }
 
+  emitErrorFailureAlert?.();
   return shouldDelete;
 }
 

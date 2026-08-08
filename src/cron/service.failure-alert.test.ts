@@ -37,15 +37,25 @@ async function withFailureAlertCron(
   params: {
     failureAlert: FailureAlertConfig;
     runResult?: IsolatedAgentRunResult;
+    sendAlertError?: string;
   },
   run: (context: {
     cron: CronService;
     sendCronFailureAlert: ReturnType<typeof vi.fn>;
+    enqueueSystemEvent: ReturnType<typeof vi.fn>;
+    requestHeartbeat: ReturnType<typeof vi.fn>;
     addJob: (name: string, overrides?: Partial<CronJobCreate>) => ReturnType<CronService["add"]>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await makeStorePath();
-  const sendCronFailureAlert = vi.fn(async () => undefined);
+  const sendCronFailureAlert = vi.fn(async () => {
+    if (params.sendAlertError) {
+      throw new Error(params.sendAlertError);
+    }
+    return undefined;
+  });
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeat = vi.fn();
   const runResult = params.runResult ?? {
     status: "error",
     error: "temporary upstream error",
@@ -55,8 +65,8 @@ async function withFailureAlertCron(
     cronEnabled: true,
     cronConfig: { failureAlert: params.failureAlert },
     log: noopLogger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSystemEvent,
+    requestHeartbeat,
     runIsolatedAgentJob: vi.fn(async () => runResult),
     sendCronFailureAlert,
   });
@@ -66,6 +76,8 @@ async function withFailureAlertCron(
     await run({
       cron,
       sendCronFailureAlert,
+      enqueueSystemEvent,
+      requestHeartbeat,
       addJob: async (name, overrides) => await cron.add(createFailureAlertJob(name, overrides)),
     });
   } finally {
@@ -140,6 +152,261 @@ describe("CronService failure alerts", () => {
         await cron.run(job.id, "force");
         expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
         expectAlertTextContaining(sendCronFailureAlert, 'Automation "daily report" failed 4 times');
+      },
+    );
+  });
+
+  it("alerts by default when a job's failures are otherwise invisible", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: undefined,
+        runResult: { status: "error", error: "expired oauth token" },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("default alert job", { delivery: { mode: "none" } });
+
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).not.toHaveBeenCalled();
+
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+        expectAlertFields(sendCronFailureAlert, { channel: "last" });
+        expectAlertTextContaining(
+          sendCronFailureAlert,
+          'Automation "default alert job" failed 2 times',
+        );
+      },
+    );
+  });
+
+  // One table for the global-config gate: which shapes alert at all, and which
+  // defer to a CONFIRMED per-run failure notice instead of stacking on it.
+  // Announced jobs ACK their notice (delivered: true), so deferral applies.
+  it.each([
+    {
+      name: "no config defers to a confirmed announce notice",
+      globalAlert: undefined,
+      confirmedNotice: true,
+      expectedAlerts: 0,
+    },
+    {
+      name: "threshold-only tuning rides the default path and also defers",
+      globalAlert: { after: 1 },
+      confirmedNotice: true,
+      expectedAlerts: 0,
+    },
+    {
+      name: "explicit enabled:true stacks on a confirmed notice",
+      globalAlert: { enabled: true, after: 2 },
+      confirmedNotice: true,
+      expectedAlerts: 1,
+    },
+    {
+      name: "destination-only legacy shape never inherits threshold alerts",
+      globalAlert: { channel: "telegram", to: "999" },
+      confirmedNotice: true,
+      expectedAlerts: 0,
+    },
+    {
+      name: "destination plus threshold stays off without enabled",
+      globalAlert: { to: "999", after: 1 },
+      confirmedNotice: false,
+      expectedAlerts: 0,
+    },
+    {
+      name: "threshold-only alerts when the notice is unconfirmed",
+      globalAlert: { after: 2 },
+      confirmedNotice: false,
+      expectedAlerts: 1,
+    },
+  ])("global gate: $name", async ({ globalAlert, confirmedNotice, expectedAlerts }) => {
+    await withFailureAlertCron(
+      {
+        failureAlert: globalAlert,
+        runResult: {
+          status: "error",
+          error: "expired oauth token",
+          ...(confirmedNotice ? { deliveryAttempted: true, delivered: true } : {}),
+        },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("gate job", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(expectedAlerts);
+      },
+    );
+  });
+
+  it("inherits webhook mode and URL for a webhook-primary job with no alert config", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: undefined,
+        runResult: { status: "error", error: "expired oauth token" },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("webhook primary job", {
+          delivery: { mode: "webhook", to: "https://example.invalid/hook" },
+        });
+
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+        expectAlertFields(sendCronFailureAlert, {
+          mode: "webhook",
+          to: "https://example.invalid/hook",
+        });
+      },
+    );
+  });
+
+  it("falls back to the owning agent's lane when channel alert delivery fails", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: { enabled: true, after: 1 },
+        runResult: { status: "error", error: "expired oauth token" },
+        sendAlertError: "no route for keyless job",
+      },
+      async ({ cron, sendCronFailureAlert, enqueueSystemEvent, addJob }) => {
+        const job = await addJob("routeless job", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => {
+          expect(enqueueSystemEvent).toHaveBeenCalledWith(
+            expect.stringContaining('Automation "routeless job" failed 1 times'),
+            expect.objectContaining({ agentId: job.agentId }),
+          );
+        });
+      },
+    );
+  });
+
+  it("scopes the fallback wake to the owning agent for a non-default wakeMode=now job", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: { enabled: true, after: 1 },
+        runResult: { status: "error", error: "expired oauth token" },
+        sendAlertError: "no route for keyless job",
+      },
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, addJob }) => {
+        const job = await addJob("owned watcher", {
+          agentId: "ops",
+          wakeMode: "now",
+          delivery: createTelegramDelivery(),
+        });
+
+        await cron.run(job.id, "force");
+        await vi.waitFor(() => {
+          expect(enqueueSystemEvent).toHaveBeenCalledWith(
+            expect.stringContaining('Automation "owned watcher" failed 1 times'),
+            expect.objectContaining({ agentId: "ops" }),
+          );
+        });
+        // An unscoped wake fans out globally instead of processing this owner's
+        // event, leaving the alert unseen with its cooldown already armed.
+        expect(requestHeartbeat).toHaveBeenCalledWith(
+          expect.objectContaining({
+            source: "cron",
+            intent: "immediate",
+            agentId: "ops",
+          }),
+        );
+      },
+    );
+  });
+
+  it("still alerts when the per-run failure notification outcome is unknown", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: undefined,
+        runResult: { status: "error", error: "expired oauth token" },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("unknown notice job", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  it("still alerts when the per-run failure notification was not delivered", async () => {
+    // Suppressing on a FAILED completion notification would end the run with
+    // nothing delivered and nothing explaining why - the bug class this fixes.
+    await withFailureAlertCron(
+      {
+        failureAlert: undefined,
+        runResult: {
+          status: "error",
+          error: "expired oauth token",
+          deliveryAttempted: true,
+          delivered: false,
+        },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("undelivered notice job", {
+          delivery: createTelegramDelivery(),
+        });
+
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+        expectAlertTextContaining(
+          sendCronFailureAlert,
+          'Automation "undelivered notice job" failed 2 times',
+        );
+      },
+    );
+  });
+
+  it("queues the fallback event in the session the wake targets", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: { enabled: true, after: 1 },
+        runResult: { status: "error", error: "expired oauth token" },
+        sendAlertError: "no route for keyless job",
+      },
+      async ({ cron, enqueueSystemEvent, requestHeartbeat, addJob }) => {
+        const job = await addJob("session scoped watcher", {
+          agentId: "ops",
+          sessionKey: "agent:ops:custom",
+          wakeMode: "now",
+          delivery: createTelegramDelivery(),
+        });
+
+        await cron.run(job.id, "force");
+        await vi.waitFor(() => {
+          expect(enqueueSystemEvent).toHaveBeenCalledWith(
+            expect.stringContaining('Automation "session scoped watcher" failed 1 times'),
+            expect.objectContaining({ agentId: "ops", sessionKey: "agent:ops:custom" }),
+          );
+        });
+        // Wake and enqueue must address the same lane or the woken session
+        // finds no event while the cooldown is already armed.
+        const wake = requestHeartbeat.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+        const enqueueOpts = enqueueSystemEvent.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+        expect(wake?.sessionKey).toBe(enqueueOpts?.sessionKey);
+        expect(wake?.agentId).toBe(enqueueOpts?.agentId);
+      },
+    );
+  });
+
+  it("suppresses inherited alerts when global alerts are disabled", async () => {
+    await withFailureAlertCron(
+      {
+        failureAlert: { enabled: false },
+        runResult: { status: "error", error: "expired oauth token" },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("globally disabled job", { delivery: createTelegramDelivery() });
+
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).not.toHaveBeenCalled();
       },
     );
   });
