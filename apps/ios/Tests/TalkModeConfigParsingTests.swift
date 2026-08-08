@@ -480,6 +480,7 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkActiveModeTitle() != "Not active")
 
         manager._test_handleRealtimeRelayStatus("Ready")
+        manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Ready")
         #expect(manager._test_gatewayTalkActiveModeTitle() == "Not active")
@@ -524,6 +525,7 @@ struct TalkModeManagerTests {
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
         manager._test_handleRealtimeRelayStatus("Ready")
+        manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Reconnecting")
         #expect(manager._test_rapidRealtimeRestartCount() == 1)
