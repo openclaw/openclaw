@@ -18,11 +18,13 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { qqbotNetworkGuidance, qqbotTokenFailureMessage } from "../config/setup-guidance.js";
 import type { EngineLogger } from "../types.js";
+import { redactQQBotCredentialText } from "../utils/credential-redaction.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
 const QQBOT_TOKEN_RESPONSE_LIMIT_BYTES = 8 * 1024;
 const QQBOT_TOKEN_REQUEST_TIMEOUT_MS = 30_000;
+const MALFORMED_TOKEN_RESPONSE_BODY_DIAGNOSTIC = "<malformed JSON body omitted>";
 
 /**
  * Host-scoped SSRF policy for the QQ Bot token endpoint.
@@ -288,18 +290,25 @@ export class TokenManager {
           cause: err,
         });
       }
-      const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
-      this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
-
       let data: { access_token?: string; expires_in?: unknown };
       try {
         data = JSON.parse(rawBody);
       } catch {
+        this.logger?.debug?.(
+          `[qqbot:token:${appId}] <<< Body: ${MALFORMED_TOKEN_RESPONSE_BODY_DIAGNOSTIC}`,
+        );
         throw new Error("QQBot access_token response was malformed JSON");
       }
 
+      const presentedBody = redactQQBotCredentialText(
+        rawBody,
+        clientSecret,
+        data.access_token ?? "",
+      );
+      this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${presentedBody}`);
+
       if (!data.access_token) {
-        throw new Error(qqbotTokenFailureMessage(JSON.stringify(data)));
+        throw new Error(qqbotTokenFailureMessage(presentedBody));
       }
 
       const nowMs = asDateTimestampMs(Date.now());

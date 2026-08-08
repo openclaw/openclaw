@@ -25,7 +25,7 @@ export class ApiError extends Error {
     public readonly path: string,
     /** Business error code from the response body (`code` or `err_code`). */
     public readonly bizCode?: number,
-    /** Original error message from the response body. */
+    /** Redacted error message extracted from the response body. */
     public readonly bizMessage?: string,
   ) {
     super(message);

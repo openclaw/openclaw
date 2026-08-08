@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
+import { redactQQBotCredentialText } from "../utils/credential-redaction.js";
 import { debugLog, debugError } from "../utils/log.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
@@ -356,11 +357,14 @@ export async function executeChannelApi(
         });
       }
 
+      // Provider bodies become agent-visible tool results for every status.
+      // Redact before parsing so successful reflections share the same boundary.
+      const presentedBody = redactQQBotCredentialText(rawBody, options.accessToken);
       let parsed: unknown;
       try {
-        parsed = JSON.parse(rawBody);
+        parsed = JSON.parse(presentedBody);
       } catch {
-        parsed = rawBody;
+        parsed = presentedBody;
       }
 
       if (!res.ok) {

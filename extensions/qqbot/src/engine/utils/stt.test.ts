@@ -4,14 +4,29 @@ import * as path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  lowercasePercentEscapes,
+  stringifyWithSlashEscapedCredential,
+} from "../../test-support/credential-reflection.js";
+import { withLoopbackHttpServer } from "../../test-support/loopback-http.js";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: ssrfRuntimeMocks.fetchWithSsrFGuard,
+const ssrfRuntimeActual = vi.hoisted(() => ({
+  fetchWithSsrFGuard: undefined as
+    | typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard
+    | undefined,
 }));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  ssrfRuntimeActual.fetchWithSsrFGuard = actual.fetchWithSsrFGuard;
+  return {
+    ...actual,
+    fetchWithSsrFGuard: ssrfRuntimeMocks.fetchWithSsrFGuard,
+  };
+});
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
@@ -303,6 +318,112 @@ describe("engine/utils/stt", () => {
       expect(tracked.wasCanceled()).toBe(true);
       expect(textSpy).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("redacts a reflected Bearer credential before exposing an STT error", async () => {
+    await withTempDir("openclaw-qqbot-stt-redaction-", async (tmpDir) => {
+      const audioPath = path.join(tmpDir, "voice.wav");
+      fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
+
+      const secretPrefix = "qQSttP";
+      const secretSuffix = "sSfQ";
+      const apiKey = `${secretPrefix}/reflected~secret+${secretSuffix}`;
+      const encodedCredential = encodeURIComponent(apiKey);
+      const formEncodedCredential = new URLSearchParams([["echo", apiKey]]).toString();
+      const lowercaseEncodedCredential = lowercasePercentEscapes(encodedCredential);
+      const lowercaseFormEncodedCredential = lowercasePercentEscapes(formEncodedCredential);
+      const slashEscapedCredential = apiKey.replaceAll("/", "\\/");
+      await withLoopbackHttpServer(
+        (req, res) => {
+          req.resume();
+          const authorization = req.headers.authorization ?? "";
+          const reflectedCredential = authorization.startsWith("Bearer ")
+            ? authorization.slice("Bearer ".length)
+            : authorization;
+          const reflectedFormCredential = new URLSearchParams([
+            ["echo", reflectedCredential],
+          ]).toString();
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(
+            stringifyWithSlashEscapedCredential(
+              {
+                message: `upstream reflected credential ${reflectedCredential}; encoded ${lowercasePercentEscapes(encodeURIComponent(reflectedCredential))}; form ${lowercasePercentEscapes(reflectedFormCredential)}; Authorization: ${authorization}`,
+                request_id: "stt-visible-123",
+              },
+              reflectedCredential,
+            ),
+          );
+        },
+        async (baseUrl) => {
+          const actualGuard = ssrfRuntimeActual.fetchWithSsrFGuard;
+          if (!actualGuard) {
+            throw new Error("expected the real SSRF guard implementation");
+          }
+          ssrfRuntimeMocks.fetchWithSsrFGuard.mockImplementationOnce(
+            async (request: Parameters<typeof actualGuard>[0]) =>
+              await actualGuard({
+                ...request,
+                policy: { ...request.policy, allowedHostnames: ["127.0.0.1"] },
+              }),
+          );
+
+          let error: unknown;
+          try {
+            await transcribeAudio(audioPath, {
+              channels: {
+                qqbot: {
+                  stt: {
+                    baseUrl,
+                    apiKey,
+                    model: "whisper-1",
+                  },
+                },
+              },
+            });
+          } catch (caught) {
+            error = caught;
+          }
+
+          const message = (error as Error).message;
+          expect(message).toContain("STT failed (HTTP 401):");
+          expect(message).toContain("Authorization: Bearer");
+          expect(message).toContain("stt-visible-123");
+          expect(message).not.toContain(apiKey);
+          expect(message).not.toContain(encodedCredential);
+          expect(message).not.toContain(formEncodedCredential);
+          expect(message).not.toContain(lowercaseEncodedCredential);
+          expect(message).not.toContain(lowercaseFormEncodedCredential);
+          expect(message).not.toContain(slashEscapedCredential);
+          expect(message).not.toContain(secretPrefix);
+          expect(message).not.toContain(secretSuffix);
+          expect(message).not.toContain("reflected-secret");
+
+          const proofHeadSha = process.env.OPENCLAW_PROOF_HEAD_SHA;
+          if (proofHeadSha) {
+            if (!/^[0-9a-f]{40}$/.test(proofHeadSha)) {
+              throw new Error("OPENCLAW_PROOF_HEAD_SHA must be a full Git SHA");
+            }
+            console.info(
+              `[qqbot stt credential redaction proof] ${JSON.stringify({
+                exactHead: proofHeadSha,
+                transport: "loopback-http",
+                status: 401,
+                safeMarkerPresent: message.includes("stt-visible-123"),
+                tokenAbsent: !message.includes(apiKey),
+                encodedAbsent: !message.includes(encodedCredential),
+                formEncodedAbsent: !message.includes(formEncodedCredential),
+                lowercaseEncodedAbsent: !message.includes(lowercaseEncodedCredential),
+                lowercaseFormEncodedAbsent: !message.includes(lowercaseFormEncodedCredential),
+                jsonSlashEscapedAbsent: !message.includes(slashEscapedCredential),
+                prefixAbsent: !message.includes(secretPrefix),
+                suffixAbsent: !message.includes(secretSuffix),
+                fragmentAbsent: !message.includes("reflected-secret"),
+              })}`,
+            );
+          }
+        },
+      );
     });
   });
 });

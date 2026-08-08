@@ -2,14 +2,15 @@
 import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { lowercasePercentEscapes } from "../../test-support/credential-reflection.js";
 import type { EngineAdapters } from "../adapter/index.js";
-import { stopBackgroundTokenRefresh } from "../messaging/sender.js";
+import { getAccessToken, getGatewayUrl, stopBackgroundTokenRefresh } from "../messaging/sender.js";
 import { flushRefIndex } from "../ref/store.js";
 import { flushKnownUsers } from "../session/known-users.js";
 import { GatewayEvent, GatewayOp, MAX_RECONNECT_ATTEMPTS } from "./constants.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { QQBotIngressAdmissionError, type QQBotIngressMonitor } from "./ingress.js";
-import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
+import type { EngineLogger, GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const createQQWSClientMock = vi.hoisted(() => vi.fn());
 
@@ -70,7 +71,41 @@ function makeAccount(): GatewayAccount {
   };
 }
 
+function makeCredentialReflectionFixture() {
+  const secretPrefix = "qQGwP";
+  const secretSuffix = "gSfQ";
+  const accessToken = `${secretPrefix}/UNIQUE~GATEWAYSECRET+${secretSuffix}`;
+  const encodedToken = encodeURIComponent(accessToken);
+  const formEncodedToken = new URLSearchParams([["credential", accessToken]])
+    .toString()
+    .slice("credential=".length);
+  const reflected = {
+    raw: accessToken,
+    encoded: lowercasePercentEscapes(encodedToken),
+    form: lowercasePercentEscapes(formEncodedToken),
+  };
+  return {
+    accessToken,
+    reflected,
+    forbidden: [
+      ...Object.values(reflected),
+      encodedToken,
+      formEncodedToken,
+      secretPrefix,
+      secretSuffix,
+      "UNIQUEGATEWAYSECRET",
+    ],
+  };
+}
+
+function expectCredentialsAbsent(output: string, forbidden: string[]): void {
+  for (const credential of forbidden) {
+    expect(output).not.toContain(credential);
+  }
+}
+
 async function startConnection(params: {
+  log?: EngineLogger;
   onDisconnected?: (info: unknown) => void;
   onError?: (error: Error) => void;
   createIngressMonitor?: () => QQBotIngressMonitor;
@@ -82,6 +117,7 @@ async function startConnection(params: {
     account: makeAccount(),
     abortSignal: controller.signal,
     cfg: {},
+    log: params.log,
     runtime: {} as GatewayPluginRuntime,
     adapters: {} as EngineAdapters,
     handleMessage: async () => {},
@@ -126,6 +162,59 @@ describe("GatewayConnection disconnect status", () => {
     ws.emit("close", 1006, Buffer.from(""));
 
     expect(onDisconnected).toHaveBeenCalledWith({ reason: "close code 1006", fatal: false });
+    controller.abort();
+    await started;
+  });
+
+  it("redacts an active access token reflected by a gateway close reason", async () => {
+    const secretPrefix = "qQGwP";
+    const secretSuffix = "gSfQ";
+    const accessToken = `${secretPrefix}/UNIQUE~GATEWAYSECRET+${secretSuffix}`;
+    vi.mocked(getAccessToken).mockResolvedValueOnce(accessToken);
+    const log = { info: vi.fn(), error: vi.fn() };
+    const { ws, controller, started } = await startConnection({ log });
+
+    ws.readyState = 1; // OPEN
+    ws.emit("open");
+    ws.emit("message", JSON.stringify({ op: GatewayOp.HELLO, d: { heartbeat_interval: 10_000 } }));
+    await vi.waitFor(() => {
+      expect(ws.send).toHaveBeenCalledWith(expect.stringContaining(`QQBot ${accessToken}`));
+    });
+
+    ws.emit(
+      "close",
+      4000,
+      Buffer.from(`gateway-close-visible-123 reflected ${accessToken}`, "utf8"),
+    );
+
+    const infoOutput = log.info.mock.calls.flat().join("\n");
+    expect(infoOutput).toContain("WebSocket closed: 4000");
+    expect(infoOutput).toContain("gateway-close-visible-123");
+    expect(infoOutput).not.toContain(accessToken);
+    expect(infoOutput).not.toContain(secretPrefix);
+    expect(infoOutput).not.toContain(secretSuffix);
+    expect(infoOutput).not.toContain("UNIQUEGATEWAYSECRET");
+
+    const proofHeadSha = process.env.OPENCLAW_PROOF_HEAD_SHA;
+    if (proofHeadSha) {
+      if (!/^[0-9a-f]{40}$/.test(proofHeadSha)) {
+        throw new Error("OPENCLAW_PROOF_HEAD_SHA must be a full Git SHA");
+      }
+      console.info(
+        `[qqbot gateway credential redaction proof] ${JSON.stringify({
+          exactHead: proofHeadSha,
+          transport: "websocket-close-event",
+          status: 4000,
+          identifySent: ws.send.mock.calls.some(([payload]) => String(payload).includes("QQBot ")),
+          safeMarkerPresent: infoOutput.includes("gateway-close-visible-123"),
+          tokenAbsent: !infoOutput.includes(accessToken),
+          prefixAbsent: !infoOutput.includes(secretPrefix),
+          suffixAbsent: !infoOutput.includes(secretSuffix),
+          fragmentAbsent: !infoOutput.includes("UNIQUEGATEWAYSECRET"),
+        })}`,
+      );
+    }
+
     controller.abort();
     await started;
   });
@@ -396,6 +485,69 @@ describe("GatewayConnection disconnect status", () => {
     await Promise.resolve();
     expect(receive).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledWith(admissionError);
+    controller.abort();
+    await started;
+  });
+});
+
+describe("GatewayConnection credential redaction", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    createQQWSClientMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("redacts raw and encoded access tokens reflected in the gateway URL log", async () => {
+    const { accessToken, reflected, forbidden } = makeCredentialReflectionFixture();
+    const gatewayUrl =
+      `wss://gateway.example.test/connect?marker=gateway-url-visible-123` +
+      `&raw=${reflected.raw}&encoded=${reflected.encoded}&form=${reflected.form}`;
+    vi.mocked(getAccessToken).mockResolvedValueOnce(accessToken);
+    vi.mocked(getGatewayUrl).mockResolvedValueOnce(gatewayUrl);
+    const log = { info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+    const { controller, started } = await startConnection({ log });
+
+    expect(createQQWSClientMock).toHaveBeenCalledWith(expect.objectContaining({ gatewayUrl }));
+    const infoOutput = log.info.mock.calls.flat().join("\n");
+    expect(infoOutput).toContain("Connecting to wss://gateway.example.test/connect");
+    expect(infoOutput).toContain("gateway-url-visible-123");
+    expectCredentialsAbsent(infoOutput, forbidden);
+
+    controller.abort();
+    await started;
+  });
+
+  it("redacts raw and encoded access tokens reflected in DISPATCH diagnostics", async () => {
+    const { accessToken, reflected, forbidden } = makeCredentialReflectionFixture();
+    vi.mocked(getAccessToken).mockResolvedValueOnce(accessToken);
+    const log = { info: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const { ws, controller, started } = await startConnection({ log });
+
+    ws.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOp.DISPATCH,
+        t: "CREDENTIAL_REFLECTION_TEST",
+        d: {
+          marker: "dispatch-visible-123",
+          ...reflected,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(log.debug).toHaveBeenCalledWith(expect.stringContaining("dispatch-visible-123"));
+    });
+    const debugOutput = log.debug.mock.calls.flat().join("\n");
+    expect(debugOutput).toContain("Dispatch event: t=CREDENTIAL_REFLECTION_TEST");
+    expect(debugOutput).toContain("dispatch-visible-123");
+    expectCredentialsAbsent(debugOutput, forbidden);
+
     controller.abort();
     await started;
   });

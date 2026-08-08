@@ -1,17 +1,37 @@
 // Qqbot tests cover token plugin behavior.
 import { getEventListeners } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  lowercasePercentEscapes,
+  stringifyWithSlashEscapedCredential,
+} from "../../test-support/credential-reflection.js";
+import { withLoopbackHttpServer } from "../../test-support/loopback-http.js";
 import { TokenManager } from "./token.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const ssrfRuntimeActual = vi.hoisted(() => ({
+  fetchWithSsrFGuard: undefined as
+    | typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard
+    | undefined,
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  ssrfRuntimeActual.fetchWithSsrFGuard = actual.fetchWithSsrFGuard;
   return {
     ...actual,
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
+
+async function readRequestBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 function mockGuardedTokenResponse(body: BodyInit, init?: ResponseInit): ReturnType<typeof vi.fn> {
   const release = vi.fn(async () => {});
@@ -90,6 +110,7 @@ describe("QQBot token manager", () => {
   });
 
   it("adds account-neutral credential guidance when the token endpoint omits access_token", async () => {
+    const clientSecret = "guidance-credential-qQ7x9V2";
     const release = mockGuardedTokenResponse('{"code":4001,"message":"invalid app secret"}', {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -97,7 +118,7 @@ describe("QQBot token manager", () => {
 
     let error: unknown;
     try {
-      await new TokenManager().getAccessToken("app-id", "secret");
+      await new TokenManager().getAccessToken("app-id", clientSecret);
     } catch (caught) {
       error = caught;
     }
@@ -126,8 +147,183 @@ describe("QQBot token manager", () => {
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.release).toHaveBeenCalledTimes(1);
-    expect(logger.debug.mock.calls.join("\n")).toContain("qqbot token unavailable");
-    expect(logger.debug.mock.calls.join("\n")).not.toContain("tail");
+    const debugOutput = logger.debug.mock.calls.join("\n");
+    expect(debugOutput).toContain("<malformed JSON body omitted>");
+    expect(debugOutput).not.toContain("qqbot token unavailable");
+    expect(debugOutput).not.toContain("tail");
+  });
+
+  it("omits malformed token response bodies from diagnostics", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const tokenPrefix = "qQMalformedP";
+    const tokenFragment = "issued-token-fragment";
+    const tokenSuffix = "tSfQ";
+    const accessToken = [tokenPrefix, tokenFragment, tokenSuffix].join("/");
+    const malformedBody = ['{"access_token":"', accessToken, '",'].join("");
+    mockGuardedTokenResponse(malformedBody, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(new TokenManager({ logger }).getAccessToken("app-id", "secret")).rejects.toThrow(
+      "QQBot access_token response was malformed JSON",
+    );
+
+    const debugOutput = logger.debug.mock.calls.join("\n");
+    expect(debugOutput).toContain("<malformed JSON body omitted>");
+    expect(debugOutput).not.toContain(accessToken);
+    expect(debugOutput).not.toContain(tokenPrefix);
+    expect(debugOutput).not.toContain(tokenFragment);
+    expect(debugOutput).not.toContain(tokenSuffix);
+  });
+
+  it("redacts a reflected client secret before logging or throwing token errors", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const secretPrefix = "qQTokP";
+    const secretSuffix = "tSfQ";
+    const clientSecret = `${secretPrefix}/reflected~secret+${secretSuffix}`;
+    const encodedCredential = encodeURIComponent(clientSecret);
+    const formEncodedCredential = new URLSearchParams([["echo", clientSecret]]).toString();
+    const lowercaseEncodedCredential = lowercasePercentEscapes(encodedCredential);
+    const lowercaseFormEncodedCredential = lowercasePercentEscapes(formEncodedCredential);
+    const slashEscapedCredential = clientSecret.replaceAll("/", "\\/");
+    await withLoopbackHttpServer(
+      (request, response) => {
+        void readRequestBody(request).then(
+          (rawBody) => {
+            const parsed = JSON.parse(rawBody) as { clientSecret?: unknown };
+            const reflectedCredential =
+              typeof parsed.clientSecret === "string" ? parsed.clientSecret : "missing";
+            const reflectedFormCredential = new URLSearchParams([
+              ["echo", reflectedCredential],
+            ]).toString();
+            response.writeHead(401, { "content-type": "application/json" });
+            response.end(
+              stringifyWithSlashEscapedCredential(
+                {
+                  code: 11244,
+                  message: "credential rejected",
+                  clientSecret: reflectedCredential,
+                  client_secret: reflectedCredential,
+                  echoed: reflectedCredential,
+                  encoded: lowercasePercentEscapes(encodeURIComponent(reflectedCredential)),
+                  form: lowercasePercentEscapes(reflectedFormCredential),
+                  request_id: "token-visible-123",
+                },
+                reflectedCredential,
+              ),
+            );
+          },
+          () => {
+            response.writeHead(500, { "content-type": "text/plain" });
+            response.end("request body read failed");
+          },
+        );
+      },
+      async (baseUrl) => {
+        const actualGuard = ssrfRuntimeActual.fetchWithSsrFGuard;
+        if (!actualGuard) {
+          throw new Error("expected the real SSRF guard implementation");
+        }
+        const loopbackFetch = vi.fn(
+          async (_input: RequestInfo | URL, init?: RequestInit) =>
+            await fetch(`${baseUrl}/token`, init),
+        );
+        fetchWithSsrFGuardMock.mockImplementationOnce(
+          async (request: Parameters<typeof actualGuard>[0]) =>
+            await actualGuard({ ...request, fetchImpl: loopbackFetch }),
+        );
+
+        let error: unknown;
+        try {
+          await new TokenManager({ logger }).getAccessToken("app-id", clientSecret);
+        } catch (caught) {
+          error = caught;
+        }
+
+        expect(error).toBeInstanceOf(Error);
+        const message = error instanceof Error ? error.message : String(error);
+        const debugOutput = logger.debug.mock.calls.flat().join("\n");
+        for (const output of [debugOutput, message]) {
+          expect(output).toContain("token-visible-123");
+          expect(output).not.toContain(clientSecret);
+          expect(output).not.toContain(encodedCredential);
+          expect(output).not.toContain(formEncodedCredential);
+          expect(output).not.toContain(lowercaseEncodedCredential);
+          expect(output).not.toContain(lowercaseFormEncodedCredential);
+          expect(output).not.toContain(slashEscapedCredential);
+          expect(output).not.toContain(secretPrefix);
+          expect(output).not.toContain(secretSuffix);
+          expect(output).not.toContain("reflected-secret");
+        }
+        expect(loopbackFetch).toHaveBeenCalledTimes(1);
+
+        const proofHeadSha = process.env.OPENCLAW_PROOF_HEAD_SHA;
+        if (proofHeadSha) {
+          if (!/^[0-9a-f]{40}$/.test(proofHeadSha)) {
+            throw new Error("OPENCLAW_PROOF_HEAD_SHA must be a full Git SHA");
+          }
+          console.info(
+            `[qqbot token credential redaction proof] ${JSON.stringify({
+              exactHead: proofHeadSha,
+              transport: "loopback-http",
+              status: 401,
+              debugSafeMarkerPresent: debugOutput.includes("token-visible-123"),
+              errorSafeMarkerPresent: message.includes("token-visible-123"),
+              debugSecretAbsent: !debugOutput.includes(clientSecret),
+              errorSecretAbsent: !message.includes(clientSecret),
+              debugEncodedAbsent: !debugOutput.includes(encodedCredential),
+              errorEncodedAbsent: !message.includes(encodedCredential),
+              debugFormEncodedAbsent: !debugOutput.includes(formEncodedCredential),
+              errorFormEncodedAbsent: !message.includes(formEncodedCredential),
+              debugLowercaseEncodedAbsent: !debugOutput.includes(lowercaseEncodedCredential),
+              errorLowercaseEncodedAbsent: !message.includes(lowercaseEncodedCredential),
+              debugLowercaseFormEncodedAbsent: !debugOutput.includes(
+                lowercaseFormEncodedCredential,
+              ),
+              errorLowercaseFormEncodedAbsent: !message.includes(lowercaseFormEncodedCredential),
+              debugJsonSlashEscapedAbsent: !debugOutput.includes(slashEscapedCredential),
+              errorJsonSlashEscapedAbsent: !message.includes(slashEscapedCredential),
+              debugPrefixAbsent: !debugOutput.includes(secretPrefix),
+              errorPrefixAbsent: !message.includes(secretPrefix),
+              debugSuffixAbsent: !debugOutput.includes(secretSuffix),
+              errorSuffixAbsent: !message.includes(secretSuffix),
+              debugFragmentAbsent: !debugOutput.includes("reflected-secret"),
+              errorFragmentAbsent: !message.includes("reflected-secret"),
+            })}`,
+          );
+        }
+      },
+    );
+  });
+
+  it("fully redacts issued access tokens from successful token diagnostics", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const tokenPrefix = "qQIssuedP";
+    const tokenSuffix = "tSfQ";
+    const accessToken = [tokenPrefix, "UNIQUE-ISSUED-TOKEN", tokenSuffix].join("/");
+    mockGuardedTokenResponse(
+      JSON.stringify({
+        access_token: accessToken,
+        expires_in: 7200,
+        marker: "issued-token-visible-123",
+      }),
+      {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      },
+    );
+
+    await expect(
+      new TokenManager({ logger }).getAccessToken("app-id", "client-secret"),
+    ).resolves.toBe(accessToken);
+
+    const debugOutput = logger.debug.mock.calls.flat().join("\n");
+    expect(debugOutput).toContain("issued-token-visible-123");
+    expect(debugOutput).not.toContain(accessToken);
+    expect(debugOutput).not.toContain(tokenPrefix);
+    expect(debugOutput).not.toContain(tokenSuffix);
+    expect(debugOutput).not.toContain("UNIQUE-ISSUED-TOKEN");
   });
 
   it("passes the RFC2544 SSRF allowance to the token fetch (regression for #88984)", async () => {
