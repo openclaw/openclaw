@@ -24,6 +24,8 @@ export function createBlockReplyCoalescer(params: {
   const idleMs = Math.max(0, Math.floor(config.idleMs));
   const joiner = config.joiner ?? "";
   const flushOnEnqueue = config.flushOnEnqueue === true;
+  const paragraphSeparatorPattern = /\n[\t ]*\n+$/;
+  const leadingParagraphSeparatorPattern = /^\n[\t ]*\n+/;
 
   let bufferText = "";
   let bufferReplyToId: ReplyPayload["replyToId"];
@@ -35,6 +37,22 @@ export function createBlockReplyCoalescer(params: {
   let bufferIsStatusNotice: ReplyPayload["isStatusNotice"];
   let bufferMetadataSource: ReplyPayload | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
+
+  const joinBufferedText = (text: string) => {
+    if (!text) {
+      return bufferText;
+    }
+    if (
+      !joiner ||
+      bufferText.endsWith(joiner) ||
+      paragraphSeparatorPattern.test(bufferText) ||
+      leadingParagraphSeparatorPattern.test(text) ||
+      text.startsWith(joiner)
+    ) {
+      return `${bufferText}${text}`;
+    }
+    return `${bufferText}${joiner}${text}`;
+  };
 
   const clearIdleTimer = () => {
     if (!idleTimer) {
@@ -124,7 +142,7 @@ export function createBlockReplyCoalescer(params: {
 
   /** Merges buffered text into a media payload without changing media metadata. */
   const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
-    const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const mergedText = joinBufferedText(text);
     const mergedPayload: ReplyPayload = {
       ...payload,
       text: mergedText,
@@ -156,6 +174,11 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
     if (!hasText) {
+      if (bufferText && leadingParagraphSeparatorPattern.test(text)) {
+        // Preserve a forced paragraph tail inside the renderable payload; ordinary
+        // whitespace-only payloads remain suppressed before outbound delivery.
+        bufferText = joinBufferedText(text);
+      }
       return;
     }
 
@@ -199,7 +222,7 @@ export function createBlockReplyCoalescer(params: {
       startBufferFromPayload(payload);
     }
 
-    const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
+    const nextText = bufferText ? joinBufferedText(text) : text;
     if (nextText.length > maxChars) {
       if (bufferText) {
         void flush({ force: true });

@@ -1106,35 +1106,38 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         final: options?.final === true,
         completeMarkdownChunk: options?.completeMarkdownChunk === true,
       }),
-    ).trimEnd();
-    if (!blockReplyText) {
+    );
+    const trimmedBlockReplyText = params.blockReplyChunking?.flushOnParagraph
+      ? trimBlockReplyTextPreservingParagraphSuffix(blockReplyText)
+      : blockReplyText.trimEnd();
+    if (!trimmedBlockReplyText) {
       return;
     }
-    if (blockReplyText === state.lastBlockReplyText) {
+    if (trimmedBlockReplyText === state.lastBlockReplyText) {
       return;
     }
     const markBlockReplyTextHandled = () => {
-      state.lastBlockReplyText = blockReplyText;
-      state.lastDeliveredBlockReplyText = blockReplyText;
+      state.lastBlockReplyText = trimmedBlockReplyText;
+      state.lastDeliveredBlockReplyText = trimmedBlockReplyText;
       state.toolExecutionSinceLastBlockReply = false;
     };
     if (hasMessageToolOnlySourceDelivery()) {
       markBlockReplyTextHandled();
       return;
     }
-    let chunk = blockReplyText;
+    let chunk = trimmedBlockReplyText;
     let slicedPrefixReplay = false;
     const lastDeliveredBlockReplyText = state.lastDeliveredBlockReplyText;
     const blockReplySuffix = lastDeliveredBlockReplyText
-      ? blockReplyText.slice(lastDeliveredBlockReplyText.length)
+      ? trimmedBlockReplyText.slice(lastDeliveredBlockReplyText.length)
       : "";
     const prefixReplayCandidate = Boolean(
       state.blockReplyBreak === "text_end" &&
       state.toolExecutionSinceLastBlockReply &&
       lastDeliveredBlockReplyText &&
       lastDeliveredBlockReplyText.trimEnd().endsWith(":") &&
-      blockReplyText.length > lastDeliveredBlockReplyText.length &&
-      blockReplyText.startsWith(lastDeliveredBlockReplyText),
+      trimmedBlockReplyText.length > lastDeliveredBlockReplyText.length &&
+      trimmedBlockReplyText.startsWith(lastDeliveredBlockReplyText),
     );
     if (prefixReplayCandidate && !/^\s/.test(blockReplySuffix)) {
       chunk = blockReplySuffix;
@@ -1621,4 +1624,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     },
   };
 }
+
+function trimBlockReplyTextPreservingParagraphSuffix(text: string): string {
+  const paragraphSuffix = text.match(/\n[\t ]*\n+$/)?.[0];
+  if (!paragraphSuffix) {
+    return text.trimEnd();
+  }
+  return `${text.slice(0, -paragraphSuffix.length).trimEnd()}${paragraphSuffix}`;
+}
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

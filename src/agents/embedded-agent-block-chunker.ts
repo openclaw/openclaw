@@ -63,25 +63,22 @@ function findSafeParagraphBreakIndex(params: {
   offset?: number;
 }): number {
   const { text, fenceSpans, minChars, reverse, offset = 0 } = params;
-  let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
-  while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
-    const candidates = [paragraphIdx, paragraphIdx + 1];
-    for (const candidate of candidates) {
-      if (candidate < minChars) {
-        continue;
+  let lastSafeBoundary = -1;
+  for (const match of text.matchAll(/\n[\t ]*\n+/g)) {
+    const paragraphIdx = match.index ?? -1;
+    const boundary = paragraphIdx + match[0].length;
+    if (
+      boundary >= minChars &&
+      boundary <= text.length &&
+      isSafeFenceBreak(fenceSpans, offset + boundary)
+    ) {
+      if (!reverse) {
+        return boundary;
       }
-      if (candidate < 0 || candidate >= text.length) {
-        continue;
-      }
-      if (isSafeFenceBreak(fenceSpans, offset + candidate)) {
-        return candidate;
-      }
+      lastSafeBoundary = boundary;
     }
-    paragraphIdx = reverse
-      ? text.lastIndexOf("\n\n", paragraphIdx - 1)
-      : text.indexOf("\n\n", paragraphIdx + 2);
   }
-  return -1;
+  return lastSafeBoundary;
 }
 
 function findSafeNewlineBreakIndex(params: {
@@ -157,7 +154,7 @@ export class EmbeddedBlockChunker {
     }
 
     if (force && this.#buffer.length <= maxChars) {
-      if (this.#buffer.trim().length > 0) {
+      if (this.#buffer.trim().length > 0 || hasParagraphSeparatorPrefix(this.#buffer)) {
         emit(this.#buffer);
       }
       this.#buffer = "";
@@ -177,15 +174,47 @@ export class EmbeddedBlockChunker {
         break;
       }
 
+      if (this.#chunking.flushOnParagraph && !reopenFence) {
+        const leadingParagraphSeparator = findLeadingParagraphSeparator(source, start);
+        if (leadingParagraphSeparator) {
+          const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
+          const chunk = sliceUtf16Safe(source.slice(start), 0, paragraphLimit);
+          if (chunk.length === 0) {
+            break;
+          }
+          if (chunk.trim().length === 0) {
+            // Text that fits is handled above; only advance this bounded whitespace
+            // prefix when later visible text would otherwise remain blocked.
+            if (!force && source.slice(start + chunk.length).trim().length === 0) {
+              break;
+            }
+            emit(chunk);
+            start += chunk.length;
+            reopenFence = undefined;
+            continue;
+          }
+          emit(`${reopenPrefix}${chunk}`);
+          start += chunk.length;
+          reopenFence = undefined;
+          continue;
+        }
+      }
+
       if (this.#chunking.flushOnParagraph && !force) {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
-        if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
-          const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
+        if (
+          paragraphBreak &&
+          paragraphBreak.index - start + paragraphBreak.length <= paragraphLimit
+        ) {
+          const chunk = `${reopenPrefix}${source.slice(
+            start,
+            paragraphBreak.index + paragraphBreak.length,
+          )}`;
           if (chunk.trim().length > 0) {
             emit(chunk);
           }
-          start = skipLeadingNewlines(source, paragraphBreak.index + paragraphBreak.length);
+          start = paragraphBreak.index + paragraphBreak.length;
           reopenFence = undefined;
           continue;
         }
@@ -211,12 +240,13 @@ export class EmbeddedBlockChunker {
       const consumed = this.#emitBreakResult({
         breakResult,
         emit,
+        force,
         reopenPrefix,
         source,
         start,
       });
       if (consumed === null) {
-        continue;
+        break;
       }
       start = consumed.start;
       reopenFence = consumed.reopenFence;
@@ -230,19 +260,23 @@ export class EmbeddedBlockChunker {
         break;
       }
     }
+    const remaining = source.slice(start);
     this.#buffer = reopenFence
-      ? `${reopenFence.openLine}\n${source.slice(start)}`
-      : stripLeadingNewlines(source.slice(start));
+      ? `${reopenFence.openLine}\n${remaining}`
+      : hasParagraphSeparatorPrefix(remaining)
+        ? remaining
+        : stripLeadingNewlines(remaining);
   }
 
   #emitBreakResult(params: {
     breakResult: BreakResult;
     emit: (chunk: string) => void;
+    force: boolean;
     reopenPrefix: string;
     source: string;
     start: number;
   }): { start: number; reopenFence?: FenceSpan } | null {
-    const { breakResult, emit, reopenPrefix, source, start } = params;
+    const { breakResult, emit, force, reopenPrefix, source, start } = params;
     const breakIdx = breakResult.index;
     if (breakIdx <= 0) {
       return null;
@@ -251,7 +285,16 @@ export class EmbeddedBlockChunker {
     const absoluteBreakIdx = start + breakIdx;
     let rawChunk = `${reopenPrefix}${source.slice(start, absoluteBreakIdx)}`;
     if (rawChunk.trim().length === 0) {
-      return { start: skipLeadingNewlines(source, absoluteBreakIdx), reopenFence: undefined };
+      if (
+        this.#chunking.flushOnParagraph &&
+        !force &&
+        hasTrailingParagraphSeparator(source, absoluteBreakIdx) &&
+        rawChunk.startsWith("\n")
+      ) {
+        return null;
+      }
+      emit(rawChunk);
+      return { start: absoluteBreakIdx, reopenFence: undefined };
     }
 
     const fenceSplit = breakResult.fenceSplit;
@@ -268,11 +311,21 @@ export class EmbeddedBlockChunker {
       return { start: absoluteBreakIdx, reopenFence: fenceSplit.fence };
     }
 
-    const nextStart =
-      absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
+    const preserveParagraphSeparator =
+      (this.#chunking.flushOnParagraph &&
+        (hasParagraphSeparatorPrefix(source, absoluteBreakIdx) ||
+          hasTrailingParagraphSeparator(source, absoluteBreakIdx))) ||
+      (hasTrailingParagraphSeparator(source, absoluteBreakIdx) &&
+        /^[\t ]/.test(source.slice(absoluteBreakIdx)));
+    const nextStart = preserveParagraphSeparator
+      ? absoluteBreakIdx
+      : absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
         ? absoluteBreakIdx + 1
         : absoluteBreakIdx;
-    return { start: skipLeadingNewlines(source, nextStart), reopenFence: undefined };
+    return {
+      start: preserveParagraphSeparator ? nextStart : skipLeadingNewlines(source, nextStart),
+      reopenFence: undefined,
+    };
   }
 
   #pickSoftBreakIndex(
@@ -374,7 +427,21 @@ export class EmbeddedBlockChunker {
       return { index: -1 };
     }
 
+    const firstVisibleIndex = buffer.search(/\S/);
+    const firstVisibleInFence =
+      firstVisibleIndex >= 0 &&
+      firstVisibleIndex < window.length &&
+      fenceSpans.some((fence) => {
+        const absoluteIndex = offset + firstVisibleIndex;
+        return absoluteIndex >= fence.start && absoluteIndex < fence.end;
+      });
     for (let i = window.length - 1; i >= minChars; i--) {
+      if (
+        (firstVisibleInFence || this.#chunking.flushOnParagraph) &&
+        window.slice(0, i).trim().length === 0
+      ) {
+        continue;
+      }
       if (/\s/.test(window.charAt(i)) && isSafeFenceBreak(fenceSpans, offset + i)) {
         return { index: i };
       }
@@ -430,6 +497,23 @@ function skipLeadingNewlines(value: string, start = 0): number {
 function stripLeadingNewlines(value: string): string {
   const start = skipLeadingNewlines(value);
   return start > 0 ? value.slice(start) : value;
+}
+
+function findLeadingParagraphSeparator(value: string, start = 0): string | null {
+  return value.slice(start).match(/^\n[\t ]*\n+/)?.[0] ?? null;
+}
+
+function hasParagraphSeparatorPrefix(value: string, start = 0): boolean {
+  const remaining = value.slice(start);
+  return findLeadingParagraphSeparator(remaining) !== null || /^\n[\t ]*$/.test(remaining);
+}
+
+function hasTrailingParagraphSeparator(value: string, end: number): boolean {
+  let start = end - 1;
+  while (start >= 0 && (value[start] === "\n" || value[start] === "\t" || value[start] === " ")) {
+    start--;
+  }
+  return /\n[\t ]*\n+[\t ]*$/.test(value.slice(start + 1, end));
 }
 
 function findNextParagraphBreak(
