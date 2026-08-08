@@ -7,8 +7,10 @@ import {
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
   statSessionEntrySync,
+  type SessionFileEntry,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -154,6 +156,24 @@ function hashSessionMessageId(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
 
+function hashSessionEntryPrefix(
+  entry: SessionFileEntry,
+  lines: string[],
+  lineCount: number,
+): string {
+  // Match buildSessionEntry's canonical hash so a cursor resumes only when
+  // content, source lines, timestamps, and provenance all retain their prefix.
+  return hashText(
+    lines.slice(0, lineCount).join("\n") +
+      "\n" +
+      entry.lineMap.slice(0, lineCount).join(",") +
+      "\n" +
+      entry.messageTimestampsMs.slice(0, lineCount).join(",") +
+      "\n" +
+      JSON.stringify(entry.lineProvenance.slice(0, lineCount)),
+  );
+}
+
 async function statSessionSource(source: SessionIngestionSource) {
   if (source.buildOptions.agentId && source.buildOptions.storePath) {
     try {
@@ -238,12 +258,15 @@ export async function scanSessionIngestionSource(params: {
   ) {
     return emptyScan("unchanged", params.previous);
   }
-  const sameContent =
-    params.previous?.mtimeMs === fileFingerprint.mtimeMs &&
-    params.previous.size === fileFingerprint.size &&
-    params.previous.contentHash === terminalState.contentHash &&
-    params.previous.lineCount === lines.length;
-  const startIndex = sameContent
+  const previousSnapshotMatches =
+    params.previous !== undefined &&
+    params.previous.contentHash.length > 0 &&
+    params.previous.lineCount <= lines.length &&
+    params.previous.contentHash ===
+      (params.previous.lineCount === lines.length
+        ? terminalState.contentHash
+        : hashSessionEntryPrefix(entry, lines, params.previous.lineCount));
+  const startIndex = previousSnapshotMatches
     ? Math.max(0, Math.min(params.previous?.lastContentLine ?? 0, lines.length))
     : 0;
   const seen = new Set(params.seenMessages[params.source.scope] ?? []);
