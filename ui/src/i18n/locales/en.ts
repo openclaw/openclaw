@@ -3920,6 +3920,7 @@ export const en: TranslationMap = {
     providerUsage: {
       title: "Provider plans & billing",
       subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
+      unavailable: "Provider usage is unavailable; the last request failed. Refresh to retry.",
       balance: "Balance",
       spend: "Usage",
       budget: "Budget",
