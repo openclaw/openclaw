@@ -6,6 +6,7 @@ import { buildMatrixQaE2eeScenarioRoomKey } from "./scenario-contract.js";
 import {
   patchMatrixQaGatewayMatrixAccount,
   replaceMatrixQaGatewayMatrixAccount,
+  runMatrixQaGatewayMatrixConfigTransaction,
 } from "./scenario-runtime-config.js";
 import {
   assertMatrixQaCliE2eeStatus,
@@ -236,149 +237,152 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
     threadReplies: "inbound",
     userId: account.userId,
   };
-  await context.restartGatewayAfterStateMutation(
-    async () => {
-      await replaceMatrixQaGatewayMatrixAccount({
-        accountConfig,
-        accountId,
-        configPath: gatewayConfigPath,
-      });
-    },
-    {
-      timeoutMs: context.timeoutMs,
-      waitAccountId: accountId,
-    },
-  );
-  await context.waitGatewayAccountReady?.(accountId, {
-    timeoutMs: context.timeoutMs,
-  });
-  const cli = await createMatrixQaCliGatewayRuntime({
-    artifactLabel: "cli-setup-then-gateway-reply",
-    context,
-  });
-  try {
-    const setupResult = await cli.run([
-      "matrix",
-      "encryption",
-      "setup",
-      "--account",
-      accountId,
-      "--json",
-    ]);
-    const setupArtifacts = await writeMatrixQaCliOutputArtifacts({
-      label: "encryption-setup",
-      result: setupResult,
-      rootDir: cli.rootDir,
-    });
-    const setup = parseMatrixQaCliJson(setupResult) as MatrixQaCliEncryptionSetupStatus;
-    if (
-      setup.accountId !== accountId ||
-      setup.success !== true ||
-      setup.bootstrap?.success !== true
-    ) {
-      throw new Error(
-        `Matrix CLI gateway account setup did not succeed: ${setup.bootstrap?.error ?? "unknown error"}`,
-      );
-    }
-    if (setup.status) {
-      assertMatrixQaCliE2eeStatus("Matrix CLI gateway account setup", setup.status);
-    }
-    await context.restartGatewayAfterStateMutation(
-      async () => {
-        await patchMatrixQaGatewayMatrixAccount({
-          accountPatch: {
-            encryption: true,
-            password: account.password,
-          },
-          accountId,
-          configPath: gatewayConfigPath,
-        });
-      },
-      {
+  return await runMatrixQaGatewayMatrixConfigTransaction({
+    applyRestoration: (restore) =>
+      context.restartGatewayAfterStateMutation!(restore, {
         timeoutMs: context.timeoutMs,
-        waitAccountId: accountId,
-      },
-    );
-    await context.waitGatewayAccountReady?.(accountId, {
-      timeoutMs: context.timeoutMs,
-    });
-    const driverClient = await createMatrixQaE2eeScenarioClient({
-      accessToken: driverAccount.accessToken,
-      actorId: `driver-cli-setup-gateway-${randomUUID().slice(0, 8)}`,
-      baseUrl: context.baseUrl,
-      deviceId: driverAccount.deviceId,
-      observedEvents: context.observedEvents,
-      outputDir: requireMatrixQaE2eeOutputDir(context),
-      password: driverAccount.password,
-      scenarioId,
-      timeoutMs: context.timeoutMs,
-      userId: driverAccount.userId,
-    });
-    const replied = await (async () => {
+      }),
+    configPath: gatewayConfigPath,
+    run: async () => {
+      await context.restartGatewayAfterStateMutation!(
+        async () => {
+          await replaceMatrixQaGatewayMatrixAccount({
+            accountConfig,
+            accountId,
+            configPath: gatewayConfigPath,
+          });
+        },
+        {
+          timeoutMs: context.timeoutMs,
+          waitAccountId: accountId,
+        },
+      );
+      const cli = await createMatrixQaCliGatewayRuntime({
+        artifactLabel: "cli-setup-then-gateway-reply",
+        context,
+      });
       try {
-        await ensureMatrixQaE2eeOwnDeviceVerified({
-          client: driverClient,
-          label: "Matrix CLI setup scenario driver",
+        const setupResult = await cli.run([
+          "matrix",
+          "encryption",
+          "setup",
+          "--account",
+          accountId,
+          "--json",
+        ]);
+        const setupArtifacts = await writeMatrixQaCliOutputArtifacts({
+          label: "encryption-setup",
+          result: setupResult,
+          rootDir: cli.rootDir,
         });
-        await driverClient.waitForJoinedMember({
-          roomId,
+        const setup = parseMatrixQaCliJson(setupResult) as MatrixQaCliEncryptionSetupStatus;
+        if (
+          setup.accountId !== accountId ||
+          setup.success !== true ||
+          setup.bootstrap?.success !== true
+        ) {
+          throw new Error(
+            `Matrix CLI gateway account setup did not succeed: ${setup.bootstrap?.error ?? "unknown error"}`,
+          );
+        }
+        if (setup.status) {
+          assertMatrixQaCliE2eeStatus("Matrix CLI gateway account setup", setup.status);
+        }
+        await context.restartGatewayAfterStateMutation!(
+          async () => {
+            await patchMatrixQaGatewayMatrixAccount({
+              accountPatch: {
+                encryption: true,
+                password: account.password,
+              },
+              accountId,
+              configPath: gatewayConfigPath,
+            });
+          },
+          {
+            timeoutMs: context.timeoutMs,
+            waitAccountId: accountId,
+          },
+        );
+        const driverClient = await createMatrixQaE2eeScenarioClient({
+          accessToken: driverAccount.accessToken,
+          actorId: `driver-cli-setup-gateway-${randomUUID().slice(0, 8)}`,
+          baseUrl: context.baseUrl,
+          deviceId: driverAccount.deviceId,
+          observedEvents: context.observedEvents,
+          outputDir: requireMatrixQaE2eeOutputDir(context),
+          password: driverAccount.password,
+          scenarioId,
           timeoutMs: context.timeoutMs,
-          userId: account.userId,
+          userId: driverAccount.userId,
         });
-        await driverClient.prime();
-        const token = buildMatrixQaToken("MATRIX_QA_E2EE_CLI_GATEWAY");
-        const driverEventId = await driverClient.sendTextMessage({
-          body: buildMentionPrompt(account.userId, token),
-          mentionUserIds: [account.userId],
-          roomId,
-        });
-        const matched = await driverClient.waitForRoomEvent({
-          predicate: (event) =>
-            isMatrixQaExactMarkerReply(event, {
+        const replied = await (async () => {
+          try {
+            await ensureMatrixQaE2eeOwnDeviceVerified({
+              client: driverClient,
+              label: "Matrix CLI setup scenario driver",
+            });
+            await driverClient.waitForJoinedMember({
               roomId,
-              sutUserId: account.userId,
-              token,
-            }) && event.relatesTo === undefined,
-          roomId,
-          timeoutMs: context.timeoutMs,
-        });
-        const reply = buildMatrixE2eeReplyArtifact(matched.event, token);
-        assertTopLevelReplyArtifact("gateway reply", reply);
+              timeoutMs: context.timeoutMs,
+              userId: account.userId,
+            });
+            await driverClient.prime();
+            const token = buildMatrixQaToken("MATRIX_QA_E2EE_CLI_GATEWAY");
+            const driverEventId = await driverClient.sendTextMessage({
+              body: buildMentionPrompt(account.userId, token),
+              mentionUserIds: [account.userId],
+              roomId,
+            });
+            const matched = await driverClient.waitForRoomEvent({
+              predicate: (event) =>
+                isMatrixQaExactMarkerReply(event, {
+                  roomId,
+                  sutUserId: account.userId,
+                  token,
+                }) && event.relatesTo === undefined,
+              roomId,
+              timeoutMs: context.timeoutMs,
+            });
+            const reply = buildMatrixE2eeReplyArtifact(matched.event, token);
+            assertTopLevelReplyArtifact("gateway reply", reply);
+            return {
+              driverEventId,
+              reply,
+            };
+          } finally {
+            await driverClient.stop();
+          }
+        })();
+
         return {
-          driverEventId,
-          reply,
+          artifacts: {
+            accountId,
+            cliDeviceId: setup.status?.deviceId ?? account.deviceId ?? null,
+            driverUserId: driverAccount.userId,
+            encryptionChanged: setup.encryptionChanged,
+            gatewayReply: replied.reply,
+            gatewayUserId: account.userId,
+            roomKey,
+            roomId,
+            setupSuccess: setup.success,
+            verificationBootstrapSuccess: setup.bootstrap.success,
+          },
+          details: [
+            "Matrix CLI encryption setup left the gateway able to reply in an encrypted room",
+            `setup stdout: ${setupArtifacts.stdoutPath}`,
+            `setup stderr: ${setupArtifacts.stderrPath}`,
+            `driver user: ${driverAccount.userId}`,
+            `gateway user: ${account.userId}`,
+            `encrypted room key: ${roomKey}`,
+            `encrypted room id: ${roomId}`,
+            `driver event: ${replied.driverEventId}`,
+            ...buildMatrixReplyDetails("gateway reply", replied.reply),
+          ].join("\n"),
         };
       } finally {
-        await driverClient.stop();
+        await cli.dispose();
       }
-    })();
-
-    return {
-      artifacts: {
-        accountId,
-        cliDeviceId: setup.status?.deviceId ?? account.deviceId ?? null,
-        driverUserId: driverAccount.userId,
-        encryptionChanged: setup.encryptionChanged,
-        gatewayReply: replied.reply,
-        gatewayUserId: account.userId,
-        roomKey,
-        roomId,
-        setupSuccess: setup.success,
-        verificationBootstrapSuccess: setup.bootstrap.success,
-      },
-      details: [
-        "Matrix CLI encryption setup left the gateway able to reply in an encrypted room",
-        `setup stdout: ${setupArtifacts.stdoutPath}`,
-        `setup stderr: ${setupArtifacts.stderrPath}`,
-        `driver user: ${driverAccount.userId}`,
-        `gateway user: ${account.userId}`,
-        `encrypted room key: ${roomKey}`,
-        `encrypted room id: ${roomId}`,
-        `driver event: ${replied.driverEventId}`,
-        ...buildMatrixReplyDetails("gateway reply", replied.reply),
-      ].join("\n"),
-    };
-  } finally {
-    await cli.dispose();
-  }
+    },
+  });
 }

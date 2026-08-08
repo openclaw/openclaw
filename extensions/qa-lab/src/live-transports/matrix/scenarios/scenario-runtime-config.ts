@@ -37,6 +37,22 @@ async function writeMatrixQaGatewayConfigFile(configPath: string, config: unknow
   });
 }
 
+async function updateMatrixQaGatewayMatrixAccount(
+  params: { accountId: string; configPath: string },
+  update: (account: unknown) => Record<string, unknown>,
+) {
+  const config = await readMatrixQaGatewayConfigFile(params.configPath);
+  const channels = isMatrixQaPlainRecord(config.channels) ? config.channels : {};
+  const matrix = isMatrixQaPlainRecord(channels.matrix) ? channels.matrix : {};
+  const accounts = isMatrixQaPlainRecord(matrix.accounts) ? matrix.accounts : {};
+  channels.matrix = {
+    ...matrix,
+    accounts: { ...accounts, [params.accountId]: update(accounts[params.accountId]) },
+  };
+  config.channels = channels;
+  await writeMatrixQaGatewayConfigFile(params.configPath, config);
+}
+
 export async function readMatrixQaGatewayMatrixAccount(params: {
   accountId: string;
   configPath: string;
@@ -57,18 +73,7 @@ export async function replaceMatrixQaGatewayMatrixAccount(params: {
   accountId: string;
   configPath: string;
 }) {
-  const config = await readMatrixQaGatewayConfigFile(params.configPath);
-  const channels = isMatrixQaPlainRecord(config.channels) ? config.channels : {};
-  const matrix = isMatrixQaPlainRecord(channels.matrix) ? channels.matrix : {};
-  channels.matrix = {
-    ...matrix,
-    defaultAccount: params.accountId,
-    accounts: {
-      [params.accountId]: params.accountConfig,
-    },
-  };
-  config.channels = channels;
-  await writeMatrixQaGatewayConfigFile(params.configPath, config);
+  await updateMatrixQaGatewayMatrixAccount(params, () => params.accountConfig);
 }
 
 export async function patchMatrixQaGatewayMatrixAccount(params: {
@@ -76,26 +81,52 @@ export async function patchMatrixQaGatewayMatrixAccount(params: {
   accountPatch: Record<string, unknown>;
   configPath: string;
 }) {
-  const config = await readMatrixQaGatewayConfigFile(params.configPath);
-  const channels = isMatrixQaPlainRecord(config.channels) ? config.channels : {};
-  const matrix = isMatrixQaPlainRecord(channels.matrix) ? channels.matrix : {};
-  const accounts = isMatrixQaPlainRecord(matrix.accounts) ? matrix.accounts : {};
-  const existing = accounts[params.accountId];
-  if (!isMatrixQaPlainRecord(existing)) {
-    throw new Error(`Matrix QA gateway account "${params.accountId}" missing from config`);
-  }
-  channels.matrix = {
-    ...matrix,
-    defaultAccount: params.accountId,
-    accounts: {
-      [params.accountId]: {
-        ...existing,
-        ...params.accountPatch,
-      },
-    },
+  await updateMatrixQaGatewayMatrixAccount(params, (existing) => {
+    if (!isMatrixQaPlainRecord(existing)) {
+      throw new Error(`Matrix QA gateway account "${params.accountId}" missing from config`);
+    }
+    return { ...existing, ...params.accountPatch };
+  });
+}
+
+export async function runMatrixQaGatewayMatrixConfigTransaction<T>(params: {
+  applyRestoration: (restore: () => Promise<void>) => Promise<void>;
+  configPath: string;
+  run: () => Promise<T>;
+}): Promise<T> {
+  const originalConfig = await readMatrixQaGatewayConfigFile(params.configPath);
+  const hadChannels = Object.hasOwn(originalConfig, "channels");
+  const originalChannels = isMatrixQaPlainRecord(originalConfig.channels)
+    ? originalConfig.channels
+    : {};
+  const hadMatrix = Object.hasOwn(originalChannels, "matrix");
+  const originalMatrix = originalChannels.matrix;
+  const restore = async () => {
+    const config = await readMatrixQaGatewayConfigFile(params.configPath);
+    const channels = isMatrixQaPlainRecord(config.channels) ? config.channels : {};
+    if (hadMatrix) {
+      channels.matrix = originalMatrix;
+    } else {
+      delete channels.matrix;
+    }
+    if (!hadChannels && Object.keys(channels).length === 0) {
+      delete config.channels;
+    } else {
+      config.channels = channels;
+    }
+    await writeMatrixQaGatewayConfigFile(params.configPath, config);
   };
-  config.channels = channels;
-  await writeMatrixQaGatewayConfigFile(params.configPath, config);
+  const errors: unknown[] = [];
+  const result = await params.run().catch((error: unknown) => errors.push(error));
+  await params.applyRestoration(restore).catch((error: unknown) => errors.push(error));
+  if (errors.length > 0) {
+    throw errors.length === 1
+      ? errors[0]
+      : new AggregateError(errors, "Matrix QA gateway config transaction failed", {
+          cause: errors[0],
+        });
+  }
+  return result as T;
 }
 
 function requireMatrixQaAccountReload(context: MatrixQaScenarioContext) {

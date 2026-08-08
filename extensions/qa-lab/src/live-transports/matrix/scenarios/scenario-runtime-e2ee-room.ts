@@ -19,7 +19,7 @@ import {
 import {
   isMatrixQaPlainRecord,
   patchMatrixQaGatewayMatrixAccount,
-  readMatrixQaGatewayMatrixAccount,
+  runMatrixQaGatewayMatrixConfigTransaction,
 } from "./scenario-runtime-config.js";
 import {
   MATRIX_QA_KEYS_SIGNATURES_UPLOAD_ENDPOINT,
@@ -319,15 +319,6 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
   }
   const accountId = context.sutAccountId ?? "sut";
   const configPath = requireMatrixQaGatewayConfigPath(context);
-  const accountConfig = await readMatrixQaGatewayMatrixAccount({
-    accountId,
-    configPath,
-  });
-  const originalGroups = isMatrixQaPlainRecord(accountConfig.groups) ? accountConfig.groups : {};
-  const originalGroupAllowFrom = Array.isArray(accountConfig.groupAllowFrom)
-    ? accountConfig.groupAllowFrom
-    : undefined;
-  const originalGroupPolicy = accountConfig.groupPolicy;
   const driverAccount = await registerMatrixQaE2eeScenarioAccount({
     context,
     deviceName: "OpenClaw Matrix QA Isolated E2EE Driver",
@@ -362,7 +353,7 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     },
   };
   const applyPatch = async (accountPatch: Record<string, unknown>) => {
-    await context.restartGatewayAfterStateMutation?.(
+    await context.restartGatewayAfterStateMutation!(
       async () => {
         await patchMatrixQaGatewayMatrixAccount({
           accountId,
@@ -377,54 +368,53 @@ export async function withMatrixQaIsolatedE2eeDriverRoom<T>(
     );
   };
 
-  let patchedGateway;
-  let client: MatrixQaE2eeScenarioClient | undefined;
-  try {
-    await applyPatch({
-      groupAllowFrom: [driverAccount.userId],
-      groupPolicy: "allowlist",
-      groups: isolatedGroups,
-    });
-    patchedGateway = true;
-    const actorId: `driver-${string}` = `driver-${scenarioId
-      .replace(/^matrix-e2ee-/, "")
-      .replace(/[^A-Za-z0-9_-]/g, "-")
-      .slice(0, 28)}`;
-    client = await createMatrixQaE2eeRegisteredScenarioClient({
-      account: driverAccount,
-      actorId,
-      context,
-      scenarioId,
-    });
-    await Promise.all([
-      client.waitForJoinedMember({
-        roomId,
+  return await runMatrixQaGatewayMatrixConfigTransaction({
+    applyRestoration: (restore) =>
+      context.restartGatewayAfterStateMutation!(restore, {
         timeoutMs: context.timeoutMs,
-        userId: context.sutUserId,
+        waitAccountId: accountId,
       }),
-      client.waitForJoinedMember({
-        roomId,
-        timeoutMs: context.timeoutMs,
-        userId: context.observerUserId,
-      }),
-    ]);
-    return await run({
-      client,
-      driverUserId: driverAccount.userId,
-      roomId,
-      roomKey,
-    });
-  } finally {
-    await client?.stop().catch(() => undefined);
-    if (patchedGateway) {
-      const restorePatch: Record<string, unknown> = {
-        groupAllowFrom: originalGroupAllowFrom,
-        groupPolicy: originalGroupPolicy,
-        groups: originalGroups,
-      };
-      await applyPatch(restorePatch).catch(() => undefined);
-    }
-  }
+    configPath,
+    run: async () => {
+      await applyPatch({
+        groupAllowFrom: [driverAccount.userId],
+        groupPolicy: "allowlist",
+        groups: isolatedGroups,
+      });
+      const actorId: `driver-${string}` = `driver-${scenarioId
+        .replace(/^matrix-e2ee-/, "")
+        .replace(/[^A-Za-z0-9_-]/g, "-")
+        .slice(0, 28)}`;
+      const client = await createMatrixQaE2eeRegisteredScenarioClient({
+        account: driverAccount,
+        actorId,
+        context,
+        scenarioId,
+      });
+      try {
+        await Promise.all([
+          client.waitForJoinedMember({
+            roomId,
+            timeoutMs: context.timeoutMs,
+            userId: context.sutUserId,
+          }),
+          client.waitForJoinedMember({
+            roomId,
+            timeoutMs: context.timeoutMs,
+            userId: context.observerUserId,
+          }),
+        ]);
+        return await run({
+          client,
+          driverUserId: driverAccount.userId,
+          roomId,
+          roomKey,
+        });
+      } finally {
+        await client.stop().catch(() => undefined);
+      }
+    },
+  });
 }
 
 export async function runMatrixQaE2eeTopLevelWithClient(
