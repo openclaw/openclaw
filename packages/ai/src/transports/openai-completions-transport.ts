@@ -393,7 +393,6 @@ async function processOpenAICompletionsStream(
   },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
-  const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
   const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
@@ -422,7 +421,6 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const provisionalCommentaryTags: PendingCommentaryTags = new Map();
-  const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
   let sawStopFinishReason = false;
@@ -805,12 +803,6 @@ async function processOpenAICompletionsStream(
             block.thoughtSignature = deltaSig;
           }
           if (toolCall.function?.arguments) {
-            const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
-            const currentBlockArgBytes = toolCallBlockBytes.get(block) ?? 0;
-            if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
-              throw new Error("Exceeded tool-call argument buffer limit");
-            }
-            toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
             block.partialArgs += toolCall.function.arguments;
             block.arguments = parseStreamingJson(block.partialArgs);
             pushStreamEvent({

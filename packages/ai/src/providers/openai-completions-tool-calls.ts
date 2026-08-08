@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
-const MAX_BUFFERED_LEGACY_TOOL_CALL_ARGUMENT_BYTES = 256_000;
+const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
 const MAX_BUFFERED_LEGACY_FOLLOWING_DELTA_BYTES = 256_000;
 const MAX_BUFFERED_LEGACY_FOLLOWING_DELTAS = 1_024;
 
@@ -26,6 +26,10 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
   let pendingLegacyArgumentBytes = 0;
   let pendingFollowingDeltaBytes = 0;
   let pendingLegacyToolCall: ChatCompletionToolCallDelta | undefined;
+  const pendingModernArguments = new Map<
+    number,
+    { bytes: number; pendingHighSurrogate: boolean }
+  >();
   const pendingFollowingDeltas: ChatCompletionChunk.Choice.Delta[] = [];
 
   const takePendingFollowingDeltas = (): NormalizedOpenAICompletionsDelta[] => {
@@ -79,6 +83,25 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
   return (delta, finishReason) => {
     const ordinaryDelta = withoutToolCalls(delta);
     if (delta.tool_calls && delta.tool_calls.length > 0) {
+      for (const toolCall of delta.tool_calls) {
+        const previous = pendingModernArguments.get(toolCall.index);
+        const argumentDelta = toolCall.function?.arguments ?? "";
+        // A surrogate pair split across SSE deltas is one four-byte code point,
+        // not two three-byte replacement characters.
+        const splitSurrogateBytes =
+          previous?.pendingHighSurrogate && /^[\uDC00-\uDFFF]/.test(argumentDelta) ? 2 : 0;
+        const argumentBytes =
+          (previous?.bytes ?? 0) + Buffer.byteLength(argumentDelta, "utf8") - splitSurrogateBytes;
+        if (argumentBytes > MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES) {
+          throw new Error("Exceeded tool-call argument buffer limit");
+        }
+        pendingModernArguments.set(toolCall.index, {
+          bytes: argumentBytes,
+          pendingHighSurrogate: argumentDelta
+            ? /[\uD800-\uDBFF]$/.test(argumentDelta)
+            : Boolean(previous?.pendingHighSurrogate),
+        });
+      }
       const precedingDeltas = takePendingFollowingDeltas();
       sawModernToolCall = true;
       pendingLegacyArgumentBytes = 0;
@@ -113,10 +136,7 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
       const nextArgumentBytes =
         Buffer.byteLength(functionCall.arguments ?? "", "utf8") +
         Buffer.byteLength(nextFunctionName ?? "", "utf8");
-      if (
-        pendingLegacyArgumentBytes + nextArgumentBytes >
-        MAX_BUFFERED_LEGACY_TOOL_CALL_ARGUMENT_BYTES
-      ) {
+      if (pendingLegacyArgumentBytes + nextArgumentBytes > MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES) {
         throw new Error("Exceeded tool-call argument buffer limit");
       }
       pendingLegacyArgumentBytes += nextArgumentBytes;
