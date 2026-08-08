@@ -30,7 +30,7 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
-  timeout?: number;
+  timeoutSeconds?: number;
   pty?: boolean;
   elevated?: boolean;
   host?: string;
@@ -38,6 +38,24 @@ export type ExecToolArgs = Record<string, unknown> & {
   ask?: string;
   node?: string;
 };
+
+/**
+ * Resolve the per-call exec timeout in seconds.
+ *
+ * `timeoutSeconds` is the canonical argument and the only one the tool schema
+ * exposes. `timeout` is an undocumented legacy alias: it was the original name
+ * for the same seconds value, so calls built against an older schema still get
+ * the deadline they asked for instead of silently falling back to the default.
+ * It is deliberately absent from both the schema and `ExecToolArgs` so no new
+ * caller can adopt it, and it is read off the index signature only.
+ */
+export function resolveExecTimeoutSeconds(args: ExecToolArgs): number | undefined {
+  if (typeof args.timeoutSeconds === "number") {
+    return args.timeoutSeconds;
+  }
+  const legacy = args.timeout;
+  return typeof legacy === "number" ? legacy : undefined;
+}
 
 type ResolvedExecEnvPreparedState = {
   host?: ExecHost;
