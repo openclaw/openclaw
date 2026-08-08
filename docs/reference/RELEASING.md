@@ -17,7 +17,8 @@ OpenClaw exposes four user-facing update channels:
 - dev: the moving head of `main`
 
 Extended-stable ships the trailing month's Gateway, official npm plugins, and
-Docker images without moving regular `latest` or `main` selectors.
+Docker images without moving regular `latest` or `main` selectors. Each release
+also has a notes-only GitHub Release page that is never marked Latest.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
@@ -91,7 +92,9 @@ gh workflow run full-release-validation.yml \
 
 The SHA form is preflight-only. Run validation on the canonical branch; publish
 binds its workflow ref, head/target SHA, run ID, and attempt. Save both IDs and
-the successful `run_attempt`; reject `release-ci/*` evidence.
+the successful `run_attempt`. Accept a direct canonical-branch run, a direct
+current-`main` run whose workflow SHA remains reachable from `main`, or the
+trusted main-pinned `release-ci/*` harness; reject narrow reruns.
 
 Classify failures before editing:
 
@@ -198,9 +201,11 @@ digest; regular aliases remain unchanged and automatic rollback is rejected.
 After that core registry readback succeeds, start Docker publication only through
 `OpenClaw Release Publish`. Its Docker-only extended-stable path rechecks the
 saved npm preflight artifact, exact `Full Release Validation` evidence, exact npm
-version and `extended-stable` selector, and published tarball digest before it
-calls the reusable `Docker Release` workflow. A tag push never publishes Docker
-images by itself:
+version and `extended-stable` selector, and published tarball digest. It then
+creates or resumes a canonical non-prerelease GitHub Release draft with
+`latest=false`, calls the reusable `Docker Release` workflow, and makes the
+draft public only after Docker succeeds. A tag push never publishes Docker
+images or a release page by itself:
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
@@ -220,8 +225,9 @@ an explicit rollback, and never rebuilds images.
 
 Slack, Discord, and Codex are the initial documented support surfaces, not a
 release allowlist: every npm-publishable official plugin ships. The regular
-checklist alone owns beta/`latest`, GitHub Releases, ClawHub, native apps, mobile,
-website, and private dist-tags; do not run those steps for this Gateway path.
+checklist alone owns beta/`latest`, GitHub Release assets, ClawHub, native apps,
+mobile, website, and private dist-tags; do not run those steps for this Gateway
+path. Extended-stable owns only its notes-only, non-Latest GitHub Release page.
 
 ## Regular release operator checklist
 
@@ -534,9 +540,9 @@ For package-candidate Telegram proof, enable `telegram_mode=mock-openai` or `tel
 
 For beta, `latest`, plugin, GitHub Release, and platform publication,
 `OpenClaw Release Publish` is the normal mutating entrypoint. The monthly
-`.33+` Gateway extended-stable path does not use this orchestrator. The
-regular workflow orchestrates the trusted-publisher workflows in the order the
-release needs:
+`.33+` Gateway extended-stable path also uses its Docker-only closeout after npm
+publication. The regular path orchestrates the trusted-publisher workflows in
+the order the release needs:
 
 1. Check out the release tag and resolve its commit SHA.
 2. Verify the tag is reachable from `main` or `release/*` (or a Tideclaw alpha branch for alpha prereleases).
@@ -672,7 +678,7 @@ readback confirms that every exact package and `extended-stable` tag converged.
 - `windows_node_installer_digests`: candidate-approved compact JSON map of the current Windows installer names to their pinned `sha256:` digests; required for stable OpenClaw publish
 - `npm_telegram_run_id`: optional successful `NPM Telegram Beta E2E` run id to include in final release evidence
 - `npm_dist_tag`: npm target tag for the OpenClaw package, one of `alpha`, `beta`, `latest`, or `extended-stable`
-- `publish_docker_only`: extended-stable-only recovery/closeout path. It requires `publish_openclaw_npm=false`, complete preflight and Full Release Validation evidence, then verifies the exact npm package, selector, and tarball digest before invoking Docker publication.
+- `publish_docker_only`: extended-stable-only recovery/closeout path. It requires `publish_openclaw_npm=false`, complete preflight and Full Release Validation evidence, then verifies the exact npm package, selector, and tarball digest, prepares the notes-only GitHub Release draft, publishes Docker, and makes the release public with `latest=false`.
 - `plugin_publish_scope`: defaults to `all-publishable`; use `selected` only for focused plugin-only repair work with `publish_openclaw_npm=false`
 - `plugins`: comma-separated `@openclaw/*` package names when `plugin_publish_scope=selected`
 - `publish_openclaw_npm`: defaults to `true`; set `false` only when using the workflow as a plugin-only repair orchestrator

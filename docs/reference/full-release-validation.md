@@ -39,10 +39,11 @@ report that same workflow SHA. Pass
 reachable from current `origin/main`. The workflow never creates or updates
 repository refs itself.
 
-## Extended-stable exception
+## Extended-stable validation
 
-Extended-stable publish requires a run whose workflow and target are both the
-canonical branch:
+Extended-stable publish accepts a complete exact-target run from the canonical
+branch, a direct current-main run whose workflow SHA remains reachable from
+current `main`, or the trusted main-pinned helper:
 
 ```bash
 gh workflow run full-release-validation.yml \
@@ -51,9 +52,10 @@ gh workflow run full-release-validation.yml \
   -f release_profile=stable
 ```
 
-Do not use `pnpm ci:full-release` or `release-ci/*`. Publish binds the run's
-branch, head/target SHA, manifest `workflowRef`, ID, and attempt to the canonical
-branch and release commit.
+The helper's temporary `release-ci/*` ref is valid only when every child uses
+the pinned trusted workflow SHA and the v3 manifest binds the canonical branch,
+exact release commit, run ID, and attempt. Reject narrow runs, stale attempts,
+untrusted workflow SHAs, and mismatched targets.
 
 Backport product failures; make the smallest behavior-preserving repair for
 frozen-target tooling; retry provider, approval, or runner failures without a
@@ -302,8 +304,8 @@ workflow first, then rerun the smallest matching handle above.
 For a regular release, record both Code SHA and Release SHA, the reuse policy
 and changed-path set, the green Code SHA parent run, and the lightweight Release
 SHA parent run. For extended-stable, record the canonical branch, exact release
-SHA, fresh parent run id and attempt, workflow ref, every child run, and any
-frozen-target compatibility repair or intentional omission.
+SHA, accepted producer identity, parent run id and attempt, workflow ref, every
+child run, and any frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:
 

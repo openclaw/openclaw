@@ -5049,6 +5049,47 @@ describe("package artifact reuse", () => {
     expect(finalizeJob.needs).toEqual(["publish", "publish_docker"]);
     expect(finalizeJob.if).toContain("needs.publish_docker.result == 'success'");
     expect(finalizeRelease.run).toContain('gh release edit "${RELEASE_TAG}"');
+
+    const extendedPrepareJob = workflowJob(
+      RELEASE_PUBLISH_WORKFLOW,
+      "prepare_extended_stable_release",
+    );
+    const extendedPrepare = workflowStep(
+      extendedPrepareJob,
+      "Create or resume the canonical draft release",
+    );
+    const extendedFinalizeJob = workflowJob(
+      RELEASE_PUBLISH_WORKFLOW,
+      "finalize_extended_stable_github_release",
+    );
+    const extendedFinalize = workflowStep(
+      extendedFinalizeJob,
+      "Publish the verified extended-stable draft",
+    );
+    expect(extendedPrepareJob.needs).toEqual(["resolve_release_target"]);
+    expect(extendedPrepare.run).toContain("verify_release_tag_target");
+    expect(extendedPrepare.run).toContain("verifyGithubReleaseNotes");
+    expect(extendedPrepare.run).toContain("body !== expectedBody");
+    expect(extendedPrepare.run).toContain("release.assets.length !== 0");
+    expect(extendedPrepare.run).toContain("release_already_public=true");
+    expect(extendedPrepare.run).toContain("--draft");
+    expect(extendedPrepare.run).toContain("--latest=false");
+    expect(extendedFinalizeJob.needs).toEqual([
+      "resolve_release_target",
+      "prepare_extended_stable_release",
+      "publish_docker",
+    ]);
+    expect(extendedFinalizeJob.if).toContain("needs.publish_docker.result == 'success'");
+    expect(extendedFinalize.run).toContain("-f make_latest=false");
+    expect(extendedFinalize.run).toContain("EXPECTED_BODY_SHA256");
+    expect(extendedFinalize.run).toContain("release.assets.length !== 0");
+    expect(extendedFinalize.run).toContain("for attempt in $(seq 1 12)");
+    expect(extendedFinalize.run).toContain(
+      'git ls-remote --tags "https://github.com/${GITHUB_REPOSITORY}.git"',
+    );
+    expect(extendedFinalize.run.indexOf("verify_release_tag_target\n")).toBeLessThan(
+      extendedFinalize.run.indexOf('current_draft="$(gh api'),
+    );
   });
 
   it("accepts tag-matched frozen release branches in OpenClaw npm preflight", () => {

@@ -287,8 +287,12 @@ on pinned current `main` as the exact command and validation contract.
    digest and refuse automatic rollback. For alias repair, dispatch the
    approval-gated `docker-channel-promote.yml` from current `main` with the exact
    tag; never rebuild or move the release tag.
-10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
-    ClawHub, or private dist-tag artifacts from this path.
+10. Dispatch the Docker-only `OpenClaw Release Publish` closeout. It must
+    reverify the exact npm selector and tarball, prepare a canonical
+    non-prerelease GitHub Release draft with `latest=false`, publish Docker,
+    and only then make the release public. Do not publish macOS, Windows,
+    mobile, website, ClawHub, npm `latest`, or private dist-tag artifacts from
+    this path.
 
 ## Keep release channel naming aligned
 
@@ -496,8 +500,8 @@ HEAD/worktree-bound manifest under git metadata for cutover review.
   body tail. Do not discard a fitting full contribution record to make room
   for proof.
 - Before publishing or closing a release, run
-  `$openclaw-changelog-update`'s `verify-release-notes.mjs` with every stable
-  and beta release tag in the train. Do not publish or leave a page live when
+  `$openclaw-changelog-update`'s `verify-release-notes.mjs` with every stable,
+  beta, and extended-stable release tag in the train. Do not publish or leave a page live when
   it is missing a source-history reference, eligible human credit, or the
   complete matching changelog body.
 - Treat the selected `--base` as a strict history boundary: it must be an

@@ -169,11 +169,13 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 Gateway extended-stable runs npm preflight, Full Release Validation, and plugin
 npm release from `extended-stable/YYYY.M.33`; core publish consumes those three
-run IDs plus the validation attempt. `release-ci/*` evidence is invalid because
-publish binds every run to the canonical branch and release SHA. The tag
-publishes Gateway images and only the `extended-stable*` aliases; the path skips
-the regular orchestrator and its ClawHub, native-app, GitHub Release, website,
-and private dist-tag surfaces. See [Monthly Gateway extended-stable
+run IDs plus the validation attempt. Complete evidence may come from the
+canonical branch, reachable current-main tooling, or the trusted main-pinned
+`release-ci/*` harness when its v3 manifest binds the exact target and attempt.
+The post-npm `OpenClaw Release Publish` closeout publishes Gateway images and
+only the `extended-stable*` aliases, then publishes the notes-only GitHub
+Release with `latest=false`; it skips ClawHub, native-app, website, and private
+dist-tag surfaces. See [Monthly Gateway extended-stable
 publication](/reference/RELEASING#monthly-gateway-extended-stable-publication)
 for commands and recovery.
 
@@ -312,6 +314,12 @@ and checksum contract before publishing the GitHub release draft.
 Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
 package list. Plugin-only `all-publishable` runs require the same immutable npm
 preflight and Full Release Validation evidence as a core publish.
+
+Extended-stable uses this workflow only after npm publication, with
+`publish_openclaw_npm=false` and `publish_docker_only=true`. That closeout
+rechecks immutable npm evidence, publishes Docker, and finalizes the notes-only
+non-Latest GitHub Release without entering plugin, ClawHub, or native-app
+publication.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \

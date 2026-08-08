@@ -14,8 +14,9 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
 - Resolve short suffixes like `.27` to the concrete CalVer version from the
   current date/context, then say the resolved version.
 - Resolve the track first. Regular beta/stable uses a GitHub Release and the
-  platform graph; extended-stable uses its canonical branch, npm selector, and
-  Gateway surfaces. Do not require one track's artifacts from the other.
+  platform graph; extended-stable uses a notes-only GitHub Release, its
+  canonical branch, npm selector, and Gateway surfaces. Do not require one
+  track's artifacts from the other.
 - Verify live state. Do not trust local checkout state, release notes, or old
   memory as current truth.
 - If the checkout is dirty or divergent, use it only for scripts/reference.
@@ -76,13 +77,15 @@ Use these checks only for the regular orchestrated release track.
 
 ## Extended-stable checks
 
-Extended-stable has no GitHub Release ledger. Verify live tag, workflow,
-registry, provenance, and image state directly.
+Extended-stable has a notes-only GitHub Release ledger. Verify it alongside
+the live tag, workflow, registry, provenance, and image state.
 
 1. **Identity:** require final `v<VERSION>` at patch `33+`, with no suffix,
    contained in `extended-stable/YYYY.M.33`. Only an active candidate must equal
    the tip. Root and every publishable official plugin must declare `<VERSION>`.
-   Require the Git tag and no GitHub Release.
+   Require the Git tag and a public, non-prerelease GitHub Release whose title
+   and canonical body match the tag. Require `isLatest=false` and no native or
+   platform assets.
 2. **Workflow chain:** find successful preflight, complete validation, plugin
    npm, and core publish runs on the canonical branch and SHA. Validation must
    use `rerun_group=all`, `release_profile=stable`, blocking soak/performance,
@@ -103,7 +106,8 @@ Promotion` for the exact tag, without rebuilding.
 6. **Recovery:** never republish. Use the generated command only for the root
    selector and approved credential-isolated tooling for others, then repeat
    complete readback. Do not require ClawHub, native/mobile apps, website,
-   private dist-tags, regular `latest`, or a GitHub Release.
+   private dist-tags, or regular `latest`. Require the notes-only GitHub
+   Release, but do not require regular-release assets or platform evidence.
 
 ## Shared live smoke
 

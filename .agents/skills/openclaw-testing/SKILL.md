@@ -310,11 +310,11 @@ node scripts/full-release-validation-at-sha.mjs \
   --target-ref release/YYYY.M.PATCH
 ```
 
-That helper is for regular releases. Extended-stable dispatches Full Release
-Validation directly from and against `extended-stable/YYYY.M.33` with
-`release_profile=stable`; its exact branch-tip evidence is fresh and cannot be
-replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
-classification and run-identity rules.
+Extended-stable may use the helper's trusted main-pinned `release-ci/*` harness
+or a direct run from `extended-stable/YYYY.M.33` with
+`release_profile=stable`. In either case, require a complete v3 manifest that
+binds the exact canonical branch tip, workflow SHA, and run attempt. Use
+`$release-openclaw-ci` for failure classification and identity rules.
 
 The helper pins the trusted workflow revision on current `main` while targeting
 the historical release SHA and recording the canonical release branch as
