@@ -134,6 +134,19 @@ function formatSetupOptionalDisplayText(value: string | undefined): string | und
   return safe || undefined;
 }
 
+function formatSetupDefinedDisplayText(
+  value: string | undefined,
+  fallback?: string,
+): string | undefined {
+  if (value === "") {
+    return "";
+  }
+  if (value?.trim() === "") {
+    return formatSetupOptionalDisplayText(fallback);
+  }
+  return formatSetupOptionalDisplayText(value) ?? formatSetupOptionalDisplayText(fallback);
+}
+
 function formatSetupDisplayList(values: readonly string[] | undefined): string[] | undefined {
   const safe = (values ?? []).flatMap((value) => {
     const sanitized = formatSetupOptionalDisplayText(value);
@@ -142,20 +155,29 @@ function formatSetupDisplayList(values: readonly string[] | undefined): string[]
   return safe.length > 0 ? safe : undefined;
 }
 
-function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
+function formatSetupDisplayMeta(
+  meta: ChannelMeta,
+  selectionDocsPrefixFallback?: string,
+): ChannelMeta {
+  const { selectionDocsPrefix, ...metaWithoutSelectionDocsPrefix } = meta;
   const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
   const safeLabel = formatSetupDisplayText(meta.label, safeId);
-  const safeSelectionDocsPrefix = formatSetupOptionalDisplayText(meta.selectionDocsPrefix);
+  const safeSelectionDocsPrefix = formatSetupDefinedDisplayText(
+    selectionDocsPrefix,
+    selectionDocsPrefixFallback,
+  );
   const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
   return {
-    ...meta,
+    ...metaWithoutSelectionDocsPrefix,
     id: safeId,
     label: safeLabel,
     selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
     docsPath: formatSetupDisplayText(meta.docsPath, "/"),
     ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
     blurb: formatSetupFreeText(meta.blurb),
-    ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
+    ...(safeSelectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: safeSelectionDocsPrefix }
+      : {}),
     ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
   };
 }
@@ -170,11 +192,13 @@ function formatChannelPrimerBlurb(channel: { id: string; blurb: string }): strin
 }
 
 function formatChannelSelectionMeta(meta: ChannelMeta): ChannelMeta {
-  return formatSetupDisplayMeta({
-    ...meta,
-    blurb: formatChannelPrimerBlurb(meta),
-    selectionDocsPrefix: meta.selectionDocsPrefix ?? t("common.docs"),
-  });
+  return formatSetupDisplayMeta(
+    {
+      ...meta,
+      blurb: formatChannelPrimerBlurb(meta),
+    },
+    t("common.docs"),
+  );
 }
 
 function localizeChannelStatusLabel(label: string): string {
