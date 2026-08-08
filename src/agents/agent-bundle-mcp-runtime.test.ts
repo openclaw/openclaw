@@ -1285,6 +1285,7 @@ describe("session MCP runtime", () => {
     });
 
     try {
+      expect((await runtime.getCatalog()).servers.capture?.transportType).toBe("stdio");
       const materialized = await materializeBundleMcpToolsForRun({ runtime });
       const result = await expectDefined(
         materialized.tools[0],
@@ -4947,7 +4948,9 @@ process.stdin.on("end", () => {
           },
         });
 
-        expect((await runtime.getCatalog()).tools).toHaveLength(1);
+        const catalog = await runtime.getCatalog();
+        expect(catalog.tools).toHaveLength(1);
+        expect(catalog.servers.stateless?.transportType).toBe("streamable-http");
         for (let attempt = 0; attempt < 3; attempt += 1) {
           await expect(runtime.callTool("stateless", "probe", {})).rejects.toThrow(
             "Session not found",
