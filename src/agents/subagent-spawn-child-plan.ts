@@ -4,7 +4,7 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
-import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { resolveAllowedModelRef, resolveDefaultModelForAgent } from "./model-selection.js";
 import { supportsModelTools } from "./model-tool-support.js";
 import { summarizeSpawnError } from "./spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "./spawn-plan.js";
@@ -217,10 +217,44 @@ export async function resolveSubagentChildPlan(params: {
       },
     };
   }
-  const { resolvedModel } = modelPlan;
+  let resolvedModel = modelPlan.resolvedModel;
+  let resolvedModelPlan = modelPlan;
+  const explicitModel = params.request.model?.trim();
+  // Reject caller-selected models before child state exists. Configured/automatic
+  // models keep the normal runtime selection and fallback path; runtime also
+  // revalidates explicit overrides so a config reload cannot bypass policy.
+  if (explicitModel) {
+    const targetDefaultModel = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.targetAgentId,
+    });
+    const allowedModel = resolveAllowedModelRef({
+      cfg: params.cfg,
+      catalog: [],
+      raw: explicitModel,
+      defaultProvider: targetDefaultModel.provider,
+      defaultModel: targetDefaultModel.model,
+      agentId: params.targetAgentId,
+    });
+    if ("error" in allowedModel) {
+      return {
+        ok: false,
+        result: { status: "error", error: allowedModel.error },
+      };
+    }
+    resolvedModel = `${allowedModel.ref.provider}/${allowedModel.ref.model}`;
+    resolvedModelPlan = {
+      ...modelPlan,
+      resolvedModel,
+      initialSessionPatch: {
+        ...modelPlan.initialSessionPatch,
+        model: resolvedModel,
+      },
+    };
+  }
   const resolvedLaunchModel = splitModelRef(resolvedModel);
   const launchAuthorization: SubagentLaunchAuthorization | undefined =
-    params.request.model?.trim() && resolvedLaunchModel.model
+    explicitModel && resolvedLaunchModel.model
       ? {
           modelOverride: {
             ...(resolvedLaunchModel.provider ? { provider: resolvedLaunchModel.provider } : {}),
@@ -255,7 +289,7 @@ export async function resolveSubagentChildPlan(params: {
       childSessionKey,
       childRuntimeSandboxed: childRuntime.sandboxed,
       targetAgentDir,
-      modelPlan,
+      modelPlan: resolvedModelPlan,
       launchAuthorization,
       resolvedModelMetadata: buildResolvedSubagentModelMetadata(resolvedModel),
     },
