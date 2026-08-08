@@ -31,7 +31,7 @@
     "install": {
       "npmSpec": "@openclaw/google-meet",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.20"
+      "minHostVersion": ">=2026.7.2"
     },
     "compat": {
       "pluginApi": ">=2026.8.1"

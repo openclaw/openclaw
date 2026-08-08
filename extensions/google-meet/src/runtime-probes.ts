@@ -1,4 +1,5 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type { MeetingBrowserHealthRefreshOutcome } from "openclaw/plugin-sdk/meeting-runtime-probes";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { normalizeMeetUrl } from "./meet-url.js";
 import type {
@@ -24,7 +25,10 @@ export type GoogleMeetRuntimeProbeContext = {
   ): boolean;
   hasHealthHandle(sessionId: string): boolean;
   refreshHealth(sessionId: string): void;
-  refreshCaptionHealth(session: GoogleMeetSession): Promise<void>;
+  refreshCaptionHealth(
+    session: GoogleMeetSession,
+    deadline?: number,
+  ): Promise<MeetingBrowserHealthRefreshOutcome | boolean | void>;
 };
 
 function resolveProbeTimeoutMs(input: number | undefined, fallback: number): number {
@@ -63,7 +67,8 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
     }
   },
   resolveSpeechTimeoutMs: (_request, config) => Math.min(config.chrome.joinTimeoutMs, 5_000),
-  refreshCaptionHealth: async (context, session) => await context.refreshCaptionHealth(session),
+  refreshCaptionHealth: async (context, session, deadline) =>
+    await context.refreshCaptionHealth(session, deadline),
   speechModeError:
     "test_speech requires mode: agent or bidi; use join mode: transcribe for observe-only sessions.",
   listeningModeError:

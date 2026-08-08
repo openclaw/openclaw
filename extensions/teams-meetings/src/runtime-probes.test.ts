@@ -170,6 +170,145 @@ describe("Microsoft Teams meeting runtime probes", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("waits for captions in a reused browser tab", async () => {
+    const session = {
+      agentId: "main",
+      chrome: {
+        browserTab: { openedByPlugin: false, targetId: "reused-teams-tab" },
+        health: { inCall: true },
+        launched: false,
+      },
+      id: "teams-listen-reused-tab",
+      mode: "transcribe",
+      transport: "chrome",
+    } as TeamsMeetingsSession;
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome!.health = {
+        ...session.chrome!.health,
+        lastCaptionText: "Caption from reused tab",
+        transcriptLines: 1,
+      };
+    });
+    const context = {
+      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
+      hasHealthHandle: () => true,
+      isReusable: () => false,
+      join: vi.fn(async () => ({ session, spoken: false })),
+      list: () => [],
+      refreshCaptionHealth,
+      refreshHealth: () => {},
+      resolveAgentId: () => "main",
+    } satisfies TeamsMeetingsProbeContext;
+
+    await expect(
+      testTeamsMeetingListening(context, {
+        mode: "transcribe",
+        timeoutMs: 100,
+        url: URL,
+      }),
+    ).resolves.toMatchObject({
+      listenTimedOut: false,
+      listenVerified: true,
+    });
+    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
+  });
+
+  it("stops retrying when a reused manual tab disappears during refresh", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const session = {
+      agentId: "main",
+      chrome: {
+        browserTab: { openedByPlugin: false, targetId: "reused-teams-tab" },
+        health: { inCall: true },
+        launched: false,
+      },
+      id: "teams-listen-missing-reused-tab",
+      mode: "transcribe",
+      transport: "chrome",
+    } as TeamsMeetingsSession;
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome!.browserTab = undefined;
+      session.chrome!.health = { inCall: false, status: "browser-tab-missing" };
+      return { browserHealthChecked: false, manualActionIsAuthoritative: false };
+    });
+    const context = {
+      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
+      hasHealthHandle: () => true,
+      isReusable: () => false,
+      join: vi.fn(async () => ({ session, spoken: false })),
+      list: () => [],
+      refreshCaptionHealth,
+      refreshHealth: () => {},
+      resolveAgentId: () => "main",
+    } satisfies TeamsMeetingsProbeContext;
+
+    await expect(
+      testTeamsMeetingListening(context, {
+        mode: "transcribe",
+        timeoutMs: 1_000,
+        url: URL,
+      }),
+    ).resolves.toMatchObject({
+      listenTimedOut: false,
+      listenVerified: false,
+      session: { chrome: { health: { status: "browser-tab-missing" } } },
+    });
+    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
+    expect(Date.now()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("refreshes a reused browser tab before returning a cached manual action", async () => {
+    const session = {
+      agentId: "main",
+      chrome: {
+        browserTab: { openedByPlugin: false, targetId: "reused-teams-tab-with-action" },
+        health: {
+          inCall: false,
+          manualAction: {
+            reason: "teams-admission-required",
+            message: "Admit the guest, then retry.",
+          },
+        },
+        launched: false,
+      },
+      id: "teams-listen-reused-tab-with-action",
+      mode: "transcribe",
+      transport: "chrome",
+    } as TeamsMeetingsSession;
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome!.health = {
+        inCall: true,
+        lastCaptionText: "Caption after admission",
+        transcriptLines: 1,
+      };
+    });
+    const context = {
+      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
+      hasHealthHandle: () => true,
+      isReusable: (candidate: TeamsMeetingsSession) => candidate.id === session.id,
+      join: vi.fn(async () => ({ browserHealthChecked: false, session, spoken: false })),
+      list: () => [session],
+      refreshCaptionHealth,
+      refreshHealth: () => {},
+      resolveAgentId: () => "main",
+    } satisfies TeamsMeetingsProbeContext;
+
+    await expect(
+      testTeamsMeetingListening(context, {
+        mode: "transcribe",
+        timeoutMs: 100,
+        url: URL,
+      }),
+    ).resolves.toMatchObject({
+      listenTimedOut: false,
+      listenVerified: true,
+      manualAction: undefined,
+    });
+    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
+  });
+
   it("does not accept caption progress that arrives after the listening deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -186,9 +325,9 @@ describe("Microsoft Teams meeting runtime probes", () => {
       isReusable: () => false,
       join: vi.fn(async () => ({ session, spoken: false })),
       list: () => [],
-      refreshCaptionHealth: async (_session: TeamsMeetingsSession, timeoutMs: number) => {
+      refreshCaptionHealth: async (_session: TeamsMeetingsSession, deadline: number) => {
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, timeoutMs + 50);
+          setTimeout(resolve, Math.max(0, deadline - Date.now()) + 50);
         });
         session.chrome!.health = {
           ...session.chrome!.health,

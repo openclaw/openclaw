@@ -30,6 +30,7 @@ function runtimeHarness(options?: RuntimeHarnessOptions) {
     meetingEndedOnce: false,
     sessionConflict: false,
     tabListFailures: 0,
+    tabListOutcomes: [] as Array<"success" | "failure" | "pending">,
     targetId: "zoom-tab",
     tabUrl: URL,
   };
@@ -38,6 +39,15 @@ function runtimeHarness(options?: RuntimeHarnessOptions) {
   const browserResult = (value: Record<string, unknown>) => ({ result: JSON.stringify(value) });
   const gatewayRequest = vi.fn(async (_method: string, params: Record<string, unknown>) => {
     if (params.path === "/tabs") {
+      const outcome = state.tabListOutcomes.shift();
+      if (outcome === "failure") {
+        throw new Error("browser node unavailable");
+      }
+      if (outcome === "pending") {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      }
       if (state.tabListFailures > 0) {
         state.tabListFailures -= 1;
         throw new Error("browser node unavailable");
@@ -286,6 +296,51 @@ describe("Zoom meeting session flow", () => {
     });
   });
 
+  it("returns an authoritative browser-control failure for a reused manual tab", async () => {
+    const harness = runtimeHarness({ tabOpen: true });
+    const runtime = new ZoomMeetingsRuntime({
+      config: resolveZoomMeetingsConfig({
+        defaultMode: "transcribe",
+        chrome: { launch: false, waitForInCallMs: 1 },
+      }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    await runtime.join({ url: URL, mode: "transcribe" });
+    harness.state.tabListOutcomes.push("success", "failure", "pending");
+
+    const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 20 });
+
+    expect(result).toMatchObject({
+      listenTimedOut: false,
+      listenVerified: false,
+      manualAction: {
+        reason: "browser-control-unavailable",
+        message: "Zoom browser readiness refresh failed: browser node unavailable",
+      },
+    });
+    expect(harness.state.tabListOutcomes).toEqual(["pending"]);
+  });
+
+  it("returns a launched-tab lifecycle failure without starting a probe refresh", async () => {
+    const { harness, runtime } = runtimeFixture();
+    await joinMeeting(runtime);
+    harness.state.tabListOutcomes.push("success", "failure", "pending");
+
+    const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 20 });
+
+    expect(result).toMatchObject({
+      listenTimedOut: false,
+      listenVerified: false,
+      manualAction: {
+        reason: "browser-control-unavailable",
+        message: "Zoom browser readiness refresh failed: browser node unavailable",
+      },
+    });
+    expect(harness.state.tabListOutcomes).toEqual(["pending"]);
+  });
+
   it("refreshes a recovered browser tab target", async () => {
     const { harness, runtime } = runtimeFixture();
     const joined = await joinMeeting(runtime);
@@ -335,7 +390,13 @@ describe("Zoom meeting session flow", () => {
   });
 
   it("ends the session when the tracked Zoom tab disappears", async () => {
-    const { harness, runtime } = runtimeFixture();
+    const { harness, runtime } = runtimeFixture({
+      harness: { tabOpen: true },
+      config: {
+        defaultMode: "transcribe",
+        chrome: { launch: false, waitForInCallMs: 1 },
+      },
+    });
     const joined = await joinMeeting(runtime);
     harness.state.tabOpen = false;
 
@@ -387,6 +448,24 @@ describe("Zoom meeting session flow", () => {
     if (scenario !== "verification-failure") {
       expect(browserRequests(harness, "/tabs/open")).toHaveLength(2);
     }
+  });
+
+  it("replaces a launch-disabled reusable session when tab verification fails", async () => {
+    const { harness, runtime } = runtimeFixture({
+      harness: { tabOpen: true },
+      config: {
+        defaultMode: "transcribe",
+        chrome: { launch: false, waitForInCallMs: 1 },
+      },
+    });
+    const first = await joinMeeting(runtime);
+    harness.state.tabListFailures = 1;
+
+    const replacement = await joinMeeting(runtime);
+
+    expect(first.session.state).toBe("ended");
+    expect(replacement.session.id).not.toBe(first.session.id);
+    expect(browserRequests(harness, "/tabs/open")).toHaveLength(0);
   });
 
   it("rejects and closes the tab when the initial browser status is host-ended", async () => {

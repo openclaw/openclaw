@@ -5,6 +5,7 @@ import type {
   TranscriptStartRequest,
   TranscriptStopRequest,
 } from "../transcripts/provider-types.js";
+import { isMeetingBrowserDeadlinePast } from "./browser-deadline.js";
 import { isMeetingRealtimeRouteReady } from "./meeting-modes.js";
 import type { MeetingPluginConfig } from "./plugin-config.js";
 import type {
@@ -22,13 +23,35 @@ import type {
 import type { MeetingProbeContext } from "./runtime-probes.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
+  getMeetingSessionRuntimeRecoveryFailure,
+  getMeetingSessionRuntimeProbeAccess,
+  recordNonAuthoritativeMeetingBrowserRecoveryFailure,
+  registerMeetingSessionRuntimeRecoveryFailure,
+  registerMeetingSessionRuntimeHealthRefresh,
+  type MeetingBrowserHealthRefreshOutcome,
+} from "./session-runtime-probes.js";
+import {
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "./session-runtime.js";
-import type { MeetingBrowserTab, MeetingPluginChromeHealth } from "./session-types.js";
+import type {
+  MeetingBrowserHealth,
+  MeetingBrowserTab,
+  MeetingPluginChromeHealth,
+} from "./session-types.js";
 
 const nowIso = () => new Date().toISOString();
+
+function clearNonAuthoritativeManualAction<Health extends MeetingBrowserHealth>(
+  health: Health | undefined,
+): Health | undefined {
+  if (!health || health.manualAction === undefined) {
+    return health;
+  }
+  const { manualAction: _manualAction, ...rest } = health;
+  return rest as Health;
+}
 
 export function createMeetingRuntimeFacade<
   Config extends MeetingPluginConfig & { defaultMode: Mode },
@@ -118,8 +141,9 @@ export function createMeetingRuntimeFacade<
         joinTransport: async ({ request, session, context }) =>
           await this.#joinTransport(request, session, context),
         releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
-        refreshBrowserHealth: async (session, refreshOptions) =>
-          await this.#refreshBrowserHealth(session, refreshOptions),
+        refreshBrowserHealth: async (session, refreshOptions) => {
+          await this.#refreshBrowserHealth(session, refreshOptions);
+        },
         refreshStatus: async (session) => await this.#refreshStatus(session),
         refreshReusableSession: async (session, request) =>
           await options.hooks?.refreshReusableSession?.(session, request, this.#hookContext()),
@@ -132,6 +156,16 @@ export function createMeetingRuntimeFacade<
           ...options.messages.durableTranscripts,
         },
       });
+      registerMeetingSessionRuntimeHealthRefresh(
+        this.#sessions,
+        async (session, refreshOptions) =>
+          await this.#refreshBrowserHealth(session as Session, refreshOptions),
+      );
+      if (options.hooks?.recordBrowserRecoveryFailure) {
+        registerMeetingSessionRuntimeRecoveryFailure(this.#sessions, (session: Session, failure) =>
+          options.hooks?.recordBrowserRecoveryFailure?.(session, failure),
+        );
+      }
     }
 
     list(): Session[] {
@@ -151,8 +185,18 @@ export function createMeetingRuntimeFacade<
     }
 
     async join(request: Request) {
+      return await this.#joinSession(
+        request,
+        async (normalized) => await this.#sessions.join(normalized),
+      );
+    }
+
+    async #joinSession<Result>(
+      request: Request,
+      join: (normalized: Request) => Promise<Result>,
+    ): Promise<Result> {
       try {
-        return await this.#sessions.join(
+        return await join(
           options.hooks?.normalizeJoinRequest?.(request, this.#hookContext()) ?? request,
         );
       } catch (error) {
@@ -239,12 +283,21 @@ export function createMeetingRuntimeFacade<
         config: this.params.config,
         resolveAgentId: (request) => normalizeAgentId(request.agentId ?? this.#defaultAgentId),
         list: () => this.list(),
-        join: async (request) => await this.join(request),
+        join: async (request) =>
+          await this.#joinSession(
+            request,
+            async (normalized) =>
+              await getMeetingSessionRuntimeProbeAccess<Session, Request>(
+                this.#sessions,
+              ).joinForProbe(normalized),
+          ),
         isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
         hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
         refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
-        refreshCaptionHealth: async (session, timeoutMs) =>
-          await this.#refreshBrowserHealth(session, { timeoutMs }),
+        refreshCaptionHealth: async (session, deadline) =>
+          await getMeetingSessionRuntimeProbeAccess<Session, Request>(
+            this.#sessions,
+          ).refreshCaptionHealthForProbe(session, deadline),
       };
     }
 
@@ -382,8 +435,13 @@ export function createMeetingRuntimeFacade<
 
     async #refreshBrowserHealth(
       session: Session,
-      refreshOptions: { readOnly?: boolean; timeoutMs?: number } = {},
-    ): Promise<void> {
+      refreshOptions: {
+        force?: boolean;
+        readOnly?: boolean;
+        timeoutMs?: number;
+        deadline?: number;
+      } = {},
+    ): Promise<MeetingBrowserHealthRefreshOutcome> {
       try {
         const result = await options.transport.recoverCurrentTab({
           runtime: this.params.runtime,
@@ -397,9 +455,14 @@ export function createMeetingRuntimeFacade<
           trackedTargetId: session.chrome?.browserTab?.targetId,
           transport: session.transport,
           timeoutMs: refreshOptions.timeoutMs,
+          deadline: refreshOptions.deadline,
           url: session.url,
         });
+        if (session.state !== "active" || isMeetingBrowserDeadlinePast(refreshOptions.deadline)) {
+          return { browserHealthChecked: false, manualActionIsAuthoritative: false };
+        }
         if (result.found && session.chrome) {
+          session.browserLeft = undefined;
           if (result.tab?.targetId) {
             const currentTab = session.chrome.browserTab;
             session.chrome.browserTab = {
@@ -408,34 +471,73 @@ export function createMeetingRuntimeFacade<
                 result.tab.targetId === currentTab?.targetId ? currentTab.openedByPlugin : false,
             };
           }
-          if (result.browser) {
-            session.chrome.health = { ...session.chrome.health, ...result.browser };
+          if (!result.browser) {
+            const failure = { kind: "error" as const, message: result.message };
+            const manualActionIsAuthoritative =
+              getMeetingSessionRuntimeRecoveryFailure<Session>(this.#sessions)?.(
+                session,
+                failure,
+              ) === "authoritative";
+            if (!manualActionIsAuthoritative && refreshOptions.force) {
+              recordNonAuthoritativeMeetingBrowserRecoveryFailure(session, failure);
+            }
+            return { browserHealthChecked: false, manualActionIsAuthoritative };
+          }
+          const refreshedHealth = { ...session.chrome.health, ...result.browser };
+          if (!Object.hasOwn(result.browser, "manualAction")) {
+            session.chrome.health = clearNonAuthoritativeManualAction(refreshedHealth);
+          } else {
+            session.chrome.health = refreshedHealth;
           }
           session.updatedAt = nowIso();
+          return { browserHealthChecked: true, manualActionIsAuthoritative: true };
         } else if (session.chrome) {
-          options.hooks?.recordBrowserRecoveryFailure?.(session, {
-            kind: "missing",
-            message: result.message,
-          });
+          const failure = { kind: "missing" as const, message: result.message };
+          const manualActionIsAuthoritative =
+            getMeetingSessionRuntimeRecoveryFailure<Session>(this.#sessions)?.(session, failure) ===
+            "authoritative";
+          if (!manualActionIsAuthoritative && refreshOptions.force) {
+            recordNonAuthoritativeMeetingBrowserRecoveryFailure(session, failure);
+          }
+          return { browserHealthChecked: false, manualActionIsAuthoritative };
         }
+        return { browserHealthChecked: false, manualActionIsAuthoritative: false };
       } catch (error) {
+        if (session.state !== "active" || isMeetingBrowserDeadlinePast(refreshOptions.deadline)) {
+          return { browserHealthChecked: false, manualActionIsAuthoritative: false };
+        }
         const formattedError = formatErrorMessage(error);
         const message = options.messages.browserReadinessFailed?.(formattedError) ?? formattedError;
-        if (options.hooks?.recordBrowserRecoveryFailure) {
+        let manualActionIsAuthoritative = false;
+        const recordBrowserRecoveryFailure = getMeetingSessionRuntimeRecoveryFailure<Session>(
+          this.#sessions,
+        );
+        if (recordBrowserRecoveryFailure) {
           this.params.logger.debug?.(`${options.platform.logScope} ${message}`);
-          options.hooks.recordBrowserRecoveryFailure(session, { kind: "error", message });
+          manualActionIsAuthoritative =
+            recordBrowserRecoveryFailure(session, { kind: "error", message }) === "authoritative";
         } else {
           this.params.logger.debug?.(
             `${options.platform.logScope} browser readiness refresh ignored: ${formatErrorMessage(error)}`,
           );
         }
+        if (!manualActionIsAuthoritative && refreshOptions.force && session.chrome) {
+          recordNonAuthoritativeMeetingBrowserRecoveryFailure(session, {
+            kind: "error",
+            message,
+          });
+        }
+        return { browserHealthChecked: false, manualActionIsAuthoritative };
       }
     }
 
     async #captureTranscript(session: Session, captureOptions: { finalize?: boolean } = {}) {
-      // Recovery permits caption setup but atomically refuses a different live
-      // session owner, so stale sessions read their archived page buffer instead.
-      await this.#sessions.refreshCaptionHealth(session);
+      // Live capture may recover caption setup, but terminal capture must only drain the
+      // tracked page buffer. Starting recovery while leave owns finalization can wait behind
+      // an in-flight status refresh and block browser cleanup from reaching its terminal fence.
+      if (!captureOptions.finalize) {
+        await this.#sessions.refreshCaptionHealth(session);
+      }
       const tab = session.chrome?.browserTab;
       if (!tab) {
         return undefined;

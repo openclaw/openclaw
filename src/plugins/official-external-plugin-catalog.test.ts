@@ -285,6 +285,14 @@ describe("official external plugin catalog", () => {
     expect(getOfficialExternalPluginCatalogEntry("fish-audio")).toBeUndefined();
   });
 
+  it("keeps the Google Meet install floor aligned with its current package contract", () => {
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("google-meet"))).toEqual({
+      npmSpec: "@openclaw/google-meet",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+  });
+
   it("curates featured external plugins with ClawHub install alternatives", () => {
     const featured = [
       ["diffs", "@openclaw/diffs", 40],

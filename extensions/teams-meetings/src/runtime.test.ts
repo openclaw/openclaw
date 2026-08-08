@@ -17,11 +17,25 @@ const logger = {
 
 function runtimeHarness(options?: { tabOpen?: boolean }) {
   let tabOpen = options?.tabOpen ?? false;
+  let tabListFailures = 0;
+  let reopenAfterMissingTabLists = 0;
   let sessionConflict = false;
   let targetId = "teams-tab";
   let tabUrl = URL;
+  let captionText: string | undefined;
   const gatewayRequest = vi.fn(async (_method: string, params: Record<string, unknown>) => {
     if (params.path === "/tabs") {
+      if (tabListFailures > 0) {
+        tabListFailures -= 1;
+        throw new Error("browser node unavailable");
+      }
+      if (!tabOpen && reopenAfterMissingTabLists > 0) {
+        reopenAfterMissingTabLists -= 1;
+        if (reopenAfterMissingTabLists === 0) {
+          tabOpen = true;
+        }
+        return { tabs: [] };
+      }
       return {
         tabs: tabOpen ? [{ targetId, title: "Teams call", url: tabUrl }] : [],
       };
@@ -57,6 +71,7 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
           inCall: true,
           micMuted: true,
           cameraOff: true,
+          ...(captionText ? { lastCaptionText: captionText, transcriptLines: 1 } : {}),
           ...(sessionConflict && fn.includes("const allowSessionAdoption = false")
             ? {
                 manualAction: {
@@ -88,6 +103,21 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
   return {
     runtime,
     gatewayRequest,
+    closeTab() {
+      tabOpen = false;
+    },
+    openTab() {
+      tabOpen = true;
+    },
+    failNextTabLists(count = 1) {
+      tabListFailures = count;
+    },
+    reopenTabAfterMissingLists(count: number) {
+      reopenAfterMissingTabLists = count;
+    },
+    setCaptionText(value: string) {
+      captionText = value;
+    },
     setSessionConflict(value: boolean) {
       sessionConflict = value;
     },
@@ -305,5 +335,360 @@ describe("Microsoft Teams meeting session flow", () => {
       }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );
+  });
+
+  it("clears stale manual actions from ordinary status after a missing recovery", async () => {
+    const harness = runtimeHarness({ tabOpen: true });
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({
+        defaultMode: "transcribe",
+        chrome: { launch: false },
+      }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    joined.session.chrome!.health = {
+      inCall: true,
+      captioning: true,
+      manualAction: {
+        reason: "teams-admission-required",
+        message: "This cached action must be rechecked after a missing recovery.",
+      },
+    };
+    joined.session.updatedAt = "2020-01-01T00:00:00.000Z";
+    harness.closeTab();
+
+    const status = await runtime.status(joined.session.id);
+
+    expect(status.session).toMatchObject({
+      browserLeft: true,
+      updatedAt: expect.not.stringMatching(/^2020-/),
+      chrome: {
+        health: {
+          inCall: false,
+          captioning: false,
+          status: "browser-tab-missing",
+        },
+      },
+    });
+    expect(status.session?.chrome?.browserTab).toBeUndefined();
+    expect(status.session?.chrome?.health?.manualAction).toBeUndefined();
+    expect(status.session?.chrome?.health?.notes).toEqual(
+      expect.arrayContaining([expect.stringContaining("No existing Teams meeting tab matched")]),
+    );
+    expect(status.session?.notes).toEqual(
+      expect.arrayContaining([expect.stringContaining("No existing Teams meeting tab matched")]),
+    );
+
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      found: true,
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      found: true,
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+  });
+
+  it.each([
+    { initialTabOpen: true, scenario: "after the tracked tab disappears" },
+    { initialTabOpen: false, scenario: "after initial discovery finds no tab" },
+  ])("replaces a targetless manual session $scenario", async ({ initialTabOpen }) => {
+    const harness = runtimeHarness({ tabOpen: initialTabOpen });
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({
+        defaultMode: "transcribe",
+        chrome: { launch: false },
+      }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = initialTabOpen
+      ? await runtime.join({ url: URL, mode: "transcribe" })
+      : undefined;
+    harness.closeTab();
+
+    const missing = await runtime.testListen({
+      url: URL,
+      mode: "transcribe",
+      timeoutMs: 1_000,
+    });
+    const first = joined?.session ?? missing.session;
+    expect(missing).toMatchObject({
+      createdSession: !initialTabOpen,
+      listenTimedOut: false,
+      listenVerified: false,
+      session: { chrome: { browserTab: undefined, launched: false }, state: "active" },
+    });
+    if (initialTabOpen) {
+      expect(missing.session.chrome?.health?.status).toBe("browser-tab-missing");
+    }
+
+    harness.setTargetId("teams-tab-reopened");
+    harness.setCaptionText("Caption from the reopened manual tab");
+    harness.openTab();
+    const retried = await runtime.testListen({
+      url: URL,
+      mode: "transcribe",
+      timeoutMs: 1_000,
+    });
+
+    expect(retried).toMatchObject({
+      createdSession: true,
+      listenTimedOut: false,
+      listenVerified: true,
+      lastCaptionText: "Caption from the reopened manual tab",
+      transcriptLines: 1,
+      session: {
+        chrome: { browserTab: { targetId: "teams-tab-reopened" }, launched: false },
+      },
+    });
+    expect(retried.session.id).not.toBe(first.id);
+    expect(first).toMatchObject({ state: "ended" });
+    expect(harness.gatewayRequest).not.toHaveBeenCalledWith(
+      "browser.request",
+      expect.objectContaining({ path: "/tabs/open" }),
+      expect.anything(),
+    );
+  });
+
+  it("waits for an in-flight recovery before terminal cleanup", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    let releaseTabList!: () => void;
+    let markTabListStarted!: () => void;
+    const tabListStarted = new Promise<void>((resolve) => {
+      markTabListStarted = resolve;
+    });
+    const tabListReleased = new Promise<void>((resolve) => {
+      releaseTabList = resolve;
+    });
+    harness.gatewayRequest.mockImplementationOnce(async (_method, params) => {
+      expect(params.path).toBe("/tabs");
+      markTabListStarted();
+      await tabListReleased;
+      return { tabs: [{ targetId: "late-teams-tab", title: "Teams call", url: URL }] };
+    });
+
+    const refreshing = runtime.status(joined.session.id);
+    await tabListStarted;
+    const leaving = runtime.leave(joined.session.id);
+    expect(joined.session.state).toBe("active");
+    releaseTabList();
+    const [, leaveResult] = await Promise.all([refreshing, leaving]);
+    expect(leaveResult).toMatchObject({
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+
+    expect(joined.session.chrome?.browserTab).toBeUndefined();
+    const requestCount = harness.gatewayRequest.mock.calls.length;
+    await runtime.status(joined.session.id);
+    expect(harness.gatewayRequest).toHaveBeenCalledTimes(requestCount);
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+  });
+
+  it("serializes a listening probe refresh behind an in-flight status refresh", async () => {
+    const harness = runtimeHarness({ tabOpen: true });
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({
+        defaultMode: "transcribe",
+        chrome: { launch: false, waitForInCallMs: 1 },
+      }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    harness.setCaptionText("Caption recovered after the older status refresh");
+    harness.gatewayRequest.mockClear();
+    const defaultGatewayRequest = harness.gatewayRequest.getMockImplementation();
+    if (!defaultGatewayRequest) {
+      throw new Error("expected browser gateway request implementation");
+    }
+    let releaseStatusTabList!: () => void;
+    let markStatusTabListStarted!: () => void;
+    const statusTabListStarted = new Promise<void>((resolve) => {
+      markStatusTabListStarted = resolve;
+    });
+    const statusTabListReleased = new Promise<void>((resolve) => {
+      releaseStatusTabList = resolve;
+    });
+    let tabListCalls = 0;
+    harness.gatewayRequest.mockImplementation(async (method, params) => {
+      if (params.path === "/tabs") {
+        tabListCalls += 1;
+        if (tabListCalls === 1) {
+          markStatusTabListStarted();
+          await statusTabListReleased;
+          return { tabs: [{ targetId: "stale-teams-tab", title: "Teams call", url: URL }] };
+        }
+      }
+      if (
+        params.path === "/act" &&
+        (params.body as { targetId?: unknown } | undefined)?.targetId === "stale-teams-tab"
+      ) {
+        return {
+          result: JSON.stringify({
+            inCall: true,
+            micMuted: true,
+            cameraOff: true,
+            url: URL,
+            title: "Teams call",
+          }),
+        };
+      }
+      return await defaultGatewayRequest(method, params);
+    });
+
+    const listening = runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 1_000 });
+    const status = runtime.status(joined.session.id);
+    await statusTabListStarted;
+    for (let index = 0; index < 5; index += 1) {
+      await Promise.resolve();
+    }
+
+    expect(tabListCalls).toBe(1);
+    releaseStatusTabList();
+    const [listenResult] = await Promise.all([listening, status]);
+
+    expect(listenResult).toMatchObject({
+      listenTimedOut: false,
+      listenVerified: true,
+      lastCaptionText: "Caption recovered after the older status refresh",
+      transcriptLines: 1,
+    });
+    expect(joined.session).toMatchObject({
+      browserLeft: undefined,
+      chrome: { browserTab: { targetId: "teams-tab" } },
+    });
+  });
+
+  it("clears stale manual actions from ordinary status after a thrown recovery", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    joined.session.chrome!.health = {
+      inCall: true,
+      captioning: true,
+      manualAction: {
+        reason: "teams-admission-required",
+        message: "This cached action must be rechecked after a thrown recovery.",
+      },
+    };
+    joined.session.updatedAt = "2020-01-01T00:00:00.000Z";
+    harness.failNextTabLists();
+
+    const status = await runtime.status(joined.session.id);
+
+    expect(status.session).toMatchObject({
+      updatedAt: expect.not.stringMatching(/^2020-/),
+      chrome: {
+        browserTab: { targetId: "teams-tab" },
+        health: {
+          inCall: true,
+          captioning: true,
+          status: "browser-control",
+        },
+      },
+    });
+    expect(status.session?.chrome?.health?.manualAction).toBeUndefined();
+    expect(status.session?.chrome?.health?.notes).toContain("browser node unavailable");
+    expect(status.session?.notes).toContain("browser node unavailable");
+  });
+
+  it("keeps retrying stale listening health until a missing tab recovers", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    const staleAction = {
+      reason: "teams-admission-required" as const,
+      message: "This cached action must be rechecked.",
+    };
+    joined.session.chrome!.health = { manualAction: staleAction };
+    harness.closeTab();
+    harness.reopenTabAfterMissingLists(2);
+    harness.setCaptionText("Recovered caption after transient tab loss");
+    harness.gatewayRequest.mockClear();
+
+    const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 1_000 });
+
+    const tabListCalls = harness.gatewayRequest.mock.calls.filter(
+      ([, params]) => params.path === "/tabs",
+    );
+    expect(tabListCalls).toHaveLength(3);
+    expect(result).toMatchObject({
+      listenTimedOut: false,
+      listenVerified: true,
+      manualAction: undefined,
+      lastCaptionText: "Recovered caption after transient tab loss",
+      transcriptLines: 1,
+    });
+    expect(result.session?.chrome?.health?.manualAction).toBeUndefined();
+    expect(result.session?.browserLeft).toBeUndefined();
+
+    harness.gatewayRequest.mockClear();
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+    expect(
+      harness.gatewayRequest.mock.calls.some(([, params]) => {
+        const fn = (params.body as { fn?: unknown } | undefined)?.fn;
+        return params.path === "/act" && typeof fn === "string" && fn.includes("leaveAction");
+      }),
+    ).toBe(true);
+  });
+
+  it("retries stale listening health after a thrown browser recovery", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    joined.session.chrome!.health = {
+      manualAction: {
+        reason: "teams-admission-required",
+        message: "This cached action must be rechecked after browser recovery resumes.",
+      },
+    };
+    harness.failNextTabLists();
+    harness.gatewayRequest.mockClear();
+
+    const result = await runtime.testListen({ url: URL, mode: "transcribe", timeoutMs: 10 });
+
+    const tabListCalls = harness.gatewayRequest.mock.calls.filter(
+      ([, params]) => params.path === "/tabs",
+    );
+    expect(tabListCalls.length).toBeGreaterThanOrEqual(2);
+    expect(result.manualAction).toBeUndefined();
+    expect(result.session?.chrome?.health?.manualAction).toBeUndefined();
   });
 });

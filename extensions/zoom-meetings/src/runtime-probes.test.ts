@@ -198,9 +198,9 @@ describe("Zoom meeting runtime probes", () => {
       isReusable: () => false,
       join: vi.fn(async () => ({ session, spoken: false })),
       list: () => [],
-      refreshCaptionHealth: async (_session: ZoomMeetingsSession, timeoutMs: number) => {
+      refreshCaptionHealth: async (_session: ZoomMeetingsSession, deadline: number) => {
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, timeoutMs + 50);
+          setTimeout(resolve, Math.max(0, deadline - Date.now()) + 50);
         });
         session.chrome!.health = {
           ...session.chrome!.health,

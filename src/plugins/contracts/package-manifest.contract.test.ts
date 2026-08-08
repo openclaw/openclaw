@@ -27,7 +27,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "google" },
-  { pluginId: "google-meet" },
+  { pluginId: "google-meet", minHostVersionBaseline: "2026.7.2" },
   {
     pluginId: "googlechat",
     pluginLocalRuntimeDeps: ["google-auth-library"],

@@ -1,5 +1,9 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import {
+  MEETING_BROWSER_RECOVERY_TIMEOUT_MESSAGE,
+  waitForMeetingBrowserDeadline,
+} from "./browser-deadline.js";
 import type {
   MeetingBrowserRequestCaller,
   MeetingBrowserRequestParams,
@@ -62,10 +66,17 @@ async function listMeetingNodes(
   runtime: PluginRuntime,
   adapter: NodeAdapter,
   params?: { connected?: boolean },
+  deadline?: number,
 ): Promise<{ nodes: MeetingBrowserNodeInfo[] }> {
   try {
-    return params ? await runtime.nodes.list(params) : await runtime.nodes.list();
+    return await waitForMeetingBrowserDeadline(
+      () => (params ? runtime.nodes.list(params) : runtime.nodes.list()),
+      deadline,
+    );
   } catch (error) {
+    if (error instanceof Error && error.message === MEETING_BROWSER_RECOVERY_TIMEOUT_MESSAGE) {
+      throw error;
+    }
     throw new Error(`${adapter.displayName} node inventory unavailable`, { cause: error });
   }
 }
@@ -74,10 +85,11 @@ export async function resolveMeetingBrowserNodeInfo(params: {
   runtime: PluginRuntime;
   adapter: NodeAdapter;
   requestedNode?: string;
+  deadline?: number;
 }): Promise<MeetingBrowserNodeInfo> {
   const requested = params.requestedNode?.trim();
   if (requested) {
-    const list = await listMeetingNodes(params.runtime, params.adapter);
+    const list = await listMeetingNodes(params.runtime, params.adapter, undefined, params.deadline);
     const matches = list.nodes.filter((node) => matchesRequestedNode(node, requested));
     if (matches.length > 1) {
       throw new Error(
@@ -98,7 +110,12 @@ export async function resolveMeetingBrowserNodeInfo(params: {
     );
   }
 
-  const list = await listMeetingNodes(params.runtime, params.adapter, { connected: true });
+  const list = await listMeetingNodes(
+    params.runtime,
+    params.adapter,
+    { connected: true },
+    params.deadline,
+  );
   const nodes = list.nodes.filter((node) => isMeetingBrowserNode(node, params.adapter));
   const [node] = nodes;
   if (!node) {
@@ -118,6 +135,7 @@ export async function resolveMeetingBrowserNode(params: {
   runtime: PluginRuntime;
   adapter: NodeAdapter;
   requestedNode?: string;
+  deadline?: number;
 }): Promise<string> {
   const node = await resolveMeetingBrowserNodeInfo(params);
   if (!node.nodeId) {

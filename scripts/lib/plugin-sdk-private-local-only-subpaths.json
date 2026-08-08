@@ -74,6 +74,7 @@
   "memory-host-events",
   "memory-host-markdown",
   "memory-host-search",
+  "meeting-runtime-probes",
   "message-tool-delivery-hints",
   "migration",
   "migration-runtime",

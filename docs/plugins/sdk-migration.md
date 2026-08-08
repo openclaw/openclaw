@@ -915,6 +915,31 @@ normalize platform-specific live health after confirmed browser departure;
 historical transcript fields may remain, but caption and audio readiness must
 not stay active after leave.
 
+### Meeting browser-health freshness
+
+`openclaw/plugin-sdk/meeting-runtime` keeps browser-health freshness at the
+shared session-runtime boundary. Bundled listening probes reach the
+lifecycle-only metadata through the private-local
+`openclaw/plugin-sdk/meeting-runtime-probes` seam; the public
+`MeetingSessionRuntime.join(...)` and `refreshCaptionHealth(...)` contracts stay
+unchanged. The private probe results include two independent flags:
+
+- `browserHealthChecked` is true only when the current browser health was
+  inspected and applied to the canonical session.
+- `manualActionIsAuthoritative` is true only when the resulting
+  `health.manualAction` is fresh enough to return immediately to an operator.
+
+An explicit `false` is preserved and is never inferred to be true merely because
+browser inspection succeeded. At the lifecycle boundary, a bare `true` means
+browser health was checked and the resulting action is authoritative; bare
+`false` and legacy `void` results mean neither. The probe compatibility layer
+may infer successful completion for older direct probe callbacks that return
+`void` after refreshing, but that fallback does not promote a cached manual
+action when the lifecycle owner reported an explicit failure. Failed, missing,
+or thrown browser recovery clears non-authoritative cached manual actions and
+records the failed verification on the canonical session, so serialized session
+state cannot disagree with the probe result.
+
 All bundled surfaces run on the shared controller: browser relay,
 managed-room handoff, voice-call realtime, voice-call streaming STT, Google
 Meet realtime, and native push-to-talk. Gateway advertises one live Talk event

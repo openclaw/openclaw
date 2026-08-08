@@ -16,6 +16,7 @@ import {
   startMeetingRealtimeEngine,
   type MeetingRealtimeAudioTransport,
 } from "openclaw/plugin-sdk/meeting-runtime";
+import * as meetingRuntimeProbes from "openclaw/plugin-sdk/meeting-runtime-probes";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type {
   RealtimeVoiceBridge,
@@ -5394,7 +5395,12 @@ describe("google-meet plugin", () => {
       },
     });
     vi.spyOn(runtime, "list").mockReturnValue([oldSession]);
-    vi.spyOn(runtime, "join").mockResolvedValue({ session: newSession, spoken: false });
+    vi.spyOn(meetingRuntimeProbes, "joinMeetingSessionForProbe").mockResolvedValue({
+      browserHealthChecked: true,
+      manualActionIsAuthoritative: true,
+      session: newSession,
+      spoken: false,
+    });
 
     const result = await runtime.testListen({
       url: MEET_URL,
@@ -5416,9 +5422,14 @@ describe("google-meet plugin", () => {
       },
     });
     vi.spyOn(runtime, "list").mockReturnValue([session]);
-    vi.spyOn(runtime, "join").mockImplementation(async () => {
+    vi.spyOn(meetingRuntimeProbes, "joinMeetingSessionForProbe").mockImplementation(async () => {
       session.chrome!.health = { transcriptLines: 2, lastCaptionText: "fresh caption" };
-      return { session, spoken: false };
+      return {
+        browserHealthChecked: true,
+        manualActionIsAuthoritative: true,
+        session,
+        spoken: false,
+      };
     });
 
     const result = await runtime.testListen({
@@ -5427,6 +5438,51 @@ describe("google-meet plugin", () => {
 
     expect(result.listenVerified).toBe(true);
     expect(result.listenTimedOut).toBe(false);
+  });
+
+  it("uses the lifecycle-owned browser health result for reused listening sessions", async () => {
+    const runtime = meetRuntime({}, noopLogger);
+    const session = meetSession({
+      mode: "transcribe",
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: {
+          manualAction: {
+            reason: "meet-admission-required",
+            message: "This cached action must be rechecked.",
+          },
+        },
+      },
+    });
+    vi.spyOn(runtime, "list").mockReturnValue([session]);
+    const publicJoin = vi.spyOn(runtime, "join").mockResolvedValue({ session, spoken: false });
+    const joinForProbe = vi
+      .spyOn(meetingRuntimeProbes, "joinMeetingSessionForProbe")
+      .mockResolvedValue({
+        browserHealthChecked: false,
+        manualActionIsAuthoritative: false,
+        session,
+        spoken: false,
+      });
+    const refreshForProbe = vi
+      .spyOn(meetingRuntimeProbes, "refreshMeetingCaptionHealthForProbe")
+      .mockResolvedValue({ browserHealthChecked: false, manualActionIsAuthoritative: false });
+
+    try {
+      const startedAt = Date.now();
+      await runtime.testListen({ url: MEET_URL, mode: "transcribe", timeoutMs: 1 });
+
+      expect(joinForProbe).toHaveBeenCalled();
+      expect(publicJoin).not.toHaveBeenCalled();
+      const forwardedDeadline = refreshForProbe.mock.calls[0]?.[2];
+      expect(forwardedDeadline).toBeGreaterThanOrEqual(startedAt);
+      expect(forwardedDeadline).toBeLessThanOrEqual(Date.now() + 1);
+    } finally {
+      refreshForProbe.mockRestore();
+      joinForProbe.mockRestore();
+      publicJoin.mockRestore();
+    }
   });
 
   it("preserves plugin ownership from browser create through join and leave", async () => {
@@ -5958,6 +6014,294 @@ describe("google-meet plugin", () => {
       expect(leaveChromeMeet).toHaveBeenCalledOnce();
     } finally {
       leaveChromeMeet.mockRestore();
+      launchChromeMeet.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      label: "a successful health refresh without manual action",
+      recovery: {
+        transport: "chrome" as const,
+        found: true,
+        targetId: "meet-tab",
+        message: "Meet tab refreshed.",
+        browser: { inCall: true },
+      },
+      preserveManualAction: false,
+      expectedStatus: undefined,
+      expectedTargetId: "meet-tab",
+      expectedInCall: true,
+      expectedCaptioning: true,
+      expectedNote: undefined,
+    },
+    {
+      label: "a missing tab result",
+      recovery: {
+        transport: "chrome" as const,
+        found: false,
+        message: "Meet tab is missing.",
+      },
+      preserveManualAction: false,
+      expectedStatus: "browser-tab-missing",
+      expectedTargetId: undefined,
+      expectedInCall: false,
+      expectedCaptioning: false,
+      expectedNote: "Meet tab is missing.",
+    },
+    {
+      label: "a found tab without browser health",
+      recovery: {
+        transport: "chrome" as const,
+        found: true,
+        targetId: "meet-tab",
+        message: "Meet tab health was unavailable.",
+      },
+      preserveManualAction: false,
+      expectedStatus: "browser-control",
+      expectedTargetId: "meet-tab",
+      expectedInCall: true,
+      expectedCaptioning: true,
+      expectedNote: "Meet tab health was unavailable.",
+    },
+    {
+      label: "a thrown recovery error",
+      recovery: new Error("browser recovery failed"),
+      preserveManualAction: false,
+      expectedStatus: "browser-control",
+      expectedTargetId: "meet-tab",
+      expectedInCall: true,
+      expectedCaptioning: true,
+      expectedNote: "Google Meet browser readiness refresh failed: browser recovery failed",
+    },
+  ])(
+    "handles stale manual actions after $label",
+    async ({
+      recovery,
+      preserveManualAction,
+      expectedStatus,
+      expectedTargetId,
+      expectedInCall,
+      expectedCaptioning,
+      expectedNote,
+    }) => {
+      const staleManualAction = {
+        reason: "meet-admission-required" as const,
+        message: "Admit the OpenClaw browser participant in Google Meet.",
+      };
+      const { launch: launchChromeMeet } = mockChromeMeetLifecycle({
+        launches: [
+          {
+            launched: false,
+            tab: { targetId: "meet-tab", openedByPlugin: false },
+            browser: { inCall: true, captioning: true, manualAction: staleManualAction },
+          },
+        ],
+      });
+      const recoverCurrentMeetTab = vi
+        .spyOn(chromeTransport, "recoverCurrentMeetTab")
+        .mockImplementation(async () => {
+          if (recovery instanceof Error) {
+            throw recovery;
+          }
+          return recovery;
+        });
+      try {
+        const runtime = createChromeLifecycleRuntime({
+          defaultMode: "transcribe",
+          chrome: { launch: false },
+        });
+        const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
+        expect(joined.session.chrome?.health?.manualAction).toEqual(staleManualAction);
+        joined.session.updatedAt = "2020-01-01T00:00:00.000Z";
+
+        const status = await runtime.status(joined.session.id);
+
+        expect(status.session?.chrome?.health?.manualAction).toEqual(
+          preserveManualAction ? staleManualAction : undefined,
+        );
+        expect(status.session?.chrome?.browserTab?.targetId).toBe(expectedTargetId);
+        expect(status.session?.chrome?.health).toMatchObject({
+          inCall: expectedInCall,
+          captioning: expectedCaptioning,
+          ...(expectedStatus ? { status: expectedStatus } : {}),
+        });
+        if (expectedNote) {
+          expect(status.session?.chrome?.health?.notes).toContain(expectedNote);
+          expect(status.session?.notes).toContain(expectedNote);
+          expect(status.session?.updatedAt).not.toMatch(/^2020-/);
+        }
+      } finally {
+        recoverCurrentMeetTab.mockRestore();
+        launchChromeMeet.mockRestore();
+      }
+    },
+  );
+
+  it("treats a confirmed missing browser tab as settled during leave", async () => {
+    const { launch: launchChromeMeet, leave: leaveChromeMeet } = mockChromeMeetLifecycle({
+      launches: [
+        {
+          launched: false,
+          tab: { targetId: "meet-tab", openedByPlugin: false },
+          browser: { inCall: true, captioning: true },
+        },
+      ],
+      leaveResults: [{ left: true, note: "unexpected browser leave" }],
+    });
+    const recoverCurrentMeetTab = vi
+      .spyOn(chromeTransport, "recoverCurrentMeetTab")
+      .mockResolvedValue({
+        transport: "chrome",
+        found: false,
+        message: "Meet tab is missing.",
+      });
+    try {
+      const runtime = createChromeLifecycleRuntime({ chrome: { launch: false } });
+      const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
+
+      await runtime.status(joined.session.id);
+
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        found: true,
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        found: true,
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+      expect(leaveChromeMeet).not.toHaveBeenCalled();
+    } finally {
+      recoverCurrentMeetTab.mockRestore();
+      leaveChromeMeet?.mockRestore();
+      launchChromeMeet.mockRestore();
+    }
+  });
+
+  it("waits for an in-flight recovery before terminal cleanup", async () => {
+    const { launch: launchChromeMeet, leave: leaveChromeMeet } = mockChromeMeetLifecycle({
+      launches: [
+        {
+          launched: false,
+          tab: { targetId: "meet-tab", openedByPlugin: false },
+          browser: { inCall: true, captioning: true },
+        },
+      ],
+      leaveResults: [{ left: true, note: "left Meet tab" }],
+    });
+    let releaseRecovery!: () => void;
+    let markRecoveryStarted!: () => void;
+    const recoveryStarted = new Promise<void>((resolve) => {
+      markRecoveryStarted = resolve;
+    });
+    const recoveryReleased = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const recoverCurrentMeetTab = vi
+      .spyOn(chromeTransport, "recoverCurrentMeetTab")
+      .mockImplementation(async () => {
+        markRecoveryStarted();
+        await recoveryReleased;
+        return {
+          transport: "chrome",
+          found: true,
+          targetId: "late-meet-tab",
+          message: "Meet tab recovered after leave.",
+          browser: { inCall: true, captioning: true },
+        };
+      });
+    try {
+      const runtime = createChromeLifecycleRuntime({ chrome: { launch: false } });
+      const joined = await runtime.join({ url: MEET_URL, mode: "agent" });
+
+      const refreshing = runtime.status(joined.session.id);
+      await recoveryStarted;
+      const leaving = runtime.leave(joined.session.id);
+      expect(joined.session.state).toBe("active");
+      expect(leaveChromeMeet).not.toHaveBeenCalled();
+      releaseRecovery();
+      const [, leaveResult] = await Promise.all([refreshing, leaving]);
+      expect(leaveResult).toMatchObject({
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+
+      expect(joined.session.chrome?.browserTab).toBeUndefined();
+      await runtime.status(joined.session.id);
+      expect(recoverCurrentMeetTab).toHaveBeenCalledOnce();
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+    } finally {
+      releaseRecovery();
+      recoverCurrentMeetTab.mockRestore();
+      leaveChromeMeet?.mockRestore();
+      launchChromeMeet.mockRestore();
+    }
+  });
+
+  it("releases a browser tab recovered after a confirmed missing result", async () => {
+    const { launch: launchChromeMeet, leave: leaveChromeMeet } = mockChromeMeetLifecycle({
+      launches: [
+        {
+          launched: true,
+          tab: { targetId: "meet-tab", openedByPlugin: true },
+          browser: { inCall: true, captioning: true },
+        },
+      ],
+      leaveResults: [{ left: true, note: "left recovered browser tab" }],
+    });
+    const recoverCurrentMeetTab = vi
+      .spyOn(chromeTransport, "recoverCurrentMeetTab")
+      .mockResolvedValueOnce({
+        transport: "chrome",
+        found: false,
+        message: "Meet tab is missing.",
+      })
+      .mockResolvedValueOnce({
+        transport: "chrome",
+        found: false,
+        message: "Meet tab is still missing.",
+      })
+      .mockResolvedValue({
+        transport: "chrome",
+        found: true,
+        targetId: "meet-tab-recovered",
+        message: "Meet tab recovered.",
+        browser: {
+          inCall: true,
+          captioning: true,
+          transcriptLines: 1,
+          lastCaptionText: "Recovered caption after transient tab loss",
+        },
+      });
+    try {
+      const runtime = createChromeLifecycleRuntime({ defaultMode: "transcribe" });
+      const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
+
+      const result = await runtime.testListen({
+        url: MEET_URL,
+        mode: "transcribe",
+        timeoutMs: 1_000,
+      });
+
+      expect(result).toMatchObject({
+        listenTimedOut: false,
+        listenVerified: true,
+        lastCaptionText: "Recovered caption after transient tab loss",
+        session: { browserLeft: undefined },
+      });
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+      expect(leaveChromeMeet).toHaveBeenCalledOnce();
+    } finally {
+      recoverCurrentMeetTab.mockRestore();
+      leaveChromeMeet?.mockRestore();
       launchChromeMeet.mockRestore();
     }
   });

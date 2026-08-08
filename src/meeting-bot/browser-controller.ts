@@ -1,5 +1,10 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { runMeetingBrowserAct } from "./browser-act-lock.js";
+import {
+  isMeetingBrowserDeadlinePast,
+  MEETING_BROWSER_RECOVERY_TIMEOUT_MESSAGE,
+  remainingMeetingBrowserDeadlineMs,
+} from "./browser-deadline.js";
 import { isMeetingBrowserTransientNavigationError } from "./browser-navigation-errors.js";
 import { asMeetingBrowserTabs, readMeetingBrowserTab } from "./browser-request.js";
 import type {
@@ -371,17 +376,16 @@ async function inspectRecoverableTab<
   timeoutMs: number;
 }) {
   const allowMicrophone = params.adapter.browser.allowsMicrophone(params.mode);
-  const focusTimeoutMs =
-    params.deadline === undefined ? params.timeoutMs : Math.floor(params.deadline - Date.now());
-  if (focusTimeoutMs <= 0) {
-    throw new Error("Meeting browser recovery timed out.");
-  }
+  const focusTimeoutMs = remainingMeetingBrowserDeadlineMs(params.deadline) ?? params.timeoutMs;
   await params.callBrowser({
     method: "POST",
     path: "/tabs/focus",
     body: { targetId: params.targetId },
     timeoutMs: Math.min(focusTimeoutMs, 5_000),
   });
+  if (isMeetingBrowserDeadlinePast(params.deadline)) {
+    throw new Error(MEETING_BROWSER_RECOVERY_TIMEOUT_MESSAGE);
+  }
   const localeAction = params.adapter.urls.localeAction(params.tab);
   if (localeAction) {
     return {
@@ -405,11 +409,11 @@ async function inspectRecoverableTab<
         callBrowser: params.callBrowser,
         meetingUrl: params.requestedMeetingUrl ?? params.tab.url ?? "",
         targetId: params.targetId,
-        timeoutMs:
-          params.deadline === undefined
-            ? params.timeoutMs
-            : Math.max(1, Math.floor(params.deadline - Date.now())),
+        timeoutMs: remainingMeetingBrowserDeadlineMs(params.deadline) ?? params.timeoutMs,
       });
+  if (isMeetingBrowserDeadlinePast(params.deadline)) {
+    throw new Error(MEETING_BROWSER_RECOVERY_TIMEOUT_MESSAGE);
+  }
   const navigationNotes: string[] = [];
   const inspectionDeadline = params.deadline ?? Date.now() + Math.min(params.timeoutMs, 10_000);
   let allowSessionAdoption = params.allowSessionAdoption ?? false;
@@ -444,6 +448,9 @@ async function inspectRecoverableTab<
             timeoutMs: remainingMs,
           }),
       });
+      if (isMeetingBrowserDeadlinePast(params.deadline)) {
+        throw new Error(MEETING_BROWSER_RECOVERY_TIMEOUT_MESSAGE);
+      }
       break;
     } catch (error) {
       const remainingMs = inspectionDeadline - Date.now();
@@ -509,6 +516,7 @@ export async function recoverMeetingBrowserTab<
   mode: Mode;
   requestedMeetingUrl: string | undefined;
   readOnly?: boolean;
+  deadline?: number;
   timeoutMs?: number;
   trackedMeetingUrl: string | undefined;
   trackedTargetId: string | undefined;
@@ -525,16 +533,18 @@ export async function recoverMeetingBrowserTab<
       ? configuredTimeoutMs
       : Math.max(1, Math.min(configuredTimeoutMs, params.timeoutMs));
   const deadline = params.timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
+  const recoveryDeadline = params.deadline ?? deadline;
+  const tabsTimeoutMs = remainingMeetingBrowserDeadlineMs(recoveryDeadline) ?? timeoutMs;
   const tabs = asMeetingBrowserTabs(
     await params.callBrowser({
       method: "GET",
       path: "/tabs",
-      timeoutMs:
-        deadline === undefined
-          ? Math.min(timeoutMs, 5_000)
-          : Math.min(Math.max(1, Math.floor(deadline - Date.now())), 5_000),
+      timeoutMs: Math.min(tabsTimeoutMs, 5_000),
     }),
   );
+  if (isMeetingBrowserDeadlinePast(recoveryDeadline)) {
+    throw new Error(MEETING_BROWSER_RECOVERY_TIMEOUT_MESSAGE);
+  }
   const trackedCandidate = params.trackedTargetId
     ? tabs.find((tab) => tab.targetId === params.trackedTargetId)
     : undefined;
@@ -581,7 +591,7 @@ export async function recoverMeetingBrowserTab<
     callBrowser: params.callBrowser,
     captureCaptions: params.captureCaptions,
     config: params.config,
-    ...(deadline === undefined ? {} : { deadline }),
+    ...(recoveryDeadline === undefined ? {} : { deadline: recoveryDeadline }),
     meetingSessionId: params.meetingSessionId,
     mode: params.mode,
     readOnly: params.readOnly,

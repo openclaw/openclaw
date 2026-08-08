@@ -235,6 +235,7 @@
   "realtime-voice-audio-queue",
   "realtime-voice",
   "meeting-runtime",
+  "meeting-runtime-probes",
   "transcripts",
   "media-understanding",
   "media-understanding-runtime",

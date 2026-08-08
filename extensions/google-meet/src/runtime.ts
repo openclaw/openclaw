@@ -10,6 +10,11 @@ import {
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
+import {
+  joinMeetingSessionForProbe,
+  refreshMeetingCaptionHealthForProbe,
+  registerMeetingSessionRuntimeHealthRefreshForProbe,
+} from "openclaw/plugin-sdk/meeting-runtime-probes";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,6 +24,7 @@ import type {
   GoogleMeetModeInput,
   GoogleMeetTransport,
 } from "./config.js";
+import { refreshGoogleMeetBrowserHealth } from "./runtime-browser-health.js";
 import {
   testGoogleMeetListening,
   testGoogleMeetSpeech,
@@ -179,8 +185,9 @@ export class GoogleMeetRuntime {
       joinTransport: async ({ request, session, context }) =>
         await this.#joinTransport(request, session, context),
       releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
-      refreshBrowserHealth: async (session, options) =>
-        await this.#refreshBrowserHealth(session, options),
+      refreshBrowserHealth: async (session, options) => {
+        await this.#refreshBrowserHealth(session, options);
+      },
       refreshStatus: async (session) => await this.#refreshStatus(session),
       refreshReusableSession: async (session, _request, _resolved) => {
         if (session.transport === "twilio") {
@@ -198,6 +205,16 @@ export class GoogleMeetRuntime {
         providerName: "Google Meet",
       },
     });
+    registerMeetingSessionRuntimeHealthRefreshForProbe(
+      this.#sessions,
+      async (session: GoogleMeetSession, options) => {
+        const browserHealthChecked = await this.#refreshBrowserHealth(session, options);
+        return {
+          browserHealthChecked,
+          manualActionIsAuthoritative: browserHealthChecked,
+        };
+      },
+    );
   }
 
   list(): GoogleMeetSession[] {
@@ -283,20 +300,33 @@ export class GoogleMeetRuntime {
   }
 
   async testListen(request: GoogleMeetJoinRequest) {
-    return await testGoogleMeetListening(this.#probeContext(), request);
+    // Listening consumes probe-only freshness metadata; speech keeps the public join contract.
+    return await testGoogleMeetListening(
+      this.#probeContext(
+        async (probeRequest) =>
+          await joinMeetingSessionForProbe<GoogleMeetSession, GoogleMeetJoinRequest>(
+            this.#sessions,
+            probeRequest,
+          ),
+      ),
+      request,
+    );
   }
 
-  #probeContext(): GoogleMeetRuntimeProbeContext {
+  #probeContext(
+    join: GoogleMeetRuntimeProbeContext["join"] = async (request) => await this.join(request),
+  ): GoogleMeetRuntimeProbeContext {
     return {
       config: this.params.config,
       resolveAgentId: (request) =>
         normalizeAgentId(request.agentId ?? this.params.config.realtime.agentId ?? this.#agentId),
       list: () => this.list(),
-      join: async (request) => await this.join(request),
+      join,
       isReusable: (session, resolved) => this.#sessions.isReusableSession(session, resolved),
       hasHealthHandle: (sessionId) => this.#sessions.hasHealthHandle(sessionId),
       refreshHealth: (sessionId) => this.#sessions.refreshHealth(sessionId),
-      refreshCaptionHealth: async (session) => await this.#sessions.refreshCaptionHealth(session),
+      refreshCaptionHealth: async (session, deadline) =>
+        await refreshMeetingCaptionHealthForProbe(this.#sessions, session, deadline),
     };
   }
 
@@ -514,50 +544,14 @@ export class GoogleMeetRuntime {
 
   async #refreshBrowserHealth(
     session: GoogleMeetSession,
-    options: { force?: boolean; readOnly?: boolean } = {},
-  ): Promise<void> {
-    try {
-      const result =
-        session.transport === "chrome-node"
-          ? await recoverCurrentMeetTabOnNode({
-              runtime: this.params.runtime,
-              config: this.params.config,
-              fullConfig: this.params.fullConfig,
-              mode: session.mode,
-              readOnly: options.readOnly,
-              trackedMeetingUrl: session.url,
-              trackedTargetId: session.chrome?.browserTab?.targetId,
-              url: session.url,
-            })
-          : await recoverCurrentMeetTab({
-              runtime: this.params.runtime,
-              config: this.params.config,
-              fullConfig: this.params.fullConfig,
-              mode: session.mode,
-              readOnly: options.readOnly,
-              trackedMeetingUrl: session.url,
-              trackedTargetId: session.chrome?.browserTab?.targetId,
-              url: session.url,
-            });
-      if (result.found && session.chrome) {
-        if (result.targetId) {
-          const currentTab = session.chrome.browserTab;
-          session.chrome.browserTab = {
-            targetId: result.targetId,
-            openedByPlugin:
-              result.targetId === currentTab?.targetId ? currentTab.openedByPlugin : false,
-          };
-        }
-        if (result.browser) {
-          session.chrome.health = { ...session.chrome.health, ...result.browser };
-        }
-        session.updatedAt = nowIso();
-      }
-    } catch (error) {
-      this.params.logger.debug?.(
-        `[google-meet] browser readiness refresh ignored: ${formatErrorMessage(error)}`,
-      );
-    }
+    options: {
+      force?: boolean;
+      readOnly?: boolean;
+      timeoutMs?: number;
+      deadline?: number;
+    } = {},
+  ): Promise<boolean> {
+    return await refreshGoogleMeetBrowserHealth({ ...this.params, options, session });
   }
 
   async #refreshStatus(session: GoogleMeetSession): Promise<void> {
