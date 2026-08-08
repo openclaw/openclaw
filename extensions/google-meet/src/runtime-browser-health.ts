@@ -48,7 +48,11 @@ export async function refreshGoogleMeetBrowserHealth(params: {
             trackedTargetId: session.chrome?.browserTab?.targetId,
             url: session.url,
           });
+    if (session.state !== "active") {
+      return false;
+    }
     if (result.found && session.chrome) {
+      session.browserLeft = undefined;
       if (result.targetId) {
         const currentTab = session.chrome.browserTab;
         session.chrome.browserTab = {
@@ -81,6 +85,9 @@ export async function refreshGoogleMeetBrowserHealth(params: {
     }
     return false;
   } catch (error) {
+    if (session.state !== "active") {
+      return false;
+    }
     const message = `Google Meet browser readiness refresh failed: ${formatErrorMessage(error)}`;
     logger.debug?.(`[google-meet] ${message}`);
     if (options.force && session.chrome) {

@@ -449,7 +449,11 @@ export function createMeetingRuntimeFacade<
           timeoutMs: refreshOptions.timeoutMs,
           url: session.url,
         });
+        if (session.state !== "active") {
+          return { browserHealthChecked: false, manualActionIsAuthoritative: false };
+        }
         if (result.found && session.chrome) {
+          session.browserLeft = undefined;
           if (result.tab?.targetId) {
             const currentTab = session.chrome.browserTab;
             session.chrome.browserTab = {
@@ -490,6 +494,9 @@ export function createMeetingRuntimeFacade<
         }
         return { browserHealthChecked: false, manualActionIsAuthoritative: false };
       } catch (error) {
+        if (session.state !== "active") {
+          return { browserHealthChecked: false, manualActionIsAuthoritative: false };
+        }
         const formattedError = formatErrorMessage(error);
         const message = options.messages.browserReadinessFailed?.(formattedError) ?? formattedError;
         let manualActionIsAuthoritative = false;
@@ -516,9 +523,12 @@ export function createMeetingRuntimeFacade<
     }
 
     async #captureTranscript(session: Session, captureOptions: { finalize?: boolean } = {}) {
-      // Recovery permits caption setup but atomically refuses a different live
-      // session owner, so stale sessions read their archived page buffer instead.
-      await this.#sessions.refreshCaptionHealth(session);
+      // Live capture may recover caption setup, but terminal capture must only drain the
+      // tracked page buffer. Starting recovery while leave owns finalization can wait behind
+      // an in-flight status refresh and block browser cleanup from reaching its terminal fence.
+      if (!captureOptions.finalize) {
+        await this.#sessions.refreshCaptionHealth(session);
+      }
       const tab = session.chrome?.browserTab;
       if (!tab) {
         return undefined;

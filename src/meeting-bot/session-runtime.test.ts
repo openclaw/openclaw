@@ -126,6 +126,7 @@ function createTestRuntime(params: {
     session: TestSession,
     options?: { force?: boolean; readOnly?: boolean },
   ): Promise<MeetingBrowserHealthRefreshOutcome | boolean | void>;
+  refreshStatus?(session: TestSession): Promise<void>;
   joinTransport(input: {
     request: TestRequest;
     session: TestSession;
@@ -219,7 +220,7 @@ function createTestRuntime(params: {
     refreshBrowserHealth: async (session, options) => {
       await params.refreshBrowserHealth?.(session, options);
     },
-    refreshStatus: async () => {},
+    refreshStatus: async (session) => await params.refreshStatus?.(session),
     refreshReusableSession: async (session, request, resolved) =>
       await params.refreshReusableSession?.(session, request, resolved),
     ensureRealtimeBridge: async () => undefined,
@@ -419,6 +420,164 @@ describe("MeetingSessionRuntime caption health compatibility", () => {
     expect(refreshBrowserHealth).toHaveBeenCalledTimes(2);
     expect(refreshBrowserHealth.mock.calls[0]?.[1]).toEqual({});
     expect(refreshBrowserHealth.mock.calls[1]?.[1]).toEqual({ force: true });
+  });
+});
+
+describe("MeetingSessionRuntime status cleanup ordering", () => {
+  it("does not refresh ended sessions by id or through the list", async () => {
+    const refreshStatus = vi.fn(async () => {});
+    const { runtime } = createTestRuntime({
+      refreshStatus,
+      releaseBrowserTab: async (session) => {
+        if (session.browser) {
+          session.browser.tab = undefined;
+        }
+        return true;
+      },
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "terminal-tab", openedByPlugin: true },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/terminal",
+      agentId: "main",
+    });
+    await runtime.leave(session.id);
+
+    await expect(runtime.status(session.id)).resolves.toMatchObject({
+      found: true,
+      session: { state: "ended", browserLeft: true },
+    });
+    await expect(runtime.status()).resolves.toMatchObject({
+      found: true,
+      sessions: [{ state: "ended", browserLeft: true }],
+    });
+    expect(refreshStatus).not.toHaveBeenCalled();
+  });
+
+  it("releases a tab recovered while terminal transcript capture is pending", async () => {
+    let finishFinalCapture!: () => void;
+    let markFinalCaptureStarted!: () => void;
+    const finalCaptureStarted = new Promise<void>((resolve) => {
+      markFinalCaptureStarted = resolve;
+    });
+    const finalCaptureFinished = new Promise<void>((resolve) => {
+      finishFinalCapture = resolve;
+    });
+    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
+      if (session.browser) {
+        session.browser.tab = undefined;
+      }
+      return true;
+    });
+    const { runtime } = createTestRuntime({
+      transcribe: true,
+      captureTranscript: async (options) => {
+        if (options?.finalize) {
+          session.browser!.tab = undefined;
+          markFinalCaptureStarted();
+          await finalCaptureFinished;
+        }
+        return { droppedLines: 0, lines: [] };
+      },
+      refreshBrowserHealth: async (session) => {
+        session.browser!.tab = { targetId: "recovered-tab", openedByPlugin: false };
+        return true;
+      },
+      releaseBrowserTab,
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "stale-tab", openedByPlugin: false },
+        };
+        session.browserLeft = true;
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/recovered-during-leave",
+      agentId: "main",
+    });
+
+    const leaving = runtime.leave(session.id);
+    await finalCaptureStarted;
+    await runtime.refreshBrowserHealth(session, { force: true });
+    finishFinalCapture();
+
+    await expect(leaving).resolves.toMatchObject({
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+    expect(releaseBrowserTab).toHaveBeenCalledOnce();
+    expect(session.browser?.tab).toBeUndefined();
+  });
+
+  it("serializes overlapping browser recovery before terminal cleanup", async () => {
+    let finishOlderRefresh!: () => void;
+    let markOlderRefreshStarted!: () => void;
+    const olderRefreshStarted = new Promise<void>((resolve) => {
+      markOlderRefreshStarted = resolve;
+    });
+    const olderRefreshFinished = new Promise<void>((resolve) => {
+      finishOlderRefresh = resolve;
+    });
+    let refreshCalls = 0;
+    const refreshBrowserHealth = vi.fn(async (session: TestSession) => {
+      refreshCalls += 1;
+      if (refreshCalls === 1) {
+        markOlderRefreshStarted();
+        await olderRefreshFinished;
+        session.browser!.tab = undefined;
+        session.browserLeft = true;
+        return false;
+      }
+      session.browser!.tab = { targetId: "replacement-tab", openedByPlugin: false };
+      session.browserLeft = undefined;
+      return true;
+    });
+    const releasedTargetIds: Array<string | undefined> = [];
+    const { runtime } = createTestRuntime({
+      refreshBrowserHealth,
+      releaseBrowserTab: async (session) => {
+        releasedTargetIds.push(session.browser?.tab?.targetId);
+        if (session.browser) {
+          session.browser.tab = undefined;
+        }
+        return true;
+      },
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "original-tab", openedByPlugin: false },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/overlapping-recovery",
+      agentId: "main",
+    });
+
+    const olderRefresh = runtime.refreshBrowserHealth(session, { force: true });
+    await olderRefreshStarted;
+    const newerRefresh = runtime.refreshBrowserHealth(session, { force: true });
+    await Promise.resolve();
+    const callsWhileOlderRefreshWasPending = refreshBrowserHealth.mock.calls.length;
+    finishOlderRefresh();
+    await Promise.all([olderRefresh, newerRefresh]);
+
+    expect(callsWhileOlderRefreshWasPending).toBe(1);
+    expect(session.browserLeft).toBeUndefined();
+    expect(session.browser?.tab?.targetId).toBe("replacement-tab");
+
+    await runtime.leave(session.id);
+
+    expect(releasedTargetIds).toEqual(["replacement-tab"]);
+    expect(session.browser?.tab).toBeUndefined();
   });
 });
 

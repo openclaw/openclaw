@@ -378,6 +378,60 @@ describe("Microsoft Teams meeting session flow", () => {
     expect(status.session?.notes).toEqual(
       expect.arrayContaining([expect.stringContaining("No existing Teams meeting tab matched")]),
     );
+
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      found: true,
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      found: true,
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+  });
+
+  it("does not reattach a recovery result after leave reaches the terminal state", async () => {
+    const harness = runtimeHarness();
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({ defaultMode: "transcribe" }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const joined = await runtime.join({ url: URL, mode: "transcribe" });
+    let releaseTabList!: () => void;
+    let markTabListStarted!: () => void;
+    const tabListStarted = new Promise<void>((resolve) => {
+      markTabListStarted = resolve;
+    });
+    const tabListReleased = new Promise<void>((resolve) => {
+      releaseTabList = resolve;
+    });
+    harness.gatewayRequest.mockImplementationOnce(async (_method, params) => {
+      expect(params.path).toBe("/tabs");
+      markTabListStarted();
+      await tabListReleased;
+      return { tabs: [{ targetId: "late-teams-tab", title: "Teams call", url: URL }] };
+    });
+
+    const refreshing = runtime.status(joined.session.id);
+    await tabListStarted;
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+    releaseTabList();
+    await refreshing;
+
+    expect(joined.session.chrome?.browserTab).toBeUndefined();
+    const requestCount = harness.gatewayRequest.mock.calls.length;
+    await runtime.status(joined.session.id);
+    expect(harness.gatewayRequest).toHaveBeenCalledTimes(requestCount);
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
   });
 
   it("clears stale manual actions from ordinary status after a thrown recovery", async () => {
@@ -451,6 +505,19 @@ describe("Microsoft Teams meeting session flow", () => {
       transcriptLines: 1,
     });
     expect(result.session?.chrome?.health?.manualAction).toBeUndefined();
+    expect(result.session?.browserLeft).toBeUndefined();
+
+    harness.gatewayRequest.mockClear();
+    await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+      browserLeft: true,
+      session: { state: "ended", browserLeft: true },
+    });
+    expect(
+      harness.gatewayRequest.mock.calls.some(([, params]) => {
+        const fn = (params.body as { fn?: unknown } | undefined)?.fn;
+        return params.path === "/act" && typeof fn === "string" && fn.includes("leaveAction");
+      }),
+    ).toBe(true);
   });
 
   it("retries stale listening health after a thrown browser recovery", async () => {

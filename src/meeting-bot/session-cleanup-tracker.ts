@@ -11,7 +11,11 @@ export class MeetingSessionCleanupTracker {
     if (this.#states.has(sessionId)) {
       return false;
     }
-    this.#states.set(sessionId, { browserLeft, browserSettled: false, stopSettled: false });
+    this.#states.set(sessionId, {
+      browserLeft,
+      browserSettled: browserLeft === true,
+      stopSettled: false,
+    });
     return true;
   }
 
@@ -22,6 +26,7 @@ export class MeetingSessionCleanupTracker {
   async cleanup(params: {
     sessionId: string;
     stop?: () => Promise<void>;
+    hasBrowserTab: () => boolean;
     keepBrowserTab: boolean;
     releaseBrowser: () => Promise<boolean | undefined>;
   }): Promise<{ browserLeft?: boolean; complete: boolean; stopSettled: boolean }> {
@@ -37,6 +42,12 @@ export class MeetingSessionCleanupTracker {
       } catch (error) {
         cleanupError = error;
       }
+    }
+    if (state.browserSettled && params.hasBrowserTab()) {
+      // A tab recovered while stop was pending is owned by this cleanup attempt;
+      // a prior missing-tab result must not let it escape terminal settlement.
+      state.browserLeft = undefined;
+      state.browserSettled = false;
     }
     if (!state.browserSettled) {
       try {

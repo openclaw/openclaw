@@ -6125,6 +6125,171 @@ describe("google-meet plugin", () => {
     },
   );
 
+  it("treats a confirmed missing browser tab as settled during leave", async () => {
+    const { launch: launchChromeMeet, leave: leaveChromeMeet } = mockChromeMeetLifecycle({
+      launches: [
+        {
+          launched: false,
+          tab: { targetId: "meet-tab", openedByPlugin: false },
+          browser: { inCall: true, captioning: true },
+        },
+      ],
+      leaveResults: [{ left: true, note: "unexpected browser leave" }],
+    });
+    const recoverCurrentMeetTab = vi
+      .spyOn(chromeTransport, "recoverCurrentMeetTab")
+      .mockResolvedValue({
+        transport: "chrome",
+        found: false,
+        message: "Meet tab is missing.",
+      });
+    try {
+      const runtime = createChromeLifecycleRuntime({ chrome: { launch: false } });
+      const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
+
+      await runtime.status(joined.session.id);
+
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        found: true,
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        found: true,
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+      expect(leaveChromeMeet).not.toHaveBeenCalled();
+    } finally {
+      recoverCurrentMeetTab.mockRestore();
+      leaveChromeMeet?.mockRestore();
+      launchChromeMeet.mockRestore();
+    }
+  });
+
+  it("does not reattach a recovery result after leave reaches the terminal state", async () => {
+    const { launch: launchChromeMeet, leave: leaveChromeMeet } = mockChromeMeetLifecycle({
+      launches: [
+        {
+          launched: false,
+          tab: { targetId: "meet-tab", openedByPlugin: false },
+          browser: { inCall: true, captioning: true },
+        },
+      ],
+      leaveResults: [{ left: true, note: "left Meet tab" }],
+    });
+    let releaseRecovery!: () => void;
+    let markRecoveryStarted!: () => void;
+    const recoveryStarted = new Promise<void>((resolve) => {
+      markRecoveryStarted = resolve;
+    });
+    const recoveryReleased = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    const recoverCurrentMeetTab = vi
+      .spyOn(chromeTransport, "recoverCurrentMeetTab")
+      .mockImplementation(async () => {
+        markRecoveryStarted();
+        await recoveryReleased;
+        return {
+          transport: "chrome",
+          found: true,
+          targetId: "late-meet-tab",
+          message: "Meet tab recovered after leave.",
+          browser: { inCall: true, captioning: true },
+        };
+      });
+    try {
+      const runtime = createChromeLifecycleRuntime({ chrome: { launch: false } });
+      const joined = await runtime.join({ url: MEET_URL, mode: "agent" });
+
+      const refreshing = runtime.status(joined.session.id);
+      await recoveryStarted;
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+      releaseRecovery();
+      await refreshing;
+
+      expect(joined.session.chrome?.browserTab).toBeUndefined();
+      await runtime.status(joined.session.id);
+      expect(recoverCurrentMeetTab).toHaveBeenCalledOnce();
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+    } finally {
+      releaseRecovery();
+      recoverCurrentMeetTab.mockRestore();
+      leaveChromeMeet?.mockRestore();
+      launchChromeMeet.mockRestore();
+    }
+  });
+
+  it("releases a browser tab recovered after a confirmed missing result", async () => {
+    const { launch: launchChromeMeet, leave: leaveChromeMeet } = mockChromeMeetLifecycle({
+      launches: [
+        {
+          launched: true,
+          tab: { targetId: "meet-tab", openedByPlugin: true },
+          browser: { inCall: true, captioning: true },
+        },
+      ],
+      leaveResults: [{ left: true, note: "left recovered browser tab" }],
+    });
+    const recoverCurrentMeetTab = vi
+      .spyOn(chromeTransport, "recoverCurrentMeetTab")
+      .mockResolvedValueOnce({
+        transport: "chrome",
+        found: false,
+        message: "Meet tab is missing.",
+      })
+      .mockResolvedValueOnce({
+        transport: "chrome",
+        found: false,
+        message: "Meet tab is still missing.",
+      })
+      .mockResolvedValue({
+        transport: "chrome",
+        found: true,
+        targetId: "meet-tab-recovered",
+        message: "Meet tab recovered.",
+        browser: {
+          inCall: true,
+          captioning: true,
+          transcriptLines: 1,
+          lastCaptionText: "Recovered caption after transient tab loss",
+        },
+      });
+    try {
+      const runtime = createChromeLifecycleRuntime({ defaultMode: "transcribe" });
+      const joined = await runtime.join({ url: MEET_URL, mode: "transcribe" });
+
+      const result = await runtime.testListen({
+        url: MEET_URL,
+        mode: "transcribe",
+        timeoutMs: 1_000,
+      });
+
+      expect(result).toMatchObject({
+        listenTimedOut: false,
+        listenVerified: true,
+        lastCaptionText: "Recovered caption after transient tab loss",
+        session: { browserLeft: undefined },
+      });
+      await expect(runtime.leave(joined.session.id)).resolves.toMatchObject({
+        browserLeft: true,
+        session: { state: "ended", browserLeft: true },
+      });
+      expect(leaveChromeMeet).toHaveBeenCalledOnce();
+    } finally {
+      recoverCurrentMeetTab.mockRestore();
+      leaveChromeMeet?.mockRestore();
+      launchChromeMeet.mockRestore();
+    }
+  });
+
   it("still leaves the browser when the Chrome bridge stop fails", async () => {
     const stop = vi.fn(async () => {
       throw new Error("bridge stop failed");

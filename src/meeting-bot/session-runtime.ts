@@ -147,6 +147,7 @@ export class MeetingSessionRuntime<
   readonly #sessions = new Map<string, TSession>();
   readonly #sessionLeaves = new Map<string, Promise<MeetingSessionLeaveResult<TSession>>>();
   readonly #sessionCleanup = new MeetingSessionCleanupTracker();
+  readonly #browserHealthRefreshLock = new MeetingSessionJoinLock();
   readonly #meetingLock = new MeetingSessionJoinLock();
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
@@ -212,11 +213,15 @@ export class MeetingSessionRuntime<
       const sessions = [...this.#sessions.values()].toSorted((a, b) =>
         a.createdAt.localeCompare(b.createdAt),
       );
-      await Promise.all(sessions.map((session) => this.options.refreshStatus(session)));
+      await Promise.all(
+        sessions
+          .filter((session) => session.state === "active")
+          .map((session) => this.options.refreshStatus(session)),
+      );
       return { found: true, sessions };
     }
     const session = this.#sessions.get(sessionId);
-    if (session) {
+    if (session?.state === "active") {
       await this.options.refreshStatus(session);
     }
     return session ? { found: true, session } : { found: false };
@@ -389,6 +394,16 @@ export class MeetingSessionRuntime<
     session: TSession,
     options: { force?: boolean; readOnly?: boolean } = {},
   ): Promise<MeetingBrowserHealthRefreshOutcome> {
+    return await this.#browserHealthRefreshLock.run(
+      session.id,
+      async () => await this.#refreshBrowserHealthUnlocked(session, options),
+    );
+  }
+
+  async #refreshBrowserHealthUnlocked(
+    session: TSession,
+    options: { force?: boolean; readOnly?: boolean },
+  ): Promise<MeetingBrowserHealthRefreshOutcome> {
     const browserTransport = this.options.isBrowserTransport(session.transport);
     const browser = browserTransport ? this.options.getBrowser(session) : undefined;
     if (!browser?.launched && !(options.force && browser?.tab?.targetId)) {
@@ -411,6 +426,9 @@ export class MeetingSessionRuntime<
         normalizeMeetingBrowserHealthRefreshOutcome(
           await this.options.refreshBrowserHealth(session, options),
         ))());
+    if (session.browserLeft === true && this.options.getBrowser(session)?.tab) {
+      session.browserLeft = undefined;
+    }
     this.refreshSpeechReadiness(session);
     return refreshOutcome;
   }
@@ -636,6 +654,7 @@ export class MeetingSessionRuntime<
       const cleanup = await this.#sessionCleanup.cleanup({
         sessionId: session.id,
         stop,
+        hasBrowserTab: () => Boolean(this.options.getBrowser(session)?.tab),
         keepBrowserTab: options?.keepBrowserTab === true,
         releaseBrowser: async () => await this.options.releaseBrowserTab(session),
       });
