@@ -161,6 +161,11 @@ const testing = {
   ): void {
     dynamicToolBuildState.openClawCodingToolsFactory = factory;
   },
+  setRuntimeToolNormalizerForTests(
+    normalizer: NonNullable<typeof dynamicToolBuildState.runtimeToolNormalizer>,
+  ): void {
+    dynamicToolBuildState.runtimeToolNormalizer = normalizer;
+  },
   shouldEnableCodexAppServerNativeToolSurface,
   withCodexStartupTimeout,
 };
@@ -5152,7 +5157,21 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("uses human approval instead of Guardian for auto exec on custom model providers", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        const response = threadStartResult();
+        return {
+          ...response,
+          thread: {
+            ...response.thread,
+            modelProvider: "lmstudio",
+          },
+          model: "local-model",
+          modelProvider: "lmstudio",
+        };
+      }
+      return undefined;
+    });
     const params = {
       ...createParams(sessionFile, workspaceDir),
       provider: "lmstudio",
@@ -5364,6 +5383,7 @@ describe("runCodexAppServerAttempt", () => {
     // This test owns review-policy projection, not requester-scoped MCP discovery.
     agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
     agentHarnessRuntimeMocks.skipRequesterScopedMcpMaterialization = true;
+    testing.setRuntimeToolNormalizerForTests((normalizationParams) => normalizationParams.tools);
     const params = createParams(sessionFile, workspaceDir);
     params.provider = "anthropic";
     params.modelId = "claude-opus-4-6";

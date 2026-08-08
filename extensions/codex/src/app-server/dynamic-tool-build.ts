@@ -425,7 +425,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, messagePolicyParams);
   const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
   toolBuildStages.mark("allowlist-filter");
-  const normalizedTools = normalizeAgentRuntimeTools({
+  const normalizeRuntimeTools =
+    dynamicToolBuildState.runtimeToolNormalizer ?? normalizeAgentRuntimeTools;
+  const normalizedTools = normalizeRuntimeTools({
     runtimePlan: input.ignoreRuntimePlan ? undefined : params.runtimePlan,
     tools: filteredTools,
     provider: params.provider,
