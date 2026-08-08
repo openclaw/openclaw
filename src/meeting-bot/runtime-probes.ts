@@ -213,6 +213,7 @@ export function createMeetingRuntimeProbes<
       (health?.transcriptLines ?? 0) > (existing?.id === result.session.id ? start.lines : 0) ||
       Boolean(health?.lastCaptionAt && health.lastCaptionAt !== start.at) ||
       Boolean(health?.lastCaptionText && health.lastCaptionText !== start.text);
+    const canWaitForListening = () => options.shouldWaitForListening(result.session);
     const reusedSession = existing?.id === result.session.id;
     const hasAuthoritativeManualAction =
       result.manualActionIsAuthoritative === true && health?.manualAction !== undefined;
@@ -222,7 +223,7 @@ export function createMeetingRuntimeProbes<
         reusedSession &&
         result.browserHealthChecked === false);
     const shouldWait =
-      options.shouldWaitForListening(result.session) &&
+      canWaitForListening() &&
       !hasAuthoritativeManualAction &&
       (health?.manualAction === undefined || manualActionRequiresRecovery);
     let manualActionIsAuthoritative =
@@ -285,6 +286,9 @@ export function createMeetingRuntimeProbes<
         if (listenVerified || (manualActionIsAuthoritative && health?.manualAction)) {
           break;
         }
+        if (!canWaitForListening()) {
+          break;
+        }
         if (Date.now() >= deadline) {
           break;
         }
@@ -301,7 +305,8 @@ export function createMeetingRuntimeProbes<
       inCall: health?.inCall,
       manualAction,
       listenVerified,
-      listenTimedOut: shouldWait && !listenVerified && manualAction === undefined,
+      listenTimedOut:
+        shouldWait && canWaitForListening() && !listenVerified && manualAction === undefined,
       captioning: health?.captioning,
       captionsEnabledAttempted: health?.captionsEnabledAttempted,
       transcriptLines: health?.transcriptLines,

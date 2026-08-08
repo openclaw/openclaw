@@ -213,6 +213,52 @@ describe("Microsoft Teams meeting runtime probes", () => {
     expect(refreshCaptionHealth).toHaveBeenCalledOnce();
   });
 
+  it("stops retrying when a reused manual tab disappears during refresh", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const session = {
+      agentId: "main",
+      chrome: {
+        browserTab: { openedByPlugin: false, targetId: "reused-teams-tab" },
+        health: { inCall: true },
+        launched: false,
+      },
+      id: "teams-listen-missing-reused-tab",
+      mode: "transcribe",
+      transport: "chrome",
+    } as TeamsMeetingsSession;
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome!.browserTab = undefined;
+      session.chrome!.health = { inCall: false, status: "browser-tab-missing" };
+      return { browserHealthChecked: false, manualActionIsAuthoritative: false };
+    });
+    const context = {
+      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
+      hasHealthHandle: () => true,
+      isReusable: () => false,
+      join: vi.fn(async () => ({ session, spoken: false })),
+      list: () => [],
+      refreshCaptionHealth,
+      refreshHealth: () => {},
+      resolveAgentId: () => "main",
+    } satisfies TeamsMeetingsProbeContext;
+
+    await expect(
+      testTeamsMeetingListening(context, {
+        mode: "transcribe",
+        timeoutMs: 1_000,
+        url: URL,
+      }),
+    ).resolves.toMatchObject({
+      listenTimedOut: false,
+      listenVerified: false,
+      session: { chrome: { health: { status: "browser-tab-missing" } } },
+    });
+    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
+    expect(Date.now()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("refreshes a reused browser tab before returning a cached manual action", async () => {
     const session = {
       agentId: "main",

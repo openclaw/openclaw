@@ -106,6 +106,9 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
     closeTab() {
       tabOpen = false;
     },
+    openTab() {
+      tabOpen = true;
+    },
     failNextTabLists(count = 1) {
       tabListFailures = count;
     },
@@ -389,6 +392,50 @@ describe("Microsoft Teams meeting session flow", () => {
       browserLeft: true,
       session: { state: "ended", browserLeft: true },
     });
+  });
+
+  it("replaces a targetless manual session when a matching tab is opened again", async () => {
+    const harness = runtimeHarness({ tabOpen: true });
+    const runtime = new TeamsMeetingsRuntime({
+      config: resolveTeamsMeetingsConfig({
+        defaultMode: "transcribe",
+        chrome: { launch: false },
+      }),
+      fullConfig: {},
+      runtime: harness.runtime,
+      logger,
+    });
+    const first = await runtime.join({ url: URL, mode: "transcribe" });
+    harness.closeTab();
+
+    await runtime.status(first.session.id);
+    expect(first.session).toMatchObject({
+      state: "active",
+      browserLeft: true,
+      chrome: { browserTab: undefined },
+    });
+
+    harness.setTargetId("teams-tab-reopened");
+    harness.setCaptionText("Caption from the reopened manual tab");
+    harness.openTab();
+    const retried = await runtime.testListen({
+      url: URL,
+      mode: "transcribe",
+      timeoutMs: 1_000,
+    });
+
+    expect(retried).toMatchObject({
+      createdSession: true,
+      listenTimedOut: false,
+      listenVerified: true,
+      lastCaptionText: "Caption from the reopened manual tab",
+      transcriptLines: 1,
+      session: {
+        chrome: { browserTab: { targetId: "teams-tab-reopened" }, launched: false },
+      },
+    });
+    expect(retried.session.id).not.toBe(first.session.id);
+    expect(first.session).toMatchObject({ state: "ended", browserLeft: true });
   });
 
   it("waits for an in-flight recovery before terminal cleanup", async () => {

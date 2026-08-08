@@ -240,8 +240,14 @@ export class MeetingSessionRuntime<
   }
 
   isReusableSession(session: TSession, resolved: MeetingResolvedJoin<TTransport, TMode>): boolean {
+    const browser = this.options.isBrowserTransport(session.transport)
+      ? this.options.getBrowser(session)
+      : undefined;
+    const missingRetainedBrowser =
+      browser?.launched === false && browser.tab === undefined && session.browserLeft === true;
     return (
       session.state === "active" &&
+      !missingRetainedBrowser &&
       this.options.sameMeetingUrl(session.url, resolved.url) &&
       session.transport === resolved.transport &&
       session.mode === resolved.mode &&
@@ -549,13 +555,16 @@ export class MeetingSessionRuntime<
     if (reusable) {
       await this.#durableTranscripts.start(reusable);
       const refreshOutcome = await this.#refreshBrowserHealth(reusable);
-      this.#noteSession(reusable, this.options.messages.reusedSessionNote);
-      reusable.updatedAt = nowIso();
-      const spoken =
-        this.options.isTalkBackMode(resolved.mode) && speechInstructions
-          ? await this.speakWhenReady(reusable, speechInstructions)
-          : false;
-      return { ...refreshOutcome, session: reusable, spoken };
+      if (this.isReusableSession(reusable, resolved)) {
+        this.#noteSession(reusable, this.options.messages.reusedSessionNote);
+        reusable.updatedAt = nowIso();
+        const spoken =
+          this.options.isTalkBackMode(resolved.mode) && speechInstructions
+            ? await this.speakWhenReady(reusable, speechInstructions)
+            : false;
+        return { ...refreshOutcome, session: reusable, spoken };
+      }
+      await this.#leaveSessionAfterBrowserRefreshes(reusable, { keepBrowserTab: true });
     }
 
     const session = this.options.createSession({ request, resolved, createdAt: nowIso() });

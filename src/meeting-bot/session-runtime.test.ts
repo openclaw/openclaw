@@ -362,6 +362,97 @@ describe("MeetingSessionRuntime probe join health", () => {
       }
     },
   );
+
+  it.each([
+    { launched: false, reusable: false },
+    { launched: true, reusable: true },
+  ])(
+    "reports confirmed target loss as non-reusable when launched=$launched",
+    async ({ launched, reusable }) => {
+      const { runtime } = createTestRuntime({
+        releaseBrowserTab: async () => true,
+        joinTransport: async ({ session }) => {
+          session.browser = { launched };
+          return {};
+        },
+      });
+      const { session } = await runtime.join({
+        url: "https://meeting.example/missing-browser",
+        agentId: "main",
+      });
+      session.browserLeft = true;
+
+      expect(
+        runtime.isReusableSession(session, {
+          url: session.url,
+          transport: session.transport,
+          mode: session.mode,
+          agentId: session.agentId,
+        }),
+      ).toBe(reusable);
+    },
+  );
+
+  it("rechecks manual-tab reuse after a concurrent missing-target refresh", async () => {
+    let releaseMissingRefresh!: () => void;
+    let markMissingRefreshStarted!: () => void;
+    const missingRefreshStarted = new Promise<void>((resolve) => {
+      markMissingRefreshStarted = resolve;
+    });
+    const missingRefreshReleased = new Promise<void>((resolve) => {
+      releaseMissingRefresh = resolve;
+    });
+    const joinTransport = vi.fn(async ({ session }: { session: TestSession }) => {
+      session.browser = {
+        launched: false,
+        tab: { targetId: session.id, openedByPlugin: false },
+      };
+      return {};
+    });
+    let runtime!: MeetingSessionRuntime<
+      TestSession,
+      TestRequest,
+      TestTransport,
+      TestMode,
+      MeetingBrowserHealth,
+      MeetingBrowserTab,
+      string,
+      string
+    >;
+    ({ runtime } = createTestRuntime({
+      joinTransport,
+      releaseBrowserTab: async () => true,
+      refreshBrowserHealth: async (session, options) => {
+        if (options?.force) {
+          markMissingRefreshStarted();
+          await missingRefreshReleased;
+          session.browser!.tab = undefined;
+          session.browserLeft = true;
+        }
+      },
+      refreshStatus: async (session) => {
+        await runtime.refreshBrowserHealth(session, { force: true });
+      },
+    }));
+    const first = await runtime.join({
+      url: "https://meeting.example/concurrent-missing-browser",
+      agentId: "main",
+    });
+
+    const refreshing = runtime.status(first.session.id);
+    await missingRefreshStarted;
+    const joining = runtime.join({
+      url: first.session.url,
+      agentId: first.session.agentId,
+    });
+    releaseMissingRefresh();
+    const [, replacement] = await Promise.all([refreshing, joining]);
+
+    expect(replacement.session.id).not.toBe(first.session.id);
+    expect(replacement.session.browser?.tab?.targetId).toBe(replacement.session.id);
+    expect(first.session).toMatchObject({ state: "ended", browserLeft: true });
+    expect(joinTransport).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("MeetingSessionRuntime caption health compatibility", () => {
