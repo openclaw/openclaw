@@ -925,6 +925,7 @@ type InFlightChatHistoryRequest = {
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
+  force?: boolean;
   startup?: boolean;
 };
 
@@ -1013,6 +1014,7 @@ function requestSharedChatHistory(
   requestAgentId: string | undefined,
   consumerOwner: object,
   isCurrentConsumer: () => boolean,
+  forceNewRequest: boolean,
 ): Promise<ChatHistoryResult> {
   let registry = sharedChatHistoryRequests.get(client);
   if (!registry) {
@@ -1029,7 +1031,7 @@ function requestSharedChatHistory(
     isCurrent: isCurrentConsumer,
     retryDeadlineMs: Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS,
   };
-  if (!shared || existingOwner) {
+  if (!shared || existingOwner || forceNewRequest) {
     const consumers = new Set([consumer]);
     const shouldContinue = () => [...consumers].some((entry) => entry.isCurrent());
     // A pane joining older shared work still owns a full retry window. Otherwise
@@ -1399,9 +1401,10 @@ export async function loadChatHistory(
   const requestKey = `${connectionEpoch}\0${method}\0${sessionKey}\0${requestAgentId ?? ""}\0${CHAT_HISTORY_REQUEST_LIMIT}`;
   const requests = getChatHistoryPaneRequests(state);
   const inFlight = requests.inFlightHistory;
-  // Live events replace the rendered array while their snapshot is pending;
-  // only stable session and connection ownership may start another request.
+  // Live events normally share the rendered pane's pending snapshot. A server
+  // rejection can force a post-rejection request that fences the older result.
   if (
+    opts.force !== true &&
     inFlight?.key === requestKey &&
     inFlight.client === client &&
     inFlight.connectionEpoch === connectionEpoch
@@ -1422,6 +1425,7 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     method,
+    opts.force === true,
   ).finally(() => {
     if (requests.inFlightHistory?.promise === promise) {
       requests.inFlightHistory = undefined;
@@ -1503,6 +1507,7 @@ async function loadChatHistoryUncached(
   sessionKey: string,
   requestAgentId: string | undefined,
   method: "chat.history" | "chat.startup",
+  forceNewRequest: boolean,
 ): Promise<ChatHistoryResult | undefined> {
   const ownership = beginChatHistoryRequest(
     state,
@@ -1545,6 +1550,7 @@ async function loadChatHistoryUncached(
       requestAgentId,
       state as object,
       () => shouldApplyChatHistoryResult(state, ownership),
+      forceNewRequest,
     );
     if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
