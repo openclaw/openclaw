@@ -771,6 +771,9 @@ function runReleaseChecksSummary(params: {
   discordResult?: "failure" | "skipped" | "success";
   resolveResult?: "failure" | "success";
   telegramSelected?: boolean;
+  windowsSelected?: boolean;
+  windowsPrereleaseResult?: "cancelled" | "failure" | "skipped" | "success";
+  windowsStableResult?: "cancelled" | "failure" | "skipped" | "success";
   validatedStatuses?: Array<{ job: string; status: string; variant: string }>;
   workflowRef?: string;
 }) {
@@ -819,6 +822,9 @@ function runReleaseChecksSummary(params: {
       RESOLVE_TARGET_RESULT: params.resolveResult ?? "success",
       RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: "skipped",
       VALIDATE_ADVISORY_STATUSES_OUTCOME: "success",
+      WINDOWS_NODE_PRERELEASE_E2E_RESULT: params.windowsPrereleaseResult ?? "skipped",
+      WINDOWS_NODE_SELECTED: String(params.windowsSelected ?? false),
+      WINDOWS_NODE_STABLE_E2E_RESULT: params.windowsStableResult ?? "skipped",
       WORKFLOW_REF: params.workflowRef ?? "refs/heads/release/2026.7.1",
     },
   });
@@ -2420,6 +2426,24 @@ describe("package artifact reuse", () => {
     ).toContain("inputs.enable_prepublish_plugin_registry");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
+    const validatePackage = workflowStep(
+      prepareDockerImage,
+      "Validate OpenClaw Docker E2E package",
+    );
+    expectTextToIncludeAll(validatePackage.run, [
+      'metadata=".artifacts/docker-e2e-package/package-candidate.json"',
+      '--arg packageSourceSha "$package_source_sha"',
+      '--arg sha256 "$digest"',
+      '--arg version "$version"',
+      '[[ -s "$metadata" ]]',
+    ]);
+    const uploadPackage = workflowStep(prepareDockerImage, "Upload OpenClaw Docker E2E package");
+    expect(uploadPackage.with?.path).toContain(
+      ".artifacts/docker-e2e-package/openclaw-current.tgz",
+    );
+    expect(uploadPackage.with?.path).toContain(
+      ".artifacts/docker-e2e-package/package-candidate.json",
+    );
     expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toEqual({
       INCLUDE_OPENWEBUI: "${{ inputs.include_openwebui }}",
       INCLUDE_RELEASE_PATH_SUITES: "${{ inputs.include_release_path_suites }}",
@@ -3410,7 +3434,7 @@ describe("package artifact reuse", () => {
       "live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}",
     );
     expect(workflow).toContain(
-      "if: needs.resolve_target.outputs.cross_os_scheduled == 'true' || needs.resolve_target.outputs.docker_release_scheduled == 'true' || needs.resolve_target.outputs.rerun_group == 'package'",
+      "if: needs.resolve_target.outputs.cross_os_scheduled == 'true' || needs.resolve_target.outputs.docker_release_scheduled == 'true' || contains(fromJSON('[\"package\",\"windows-node\"]'), needs.resolve_target.outputs.rerun_group)",
     );
     expect(workflow).toContain(
       "if: needs.resolve_target.outputs.docker_release_scheduled == 'true'",
@@ -3448,6 +3472,47 @@ describe("package artifact reuse", () => {
         "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}",
       );
     }
+  });
+
+  it("binds both Windows-node release E2E calls to the resolved asset tuple", () => {
+    const workflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const resolver = workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_windows_node_release_artifacts");
+    const prerelease = workflowJob(RELEASE_CHECKS_WORKFLOW, "windows_node_prerelease_e2e");
+    const stable = workflowJob(RELEASE_CHECKS_WORKFLOW, "windows_node_stable_e2e");
+    const reusableWorkflow =
+      "openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@77141d27ee69728da6c3509fb116de63bd176da4";
+
+    expect(resolver.outputs).toMatchObject({
+      stable_asset_name: "${{ steps.resolve.outputs.stable_asset_name }}",
+      stable_asset_sha256: "${{ steps.resolve.outputs.stable_asset_sha256 }}",
+      prerelease_asset_name: "${{ steps.resolve.outputs.prerelease_asset_name }}",
+      prerelease_asset_sha256: "${{ steps.resolve.outputs.prerelease_asset_sha256 }}",
+    });
+    expect(workflow).toContain('release_sha="$(resolve_tag_sha "$tag")"');
+    expect(workflow).toContain('echo "${channel}_release_sha=${release_sha}" >> "$GITHUB_OUTPUT"');
+    expect(workflow).not.toContain(
+      'echo "${channel}_release_sha=$(resolve_tag_sha "$tag")" >> "$GITHUB_OUTPUT"',
+    );
+    expect(prerelease.uses).toBe(reusableWorkflow);
+    expect(prerelease.with).toMatchObject({
+      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
+      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      windows_node_release_asset_name:
+        "${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_name }}",
+      windows_node_release_asset_sha256:
+        "${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_sha256 }}",
+      windows_node_sha: "77141d27ee69728da6c3509fb116de63bd176da4",
+    });
+    expect(stable.uses).toBe(reusableWorkflow);
+    expect(stable.with).toMatchObject({
+      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
+      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      windows_node_release_asset_name:
+        "${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_name }}",
+      windows_node_release_asset_sha256:
+        "${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_sha256 }}",
+      windows_node_sha: "77141d27ee69728da6c3509fb116de63bd176da4",
+    });
   });
 
   it("routes release Matrix through the QA Lab selector", () => {
@@ -4084,7 +4149,7 @@ describe("package artifact reuse", () => {
       'args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")',
       'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
       'case "$RERUN_GROUP" in',
-      "release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
+      "release-checks|install-smoke|cross-os|windows-node|live-e2e|package|qa|qa-parity|qa-live)",
       "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}",
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
@@ -4868,6 +4933,69 @@ describe("package artifact reuse", () => {
     if (emptyStderr) {
       expect(result.stderr).toBe("");
     }
+    for (const snippet of expected ?? []) {
+      expect(output).toContain(snippet);
+    }
+  });
+
+  it.each([
+    {
+      expected: [] as string[],
+      name: "accepts both successful selected Windows-node E2E children",
+      params: {
+        currentAttempt: "2",
+        currentResult: "skipped" as const,
+        telegramSelected: false,
+        windowsSelected: true,
+        windowsPrereleaseResult: "success" as const,
+        windowsStableResult: "success" as const,
+      },
+      status: 0,
+    },
+    {
+      expected: ["::error::windows_node_prerelease_e2e ended with skipped"],
+      name: "rejects a skipped selected Windows-node prerelease E2E child",
+      params: {
+        currentAttempt: "2",
+        currentResult: "skipped" as const,
+        telegramSelected: false,
+        windowsSelected: true,
+        windowsPrereleaseResult: "skipped" as const,
+        windowsStableResult: "success" as const,
+      },
+      status: 1,
+    },
+    {
+      expected: ["::error::windows_node_stable_e2e ended with failure"],
+      name: "rejects a failed selected Windows-node stable E2E child",
+      params: {
+        currentAttempt: "2",
+        currentResult: "skipped" as const,
+        telegramSelected: false,
+        windowsSelected: true,
+        windowsPrereleaseResult: "success" as const,
+        windowsStableResult: "failure" as const,
+      },
+      status: 1,
+    },
+    {
+      expected: [] as string[],
+      name: "accepts skipped Windows-node E2E children when unselected",
+      params: {
+        currentAttempt: "2",
+        currentResult: "skipped" as const,
+        telegramSelected: false,
+        windowsSelected: false,
+        windowsPrereleaseResult: "skipped" as const,
+        windowsStableResult: "skipped" as const,
+      },
+      status: 0,
+    },
+  ] as const)("$name", ({ expected, params, status }) => {
+    const result = runReleaseChecksSummary(params);
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status, output).toBe(status);
     for (const snippet of expected ?? []) {
       expect(output).toContain(snippet);
     }
