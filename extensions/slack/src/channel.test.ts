@@ -248,12 +248,10 @@ describe("slackPlugin actions", () => {
       toolContext: { currentChannelId: "team:T123:channel:C123" },
     };
 
-    await expect(
-      prepareSendPayload({ ctx, to: "team:T123:channel:C123", payload } as never),
-    ).resolves.toBe(payload);
-    await expect(prepareSendPayload({ ctx, to: "channel:C999", payload } as never)).resolves.toBe(
+    expect(prepareSendPayload({ ctx, to: "team:T123:channel:C123", payload } as never)).toBe(
       payload,
     );
+    expect(prepareSendPayload({ ctx, to: "channel:C999", payload } as never)).toBe(payload);
   });
 
   it("prefers session lookup for announce target routing", () => {
