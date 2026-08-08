@@ -13,17 +13,96 @@ import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-sou
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
+import { updateExecApprovalsSync } from "../infra/exec-approvals-store.js";
 import {
   loadExecApprovals,
   resolveExecApprovalsDisplayPath,
+  type ExecAllowlistEntry,
+  type ExecApprovalsFile,
   type ExecAsk,
   type ExecMode,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import {
+  compileExecArgPattern,
+  type ExecArgPatternRejectReason,
+} from "../infra/exec-arg-pattern.js";
 import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
 import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
+
+type RejectedExecArgPattern = {
+  scope: string;
+  pattern: string;
+  argPattern: string;
+  reason: ExecArgPatternRejectReason;
+};
+
+function collectRejectedExecArgPatternsFromAllowlist(
+  scope: string,
+  allowlist: readonly ExecAllowlistEntry[] | undefined,
+): RejectedExecArgPattern[] {
+  const findings: RejectedExecArgPattern[] = [];
+  for (const entry of allowlist ?? []) {
+    if (typeof entry.argPattern !== "string") {
+      continue;
+    }
+    const compiled = compileExecArgPattern(entry.argPattern);
+    if (!compiled.regex) {
+      findings.push({
+        scope,
+        pattern: entry.pattern,
+        argPattern: entry.argPattern,
+        reason: compiled.reason,
+      });
+    }
+  }
+  return findings;
+}
+
+export function collectRejectedExecArgPatterns(
+  file: ExecApprovalsFile = loadExecApprovals(),
+): RejectedExecArgPattern[] {
+  return Object.entries(file.agents ?? {}).flatMap(([agentId, agent]) =>
+    collectRejectedExecArgPatternsFromAllowlist(`agents.${agentId}`, agent.allowlist),
+  );
+}
+
+export function repairRejectedExecArgPatterns(): RejectedExecArgPattern[] {
+  const removed: RejectedExecArgPattern[] = [];
+  updateExecApprovalsSync({
+    update: (file) => {
+      let changed = false;
+      const agents = { ...file.agents };
+      for (const [agentId, agent] of Object.entries(file.agents ?? {})) {
+        const scope = `agents.${agentId}`;
+        const nextAllowlist = (agent.allowlist ?? []).filter((entry) => {
+          if (typeof entry.argPattern !== "string") {
+            return true;
+          }
+          const compiled = compileExecArgPattern(entry.argPattern);
+          if (compiled.regex) {
+            return true;
+          }
+          changed = true;
+          removed.push({
+            scope,
+            pattern: entry.pattern,
+            argPattern: entry.argPattern,
+            reason: compiled.reason,
+          });
+          return false;
+        });
+        if (nextAllowlist.length !== (agent.allowlist?.length ?? 0)) {
+          agents[agentId] = { ...agent, allowlist: nextAllowlist };
+        }
+      }
+      return changed ? { ...file, agents } : null;
+    },
+  });
+  return removed;
+}
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
@@ -187,11 +266,6 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
   return warnings;
 }
 
-function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
-  void cfg;
-  return [];
-}
-
 function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): string[] {
   return collectExecFilesystemPolicyDriftHits(cfg).map((hit) =>
     [
@@ -268,7 +342,6 @@ export async function collectSecurityWarnings(
   warnings.push(...collectExecPolicyConflictWarnings(cfg));
   warnings.push(...collectExecFilesystemPolicyWarnings(cfg));
   warnings.push(...collectPlaintextConfigSecretWarnings(cfg));
-  warnings.push(...collectDurableExecApprovalWarnings(cfg));
 
   // Network exposure needs auth proof before doctor can treat non-loopback bind as intentional.
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";

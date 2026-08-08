@@ -152,6 +152,43 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeNull();
     });
 
+    it("rejects nested-repetition patterns before they can authorize a matching command", () => {
+      const argPattern = "(a+)+$";
+      const unsafe = { pattern: "/usr/bin/python3", argPattern };
+
+      expect(new RegExp(argPattern).test("aaaa")).toBe(true);
+      expect(matchAllowlist([unsafe], resolution, ["python3", "aaaa"])).toBeNull();
+    });
+
+    it("rejects repeated overlapping alternatives while preserving disjoint siblings", () => {
+      const duplicate = { pattern: "/usr/bin/python3", argPattern: "^(a|a)+$" };
+      const overlapping = { pattern: "/usr/bin/python3", argPattern: "^(aa|a.)+$" };
+      const safe = { pattern: "/usr/bin/python3", argPattern: "^(?:aa|bb)+$" };
+
+      expect(matchAllowlist([duplicate], resolution, ["python3", "aaaa"])).toBeNull();
+      expect(matchAllowlist([overlapping], resolution, ["python3", "aaaa"])).toBeNull();
+      expect(matchAllowlist([safe], resolution, ["python3", "aabb"])).toBe(safe);
+    });
+
+    it("falls back to an explicit path-only sibling when an argPattern is rejected", () => {
+      const unsafe = { pattern: "/usr/bin/python3", argPattern: "(a+)+$" };
+      const pathOnly = { pattern: "/usr/bin/python3" };
+
+      expect(matchAllowlist([unsafe, pathOnly], resolution, ["python3", "aaaa"])).toBe(pathOnly);
+    });
+
+    it("preserves blank and whitespace-sensitive legacy argPattern semantics", () => {
+      const blank = { pattern: "/usr/bin/python3", argPattern: "" };
+      const whitespace = { pattern: "/usr/bin/python3", argPattern: "^ a $" };
+      const escapedSpace = { pattern: "/usr/bin/python3", argPattern: String.raw`\ ` };
+
+      expect(matchAllowlist([blank], resolution, ["python3", "anything"])).toBe(blank);
+      expect(matchAllowlist([whitespace], resolution, ["python3", " a "])).toBe(whitespace);
+      expect(matchAllowlist([whitespace], resolution, ["python3", "a"])).toBeNull();
+      expect(matchAllowlist([escapedSpace], resolution, ["python3", " "])).toBe(escapedSpace);
+      expect(matchAllowlist([escapedSpace], resolution, ["python3", "x"])).toBeNull();
+    });
+
     it("rejects split-arg bypasses against single-arg auto-generated argPattern", () => {
       const entry = { pattern: "/usr/bin/python3", argPattern: "^hello world\x00$" };
       const entries: ExecAllowlistEntry[] = [entry];
