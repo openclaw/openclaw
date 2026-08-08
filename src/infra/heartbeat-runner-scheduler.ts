@@ -28,6 +28,7 @@ import {
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import {
   isConfiguredHeartbeatAgent,
+  isTargetedImmediateHookWake,
   isTargetedImmediateSystemEventWake,
 } from "./heartbeat-wake-policy.js";
 import {
@@ -295,12 +296,19 @@ export function startHeartbeatRunner(opts: {
     const allowsUnscheduledTarget =
       requestedTargetAgentId !== undefined &&
       isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
-      isTargetedImmediateSystemEventWake({
+      (isTargetedImmediateSystemEventWake({
         source: params.source,
         intent,
         reason,
         sessionKey: requestedSessionKey,
-      });
+      }) ||
+        isTargetedImmediateHookWake({
+          source: params.source,
+          intent,
+          reason,
+          agentId: requestedAgentId,
+          sessionKey: requestedSessionKey,
+        }));
     if (state.agents.size === 0 && !allowsUnscheduledTarget) {
       return {
         status: "skipped",

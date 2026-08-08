@@ -27,11 +27,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
-import { toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { isUnscopedSessionKeySentinel, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import {
   createHooksRequestHandler,
@@ -54,9 +55,9 @@ const HOOK_AGENT_SESSION_CONFLICT_ERROR =
 const HOOK_AGENT_PREPARATION_ERROR = "hook agent run failed before entering the agent runner";
 
 function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
-  return params.agentId
-    ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
-    : resolveMainSessionKey(params.cfg);
+  return params.cfg.session?.scope === "global" || !params.agentId
+    ? resolveMainSessionKey(params.cfg)
+    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
 }
 
 function shouldAnnounceHookRunResult(params: {
@@ -257,9 +258,16 @@ export function createGatewayHooksRequestHandler(params: {
         })()
       : undefined;
     const sessionKey = target?.eventSessionKey ?? resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, {
-      sessionKey,
-    });
+    const eventOptions = { sessionKey };
+    enqueueSystemEvent(
+      value.text,
+      // A targeted wake consumes the queued event; in global scope the queue
+      // key is the shared sentinel, so the event must carry its owner's agent
+      // to keep concurrent hook wakes from cross-consuming each other's events.
+      isUnscopedSessionKeySentinel(sessionKey) && target?.heartbeatTarget?.agentId
+        ? withSystemEventOwner(eventOptions, target.heartbeatTarget.agentId)
+        : eventOptions,
+    );
     if (value.mode === "now") {
       requestHeartbeat({
         source: "hook",
@@ -304,16 +312,44 @@ export function createGatewayHooksRequestHandler(params: {
       state: { nextRunAtMs: nowMs },
     };
     let hookEventSessionKey: string | undefined;
+    // Dispatch-time accepted agent, frozen before the queue so a default-agent
+    // reload between dispatch and queue execution cannot retarget global wakes
+    // at a different agent than the one the isolated run actually used.
+    let acceptedHookAgentId: string | undefined = undefined;
     const reportHookFailure = (err: unknown) => {
+      const failureSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
+      const failureAgentId = normalizeOptionalString(value.agentId);
+      // The shared global queue cannot identify an agent and is unsafe as a wake key.
+      // Carry an explicit/fresh default agent without the sentinel to prevent coalescing.
+      // Check the recovered key because initial resolution can fail before assignment.
+      const failureWakeAgentId =
+        failureAgentId && hookEventSessionKey
+          ? failureAgentId
+          : isUnscopedSessionKeySentinel(failureSessionKey)
+            ? (failureAgentId ?? acceptedHookAgentId ?? resolveDefaultAgentId(getRuntimeConfig()))
+            : undefined;
       logHooks.warn(`hook agent failed: ${String(err)}`);
-      enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-        sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
-      });
+      const failureEventOptions = { sessionKey: failureSessionKey };
+      enqueueSystemEvent(
+        `Hook ${safeName} (error): ${String(err)}`,
+        // In global scope the failure event shares the sentinel queue with
+        // every other agent; ownership keeps the targeted failure wake from
+        // consuming another agent's queued failure event.
+        isUnscopedSessionKeySentinel(failureSessionKey) && failureWakeAgentId
+          ? withSystemEventOwner(failureEventOptions, failureWakeAgentId)
+          : failureEventOptions,
+      );
       if (value.wakeMode === "now") {
+        // A hook wake must target the same agent/session the event landed on;
+        // an unscoped wake would run heartbeat turns for every heartbeat-enabled agent.
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
           reason: `hook:${jobId}:error`,
+          ...(failureWakeAgentId ? { agentId: failureWakeAgentId } : {}),
+          ...(!isUnscopedSessionKeySentinel(failureSessionKey)
+            ? { sessionKey: failureSessionKey }
+            : {}),
         });
       }
     };
@@ -337,6 +373,10 @@ export function createGatewayHooksRequestHandler(params: {
       };
     }
     const agentId = acceptedValue.agentId ?? resolveDefaultAgentId(dispatchCfg);
+    // Freeze the accepted agent for failure/announce wake routing: the queue
+    // may run after a reload that changes the default agent, and a global
+    // wake must target the agent the isolated run actually used.
+    acceptedHookAgentId = agentId;
     const queueKey = resolveCronAgentSessionKey({
       sessionKey,
       agentId,
@@ -467,11 +507,38 @@ export function createGatewayHooksRequestHandler(params: {
           }
           if (shouldAnnounce) {
             const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
-            enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-              sessionKey: eventSessionKey,
-            });
+            const announceEventOptions = { sessionKey: eventSessionKey };
+            enqueueSystemEvent(
+              `${prefix}: ${summary}`.trim(),
+              // Global-scope announce events share the sentinel queue with every
+              // other agent; ownership keeps the targeted announce wake from
+              // consuming another agent's queued completion event.
+              isUnscopedSessionKeySentinel(eventSessionKey)
+                ? withSystemEventOwner(
+                    announceEventOptions,
+                    acceptedHookAgentId ?? resolveDefaultAgentId(cfg),
+                  )
+                : announceEventOptions,
+            );
             if (value.wakeMode === "now") {
-              requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+              // Target the event's agent/session; unnamed non-global hooks rely on the
+              // fresh session key so a default-agent reload cannot wake a stale agent.
+              // Global wakes carry the frozen accepted agent (not a freshly resolved
+              // default) so a reload between dispatch and queue execution cannot
+              // retarget the wake at a different agent than the run used.
+              requestHeartbeat({
+                source: "hook",
+                intent: "immediate",
+                reason: `hook:${jobId}`,
+                ...(acceptedValue.agentId
+                  ? { agentId: acceptedValue.agentId }
+                  : isUnscopedSessionKeySentinel(eventSessionKey)
+                    ? { agentId: acceptedHookAgentId ?? resolveDefaultAgentId(cfg) }
+                    : {}),
+                ...(!isUnscopedSessionKeySentinel(eventSessionKey)
+                  ? { sessionKey: eventSessionKey }
+                  : {}),
+              });
             }
           } else if (result.status === "ok" && !value.deliver) {
             logHooks.info("hook agent run completed without announcement", {
