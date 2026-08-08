@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -84,6 +85,45 @@ export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMe
     .trim();
 }
 
+/**
+ * Reads the Gateway transcript metadata (`__openclaw`) as a non-array record,
+ * using the shared canonical guard so oversized/truncation detection cannot be
+ * fooled by array-shaped metadata. Returns null for missing or malformed rows.
+ */
+function resolveTranscriptMetadata(message: unknown): Record<string, unknown> | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  return asNullableRecord((message as Record<string, unknown>)["__openclaw"]);
+}
+
+/** Oversized rows carry `truncated: true, reason: "oversized"` and must surface a notice. */
+export function isOversizedHistoryPlaceholder(message: unknown): boolean {
+  const metadata = resolveTranscriptMetadata(message);
+  return metadata?.truncated === true && metadata.reason === "oversized";
+}
+
+/**
+ * Shared display projection for a transcript row: oversized rows resolve to the
+ * localized notice instead of the raw internal placeholder, while ordinary rows
+ * keep their normalized markdown (thinking tags stripped for assistants). Every
+ * user-facing surface - bubble text, `data-message-text`, inline Reply,
+ * context-menu Reply, copy, and canvas - reads from this projection so the raw
+ * marker can never leak through an action or attribute path.
+ */
+function resolveMessageDisplayText(params: {
+  message: unknown;
+  normalizedMarkdown: string;
+  role: string;
+}): string {
+  if (isOversizedHistoryPlaceholder(params.message)) {
+    return t("chat.messages.tooLargeToDisplay");
+  }
+  return params.role === "assistant"
+    ? stripThinkingTags(params.normalizedMarkdown).trim()
+    : params.normalizedMarkdown.trim();
+}
+
 export function resolveMessageActionDetails(params: {
   message: unknown;
   messageId: string;
@@ -94,12 +134,8 @@ export function resolveMessageActionDetails(params: {
 }): MessageActionDetails | null {
   const { message, messageId: renderMessageId, canFetchFullMessage, onReply, senderLabel } = params;
   const record = message as Record<string, unknown>;
-  const transcriptMeta =
-    record["__openclaw"] &&
-    typeof record["__openclaw"] === "object" &&
-    !Array.isArray(record["__openclaw"])
-      ? (record["__openclaw"] as Record<string, unknown>)
-      : null;
+  const transcriptMeta = resolveTranscriptMetadata(message);
+  const isOversized = isOversizedHistoryPlaceholder(message);
   const messageId =
     typeof transcriptMeta?.id === "string"
       ? transcriptMeta.id
@@ -109,10 +145,12 @@ export function resolveMessageActionDetails(params: {
   const normalizedMessage = normalizeMessage(message);
   const normalizedMarkdown = resolveNormalizedMessageMarkdown(normalizedMessage);
   const role = normalizeRoleForGrouping(normalizedMessage.role);
-  const previewMarkdown =
-    role === "assistant" ? stripThinkingTags(normalizedMarkdown).trim() : normalizedMarkdown.trim();
+  const previewMarkdown = resolveMessageDisplayText({ message, normalizedMarkdown, role });
   // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
+  // Oversized rows surface only the notice: they are not inline-expandable, so they never
+  // request a full-message fetch or trigger the assistant disclosure.
   const shouldFetchFullMessage = Boolean(
+    !isOversized &&
     canFetchFullMessage &&
     messageId &&
     !record.openclawMessageToolMirror &&
@@ -127,7 +165,10 @@ export function resolveMessageActionDetails(params: {
     expansion?.status === "loaded" && expansion.expanded
       ? stripThinkingTags(expansion.markdown).trim()
       : previewMarkdown;
-  const markdown = role === "assistant" ? visibleMarkdown : undefined;
+  // Oversized rows project the notice for every role so `data-message-text`,
+  // reply, and copy never carry the raw internal placeholder; ordinary user
+  // rows stay non-markdown (no copy action) to preserve main's behavior.
+  const markdown = isOversized || role === "assistant" ? visibleMarkdown : undefined;
   const replyText = onReply ? truncateUtf16Safe(visibleMarkdown, 500) : "";
   if (!markdown && !replyText && !(role === "assistant" && shouldFetchFullMessage)) {
     return null;

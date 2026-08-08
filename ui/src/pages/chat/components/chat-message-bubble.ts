@@ -40,6 +40,7 @@ import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { renderMessageImages, resolveRenderableMessageImages } from "./chat-message-images.ts";
 import {
   detectJson,
+  isOversizedHistoryPlaceholder,
   jsonSummaryLabel,
   renderAssistantMessageMarkdown,
   renderMarkdownText,
@@ -224,6 +225,11 @@ export function renderGroupedMessage(
   const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
 
   const extractedText = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const isOversized = isOversizedHistoryPlaceholder(message);
+  // `actionText` is the shared display projection from resolveMessageActionDetails:
+  // oversized rows already resolve to the localized notice there, so the
+  // `data-message-text` attribute and reply/copy actions never carry the raw
+  // internal placeholder.
   const actionText = opts.actionMarkdown ?? extractedText;
   const assistantAttachments = normalizedMessage.content.filter(
     (item): item is AttachmentItem => item.type === "attachment",
@@ -235,7 +241,8 @@ export function renderGroupedMessage(
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
-  const markdown = extractedText?.trim() ? extractedText : null;
+  const oversizedNotice = isOversized ? t("chat.messages.tooLargeToDisplay") : null;
+  const markdown = oversizedNotice ?? (extractedText?.trim() ? extractedText : null);
   const markdownRenderOptions: MarkdownRenderOptions = {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
@@ -448,9 +455,13 @@ export function renderGroupedMessage(
                             </summary>
                             <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
-                        : markdown
-                          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
-                          : nothing}
+                        : oversizedNotice
+                          ? html`<div class="chat-text chat-history-omitted">
+                              ${oversizedNotice}
+                            </div>`
+                          : markdown
+                            ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                            : nothing}
                       ${hasToolCards
                         ? singleToolCard && !markdown && !hasImages
                           ? renderExpandedToolCardContent(
@@ -502,26 +513,28 @@ export function renderGroupedMessage(
                 </div>`
               : nothing}
             ${assistantViewContent}
-            ${jsonResult
-              ? html`<details class="chat-json-collapse">
-                  <summary class="chat-json-summary">
-                    <span class="chat-json-badge">JSON</span>
-                    <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                  </summary>
-                  <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                </details>`
-              : markdown
-                ? normalizedRole === "user"
-                  ? renderUserMessageMarkdown(markdown, messageKey, opts, markdownRenderOptions)
-                  : normalizedRole === "assistant"
-                    ? renderAssistantMessageMarkdown(
-                        markdown,
-                        opts.isStreaming,
-                        opts.assistantMessageDisclosure,
-                        markdownRenderOptions,
-                      )
-                    : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
-                : nothing}
+            ${oversizedNotice
+              ? html`<div class="chat-text chat-history-omitted">${oversizedNotice}</div>`
+              : jsonResult
+                ? html`<details class="chat-json-collapse">
+                    <summary class="chat-json-summary">
+                      <span class="chat-json-badge">JSON</span>
+                      <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                    </summary>
+                    <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                  </details>`
+                : markdown
+                  ? normalizedRole === "user"
+                    ? renderUserMessageMarkdown(markdown, messageKey, opts, markdownRenderOptions)
+                    : normalizedRole === "assistant"
+                      ? renderAssistantMessageMarkdown(
+                          markdown,
+                          opts.isStreaming,
+                          opts.assistantMessageDisclosure,
+                          markdownRenderOptions,
+                        )
+                      : renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions)
+                  : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
                   messageKey,

@@ -444,4 +444,97 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await context.close();
     }
   });
+
+  it("renders oversized history rows as a notice and never leaks the raw placeholder through actions (#111854)", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: captureUiProof
+        ? { dir: path.join(artifactDir, "video"), size: { height: 900, width: 1440 } }
+        : undefined,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(server.baseUrl).origin,
+    });
+    const page = await context.newPage();
+    const rawPlaceholder = "[chat.history omitted: message too large]";
+    const notice = "This message is too large to display here.";
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: rawPlaceholder }],
+          timestamp: Date.now(),
+          __openclaw: { id: "oversized-user-proof", seq: 1, truncated: true, reason: "oversized" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: rawPlaceholder }],
+          timestamp: Date.now() + 1,
+          __openclaw: { id: "oversized-asst-proof", seq: 2, truncated: true, reason: "oversized" },
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
+
+      // The raw internal placeholder must never reach the rendered DOM.
+      await expect.poll(() => page.locator(".chat-history-omitted").count()).toBe(2);
+      await expect
+        .poll(() => page.evaluate(() => document.body.textContent))
+        .not.toContain(rawPlaceholder);
+      const noticeTexts = await page.locator(".chat-history-omitted").allTextContents();
+      expect(noticeTexts.every((value) => value.trim() === notice)).toBe(true);
+      await screenshot(page, "10-oversized-notice.png");
+
+      // The data-message-text attribute (context-menu Reply source) must carry the
+      // notice, not the raw placeholder, for both user and assistant oversized rows.
+      const assistantBubble = page.locator('.chat-bubble[data-entry-id="oversized-asst-proof"]');
+      await assistantBubble.waitFor({ state: "visible" });
+      expect(await assistantBubble.getAttribute("data-message-text")).toBe(notice);
+      const userBubble = page.locator('.chat-bubble[data-entry-id="oversized-user-proof"]');
+      expect(await userBubble.getAttribute("data-message-text")).toBe(notice);
+
+      // Inline Reply must route the notice into the reply preview, never the raw marker.
+      const assistantGroup = assistantBubble.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')]",
+      );
+      await assistantGroup.hover();
+      await assistantGroup.getByRole("button", { name: "Reply to message" }).click();
+      const replyPreview = page.locator(".chat-reply-preview");
+      await replyPreview.waitFor({ state: "visible" });
+      await expect
+        .poll(() => replyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(notice);
+      await screenshot(page, "11-oversized-reply-preview.png");
+      await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      // Copy as markdown must place the notice on the clipboard, never the raw marker.
+      await assistantGroup.hover();
+      await assistantGroup.getByRole("button", { name: "Copy as markdown" }).click();
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(notice);
+
+      // Context-menu Reply reads data-message-text, which must be the notice.
+      const menu = page.locator(".chat-reply-context-menu");
+      await assistantBubble.click({ button: "right" });
+      await menu.waitFor({ state: "visible" });
+      expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
+        "Reply",
+        "Hide message",
+        "Copy as markdown",
+      ]);
+      await screenshot(page, "12-oversized-context-menu.png");
+      await menu.getByRole("menuitem", { name: "Reply to message" }).click();
+      await replyPreview.waitFor({ state: "visible" });
+      await expect
+        .poll(() => replyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(notice);
+      await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
+    } finally {
+      await context.close();
+    }
+  });
 });

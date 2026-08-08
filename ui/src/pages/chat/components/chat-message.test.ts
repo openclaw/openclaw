@@ -5222,5 +5222,115 @@ describe("grouped chat rendering", () => {
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
   });
+
+  it("renders an oversized user history placeholder as a notice and keeps the raw marker out of data-message-text (#111854)", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: { id: "oversized-user", seq: 1, truncated: true, reason: "oversized" },
+      },
+      "user",
+    );
+
+    expect(container.textContent).not.toContain("[chat.history omitted: message too large]");
+    const notice = container.querySelector(".chat-history-omitted");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent?.trim()).toBe("This message is too large to display here.");
+    // The raw internal placeholder must not leak through the DOM attribute that
+    // context-menu Reply reads, or reply would reintroduce the internal string.
+    const bubble = container.querySelector<HTMLElement>(".chat-bubble");
+    expect(bubble?.dataset.messageText).toBe("This message is too large to display here.");
+  });
+
+  it("renders an oversized assistant placeholder as a notice without an inline expand disclosure (#111854)", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: { id: "oversized-assistant", seq: 1, truncated: true, reason: "oversized" },
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        loadFullAssistantMessage: async () => ({ ok: true, message: { content: [] } }),
+        onToggleAssistantMessageExpanded: vi.fn(),
+      },
+    );
+
+    expect(container.textContent).not.toContain("[chat.history omitted: message too large]");
+    const notice = container.querySelector(".chat-history-omitted");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent?.trim()).toBe("This message is too large to display here.");
+    // Oversized rows surface only the notice: they are not inline-expandable, so
+    // the assistant Show more disclosure must not appear for them.
+    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+    const bubble = container.querySelector<HTMLElement>(".chat-bubble");
+    expect(bubble?.dataset.messageText).toBe("This message is too large to display here.");
+  });
+
+  it("routes oversized reply text through the shared projection so inline Reply carries the notice (#111854)", () => {
+    const container = document.createElement("div");
+    const onReply = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: { id: "oversized-reply", seq: 1, truncated: true, reason: "oversized" },
+      },
+      { onReply },
+    );
+
+    const replyButton = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
+    expect(replyButton).toBeInstanceOf(HTMLButtonElement);
+    replyButton!.click();
+    expect(onReply).toHaveBeenCalledTimes(1);
+    const target = requireFirstMockArg(onReply, "reply target");
+    expect(target.text).toBe("This message is too large to display here.");
+    expect(target.text).not.toContain("[chat.history omitted");
+  });
+
+  it("treats array-shaped __openclaw metadata as ordinary text, not an oversized notice (#111854)", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: [{ type: "text", text: "a normal message body" }],
+        // Malformed metadata (array) must not satisfy the non-array record guard,
+        // so the row renders its real text instead of the oversized notice.
+        __openclaw: [{ id: "bogus", truncated: true, reason: "oversized" }],
+      },
+      "user",
+    );
+
+    expect(container.querySelector(".chat-history-omitted")).toBeNull();
+    expect(container.textContent).toContain("a normal message body");
+    const bubble = container.querySelector<HTMLElement>(".chat-bubble");
+    expect(bubble?.dataset.messageText).toBe("a normal message body");
+  });
+
+  it("keeps ordinary messages unaffected by the oversized projection (#111854)", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: [{ type: "text", text: "plain ordinary message" }],
+        __openclaw: { id: "ordinary-user", seq: 1 },
+      },
+      "user",
+    );
+
+    expect(container.querySelector(".chat-history-omitted")).toBeNull();
+    expect(container.textContent).toContain("plain ordinary message");
+    const bubble = container.querySelector<HTMLElement>(".chat-bubble");
+    expect(bubble?.dataset.messageText).toBe("plain ordinary message");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
