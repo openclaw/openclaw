@@ -460,7 +460,7 @@ describe("executeFollowupTurn", () => {
     expect(observed).toBe(expected);
   });
 
-  it("tracks a visible failed item before suppressing duplicate default warnings", async () => {
+  it("buffers a regular-verbose failed item until terminal delivery is known", async () => {
     const onItemEvent = vi.fn(async () => undefined);
     let warningSuppressed: boolean | undefined;
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
@@ -482,8 +482,42 @@ describe("executeFollowupTurn", () => {
     });
     await result.progress.drain();
 
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(warningSuppressed).toBeUndefined();
+    expect(result.progress.hasPendingFailed()).toBe(true);
+
+    await result.progress.flushFailed();
+
     expect(onItemEvent).toHaveBeenCalledOnce();
-    expect(warningSuppressed).toBe(true);
+    expect(result.progress.visibleToolErrorObserved()).toBe(true);
+  });
+
+  it("continues flushing buffered failures after a delivery callback rejects", async () => {
+    const onItemEvent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("presentation failed"))
+      .mockResolvedValueOnce(undefined);
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onItemEvent?.({ phase: "end", status: "failed" });
+      await params.opts?.onItemEvent?.({ phase: "end", status: "error" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onItemEvent },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    await expect(result.progress.flushFailed()).resolves.toBe(true);
+    expect(onItemEvent).toHaveBeenCalledTimes(2);
   });
 
   it("tracks a full-verbosity failed command before suppressing duplicate warnings", async () => {

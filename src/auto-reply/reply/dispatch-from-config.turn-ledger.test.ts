@@ -30,6 +30,21 @@ describe("createReplyTurnLedger", () => {
     await dispatcher.waitForIdle();
   });
 
+  it("confirms only clean block or final delivery after settlement", async () => {
+    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    const ledger = createReplyTurnLedger(dispatcher);
+    ledger.sendQueued("tool", { text: "tool succeeded" });
+    ledger.sendQueued("final", { text: "terminal failure", isError: true });
+    await ledger.settleQueued();
+    expect(ledger.hasCleanTerminalDelivery()).toBe(false);
+
+    ledger.sendQueued("block", { text: "recovered answer" });
+    await ledger.settleQueued();
+    expect(ledger.hasCleanTerminalDelivery()).toBe(true);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  });
+
   it("does not count a beforeDeliver-cancelled payload as visible", async () => {
     const deliver = vi.fn(async () => {});
     const dispatcher = createReplyDispatcher({ deliver, beforeDeliver: async () => null });
@@ -126,6 +141,14 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.hasVisibleDelivery()).toBe(false);
     ledger.recordRoutedDelivery({ mediaUrl: "https://example.com/seatmap.png" }, true);
     expect(ledger.hasVisibleDelivery()).toBe(true);
+  });
+
+  it("does not treat routed tool progress as a clean terminal delivery", () => {
+    const ledger = createReplyTurnLedger(createUntrackedDispatcher());
+    ledger.recordRoutedDelivery({ text: "tool succeeded" }, true, "tool");
+    expect(ledger.hasCleanTerminalDelivery()).toBe(false);
+    ledger.recordRoutedDelivery({ text: "recovered answer" }, true, "final");
+    expect(ledger.hasCleanTerminalDelivery()).toBe(true);
   });
 
   it("reports foreign admissions the dispatch pipeline never sent", () => {

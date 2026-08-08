@@ -9,6 +9,8 @@ import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { defaultRuntime } from "../../runtime.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -100,6 +102,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     accumulatedBlockTtsText: "",
     blockCount: 0,
     hasPendingDirectBlockReplyDelivery: false,
+    pendingFailedProgressDeliveries: [] as Array<() => Promise<void>>,
     progressCallbackStartTail: Promise.resolve(),
   };
   const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
@@ -179,6 +182,92 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     payload.status === "failed" ||
     payload.status === "error" ||
     (typeof payload.exitCode === "number" && payload.exitCode !== 0);
+  const shouldForwardFailedProgress = (options?: { force?: boolean }) =>
+    options?.force === true || state.shouldEmitFullVerboseProgress();
+  const shouldBufferFailedProgress = (options?: { force?: boolean }) =>
+    state.sourceReplyDeliveryMode !== "message_tool_only" &&
+    !shouldForwardFailedProgress(options) &&
+    hasVisibleRegularVerboseToolProgress();
+  const shouldForwardFailedProgressStatus = (payload: {
+    phase?: string;
+    status?: string;
+    exitCode?: number | null;
+  }) => shouldForwardFailedProgress() || !hasFailedProgressStatus(payload);
+  const enqueuePendingFailedProgressDelivery = (deliver: () => Promise<void>) => {
+    progressState.pendingFailedProgressDeliveries.push(deliver);
+  };
+  const discardPendingFailedProgressDeliveries = () => {
+    progressState.pendingFailedProgressDeliveries.length = 0;
+  };
+  const flushPendingFailedProgressDeliveries = async () => {
+    const deliveries = progressState.pendingFailedProgressDeliveries.splice(0);
+    for (const deliver of deliveries) {
+      if (isDispatchOperationAborted()) {
+        return;
+      }
+      try {
+        await deliver();
+      } catch (error) {
+        defaultRuntime.error?.(
+          `dispatch-from-config: buffered failed progress delivery failed: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+  };
+  const hasPendingFailedProgressDeliveries = () =>
+    progressState.pendingFailedProgressDeliveries.length > 0;
+  const forwardOrBufferToolResultProgressCallback = async (
+    payload: ReplyPayload,
+    isFastModeAutoProgress: boolean,
+    isForcedToolProgress: boolean,
+  ) => {
+    const forwarded = shouldForwardToolResultProgressCallback(
+      payload,
+      isFastModeAutoProgress,
+      isForcedToolProgress,
+    );
+    if (forwarded) {
+      await onToolResultFromReplyOptions?.(payload);
+    } else if (
+      onToolResultFromReplyOptions &&
+      payload.isError === true &&
+      shouldBufferFailedProgress({ force: isForcedToolProgress }) &&
+      shouldForwardToolResultProgressCallbackBase(payload, isFastModeAutoProgress)
+    ) {
+      enqueuePendingFailedProgressDelivery(async () => {
+        await onToolResultFromReplyOptions(payload);
+        markVisibleToolErrorProgress();
+      });
+    }
+    return forwarded;
+  };
+  const deferFailedProgressDelivery = (payload: ReplyPayload, force: boolean) => {
+    if (payload.isError !== true || shouldForwardFailedProgress({ force })) {
+      if (payload.isError === true) {
+        markVisibleToolErrorProgress();
+      }
+      return false;
+    }
+    if (shouldBufferFailedProgress({ force })) {
+      enqueuePendingFailedProgressDelivery(async () => {
+        if (isDispatchOperationAborted()) {
+          return;
+        }
+        if (shouldRouteToOriginating) {
+          const result = await sendPayloadAsync(payload, undefined, false);
+          if (result?.delivered) {
+            markVisibleToolErrorProgress();
+          }
+        } else {
+          markInboundDedupeReplayUnsafe();
+          if (state.turnLedger.sendQueued("tool", payload).queued) {
+            markVisibleToolErrorProgress();
+          }
+        }
+      });
+    }
+    return true;
+  };
   const shouldSuppressToolErrorWarnings = () => {
     if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
       return params.replyOptions.suppressToolErrorWarnings;
@@ -201,7 +290,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     const text = normalizeOptionalString(payload.text);
     return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
   };
-  const shouldForwardToolResultProgressCallback = (
+  const shouldForwardToolResultProgressCallbackBase = (
     payload: ReplyPayload,
     isFastModeAutoProgress: boolean,
   ) => {
@@ -216,6 +305,13 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     }
     return shouldSendToolSummaries() && shouldForwardProgressCallback();
   };
+  const shouldForwardToolResultProgressCallback = (
+    payload: ReplyPayload,
+    isFastModeAutoProgress: boolean,
+    isForcedToolProgress: boolean,
+  ) =>
+    (payload.isError !== true || shouldForwardFailedProgress({ force: isForcedToolProgress })) &&
+    shouldForwardToolResultProgressCallbackBase(payload, isFastModeAutoProgress);
   const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
     allowWhenToolSummariesHidden?: boolean;
     requiresToolSummaryVisibility?: boolean;
@@ -273,6 +369,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       requiresToolSummaryVisibility?: boolean;
       onForward?: (...args: Args) => Promise<void> | void;
       onVisible?: (...args: Args) => Promise<void> | void;
+      deferWhenShouldForwardFalse?: boolean;
+      shouldForward?: (...args: Args) => boolean;
       waitForDirectBlockReplyDelivery?: boolean;
     },
   ): ((...args: Args) => Promise<Result | undefined>) | undefined => {
@@ -296,6 +394,21 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
           if (isDispatchOperationAborted()) {
             return undefined;
           }
+        }
+        if (options?.shouldForward?.(...args) === false) {
+          if (options.deferWhenShouldForwardFalse === true && shouldBufferFailedProgress()) {
+            enqueuePendingFailedProgressDelivery(async () => {
+              if (!shouldForwardProgressCallback(options)) {
+                return;
+              }
+              await options.onForward?.(...args);
+              const result = await callback(...args);
+              if (result !== false) {
+                await options.onVisible?.(...args);
+              }
+            });
+          }
+          return undefined;
         }
         if (shouldForwardProgressCallback(options)) {
           if (preserveProgressCallbackStartOrder && options?.onForward) {
@@ -356,6 +469,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
         ...itemEventForwardingOptions,
         waitForDirectBlockReplyDelivery: true,
+        deferWhenShouldForwardFalse: true,
+        shouldForward: shouldForwardFailedProgressStatus,
         onForward: (payload) =>
           preserveProgressCallbackStartOrder && shouldDeliverDurableCommentaryProgress(payload)
             ? noteCommentaryProgress(payload)
@@ -427,12 +542,22 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     shouldSuppressProgressDelivery,
     markVisibleToolErrorProgress,
     hasFailedProgressStatus,
+    shouldForwardFailedProgress,
+    shouldBufferFailedProgress,
+    enqueuePendingFailedProgressDelivery,
+    discardPendingFailedProgressDeliveries,
+    flushPendingFailedProgressDeliveries,
+    hasPendingFailedProgressDeliveries,
+    forwardOrBufferToolResultProgressCallback,
+    deferFailedProgressDelivery,
+    hasVisibleToolErrorProgress: () => observedVisibleToolErrorProgress,
     shouldSuppressToolErrorWarnings,
     suppressToolErrorWarnings,
     onToolResultFromReplyOptions,
     onPlanUpdateFromReplyOptions,
     onApprovalEventFromReplyOptions,
     onPatchSummaryFromReplyOptions,
+    shouldForwardToolResultProgressCallbackBase,
     shouldForwardToolResultProgressCallback,
     waitForPendingDirectBlockReplyDelivery,
     shouldForwardProgressCallback,

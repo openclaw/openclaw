@@ -1,6 +1,7 @@
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { defaultRuntime } from "../../runtime.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -18,6 +19,9 @@ export type FollowupExecutionResult = {
   pendingToolTasks: Set<Promise<void>>;
   progress: {
     drain(): Promise<void>;
+    discardFailed(): void;
+    flushFailed(): Promise<boolean>;
+    hasPendingFailed(): boolean;
     visibleToolErrorObserved(): boolean;
   };
 };
@@ -63,7 +67,7 @@ export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
   onExecutionStarted?: () => void;
-  onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
+  onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<boolean | void>;
   onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
@@ -107,6 +111,7 @@ export async function executeFollowupTurn(params: {
   const shouldEmitToolResult = () =>
     progressAllowed() && (forceToolResultProgress || shouldEmitVerboseToolResult());
   const shouldEmitToolOutput = () => progressAllowed() && currentVerboseLevel() === "full";
+  const shouldEmitFailedToolProgress = () => currentVerboseLevel() === "full";
   const shouldEmitToolLifecycle = () =>
     progressAllowed() &&
     (shouldEmitToolResult() || defaults.opts?.allowToolLifecycleWhenProgressHidden === true);
@@ -125,6 +130,33 @@ export async function executeFollowupTurn(params: {
     void trackedTask.catch(() => undefined);
     pendingProgressTasks.add(trackedTask);
     return progressChain;
+  };
+  const pendingFailedProgressDeliveries: Array<() => Promise<boolean>> = [];
+  const shouldBufferFailedProgress = () =>
+    turn.queued.run.sourceReplyDeliveryMode !== "message_tool_only" &&
+    progressAllowed() &&
+    currentVerboseLevel() === "on" &&
+    shouldEmitToolResult();
+  const enqueuePendingFailedProgressDelivery = (deliver: () => Promise<boolean>) => {
+    pendingFailedProgressDeliveries.push(deliver);
+  };
+  const discardPendingFailedProgressDeliveries = () => {
+    pendingFailedProgressDeliveries.length = 0;
+  };
+  const flushPendingFailedProgressDeliveries = async (): Promise<boolean> => {
+    const deliveries = pendingFailedProgressDeliveries.splice(0);
+    for (const deliver of deliveries) {
+      try {
+        if (await deliver()) {
+          visibleToolError = true;
+        }
+      } catch (error) {
+        defaultRuntime.error?.(
+          `followup queue: buffered failed progress delivery failed: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+    return visibleToolError;
   };
   const enqueueProgressResult = async (
     deliver: () => Promise<boolean | void> | boolean | void,
@@ -193,15 +225,21 @@ export async function executeFollowupTurn(params: {
             if (!shouldEmitToolResult()) {
               return false;
             }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onCommandOutput!(output))
-            ).visible;
-            if (
-              visible &&
-              (output.status === "failed" ||
-                output.status === "error" ||
-                (typeof output.exitCode === "number" && output.exitCode !== 0))
-            ) {
+            const failed =
+              output.status === "failed" ||
+              output.status === "error" ||
+              (typeof output.exitCode === "number" && output.exitCode !== 0);
+            const deliver = async () =>
+              (await settleProgressVisibilityCallbackResult(sourceOpts.onCommandOutput!(output)))
+                .visible;
+            if (failed && !shouldEmitFailedToolProgress()) {
+              if (shouldBufferFailedProgress()) {
+                enqueuePendingFailedProgressDelivery(deliver);
+              }
+              return false;
+            }
+            const visible = await deliver();
+            if (visible && failed) {
               visibleToolError = true;
             }
             return visible;
@@ -213,13 +251,18 @@ export async function executeFollowupTurn(params: {
             if (!shouldEmitToolResult()) {
               return false;
             }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))
-            ).visible;
-            if (
-              visible &&
-              (item.phase === "error" || item.status === "failed" || item.status === "error")
-            ) {
+            const failed =
+              item.phase === "error" || item.status === "failed" || item.status === "error";
+            const deliver = async () =>
+              (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))).visible;
+            if (failed && !shouldEmitFailedToolProgress()) {
+              if (shouldBufferFailedProgress()) {
+                enqueuePendingFailedProgressDelivery(deliver);
+              }
+              return false;
+            }
+            const visible = await deliver();
+            if (visible && failed) {
               visibleToolError = true;
             }
             return visible;
@@ -283,11 +326,24 @@ export async function executeFollowupTurn(params: {
         ) {
           return false;
         }
-        const visible =
+        const deliver = async () =>
           channelToolResultProgress && !verboseToolResult
             ? (await settleProgressVisibilityCallbackResult(channelToolResultProgress(payload)))
                 .visible
-            : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
+            : await params
+                .onToolResult(payload, { runId: turn.runId })
+                .then((visible) => visible !== false);
+        if (
+          payload.isError === true &&
+          currentVerboseLevel() === "on" &&
+          !shouldEmitFailedToolProgress()
+        ) {
+          if (shouldBufferFailedProgress()) {
+            enqueuePendingFailedProgressDelivery(deliver);
+          }
+          return false;
+        }
+        const visible = await deliver();
         if (visible && payload.isError === true) {
           visibleToolError = true;
         }
@@ -393,6 +449,7 @@ export async function executeFollowupTurn(params: {
           ...pendingToolTaskWatchers,
         ]);
       }
+      await flushPendingFailedProgressDeliveries();
       throw error;
     }
   }
@@ -423,6 +480,9 @@ export async function executeFollowupTurn(params: {
             : new Error(formatErrorMessage(firstFailure));
         }
       },
+      discardFailed: discardPendingFailedProgressDeliveries,
+      flushFailed: flushPendingFailedProgressDeliveries,
+      hasPendingFailed: () => pendingFailedProgressDeliveries.length > 0,
       visibleToolErrorObserved: () => visibleToolError,
     },
   };

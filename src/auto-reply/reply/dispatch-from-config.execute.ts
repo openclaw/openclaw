@@ -164,6 +164,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   forwardWhenSourceDeliverySuppressed: true,
                   requiresToolSummaryVisibility: true,
                   waitForDirectBlockReplyDelivery: true,
+                  deferWhenShouldForwardFalse: true,
+                  shouldForward: (payload) =>
+                    state.shouldForwardFailedProgress() || !state.hasFailedProgressStatus(payload),
                   onVisible: (payload) => {
                     if (state.hasFailedProgressStatus(payload)) {
                       markVisibleToolErrorProgress();
@@ -216,13 +219,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       state.shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
-                    const progressCallbackForwarded = state.shouldForwardToolResultProgressCallback(
-                      payload,
-                      isFastModeAutoProgress,
-                    );
-                    if (progressCallbackForwarded) {
-                      await onToolResultFromReplyOptions?.(payload);
-                    }
+                    const progressCallbackForwarded =
+                      await state.forwardOrBufferToolResultProgressCallback(
+                        payload,
+                        isFastModeAutoProgress,
+                        isForcedToolProgress,
+                      );
                     if (isDispatchOperationAborted()) {
                       return;
                     }
@@ -293,9 +295,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         return;
                       }
                     }
-                    if (deliveryPayload.isError === true) {
-                      markVisibleToolErrorProgress();
-                    }
                     const askUserQuestionId = state.readAskUserQuestionId(deliveryPayload);
                     if (
                       askUserQuestionId !== undefined &&
@@ -304,6 +303,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       return;
                     }
                     if (isDispatchOperationAborted()) {
+                      return;
+                    }
+                    if (state.deferFailedProgressDelivery(deliveryPayload, isForcedToolProgress)) {
                       return;
                     }
                     if (shouldRouteToOriginating) {
@@ -592,6 +594,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       !didDeliverVisiblePartialReply ||
       isDispatchOperationAborted()
     ) {
+      await flushPendingCommentaryProgress();
+      await state.flushPendingFailedProgressDeliveries();
       throw error;
     }
     failDispatchReplyOperation(error);

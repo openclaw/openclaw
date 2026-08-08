@@ -4,7 +4,11 @@ import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
-import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
+import {
+  deliverFollowupDecision,
+  isCleanFollowupTerminalPayload,
+  resolveFollowupDeliveryDecision,
+} from "./followup-delivery.js";
 import {
   admitFollowupTurn,
   settleQueuedFollowupPresentation,
@@ -83,7 +87,7 @@ export function createFollowupRunner(
           executionStarted = true;
         },
         onToolResult: async (payload, identity) => {
-          await deliverFollowupDecision({
+          const outcome = await deliverFollowupDecision({
             decision: { kind: "deliver", payloads: [payload] },
             turn,
             defaults,
@@ -91,6 +95,7 @@ export function createFollowupRunner(
             runFollowup,
             kind: "tool",
           });
+          return outcome !== "none";
         },
         onCompactionNoticePayload: async (payload, identity) => {
           await deliverFollowupDecision({
@@ -125,13 +130,47 @@ export function createFollowupRunner(
         accounting,
         opts: defaults.opts,
       });
-      await deliverFollowupDecision({
-        decision,
-        turn,
-        defaults,
-        runId: execution.execution.runId,
-        runFollowup,
-      });
+      const decisionPayloads =
+        decision.kind === "deliver"
+          ? decision.payloads
+          : decision.kind === "deliver-diagnostic"
+            ? [decision.payload]
+            : [];
+      const hasCleanFinalPayload = decisionPayloads.some(isCleanFollowupTerminalPayload);
+      let skipTerminalFallback = false;
+      if (!hasCleanFinalPayload && execution.progress.hasPendingFailed()) {
+        if (
+          decision.kind === "retry-source-delivery" ||
+          decision.kind === "deliver-diagnostic" ||
+          (decision.kind === "suppress" && decision.reason !== "silent")
+        ) {
+          execution.progress.discardFailed();
+        } else {
+          const flushedVisibleFailure = await execution.progress.flushFailed();
+          skipTerminalFallback =
+            flushedVisibleFailure &&
+            decision.kind === "deliver" &&
+            decision.payloads.length === 1 &&
+            decision.payloads[0]?.isError === true &&
+            decision.payloads[0].text === accounting?.terminalFailurePayload?.text;
+        }
+      }
+      if (!skipTerminalFallback) {
+        const finalDelivery = await deliverFollowupDecision({
+          decision,
+          turn,
+          defaults,
+          runId: execution.execution.runId,
+          runFollowup,
+        });
+        if (hasCleanFinalPayload) {
+          if (finalDelivery === "non_error") {
+            execution.progress.discardFailed();
+          } else {
+            await execution.progress.flushFailed();
+          }
+        }
+      }
       disposition = { kind: "consumed" };
     } catch (error) {
       if (error instanceof FollowupRunDeferredError) {

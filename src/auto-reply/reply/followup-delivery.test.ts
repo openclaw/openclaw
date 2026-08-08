@@ -778,7 +778,7 @@ describe("deliverFollowupDecision", () => {
     deliveryState.routeReply.mockReset();
 
     try {
-      await deliverFollowupDecision({
+      const outcome = await deliverFollowupDecision({
         decision: { kind: "deliver", payloads: [{ text: "dispatcher only" }] },
         turn: createTurn(),
         defaults: createDefaults(onBlockReply),
@@ -788,6 +788,7 @@ describe("deliverFollowupDecision", () => {
 
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(deliveryState.routeReply).not.toHaveBeenCalled();
+      expect(outcome).toBe("none");
     } finally {
       deliveryState.followupRoute = undefined;
     }
@@ -918,7 +919,7 @@ describe("deliverFollowupDecision", () => {
       reason: "reasoning_payload_not_external",
     });
 
-    await deliverFollowupDecision({
+    const outcome = await deliverFollowupDecision({
       decision: { kind: "deliver", payloads: [{ text: "internal reasoning", isReasoning: true }] },
       turn: createTurn(),
       defaults: createDefaults(onBlockReply),
@@ -927,5 +928,6 @@ describe("deliverFollowupDecision", () => {
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
+    expect(outcome).toBe("none");
   });
 });
