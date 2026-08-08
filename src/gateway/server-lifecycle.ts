@@ -42,7 +42,60 @@ import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayRuntimeState>>;
+type GatewayRuntimeState = ReturnType<typeof createGatewayServerLiveState>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
+type GatewayCleanupStep = readonly [label: string, run: () => void | Promise<void>];
+
+export async function runGatewayCleanupSequence(
+  steps: readonly GatewayCleanupStep[],
+  log: Pick<GatewayLogger, "warn">,
+): Promise<void> {
+  const errors: unknown[] = [];
+  for (const [label, run] of steps) {
+    try {
+      await run();
+    } catch (error) {
+      log.warn(`${label} failed: ${String(error)}`);
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw errors[0];
+  }
+}
+
+export async function stopRegisteredGatewaySidecars(
+  runtimeState: Pick<GatewayRuntimeState, "gatewayLifetimeSidecars" | "postReadySidecars">,
+  log: Pick<GatewayLogger, "warn">,
+): Promise<void> {
+  const groups = [
+    ["gateway-lifetime", runtimeState.gatewayLifetimeSidecars],
+    ["post-ready", runtimeState.postReadySidecars],
+  ] as const;
+  runtimeState.gatewayLifetimeSidecars = [];
+  runtimeState.postReadySidecars = [];
+
+  const steps = groups.flatMap(([label, sidecars]) =>
+    sidecars.map(
+      (sidecar, index) => [`${label} sidecar ${index} stop`, () => sidecar.stop()] as const,
+    ),
+  );
+  await runGatewayCleanupSequence(steps, log);
+}
+
+export async function stopRegisteredPostReadySidecars(
+  runtimeState: Pick<GatewayRuntimeState, "postReadySidecars">,
+  log: Pick<GatewayLogger, "warn">,
+): Promise<void> {
+  const postReadySidecars = runtimeState.postReadySidecars;
+  runtimeState.postReadySidecars = [];
+  await runGatewayCleanupSequence(
+    postReadySidecars.map(
+      (sidecar, index) => [`post-ready sidecar ${index} stop`, () => sidecar.stop()] as const,
+    ),
+    log,
+  );
+}
 
 export async function prepareGatewayLifecycle(params: {
   runtime: GatewayRuntimePreparation;
@@ -339,8 +392,9 @@ export async function prepareGatewayLifecycle(params: {
       stopConfigReloaderForClose().catch(() => {}),
     ]);
   };
-  const runClosePrelude = async () => {
-    await beginClosePrelude();
+  const runClosePreludeAfterFence = async () => {
+    // The outer cleanup sequence owns the fence join so its failure cannot
+    // strand these independent prelude owners.
     disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
     clearPluginMetadataLifecycleCaches();
@@ -380,20 +434,7 @@ export async function prepareGatewayLifecycle(params: {
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
       getConfigReloaderHotReloadStatus: () => runtimeState?.configReloader.hotReloadStatus?.(),
     });
-  const stopRegisteredPostReadySidecars = async () => {
-    const postReadySidecars = runtimeState.postReadySidecars;
-    runtimeState.postReadySidecars = [];
-    for (const postReadySidecar of postReadySidecars) {
-      await postReadySidecar.stop();
-    }
-  };
-  const stopRegisteredGatewayLifetimeSidecars = async () => {
-    const gatewayLifetimeSidecars = runtimeState.gatewayLifetimeSidecars;
-    runtimeState.gatewayLifetimeSidecars = [];
-    for (const gatewayLifetimeSidecar of gatewayLifetimeSidecars) {
-      await gatewayLifetimeSidecar.stop();
-    }
-  };
+  const stopRegisteredSidecars = () => stopRegisteredGatewaySidecars(runtimeState, log);
   const createCloseHandler = () => async (optsValue?: GatewayCloseOptions) => {
     const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
@@ -405,7 +446,6 @@ export async function prepareGatewayLifecycle(params: {
       channelIds,
       stopChannel,
       pluginServices: runtimeState.pluginServices,
-      postReadySidecars: runtimeState.postReadySidecars,
       cron: runtimeState.cronState.cron,
       heartbeatRunner: runtimeState.heartbeatRunner,
       updateCheckStop: runtimeState.stopGatewayUpdateCheck,
@@ -462,17 +502,17 @@ export async function prepareGatewayLifecycle(params: {
     })(optsValue);
   };
   let clearFallbackGatewayContextForServer = () => {};
-  const closeOnStartupFailure = async () => {
-    try {
-      await beginClosePrelude();
-      await stopRegisteredGatewayLifetimeSidecars();
-      await stopRegisteredPostReadySidecars();
-      await runClosePrelude();
-      await createCloseHandler()({ reason: "gateway startup failed" });
-    } finally {
-      clearFallbackGatewayContextForServer();
-    }
-  };
+  const closeOnStartupFailure = () =>
+    runGatewayCleanupSequence(
+      [
+        ["gateway close prelude fence", beginClosePrelude],
+        ["registered sidecars", stopRegisteredSidecars],
+        ["gateway close prelude", runClosePreludeAfterFence],
+        ["gateway close", () => createCloseHandler()({ reason: "gateway startup failed" })],
+        ["fallback gateway context", clearFallbackGatewayContextForServer],
+      ],
+      log,
+    );
 
   if (diagnosticsEnabled) {
     // Gateway lifecycle owns both this existing heartbeat timer and the monitor
@@ -523,15 +563,14 @@ export async function prepareGatewayLifecycle(params: {
     postReadyState,
     cronReconciliation,
     beginClosePrelude,
-    runClosePrelude,
+    runClosePreludeAfterFence,
     getRuntimeSnapshot,
     startChannels,
     startChannel,
     stopChannel,
     markChannelLoggedOut,
     refreshGatewayHealthSnapshotWithRuntime,
-    stopRegisteredPostReadySidecars,
-    stopRegisteredGatewayLifetimeSidecars,
+    stopRegisteredSidecars,
     createCloseHandler,
     clearFallbackGatewayContextForServer: {
       get: () => clearFallbackGatewayContextForServer,

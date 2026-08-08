@@ -3,7 +3,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
-import { prepareGatewayLifecycle } from "./server-lifecycle.js";
+import { prepareGatewayLifecycle, runGatewayCleanupSequence } from "./server-lifecycle.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { prepareGatewayRuntimeState } from "./server-runtime-state-prepare.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -147,9 +147,8 @@ export async function startGatewayServer(
     clearFallbackGatewayContextForServer,
     closeOnStartupFailure,
     createCloseHandler,
-    runClosePrelude,
-    stopRegisteredGatewayLifetimeSidecars,
-    stopRegisteredPostReadySidecars,
+    runClosePreludeAfterFence,
+    stopRegisteredSidecars,
     terminalSessions,
   } = lifecycleRuntime;
   try {
@@ -182,7 +181,9 @@ export async function startGatewayServer(
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
   } catch (err) {
-    await closeOnStartupFailure();
+    await closeOnStartupFailure().catch((cleanupError: unknown) =>
+      log.warn(`gateway startup cleanup failed: ${String(cleanupError)}`),
+    );
     throw err;
   }
   // The public server is fully initialized now. Leave a short I/O window before
@@ -194,12 +195,7 @@ export async function startGatewayServer(
 
   return {
     close: async (optsLocal) => {
-      try {
-        await beginClosePrelude();
-        // Kill any live operator shells before the socket layer tears down.
-        terminalSessions.disposeAll();
-        await stopRegisteredGatewayLifetimeSidecars();
-        await stopRegisteredPostReadySidecars();
+      const runGatewayStopHook = async () => {
         // Run gateway_stop plugin hook before shutdown
         const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
         await runGlobalGatewayStopSafely({
@@ -207,11 +203,20 @@ export async function startGatewayServer(
           ctx: { port },
           onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
         });
-        await runClosePrelude();
-        await close(optsLocal);
-      } finally {
-        clearFallbackGatewayContextForServer.get()();
-      }
+      };
+      // Preserve ordering, but do not let one cleanup owner strand the rest.
+      await runGatewayCleanupSequence(
+        [
+          ["gateway close prelude fence", beginClosePrelude],
+          ["terminal sessions", () => terminalSessions.disposeAll()],
+          ["registered sidecars", stopRegisteredSidecars],
+          ["gateway stop hook", runGatewayStopHook],
+          ["gateway close prelude", runClosePreludeAfterFence],
+          ["gateway close", () => close(optsLocal)],
+          ["fallback gateway context", clearFallbackGatewayContextForServer.get()],
+        ],
+        log,
+      );
     },
   };
 }

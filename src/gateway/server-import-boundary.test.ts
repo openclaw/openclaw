@@ -135,13 +135,24 @@ describe("gateway startup import boundaries", () => {
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {
     const serverImpl = readServerImplementation();
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
-    const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
-    const reloadStopStart = serverImpl.indexOf("await beginClosePrelude();", closeStart);
-    const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll();", closeStart);
+    const hookStart = serverImpl.indexOf('["gateway stop hook", runGatewayStopHook]', closeStart);
+    const reloadStopStart = serverImpl.indexOf(
+      '["gateway close prelude fence", beginClosePrelude]',
+      closeStart,
+    );
+    const terminalStopStart = serverImpl.indexOf(
+      '["terminal sessions", () => terminalSessions.disposeAll()]',
+      closeStart,
+    );
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
     const beginHelperEnd = serverImpl.indexOf("};", beginHelperStart);
+    const postFenceHelperStart = serverImpl.indexOf(
+      "const runClosePreludeAfterFence = async () => {",
+    );
+    const postFenceHelperEnd = serverImpl.indexOf("};", postFenceHelperStart);
+    const postFenceHelper = serverImpl.slice(postFenceHelperStart, postFenceHelperEnd);
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({");
     const postReadyEnd = serverImpl.indexOf("});", postReadyStart);
     const postReadyBlock = serverImpl.slice(postReadyStart, postReadyEnd);
@@ -169,6 +180,18 @@ describe("gateway startup import boundaries", () => {
     );
     expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
       "stopOutboundDeliveryRecoveryForClose(),",
+    );
+    expect(postFenceHelperStart).toBeGreaterThan(-1);
+    expect(postFenceHelper).not.toContain("beginClosePrelude");
+    expect(postFenceHelper).toContain("disposeNodeConnectionNotifications(nodeRegistry);");
+    expect(postFenceHelper).toContain("watchNodeHttpRuntime.close();");
+    expect(postFenceHelper).toContain("clearPluginMetadataLifecycleCaches();");
+    expect(postFenceHelper).toContain("runGatewayClosePrelude");
+    expect(serverImpl).toContain(
+      "stopPostReadySidecars: () => stopRegisteredPostReadySidecars(runtimeState, log),",
+    );
+    expect(serverImpl).not.toContain(
+      "stopPostReadySidecars: () => stopRegisteredGatewaySidecars(runtimeState, log),",
     );
     expect(postReadyStart).toBeGreaterThan(-1);
     expect(postReadyBlock).toContain("isClosing: () => lifecycle.closePreludeStarted");

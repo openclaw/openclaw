@@ -81,15 +81,24 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
 export type GatewayPostReadySidecarHandle = { stop: () => Awaitable<void> };
 
 /** Stop sidecars immediately when shutdown has already started before they are reported. */
-export function stopPostReadySidecarsAfterCloseStarted(params: {
-  postReadySidecars: readonly GatewayPostReadySidecarHandle[];
-  closeStarted: boolean;
-}): void {
+export function stopPostReadySidecarsAfterCloseStarted(
+  params: {
+    postReadySidecars: readonly GatewayPostReadySidecarHandle[];
+    closeStarted: boolean;
+  },
+  log: { warn: (msg: string) => void },
+): void {
   if (!params.closeStarted) {
     return;
   }
-  for (const postReadySidecar of params.postReadySidecars) {
-    void postReadySidecar.stop();
+  const warn = (index: number, error: unknown) =>
+    log.warn(`post-ready sidecar ${index} failed to stop after close started: ${String(error)}`);
+  for (const [index, sidecar] of params.postReadySidecars.entries()) {
+    try {
+      void Promise.resolve(sidecar.stop()).catch((error: unknown) => warn(index, error));
+    } catch (error) {
+      warn(index, error);
+    }
   }
 }
 
@@ -1270,7 +1279,15 @@ export async function startGatewayPostAttachRuntime(
               }),
             );
           } catch (error) {
-            await workerEnvironmentSidecar?.stop();
+            if (workerEnvironmentSidecar) {
+              try {
+                await workerEnvironmentSidecar.stop();
+              } catch (cleanupError) {
+                params.log.warn(
+                  `worker-environment sidecar failed to stop during startup rollback: ${String(cleanupError)}`,
+                );
+              }
+            }
             throw error;
           }
         })();

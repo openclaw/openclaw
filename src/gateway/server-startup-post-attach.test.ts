@@ -315,14 +315,16 @@ async function stopTrackedSidecar(sidecar: SidecarHandle): Promise<void> {
 }
 
 function stopTrackedPostReadySidecarsAfterCloseStarted(
-  params: Parameters<typeof testing.stopPostReadySidecarsAfterCloseStarted>[0],
+  params: Parameters<typeof testing.stopPostReadySidecarsAfterCloseStarted>[0] & {
+    log: { warn: (msg: string) => void };
+  },
 ): void {
   if (params.closeStarted) {
     for (const sidecar of params.postReadySidecars) {
       transferBeforeStop(sidecar);
     }
   }
-  testing.stopPostReadySidecarsAfterCloseStarted(params);
+  testing.stopPostReadySidecarsAfterCloseStarted(params, params.log);
 }
 
 async function cleanupGatewayTestState(): Promise<void> {
@@ -2226,6 +2228,7 @@ describe("startGatewayPostAttachRuntime", () => {
     stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: true,
+      log: { warn: vi.fn() },
     });
 
     expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
@@ -2239,10 +2242,46 @@ describe("startGatewayPostAttachRuntime", () => {
     stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: false,
+      log: { warn: vi.fn() },
     });
 
     expect(postReadySidecar.stop).not.toHaveBeenCalled();
     expect(publishedPostReadySidecars).toContain(postReadySidecar);
+  });
+
+  it("contains synchronous and asynchronous late sidecar stop failures", async () => {
+    const synchronousFailure = new Error("synchronous stop failed");
+    const asynchronousFailure = new Error("asynchronous stop failed");
+    const sidecars = [
+      {
+        stop: vi.fn(() => {
+          throw synchronousFailure;
+        }),
+      },
+      {
+        stop: vi.fn(() => Promise.reject(asynchronousFailure)),
+      },
+      { stop: vi.fn() },
+    ];
+    const log = { warn: vi.fn() };
+    adoptSidecars(publishedPostReadySidecars, sidecars);
+
+    stopTrackedPostReadySidecarsAfterCloseStarted({
+      postReadySidecars: sidecars,
+      closeStarted: true,
+      log,
+    });
+
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledTimes(2));
+    expect(sidecars.every((sidecar) => sidecar.stop.mock.calls.length === 1)).toBe(true);
+    expect(log.warn).toHaveBeenNthCalledWith(
+      1,
+      `post-ready sidecar 0 failed to stop after close started: ${String(synchronousFailure)}`,
+    );
+    expect(log.warn).toHaveBeenNthCalledWith(
+      2,
+      `post-ready sidecar 1 failed to stop after close started: ${String(asynchronousFailure)}`,
+    );
   });
 
   it("runs Gmail watcher after sidecars are ready", async () => {
@@ -2419,7 +2458,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("stops already-started Gmail watcher cleanup on close", async () => {
+  it("does not stop already-transferred Gmail cleanup twice", async () => {
     const postReadySidecars = [{ stop: vi.fn() }];
     const stopChannel = vi.fn(async () => {});
     const pluginServices = { stop: vi.fn(async () => {}) };
@@ -2429,7 +2468,6 @@ describe("startGatewayPostAttachRuntime", () => {
       channelIds: [],
       stopChannel,
       pluginServices,
-      postReadySidecars,
       cron: { stop: vi.fn() },
       heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
       nodePresenceTimers: new Map(),
@@ -2457,9 +2495,15 @@ describe("startGatewayPostAttachRuntime", () => {
       httpServer: { close: vi.fn((callback: () => void) => callback()) } as never,
     });
 
+    stopTrackedPostReadySidecarsAfterCloseStarted({
+      postReadySidecars,
+      closeStarted: true,
+      log: { warn: vi.fn() },
+    });
+    await vi.waitFor(() => expect(postReadySidecars[0]?.stop).toHaveBeenCalledOnce());
     await close();
 
-    expect(postReadySidecars[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(postReadySidecars[0]?.stop).toHaveBeenCalledOnce();
     expect(pluginServices.stop).toHaveBeenCalledTimes(1);
   });
 
@@ -2637,6 +2681,37 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the startup failure when worker placement cleanup rejects", async () => {
+    const cleanupError = new Error("worker cleanup failed");
+    const workerSidecar = {
+      stop: vi.fn(async () => {
+        throw cleanupError;
+      }),
+    };
+    const startupError = new Error("sidecar startup failed");
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      startGatewayPostAttachRuntime(
+        {
+          ...createPostAttachParams(),
+          log,
+          startWorkerEnvironmentRuntime: vi.fn(() => workerSidecar),
+        },
+        createPostAttachRuntimeDeps({
+          startGatewaySidecars: vi.fn(async () => {
+            throw startupError;
+          }),
+        }),
+      ),
+    ).rejects.toBe(startupError);
+
+    expect(workerSidecar.stop).toHaveBeenCalledOnce();
+    expect(log.warn).toHaveBeenCalledWith(
+      `worker-environment sidecar failed to stop during startup rollback: ${String(cleanupError)}`,
+    );
+  });
+
   it("does not start the worker environment sidecar after close begins", async () => {
     const startWorkerEnvironmentRuntime = vi.fn(() => ({ stop: vi.fn() }));
     const startGatewaySidecarsValue = vi.fn(async () => ({
@@ -2781,6 +2856,7 @@ describe("startGatewayPostAttachRuntime", () => {
     stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: result.postReadySidecars,
       closeStarted: true,
+      log: { warn: vi.fn() },
     });
     releasePostReadyWork();
     await vi.advanceTimersByTimeAsync(1_000);

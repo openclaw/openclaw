@@ -16,6 +16,7 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { stopRegisteredPostReadySidecars } from "./server-lifecycle.js";
 import {
   attachInitialGatewayLifetimeSidecars,
   publishGatewayLifetimeSidecars,
@@ -189,7 +190,6 @@ export async function finishGatewayStartup(params: {
     resolveSharedGatewaySessionGenerationForConfig,
     reloadAttachedGatewayPlugins,
     readinessEventLoopHealth,
-    stopRegisteredPostReadySidecars,
     clearFallbackGatewayContextForServer,
   } = runtime;
   const unavailableGatewayMethods = new Set<string>(
@@ -480,10 +480,13 @@ export async function finishGatewayStartup(params: {
           },
           onPostReadySidecars: (postReadySidecars) => {
             runtimeState.postReadySidecars = postReadySidecars;
-            stopPostReadySidecarsAfterCloseStarted({
-              postReadySidecars,
-              closeStarted: lifecycle.closePreludeStarted,
-            });
+            stopPostReadySidecarsAfterCloseStarted(
+              {
+                postReadySidecars,
+                closeStarted: lifecycle.closePreludeStarted,
+              },
+              log,
+            );
             if (lifecycle.closePreludeStarted) {
               runtimeState.postReadySidecars = [];
             }
@@ -493,7 +496,8 @@ export async function finishGatewayStartup(params: {
               registered: runtimeState.gatewayLifetimeSidecars,
               published: gatewayLifetimeSidecars,
               closeStarted: lifecycle.closePreludeStarted,
-              stopAfterCloseStarted: stopPostReadySidecarsAfterCloseStarted,
+              stopAfterCloseStarted: (sidecarState) =>
+                stopPostReadySidecarsAfterCloseStarted(sidecarState, log),
             });
           },
           ...(workerPlacementRuntime
@@ -599,7 +603,7 @@ export async function finishGatewayStartup(params: {
     startChannel,
     stopChannel,
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-    stopPostReadySidecars: stopRegisteredPostReadySidecars,
+    stopPostReadySidecars: () => stopRegisteredPostReadySidecars(runtimeState, log),
     reloadPlugins: reloadAttachedGatewayPlugins,
     logHooks,
     logChannels,
