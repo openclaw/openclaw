@@ -349,6 +349,44 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
   });
 
+  it.each([
+    {
+      commentaryItalics: true,
+      commentaryLinePrefix: "",
+      expected: "_Checking the workspace_",
+      name: "Slack",
+    },
+    {
+      commentaryItalics: false,
+      commentaryLinePrefix: "💬 ",
+      expected: "💬 Checking the workspace",
+      name: "Discord and Telegram",
+    },
+  ])("renders $name commentary with its channel presentation", async (testCase) => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true, label: false, toolProgress: false },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryItalics: testCase.commentaryItalics,
+      commentaryLinePrefix: testCase.commentaryLinePrefix,
+      update,
+    });
+
+    await progress.pushCommentaryProgress("Checking the workspace", { itemId: "commentary" });
+
+    expect(update).toHaveBeenLastCalledWith(testCase.expected, {
+      flush: true,
+      lines: [expect.objectContaining({ text: testCase.expected })],
+    });
+  });
+
   it("collapses cumulative id-less commentary snapshots onto one line", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({

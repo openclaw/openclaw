@@ -1,3 +1,4 @@
+import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
 // Qa Lab tests cover slack live plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
@@ -697,7 +698,7 @@ describe("Slack live QA runtime helpers", () => {
     }
   });
 
-  it("classifies only exact Slack commentary lane presentations", () => {
+  it("classifies only exact Slack commentary lane presentations", async () => {
     const scenario = testing.findScenario(["slack-progress-commentary-true"])[0];
     const run = scenario?.buildRun("U999999999");
     const input = run && "input" in run ? run.input : "";
@@ -706,6 +707,27 @@ describe("Slack live QA runtime helpers", () => {
     const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
     if (!commentaryMarker || !finalMarker || !verifyObserved) {
       throw new Error("missing Slack progress commentary lane verifier");
+    }
+    let portableCommentary = "";
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true, label: false, toolProgress: false },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "slack-qa",
+      commentaryItalics: true,
+      commentaryLinePrefix: "",
+      update: (text) => {
+        portableCommentary = text;
+      },
+    });
+    await progress.pushCommentaryProgress(commentaryMarker, { itemId: "commentary" });
+    if (!portableCommentary) {
+      throw new Error("shared commentary renderer produced no Slack QA presentation");
     }
     const verifyCommentaryMessage = (message: { blockText?: string[]; text: string }) =>
       verifyObserved({
@@ -725,8 +747,8 @@ describe("Slack live QA runtime helpers", () => {
       });
 
     for (const message of [
-      { text: `_${commentaryMarker}_` },
-      { text: ` \n_${commentaryMarker}_\t` },
+      { text: portableCommentary },
+      { text: ` \n${portableCommentary}\t` },
       { text: `💬 ${commentaryMarker}` },
       { blockText: ["Update", commentaryMarker], text: "Working…" },
     ]) {
@@ -734,13 +756,16 @@ describe("Slack live QA runtime helpers", () => {
     }
     for (const text of [
       commentaryMarker,
-      `prefix _${commentaryMarker}_ suffix`,
-      `_${commentaryMarker}_\nmore`,
+      `prefix ${portableCommentary} suffix`,
+      `${portableCommentary}\nmore`,
     ]) {
       expect(() => verifyCommentaryMessage({ text })).toThrow(
         "expected commentary in the Slack progress commentary lane",
       );
     }
+    expect(() => verifyCommentaryMessage({ text: commentaryMarker })).toThrow(
+      `portable renderer expected one exact italic line containing ${JSON.stringify(commentaryMarker)}`,
+    );
   });
 
   it("rejects commentary when false and mismatched tool progress", () => {

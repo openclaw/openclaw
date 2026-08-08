@@ -85,7 +85,8 @@ function hasSlackCommentaryLaneMarker(
   message: { blockText?: string[]; text: string },
   marker: string,
 ) {
-  if (message.text.includes(`💬 ${marker}`) || message.text.trim() === `_${marker}_`) {
+  const portableCommentary = /^_([^\r\n]+)_$/u.exec(message.text.trim())?.[1];
+  if (message.text.includes(`💬 ${marker}`) || portableCommentary === marker) {
     return true;
   }
   const blockText = message.blockText ?? [];
@@ -93,6 +94,17 @@ function hasSlackCommentaryLaneMarker(
     blockText.some((text) => text.trim() === "Update") &&
     blockText.some((text) => text.includes(marker))
   );
+}
+
+function describeSlackCommentaryLaneMismatch(
+  messages: ReadonlyArray<{ blockText?: string[]; text: string }>,
+  marker: string,
+) {
+  return [
+    "expected commentary in the Slack progress commentary lane",
+    `portable renderer expected one exact italic line containing ${JSON.stringify(marker)}`,
+    `observed ${JSON.stringify(messages.map((message) => ({ blockText: message.blockText, text: message.text })))}`,
+  ].join("; ");
 }
 
 export function buildSlackProgressCommentaryRun(
@@ -150,7 +162,9 @@ export function buildSlackProgressCommentaryRun(
           expectation.commentary === "lane" &&
           (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
         ) {
-          throw new Error("expected commentary in the Slack progress commentary lane");
+          throw new Error(
+            describeSlackCommentaryLaneMismatch(commentaryMessages, commentaryMarker),
+          );
         }
         if (expectation.commentary === "headline" && commentaryLaneTimestamps.size !== 0) {
           throw new Error("expected the preamble as the Slack progress status headline");
