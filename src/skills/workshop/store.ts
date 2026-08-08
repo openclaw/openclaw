@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
-import { root } from "../../infra/fs-safe.js";
+import { FsSafeError, root } from "../../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -79,6 +79,16 @@ type SkillProposalReadOptions = {
 export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & {
   content: string;
 };
+export class SkillProposalIntegrityError extends Error {
+  override name = "SkillProposalIntegrityError";
+
+  constructor(
+    message: string,
+    readonly record?: SkillProposalRecord,
+  ) {
+    super(message);
+  }
+}
 
 /** Creates a stable proposal id from skill name, date, and random suffix. */
 export function createSkillProposalId(name: string, now = new Date()): string {
@@ -197,14 +207,22 @@ export async function readSkillProposal(
     return null;
   }
   const stateRoot = await root(resolveSkillWorkshopStateDir(options));
-  const draft = await stateRoot.read(
-    path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE),
-    {
+  const draft = await stateRoot
+    .read(path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE), {
       hardlinks: "reject",
       maxBytes: MAX_PROPOSAL_BYTES,
+      nonBlockingRead: true,
       symlinks: "reject",
-    },
-  );
+    })
+    .catch((error: unknown) => {
+      if (error instanceof FsSafeError && error.category === "policy") {
+        throw new SkillProposalIntegrityError(
+          "Proposal draft no longer matches its stored record.",
+          stored.record,
+        );
+      }
+      throw error;
+    });
   return {
     record: stored.record,
     revisionHash: hashSkillProposalRevision(stored.record),
@@ -466,16 +484,28 @@ export async function readProposalSupportFiles(
   const out: PreparedSkillProposalSupportFile[] = [];
   for (const file of record.supportFiles ?? []) {
     const filePath = normalizeWorkspaceSkillSupportPath(file.path);
-    const read = await stateRoot.read(path.join(proposalRelativeDir(record.id), filePath), {
-      hardlinks: "reject",
-      maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
-      symlinks: "reject",
-    });
+    const read = await stateRoot
+      .read(path.join(proposalRelativeDir(record.id), filePath), {
+        hardlinks: "reject",
+        maxBytes: MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+        nonBlockingRead: true,
+        symlinks: "reject",
+      })
+      .catch((error: unknown) => {
+        if (error instanceof FsSafeError && error.category === "policy") {
+          throw new SkillProposalIntegrityError(
+            `Proposal support file no longer matches metadata: ${filePath}`,
+          );
+        }
+        throw error;
+      });
     const content = read.buffer.toString("utf8");
     const sizeBytes = contentSizeBytes(content);
     const hash = hashSkillProposalContent(content);
     if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
-      throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);
+      throw new SkillProposalIntegrityError(
+        `Proposal support file changed without updating metadata: ${filePath}`,
+      );
     }
     out.push({ path: filePath, sizeBytes, hash, content });
   }

@@ -62,6 +62,8 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
     mocks.acquireGatewayLock.mockReset().mockResolvedValue({ release: mocks.releaseGatewayLock });
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.exit.mockClear();
+    mocks.defaultRuntime.writeJson.mockClear();
+    mocks.defaultRuntime.writeStdout.mockClear();
     mocks.callGateway.mockReset().mockImplementation(async (request) => {
       if (request.method === "health") {
         return {};
@@ -307,5 +309,137 @@ describe("skills workshop CLI gateway snapshot invalidation", () => {
         "skill-spector (nvidia-evals@1.2.3)  completed revise: Tighten the trigger.",
       ),
     );
+  });
+
+  it("reviews the Gateway-owned proposal in remote mode", async () => {
+    mocks.config.gateway = { mode: "remote" };
+    const gatewayReview = {
+      record: { id: "proposal-remote", proposedVersion: "v3" },
+      revisionHash: "c".repeat(64),
+      mode: "diff",
+      diff: "--- old\n+++ new\n",
+    };
+    mocks.gatewayApply = async (request) => {
+      expect(request).toMatchObject({
+        method: "skills.proposals.review",
+        params: { agentId: "main", proposalId: "proposal-remote" },
+        timeoutMs: 1_500,
+        requiredMethods: ["skills.proposals.review"],
+      });
+      return gatewayReview;
+    };
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await program.parseAsync(["skills", "workshop", "review", "proposal-remote", "--json"], {
+      from: "user",
+    });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(gatewayReview);
+    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
+  });
+
+  it("preserves offline review while holding the local Gateway ownership lock", async () => {
+    const workshop = await import("../skills/workshop/service.js");
+    const proposal = await workshop.proposeCreateSkill({
+      workspaceDir: mocks.workspaceDir,
+      name: "Offline Review",
+      description: "Preview without a running gateway",
+      content: "# Offline Review\n\nShow this exact proposal.\n",
+    });
+    const authError = Object.assign(new Error("gateway review requires credentials"), {
+      name: "GatewayCredentialsRequiredError",
+      method: "skills.proposals.review",
+      configPath: "/tmp/openclaw.json",
+    });
+    mocks.callGateway.mockRejectedValueOnce(authError);
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await program.parseAsync(["skills", "workshop", "review", proposal.record.id, "--json"], {
+      from: "user",
+    });
+
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledWith({
+      allowInTests: true,
+      port: 18789,
+      role: "skill-workshop-review",
+      timeoutMs: 250,
+    });
+    expect(mocks.releaseGatewayLock).toHaveBeenCalledTimes(1);
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        record: expect.objectContaining({ id: proposal.record.id }),
+        mode: "full",
+      }),
+    );
+  });
+
+  it("never falls back to local review after a remote Gateway failure", async () => {
+    mocks.config.gateway = { mode: "remote" };
+    mocks.callGateway.mockRejectedValueOnce(new Error("remote review failed"));
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await expect(
+      program.parseAsync(["skills", "workshop", "review", "proposal-remote", "--json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass a credential-protected local Gateway that owns the workspace", async () => {
+    const authError = Object.assign(new Error("gateway review requires credentials"), {
+      name: "GatewayCredentialsRequiredError",
+      method: "skills.proposals.review",
+      configPath: "/tmp/openclaw.json",
+    });
+    mocks.callGateway.mockRejectedValueOnce(authError);
+    mocks.acquireGatewayLock.mockRejectedValueOnce(new Error("gateway lock is owned"));
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await expect(
+      program.parseAsync(["skills", "workshop", "review", "proposal-local", "--json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseGatewayLock).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("does not hide a local Gateway RPC failure with a workspace read", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("unknown method: skills.proposals.review"));
+
+    vi.resetModules();
+    const { registerSkillsCli } = await import("./skills-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerSkillsCli(program);
+    await expect(
+      program.parseAsync(["skills", "workshop", "review", "proposal-local", "--json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 });

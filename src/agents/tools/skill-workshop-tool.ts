@@ -17,6 +17,7 @@ import {
   proposeUpdateSkill,
   quarantineSkillProposal,
   rejectSkillProposal,
+  reviewSkillProposal,
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
@@ -47,11 +48,14 @@ import {
   readListLimitParam,
   readProposalForInspect,
   readProposalStatusParam,
+  readReviewPageParam,
+  resolveProposalIdForRead,
   readSupportFilesParam,
 } from "./skill-workshop-tool-helpers.js";
 import {
   formatProposalInspect,
   formatProposalList,
+  formatProposalReviewResult,
   listProposalEntries,
 } from "./skill-workshop-tool-presentation.js";
 
@@ -61,6 +65,7 @@ const SKILL_WORKSHOP_ACTIONS = [
   "revise",
   "list",
   "inspect",
+  "review",
   "evaluate",
   "apply",
   "reject",
@@ -73,6 +78,7 @@ function resolveProposalOnlyActions(updateProposals: boolean, supportsCompletion
     "revise",
     "list",
     "inspect",
+    "review",
     ...(supportsCompletion ? ["complete"] : []),
   ];
 }
@@ -113,19 +119,19 @@ function buildSkillWorkshopToolSchema(
     {
       action: stringEnum(proposalOnly ? proposalActions : [...SKILL_WORKSHOP_ACTIONS], {
         description: proposalOnly
-          ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = bounded excerpt of an existing live skill (read before patching so you can quote it); update = full-body update proposal (stays pending for operator review);" : ""} revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
-          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
+          ? `create = new skill;${updateProposals ? " patch = targeted find-and-replace on an existing live skill (quote the exact current text in old_string, replacement in new_string; empty old_string appends new_string at the end); read = bounded excerpt of an existing live skill (read before patching so you can quote it); update = full-body update proposal (stays pending for operator review);" : ""} revise = existing pending proposal; list/inspect/review discover or preview pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Nothing writes a live skill directly; lifecycle actions are unavailable.`
+          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover proposals (not filesystem search); review = exact applied content for creates or a live unified diff for updates; evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
       }),
       proposal_id: Type.Optional(
         Type.String({
           description:
-            "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, or action=quarantine.",
+            "Existing proposal id for action=inspect, action=review, action=revise, action=evaluate, action=apply, action=reject, or action=quarantine. Required for review pages after page 1.",
         }),
       ),
       name: Type.Optional(
         Type.String({
           description:
-            "Skill/proposal name. Required for create; for inspect/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
+            "Skill/proposal name. Required for create; for inspect/review/revise when proposal_id is unknown, resolves a pending proposal or returns candidates.",
         }),
       ),
       query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
@@ -139,6 +145,12 @@ function buildSkillWorkshopToolSchema(
           minimum: 1,
           maximum: 50,
           description: "Maximum proposals to return for action=list. Defaults to 20.",
+        }),
+      ),
+      page: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description: "One-based output page for action=review. Defaults to 1.",
         }),
       ),
       description: Type.Optional(
@@ -197,7 +209,7 @@ function buildSkillWorkshopToolSchema(
       expected_revision_hash: Type.Optional(
         Type.String({
           description:
-            "Optional exact proposal revision hash for evaluate/apply/reject/quarantine. The action fails if content or support files changed.",
+            "Exact proposal revision hash returned by review/inspect. Required for later review pages and recommended for evaluate/apply/reject/quarantine; the action fails if content or support files changed.",
         }),
       ),
       correlation_id: Type.Optional(
@@ -235,11 +247,11 @@ function buildSkillWorkshopToolDescription(
   updateProposals: boolean,
 ): string {
   if (!proposalOnly) {
-    return `Create/update/revise/list/inspect/evaluate/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+    return `Create/update/revise/list/inspect/review/evaluate/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const completion = supportsCompletion ? " complete = durably finish this review." : "";
   const draftKinds = updateProposals ? "create, update, or revise" : "create or revise";
-  return `Inspect reusable-procedure skill proposals and draft pending ${draftKinds} proposals.${completion} Nothing writes a live skill directly; lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+  return `Inspect or review reusable-procedure skill proposals and draft pending ${draftKinds} proposals.${completion} Nothing writes a live skill directly; lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
 }
 
 /** Create the Skill Workshop tool for proposal discovery and lifecycle actions. */
@@ -346,6 +358,38 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           contentText: formatProposalInspect(proposal),
           includeContent: true,
         });
+      }
+
+      if (action === "review") {
+        const page = readReviewPageParam(params);
+        const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
+        if (page > 1 && !proposalId) {
+          throw new ToolInputError("proposal_id required for review pages after page 1");
+        }
+        const expectedRevisionHash = readStringParam(params, "expected_revision_hash");
+        if (page > 1 && !expectedRevisionHash) {
+          throw new ToolInputError("expected_revision_hash required for review pages after page 1");
+        }
+        const review = await reviewSkillProposal({
+          workspaceDir: options.workspaceDir,
+          config: options.config,
+          env: options.env,
+          agentId: options.agentId,
+          proposalId:
+            proposalId ??
+            (await resolveProposalIdForRead(
+              params,
+              options.workspaceDir,
+              options.env,
+              options.agentId,
+            )),
+        });
+        if (expectedRevisionHash && expectedRevisionHash !== review.revisionHash) {
+          throw new ToolInputError(
+            `Skill proposal changed after review (expected ${expectedRevisionHash}, current ${review.revisionHash}). Restart at page 1.`,
+          );
+        }
+        return formatProposalReviewResult(review, page);
       }
 
       if (action === "evaluate") {

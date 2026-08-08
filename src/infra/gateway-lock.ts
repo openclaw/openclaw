@@ -44,7 +44,9 @@ const LockPayloadSchema = z.object({
   createdAt: z.string(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
-  role: z.enum(["gateway", "skill-workshop-apply", "sqlite-maintenance"]).optional(),
+  role: z
+    .enum(["gateway", "skill-workshop-apply", "skill-workshop-review", "sqlite-maintenance"])
+    .optional(),
   stateDir: z.string().optional(),
   startTime: z.number().optional(),
 }) as z.ZodType<LockPayload>;
@@ -56,7 +58,11 @@ type GatewayLockHandle = {
   release: () => Promise<void>;
 };
 
-type GatewayLockRole = "gateway" | "skill-workshop-apply" | "sqlite-maintenance";
+type GatewayLockRole =
+  | "gateway"
+  | "skill-workshop-apply"
+  | "skill-workshop-review"
+  | "sqlite-maintenance";
 
 export type GatewayLockIdentity = {
   pid: number;

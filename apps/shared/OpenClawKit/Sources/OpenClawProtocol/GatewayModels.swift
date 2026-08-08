@@ -13426,6 +13426,24 @@ public struct SkillsProposalEventsListResult: Codable, Sendable {
     }
 }
 
+public struct SkillsProposalReviewParams: Codable, Sendable {
+    public let agentid: String?
+    public let proposalid: String
+
+    public init(
+        agentid: String? = nil,
+        proposalid: String)
+    {
+        self.agentid = agentid
+        self.proposalid = proposalid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case proposalid = "proposalId"
+    }
+}
+
 public struct SkillsProposalHistoryStatusParams: Codable, Sendable {
     public let agentid: String?
 

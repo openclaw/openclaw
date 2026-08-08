@@ -7,6 +7,7 @@ export {
   hasNodeErrorCode,
   isNotFoundPathError,
   isPathInside,
+  isSymlinkOpenError,
   normalizeWindowsPathForComparison,
   safeStatSync,
 } from "@openclaw/fs-safe/path";

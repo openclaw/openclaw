@@ -20,6 +20,7 @@ import {
   SkillsProposalEventsListParamsSchema,
   SkillsProposalEventsListResultSchema,
   SkillsProposalInspectResultSchema,
+  SkillsProposalReviewResultSchema,
   SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
   ToolsInvokeParamsSchema,
@@ -412,6 +413,36 @@ describe("SkillsProposalInspectResultSchema", () => {
       record: result.record,
       content: result.content,
     });
+  });
+});
+
+describe("SkillsProposalReviewResultSchema", () => {
+  const common = {
+    record: proposalRecord(),
+    revisionHash: "a".repeat(64),
+  };
+
+  it("accepts each exact review mode", () => {
+    expectAccepted(
+      SkillsProposalReviewResultSchema,
+      { ...common, mode: "full", content: "# Weather\n", supportFiles: [] },
+      { ...common, mode: "diff", diff: "--- before\n+++ after\n" },
+      { ...common, mode: "unavailable", reason: "proposal-changed" },
+      { ...common, mode: "unavailable", reason: "target-changed" },
+      { ...common, mode: "unavailable", reason: "target-missing" },
+      { ...common, mode: "unavailable", reason: "diff-limit" },
+      { ...common, mode: "unavailable", reason: "output-limit" },
+    );
+  });
+
+  it("rejects mixed, incomplete, or extended review results", () => {
+    expectRejected(
+      SkillsProposalReviewResultSchema,
+      { ...common, mode: "diff", diff: "unchanged", content: "leaked" },
+      { record: common.record, mode: "diff", diff: "missing revision" },
+      { ...common, mode: "unavailable", reason: "unknown" },
+      { ...common, mode: "full", content: "# Weather\n", supportFiles: [], extra: true },
+    );
   });
 });
 

@@ -44,6 +44,7 @@ describe("method scope resolution", () => {
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
     ["audit.run.inspect", ["operator.read"]],
+    ["skills.proposals.review", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
     ["users.self", ["operator.write"]],
@@ -835,6 +836,7 @@ describe("core gateway method classification", () => {
       "skills.proposals.list",
       "skills.proposals.events.list",
       "skills.proposals.inspect",
+      "skills.proposals.review",
       "skills.proposals.historyStatus",
     ]) {
       expect(listGatewayMethods()).toContain(method);

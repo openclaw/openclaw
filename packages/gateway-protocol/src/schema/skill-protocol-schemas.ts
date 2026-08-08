@@ -3,6 +3,8 @@ import {
   SkillsProposalEvaluateResultSchema,
   SkillsProposalEventsListParamsSchema,
   SkillsProposalEventsListResultSchema,
+  SkillsProposalReviewParamsSchema,
+  SkillsProposalReviewResultSchema,
   SkillsProposalsListParamsSchema,
   SkillsProposalsListResultSchema,
 } from "./agents-models-skills.js";
@@ -19,6 +21,8 @@ export const SkillWorkshopProtocolSchemas = {
   SkillsProposalEvaluateResult: SkillsProposalEvaluateResultSchema,
   SkillsProposalEventsListParams: SkillsProposalEventsListParamsSchema,
   SkillsProposalEventsListResult: SkillsProposalEventsListResultSchema,
+  SkillsProposalReviewParams: SkillsProposalReviewParamsSchema,
+  SkillsProposalReviewResult: SkillsProposalReviewResultSchema,
   SkillsProposalHistoryStatusParams: SkillsProposalHistoryStatusParamsSchema,
   SkillsProposalHistoryScanParams: SkillsProposalHistoryScanParamsSchema,
   SkillsProposalHistoryScanResult: SkillsProposalHistoryScanResultSchema,

@@ -67,10 +67,11 @@ openclaw skills workshop propose-create --name "qa-check" --description "QA chec
 openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop review <proposal-id>
 openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
-openclaw skills workshop apply <proposal-id>
-openclaw skills workshop reject <proposal-id> --reason "Not reusable"
-openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+openclaw skills workshop apply <proposal-id> --expected-revision-hash <hash>
+openclaw skills workshop reject <proposal-id> --expected-revision-hash <hash> --reason "Not reusable"
+openclaw skills workshop quarantine <proposal-id> --expected-revision-hash <hash> --reason "Needs security review"
 ```
 
 `search`, `update`, and `verify` use ClawHub directly. `install @owner/<slug>`
@@ -187,15 +188,22 @@ openclaw skills workshop propose-create \
 openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop review <proposal-id>
 openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
-openclaw skills workshop apply <proposal-id>
-openclaw skills workshop reject <proposal-id> --reason "Duplicate"
-openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+openclaw skills workshop apply <proposal-id> --expected-revision-hash <hash>
+openclaw skills workshop reject <proposal-id> --expected-revision-hash <hash> --reason "Duplicate"
+openclaw skills workshop quarantine <proposal-id> --expected-revision-hash <hash> --reason "Needs security review"
 ```
 
 `propose-create`, `propose-update`, and `revise` also accept `--goal <text>`
 and `--evidence <text>` to record the proposal's motivation and supporting
 notes alongside the `--proposal`/`--proposal-dir` content.
+To select another agent workspace, place the parent option before the
+subcommand: `openclaw skills workshop --agent <id> review <proposal-id>`.
+`review` prints the exact revision hash. Pass it to `apply`, `reject`, or
+`quarantine` with `--expected-revision-hash <hash>` to fail closed if the proposal
+is revised before the decision. The flag is optional for existing ID-only
+workflows.
 
 ## Related
 

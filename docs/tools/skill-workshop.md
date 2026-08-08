@@ -235,22 +235,23 @@ and paths outside the standard support folders.
 ## Agent tool
 
 The model uses `skill_workshop` with one required `action`:
-`create | update | revise | list | inspect | evaluate | apply | reject | quarantine`.
+`create | update | revise | list | inspect | review | evaluate | apply | reject | quarantine`.
 Other parameters apply depending on the action:
 
-| Parameter                  | Used by                                                          | Notes                                                                |
-| -------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise |
-| `description`              | `create`, `update`, `revise`                                     | Max 160 bytes                                                        |
-| `skill_name`               | `update`                                                         | Existing skill name or key                                           |
-| `proposal_content`         | `create`, `update`, `revise`                                     | Required for create/update; omit on revise to preserve the body      |
-| `support_files`            | `create`, `update`, `revise`                                     | Array of `{ path, content }`                                         |
-| `goal`, `evidence`         | `create`, `update`, `revise`                                     | Free-text context                                                    |
-| `proposal_id`              | `inspect`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
-| `expected_revision_hash`   | `evaluate`, `apply`, `reject`, `quarantine`                      | Rejects a stale orchestration step                                   |
-| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`            | External run or experiment correlation                               |
-| `reason`                   | `apply`, `reject`, `quarantine`                                  | Optional                                                             |
-| `query`, `status`, `limit` | `list`                                                           | Filter/paginate; `limit` max 50, default 20                          |
+| Parameter                  | Used by                                                                    | Notes                                                                |
+| -------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `review`, `revise`                                    | Required for `create`; resolves a pending proposal by name otherwise |
+| `description`              | `create`, `update`, `revise`                                               | Max 160 bytes                                                        |
+| `skill_name`               | `update`                                                                   | Existing skill name or key                                           |
+| `proposal_content`         | `create`, `update`, `revise`                                               | Required for create/update; omit on revise to preserve the body      |
+| `support_files`            | `create`, `update`, `revise`                                               | Array of `{ path, content }`                                         |
+| `goal`, `evidence`         | `create`, `update`, `revise`                                               | Free-text context                                                    |
+| `proposal_id`              | `inspect`, `review`, `revise`, `evaluate`, `apply`, `reject`, `quarantine` | Target proposal; required after review page 1                        |
+| `page`                     | `review`                                                                   | One-based output page; defaults to 1                                 |
+| `expected_revision_hash`   | `review`, `evaluate`, `apply`, `reject`, `quarantine`                      | Required after review page 1; rejects stale orchestration            |
+| `correlation_id`           | `evaluate`, `revise`, `apply`, `reject`, `quarantine`                      | External run or experiment correlation                               |
+| `reason`                   | `apply`, `reject`, `quarantine`                                            | Optional                                                             |
+| `query`, `status`, `limit` | `list`                                                                     | Filter/paginate; `limit` max 50, default 20                          |
 
 Agents must use `skill_workshop` for generated skill work and must not create or
 change skill or proposal files directly. This rule is advisory and
@@ -418,6 +419,7 @@ proposals remain listed with a previous-workspace marker instead of disappearing
 | Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
 | Support files                   | 64 per proposal                                                              |
 | Support file size               | 256 KiB each, 2 MiB total                                                    |
+| Review output                   | 7,000 characters per page, 16 pages                                          |
 | Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)                      |
 
 ## Troubleshooting

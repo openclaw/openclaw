@@ -53,6 +53,7 @@ import {
   readSkillProposalDraftDirectory,
   readSkillProposalDraftFile,
   rejectSkillProposal,
+  reviewSkillProposal,
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
 import type {
@@ -60,6 +61,7 @@ import type {
   SkillProposalEvaluateResult,
   SkillProposalManifest,
   SkillProposalReadResult,
+  SkillProposalReviewResult,
   SkillProposalSupportFileInput,
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -358,6 +360,28 @@ function formatSkillProposalEvaluation(result: SkillProposalEvaluateResult): str
   return `${lines.join("\n")}\n`;
 }
 
+function formatSkillProposalReview(review: SkillProposalReviewResult): string {
+  const header = [
+    `Proposal: ${review.record.id}`,
+    `Version: ${review.record.proposedVersion}`,
+    `Revision hash: ${review.revisionHash}`,
+    `Review: ${review.mode}`,
+    "",
+  ];
+  if (review.mode === "diff") {
+    return [...header, review.diff || "No changes would be applied."].join("\n");
+  }
+  if (review.mode === "unavailable") {
+    return [...header, `Review unavailable: ${review.reason}`].join("\n");
+  }
+  return [
+    ...header,
+    "--- SKILL.md ---",
+    review.content,
+    ...review.supportFiles.flatMap((file) => ["", `--- ${file.path} ---`, file.content]),
+  ].join("\n");
+}
+
 function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
   const timestamp = (value: number | null) =>
     value === null ? "never" : new Date(value).toISOString();
@@ -446,6 +470,7 @@ async function runSkillCuratorMutation(method: "pin" | "restore" | "unpin", skil
 async function runSkillProposalApply(
   resolved: ResolvedSkillsWorkspace,
   proposalId: string,
+  expectedRevisionHash?: string,
 ): Promise<SkillProposalApplyResult> {
   const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
     await import("../gateway/call.js");
@@ -468,7 +493,6 @@ async function runSkillProposalApply(
     if (resolved.config.gateway?.mode === "remote" || !isOfflineCandidate) {
       throw err;
     }
-
     // Hold the canonical Gateway ownership locks across local mutation. This
     // makes offline apply atomic with Gateway startup, so a new process cannot
     // inherit a stale process-local skill snapshot.
@@ -494,6 +518,7 @@ async function runSkillProposalApply(
         workspaceDir: resolved.workspaceDir,
         config: resolved.config,
         proposalId,
+        expectedRevisionHash,
       });
     } finally {
       await lock.release();
@@ -503,11 +528,68 @@ async function runSkillProposalApply(
   return await callGateway<SkillProposalApplyResult>({
     config: resolved.config,
     method: "skills.proposals.apply",
-    params: { agentId: resolved.agentId, proposalId },
+    params: { agentId: resolved.agentId, proposalId, expectedRevisionHash },
     timeoutMs: GATEWAY_SKILLS_APPLY_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   });
+}
+
+async function runSkillProposalReview(
+  resolved: ResolvedSkillsWorkspace,
+  proposalId: string,
+): Promise<SkillProposalReviewResult> {
+  const { callGateway, isGatewayCredentialsRequiredError, isGatewayTransportError } =
+    await import("../gateway/call.js");
+  try {
+    return await callGateway<SkillProposalReviewResult>({
+      config: resolved.config,
+      method: "skills.proposals.review",
+      params: { agentId: resolved.agentId, proposalId },
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      requiredMethods: ["skills.proposals.review"],
+    });
+  } catch (err) {
+    const isLocalTransportClosure =
+      isGatewayTransportError(err) &&
+      err.kind === "closed" &&
+      err.code === 1006 &&
+      err.connectionDetails.urlSource === "local loopback";
+    const isOfflineCandidate =
+      (isGatewayCredentialsRequiredError(err) &&
+        !normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL)) ||
+      isLocalTransportClosure;
+    if (resolved.config.gateway?.mode === "remote" || !isOfflineCandidate) {
+      throw err;
+    }
+    const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
+    let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
+    try {
+      lock = await acquireGatewayLock({
+        allowInTests: true,
+        port: resolveGatewayPort(resolved.config, process.env),
+        role: "skill-workshop-review",
+        timeoutMs: GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS,
+      });
+    } catch {
+      throw err;
+    }
+    if (!lock) {
+      throw err;
+    }
+    try {
+      return await reviewSkillProposal({
+        workspaceDir: resolved.workspaceDir,
+        agentId: resolved.agentId,
+        config: resolved.config,
+        proposalId,
+      });
+    } finally {
+      await lock.release();
+    }
+  }
 }
 
 async function runSkillProposalEvaluate(
@@ -1054,6 +1136,26 @@ export function registerSkillsCli(program: Command) {
     });
 
   workshop
+    .command("review")
+    .description("Show the exact content or diff a proposal would apply")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--json", "Output as JSON", false)
+    .action(async (proposalId: string, opts: { json?: boolean; agent?: string }) => {
+      try {
+        const resolved = resolveSkillsWorkspaceForCommand(workshop, opts);
+        const review = await runSkillProposalReview(resolved, proposalId);
+        if (hasJsonOutput(opts)) {
+          defaultRuntime.writeJson(review);
+          return;
+        }
+        defaultRuntime.writeStdout(formatSkillProposalReview(review));
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  workshop
     .command("propose-create")
     .description("Create a pending proposal for a new workspace skill")
     .requiredOption("--name <name>", "Skill name")
@@ -1141,13 +1243,18 @@ export function registerSkillsCli(program: Command) {
     .command("apply")
     .description("Apply a pending skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
+    .option("--expected-revision-hash <hash>", "Exact revision hash returned by review")
     .option("--json", "Output as JSON", false)
-    .action((proposalId: string, opts: { json?: boolean; agent?: string }) =>
-      runWorkshopAction(
-        opts,
-        (resolved) => runSkillProposalApply(resolved, proposalId),
-        (applied) => `Applied ${applied.record.id} -> ${applied.targetSkillFile}\n`,
-      ),
+    .action(
+      (
+        proposalId: string,
+        opts: { expectedRevisionHash?: string; json?: boolean; agent?: string },
+      ) =>
+        runWorkshopAction(
+          opts,
+          (resolved) => runSkillProposalApply(resolved, proposalId, opts.expectedRevisionHash),
+          (applied) => `Applied ${applied.record.id} -> ${applied.targetSkillFile}\n`,
+        ),
     );
 
   for (const [name, description, reasonDescription, verb, action] of [
@@ -1170,21 +1277,32 @@ export function registerSkillsCli(program: Command) {
       .command(name)
       .description(description)
       .argument("<proposal-id>", "Skill proposal id")
+      .option("--expected-revision-hash <hash>", "Exact revision hash returned by review")
       .option("--reason <text>", reasonDescription)
       .option("--json", "Output as JSON", false)
-      .action((proposalId: string, opts: { reason?: string; json?: boolean; agent?: string }) =>
-        runWorkshopAction(
-          opts,
-          ({ agentId, workspaceDir }) =>
-            action({
-              agentId,
-              eventActor: { type: "system", id: "cli" },
-              workspaceDir,
-              proposalId,
-              reason: opts.reason,
-            }),
-          (record) => `${verb} ${record.id}\n`,
-        ),
+      .action(
+        (
+          proposalId: string,
+          opts: {
+            expectedRevisionHash?: string;
+            reason?: string;
+            json?: boolean;
+            agent?: string;
+          },
+        ) =>
+          runWorkshopAction(
+            opts,
+            ({ agentId, workspaceDir }) =>
+              action({
+                agentId,
+                eventActor: { type: "system", id: "cli" },
+                workspaceDir,
+                proposalId,
+                expectedRevisionHash: opts.expectedRevisionHash,
+                reason: opts.reason,
+              }),
+            (record) => `${verb} ${record.id}\n`,
+          ),
       );
   }
 

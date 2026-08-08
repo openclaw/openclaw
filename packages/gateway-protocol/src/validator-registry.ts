@@ -326,6 +326,7 @@ export const validateSkillsCuratorStatusParams = compile(S.SkillsCuratorStatusPa
 export const validateSkillsCuratorActionParams = compile(S.SkillsCuratorActionParamsSchema);
 export const validateSkillsProposalsListParams = compile(S.SkillsProposalsListParamsSchema);
 export const validateSkillsProposalInspectParams = compile(S.SkillsProposalInspectParamsSchema);
+export const validateSkillsProposalReviewParams = compile(S.SkillsProposalReviewParamsSchema);
 export const validateSkillsProposalCreateParams = compile(S.SkillsProposalCreateParamsSchema);
 export const validateSkillsProposalUpdateParams = compile(S.SkillsProposalUpdateParamsSchema);
 export const validateSkillsProposalReviseParams = compile(S.SkillsProposalReviseParamsSchema);

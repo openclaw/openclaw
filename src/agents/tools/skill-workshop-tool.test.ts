@@ -216,7 +216,7 @@ describe("skill_workshop tool", () => {
 
     expect(
       (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "revise", "list", "inspect", "complete"]);
+    ).toEqual(["create", "revise", "list", "inspect", "review", "complete"]);
     const create = tool.execute("call-create-before-complete", {
       action: "create",
       name: "Checkpointed Learning",

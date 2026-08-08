@@ -308,6 +308,26 @@ export type SkillProposalReadResult = {
   supportFiles?: SkillProposalSupportFileInput[];
 };
 
+export type SkillProposalReviewUnavailableReason =
+  | "proposal-changed"
+  | "target-changed"
+  | "target-missing"
+  | "diff-limit"
+  | "output-limit";
+
+export type SkillProposalReviewResult = {
+  record: SkillProposalRecord;
+  revisionHash: string;
+} & (
+  | {
+      mode: "full";
+      content: string;
+      supportFiles: SkillProposalSupportFileInput[];
+    }
+  | { mode: "diff"; diff: string }
+  | { mode: "unavailable"; reason: SkillProposalReviewUnavailableReason }
+);
+
 export type SkillProposalApplyResult = {
   record: SkillProposalRecord;
   targetSkillFile: string;

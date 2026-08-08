@@ -724,6 +724,38 @@ export const SkillsProposalInspectResultSchema = closedObject({
   supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
 });
 
+/** Selects a proposal whose exact apply preview should be rendered. */
+export const SkillsProposalReviewParamsSchema = SkillsProposalInspectParamsSchema;
+
+/** Exact content, diff, or fail-closed reason shown before proposal approval. */
+export const SkillsProposalReviewResultSchema = Type.Union([
+  closedObject({
+    record: SkillProposalRecordSchema,
+    revisionHash: Sha256String,
+    mode: Type.Literal("full"),
+    content: SkillProposalContentString,
+    supportFiles: Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 }),
+  }),
+  closedObject({
+    record: SkillProposalRecordSchema,
+    revisionHash: Sha256String,
+    mode: Type.Literal("diff"),
+    diff: Type.String({ maxLength: 524_288 }),
+  }),
+  closedObject({
+    record: SkillProposalRecordSchema,
+    revisionHash: Sha256String,
+    mode: Type.Literal("unavailable"),
+    reason: Type.Union([
+      Type.Literal("proposal-changed"),
+      Type.Literal("target-changed"),
+      Type.Literal("target-missing"),
+      Type.Literal("diff-limit"),
+      Type.Literal("output-limit"),
+    ]),
+  }),
+]);
+
 /** Creates a proposal for a new skill. */
 export const SkillsProposalCreateParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
@@ -1133,6 +1165,8 @@ export type SkillsProposalsListParams = Static<typeof SkillsProposalsListParamsS
 export type SkillsProposalsListResult = Static<typeof SkillsProposalsListResultSchema>;
 export type SkillsProposalInspectParams = Static<typeof SkillsProposalInspectParamsSchema>;
 export type SkillsProposalInspectResult = Static<typeof SkillsProposalInspectResultSchema>;
+export type SkillsProposalReviewParams = Static<typeof SkillsProposalReviewParamsSchema>;
+export type SkillsProposalReviewResult = Static<typeof SkillsProposalReviewResultSchema>;
 export type SkillsProposalCreateParams = Static<typeof SkillsProposalCreateParamsSchema>;
 export type SkillsProposalUpdateParams = Static<typeof SkillsProposalUpdateParamsSchema>;
 export type SkillsProposalReviseParams = Static<typeof SkillsProposalReviseParamsSchema>;

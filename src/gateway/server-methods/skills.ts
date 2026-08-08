@@ -14,6 +14,7 @@ import {
   validateSkillsProposalEvaluateParams,
   validateSkillsProposalEventsListParams,
   validateSkillsProposalInspectParams,
+  validateSkillsProposalReviewParams,
   validateSkillsProposalRequestRevisionParams,
   validateSkillsProposalReviseParams,
   validateSkillsProposalsListParams,
@@ -64,6 +65,7 @@ import {
   proposeUpdateSkill,
   quarantineSkillProposal,
   rejectSkillProposal,
+  reviewSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
 import { skillProposalHistoryHandlers } from "./skills-proposal-history.js";
@@ -417,6 +419,22 @@ export const skillsHandlers: GatewayRequestHandlers = {
         }
         return proposal;
       },
+    });
+  },
+  "skills.proposals.review": async ({ params, respond, context }) => {
+    await runSkillsProposalWorkspaceHandler({
+      method: "skills.proposals.review",
+      rawParams: params,
+      respond,
+      context,
+      validate: validateSkillsProposalReviewParams,
+      run: (parsedParams, resolved) =>
+        reviewSkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          agentId: resolved.agentId,
+          config: resolved.cfg,
+          proposalId: parsedParams.proposalId,
+        }),
     });
   },
   "skills.proposals.evaluate": async ({ params, respond, context }) => {

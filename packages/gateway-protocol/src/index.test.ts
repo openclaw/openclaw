@@ -123,7 +123,13 @@ describe("protocol export registries", () => {
     expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
   });
 
-  it("registers Skill Workshop evaluation and lifecycle replay schemas", () => {
+  it("registers Skill Workshop review, evaluation, and lifecycle replay schemas", () => {
+    expect(ProtocolSchemas.SkillsProposalReviewParams).toBe(
+      schemaExportRegistry.SkillsProposalReviewParamsSchema,
+    );
+    expect(ProtocolSchemas.SkillsProposalReviewResult).toBe(
+      schemaExportRegistry.SkillsProposalReviewResultSchema,
+    );
     expect(ProtocolSchemas.SkillsProposalEvaluateParams).toBe(
       schemaExportRegistry.SkillsProposalEvaluateParamsSchema,
     );
@@ -472,6 +478,18 @@ describe("lazy protocol validators", () => {
       proposalRequest({ afterSequence: 41, limit: 200 }),
     ]);
     expectRejected(protocol.validateSkillsProposalEventsListParams, [{ limit: 201 }]);
+  });
+
+  it("validates closed Skill Workshop review params", () => {
+    expectAccepted(protocol.validateSkillsProposalReviewParams, [
+      { proposalId: "proposal-1" },
+      { agentId: "main", proposalId: "proposal-1" },
+    ]);
+    expectRejected(protocol.validateSkillsProposalReviewParams, [
+      {},
+      { proposalId: "" },
+      { proposalId: "proposal-1", extra: true },
+    ]);
   });
 
   it("can still compile every exported protocol validator", () => {

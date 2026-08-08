@@ -180,6 +180,23 @@ describe("skills proposal gateway handlers", () => {
       },
     ]);
 
+    const review = await callHandler("skills.proposals.review", {
+      proposalId: created.record.id,
+    });
+    expect(review.ok).toBe(true);
+    expect(review.response).toMatchObject({
+      record: { id: created.record.id },
+      revisionHash: expect.any(String),
+      mode: "full",
+      content: expect.stringContaining("# Weather Planner"),
+      supportFiles: [
+        {
+          path: "references/weather.md",
+          content: "Use current weather before recommendations.\n",
+        },
+      ],
+    });
+
     const revise = await callHandler("skills.proposals.revise", {
       proposalId: created.record.id,
       description: "Plan with current weather",
@@ -250,6 +267,13 @@ describe("skills proposal gateway handlers", () => {
     const firstList = await callHandler("skills.proposals.list", {});
     expect(firstList.ok).toBe(true);
     expect((firstList.response as { proposals: Array<{ id: string }> }).proposals).toHaveLength(2);
+  });
+
+  it("rejects invalid review params before reading proposal state", async () => {
+    const result = await callHandler("skills.proposals.review", { proposalId: "" });
+
+    expect(result.ok).toBe(false);
+    expect((result.error as { code?: string }).code).toBe("INVALID_REQUEST");
   });
 
   it("rejects invalid params before touching workshop state", async () => {
