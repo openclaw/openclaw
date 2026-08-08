@@ -216,6 +216,58 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   };
   const hasPendingFailedProgressDeliveries = () =>
     progressState.pendingFailedProgressDeliveries.length > 0;
+  const forwardOrBufferToolResultProgressCallback = async (
+    payload: ReplyPayload,
+    isFastModeAutoProgress: boolean,
+    isForcedToolProgress: boolean,
+  ) => {
+    const forwarded = shouldForwardToolResultProgressCallback(
+      payload,
+      isFastModeAutoProgress,
+      isForcedToolProgress,
+    );
+    if (forwarded) {
+      await onToolResultFromReplyOptions?.(payload);
+    } else if (
+      onToolResultFromReplyOptions &&
+      payload.isError === true &&
+      shouldBufferFailedProgress({ force: isForcedToolProgress }) &&
+      shouldForwardToolResultProgressCallbackBase(payload, isFastModeAutoProgress)
+    ) {
+      enqueuePendingFailedProgressDelivery(async () => {
+        await onToolResultFromReplyOptions(payload);
+        markVisibleToolErrorProgress();
+      });
+    }
+    return forwarded;
+  };
+  const deferFailedProgressDelivery = (payload: ReplyPayload, force: boolean) => {
+    if (payload.isError !== true || shouldForwardFailedProgress({ force })) {
+      if (payload.isError === true) {
+        markVisibleToolErrorProgress();
+      }
+      return false;
+    }
+    if (shouldBufferFailedProgress({ force })) {
+      enqueuePendingFailedProgressDelivery(async () => {
+        if (isDispatchOperationAborted()) {
+          return;
+        }
+        if (shouldRouteToOriginating) {
+          const result = await sendPayloadAsync(payload, undefined, false);
+          if (result?.delivered) {
+            markVisibleToolErrorProgress();
+          }
+        } else {
+          markInboundDedupeReplayUnsafe();
+          if (state.turnLedger.sendQueued("tool", payload).queued) {
+            markVisibleToolErrorProgress();
+          }
+        }
+      });
+    }
+    return true;
+  };
   const shouldSuppressToolErrorWarnings = () => {
     if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
       return params.replyOptions.suppressToolErrorWarnings;
@@ -496,6 +548,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     discardPendingFailedProgressDeliveries,
     flushPendingFailedProgressDeliveries,
     hasPendingFailedProgressDeliveries,
+    forwardOrBufferToolResultProgressCallback,
+    deferFailedProgressDelivery,
     hasVisibleToolErrorProgress: () => observedVisibleToolErrorProgress,
     shouldSuppressToolErrorWarnings,
     suppressToolErrorWarnings,

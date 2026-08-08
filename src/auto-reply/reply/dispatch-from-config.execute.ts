@@ -219,27 +219,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       state.shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
-                    const progressCallbackForwarded = state.shouldForwardToolResultProgressCallback(
-                      payload,
-                      isFastModeAutoProgress,
-                      isForcedToolProgress,
-                    );
-                    if (progressCallbackForwarded) {
-                      await onToolResultFromReplyOptions?.(payload);
-                    } else if (
-                      onToolResultFromReplyOptions &&
-                      payload.isError === true &&
-                      state.shouldBufferFailedProgress({ force: isForcedToolProgress }) &&
-                      state.shouldForwardToolResultProgressCallbackBase(
+                    const progressCallbackForwarded =
+                      await state.forwardOrBufferToolResultProgressCallback(
                         payload,
                         isFastModeAutoProgress,
-                      )
-                    ) {
-                      state.enqueuePendingFailedProgressDelivery(async () => {
-                        await onToolResultFromReplyOptions(payload);
-                        markVisibleToolErrorProgress();
-                      });
-                    }
+                        isForcedToolProgress,
+                      );
                     if (isDispatchOperationAborted()) {
                       return;
                     }
@@ -320,36 +305,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    if (
-                      deliveryPayload.isError === true &&
-                      !state.shouldForwardFailedProgress({ force: isForcedToolProgress })
-                    ) {
-                      if (state.shouldBufferFailedProgress({ force: isForcedToolProgress })) {
-                        state.enqueuePendingFailedProgressDelivery(async () => {
-                          if (isDispatchOperationAborted()) {
-                            return;
-                          }
-                          if (shouldRouteToOriginating) {
-                            const result = await sendPayloadAsync(
-                              deliveryPayload,
-                              undefined,
-                              false,
-                            );
-                            if (result?.delivered) {
-                              markVisibleToolErrorProgress();
-                            }
-                          } else {
-                            markInboundDedupeReplayUnsafe();
-                            if (state.turnLedger.sendQueued("tool", deliveryPayload).queued) {
-                              markVisibleToolErrorProgress();
-                            }
-                          }
-                        });
-                      }
+                    if (state.deferFailedProgressDelivery(deliveryPayload, isForcedToolProgress)) {
                       return;
-                    }
-                    if (deliveryPayload.isError === true) {
-                      markVisibleToolErrorProgress();
                     }
                     if (shouldRouteToOriginating) {
                       await sendPayloadAsync(deliveryPayload, undefined, false);
