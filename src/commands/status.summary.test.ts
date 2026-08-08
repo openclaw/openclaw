@@ -193,6 +193,7 @@ const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveStorePath } = await import("../config/sessions/paths.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
+const { parseAgentSessionKey } = await import("../routing/session-key.js");
 let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
 
@@ -967,6 +968,34 @@ describe("getStatusSummary", () => {
         provider: "anthropic",
         model: "claude-opus-4-8",
       }),
+    );
+  });
+
+  it("resolves the session model for the agent parsed from an unscoped session's key, not the byAgent override", async () => {
+    // Regression for #107643: the cross-agent "recent" listing has no
+    // agentIdOverride, so resolveSessionModelRef must fall back to the
+    // per-row agentId parsed from the session key instead of silently
+    // reusing the (undefined) override and landing on agents.defaults.
+    vi.mocked(parseAgentSessionKey).mockReturnValue({ agentId: "ops", rest: "main" });
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:ops:main": {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+
+    try {
+      await getStatusSummary();
+    } finally {
+      vi.mocked(parseAgentSessionKey).mockReturnValue(null);
+    }
+
+    expect(statusSummaryRuntime.resolveSessionModelRef).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "ops",
     );
   });
 });
