@@ -967,102 +967,77 @@ describe("mcp cli", () => {
     });
   });
 
-  it("clears stored OAuth credentials when auth is cleared", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+  it.each([
+    {
+      name: "auth is cleared",
+      resetMock: false,
+      verifyAuthRemoved: true,
+      commands: [["mcp", "configure", "docs", "--clear-auth"]],
+    },
+    {
+      name: "an MCP server is removed",
+      resetMock: false,
+      verifyAuthRemoved: false,
+      commands: [["mcp", "unset", "docs"]],
+    },
+    {
+      name: "set replaces an OAuth server",
+      resetMock: true,
+      verifyAuthRemoved: false,
+      commands: [["mcp", "set", "docs", '{"command":"uvx","args":["docs-mcp"]}']],
+    },
+    {
+      name: "add changes an OAuth server URL",
+      resetMock: true,
+      verifyAuthRemoved: false,
+      commands: [
+        [
+          "mcp",
+          "add",
+          "docs",
+          "--url",
+          "https://other.example.com",
+          "--transport",
+          "streamable-http",
+          "--auth",
+          "oauth",
+          "--no-probe",
+        ],
+      ],
+    },
+  ])(
+    "clears stored OAuth credentials when $name",
+    async ({ commands, resetMock, verifyAuthRemoved }) => {
+      await withTempHome("openclaw-cli-mcp-home-", async () => {
+        const workspaceDir = await createWorkspace();
+        vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      await runMcpCommand(["mcp", "configure", "docs", "--clear-auth"]);
+        await runMcpCommand([
+          "mcp",
+          "set",
+          "docs",
+          '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
+        ]);
+        if (resetMock) {
+          clearMcpOAuthCredentials.mockClear();
+        }
+        for (const command of commands) {
+          await runMcpCommand(command);
+        }
 
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
+        expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
+          serverName: "docs",
+          serverUrl: "https://mcp.example.com",
+        });
+
+        if (verifyAuthRemoved) {
+          mockLog.mockClear();
+          await runMcpCommand(["mcp", "show", "docs", "--json"]);
+          expect(JSON.parse(lastLogLine())).not.toHaveProperty("auth");
+        }
       });
-
-      mockLog.mockClear();
-      await runMcpCommand(["mcp", "show", "docs", "--json"]);
-      expect(JSON.parse(lastLogLine())).not.toHaveProperty("auth");
-    });
-  });
-
-  it("clears stored OAuth credentials when an MCP server is removed", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      await runMcpCommand(["mcp", "unset", "docs"]);
-
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
-    });
-  });
-
-  it("clears stored OAuth credentials when set replaces an OAuth server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      clearMcpOAuthCredentials.mockClear();
-      await runMcpCommand(["mcp", "set", "docs", '{"command":"uvx","args":["docs-mcp"]}']);
-
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
-    });
-  });
-
-  it("clears stored OAuth credentials when add changes an OAuth server URL", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async () => {
-      const workspaceDir = await createWorkspace();
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await runMcpCommand([
-        "mcp",
-        "set",
-        "docs",
-        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
-      ]);
-      clearMcpOAuthCredentials.mockClear();
-      await runMcpCommand([
-        "mcp",
-        "add",
-        "docs",
-        "--url",
-        "https://other.example.com",
-        "--transport",
-        "streamable-http",
-        "--auth",
-        "oauth",
-        "--no-probe",
-      ]);
-
-      expect(clearMcpOAuthCredentials).toHaveBeenCalledWith({
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com",
-      });
-    });
-  });
+    },
+  );
 
   it("removes pure disabled tombstones when enabling MCP servers", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
