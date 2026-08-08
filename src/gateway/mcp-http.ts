@@ -196,11 +196,14 @@ async function startMcpLoopbackServer(port = 0): Promise<{
   };
 
   const httpServer = createHttpServer((req, res) => {
+    const admissionCfg = getRuntimeConfig();
     const auth = validateMcpLoopbackRequest({
       req,
       res,
       ownerToken,
       nonOwnerToken,
+      trustedProxies: admissionCfg.gateway?.trustedProxies ?? [],
+      allowRealIpFallback: admissionCfg.gateway?.allowRealIpFallback === true,
       onSseResponse: trackSseResponse,
     });
     if (!auth) {
