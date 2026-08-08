@@ -3024,7 +3024,7 @@ describe("cron tool", () => {
     });
   });
 
-  it("retries cap derivation after a concurrent cron job update", async () => {
+  it("retries the update after a concurrent cron job revision conflict without echoing the stored cap", async () => {
     const conflict = Object.assign(
       new Error("cron job definition no longer matches the loaded version"),
       {
@@ -3065,7 +3065,7 @@ describe("cron tool", () => {
       params: {
         id: "job-race",
         expectedConfigRevision: "sha256:first",
-        patch: { payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] } },
+        patch: { payload: { kind: "agentTurn", message: "updated" } },
       },
     });
     expect(readGatewayCall(3)).toEqual({
@@ -3073,7 +3073,7 @@ describe("cron tool", () => {
       params: {
         id: "job-race",
         expectedConfigRevision: "sha256:second",
-        patch: { payload: { kind: "agentTurn", message: "updated", toolsAllow: [] } },
+        patch: { payload: { kind: "agentTurn", message: "updated" } },
       },
     });
   });
@@ -3096,7 +3096,7 @@ describe("cron tool", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves an existing narrower toolsAllow when updating payload fields without toolsAllow", async () => {
+  it("omits stored narrower toolsAllow on unrelated payload edits so the service keeps the cap without reauthorizing", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
         id: "job-11",
@@ -3116,6 +3116,10 @@ describe("cron tool", () => {
       },
     });
 
+    // The patch must not echo the stored cap: mergeCronPayload preserves it on
+    // the job, and omitting toolsAllow keeps the cron service from treating the
+    // routine edit as an explicit tool-authority mutation that reauthorizes the
+    // job with a fresh scheduled policy.
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
     expect(readGatewayCall(1)).toEqual({
       method: "cron.update",
@@ -3126,7 +3130,6 @@ describe("cron tool", () => {
           payload: {
             kind: "agentTurn",
             model: "openai/gpt-5.5",
-            toolsAllow: ["read"],
           },
         },
       },

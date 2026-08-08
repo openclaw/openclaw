@@ -82,6 +82,37 @@ describe("scheduled tool policy provenance", () => {
     }
   });
 
+  it("preserves durable scheduled authority across routine payload edits", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-23T12:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const created = await add(state, {
+      name: "capped",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+    });
+    // add stamps trusted authority for a capped tool-runtime job.
+    expect(created.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
+    const storedToolsAllow = created.payload.toolsAllow;
+
+    // A routine payload edit (no toolsAllow in the patch) must neither drop the
+    // stored cap nor reauthorize the job: mergeCronPayload preserves toolsAllow,
+    // and reconcileScheduledToolPolicy re-resolves and keeps the existing
+    // authority instead of stamping a fresh one.
+    const routine = await update(state, created.id, {
+      payload: { kind: "agentTurn", message: "updated" },
+    });
+    expect(routine.payload.toolsAllow).toEqual(storedToolsAllow);
+    expect(routine.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
+
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("keeps routine legacy edits restrictive and adopts authority on an explicit tool edit", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-23T12:00:00.000Z");
@@ -103,6 +134,11 @@ describe("scheduled tool policy provenance", () => {
 
     const routine = await update(state, created.id, { description: "routine" });
     expect(routine.scheduledToolPolicy).toBeUndefined();
+
+    const payloadRoutine = await update(state, created.id, {
+      payload: { kind: "agentTurn", message: "updated" },
+    });
+    expect(payloadRoutine.scheduledToolPolicy).toBeUndefined();
 
     const reauthorized = await update(
       state,
