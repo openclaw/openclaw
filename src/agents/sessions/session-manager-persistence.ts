@@ -5,6 +5,7 @@ import {
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   isIndexedSessionEntry,
   isJsonRecord,
@@ -38,6 +39,37 @@ function requireTranscriptEventAppend(
   }
   const cause = result.ok ? { code: "transcript-event-not-appended" as const } : result.error;
   throw new Error(`${message}: ${cause.code}`, { cause });
+}
+
+/**
+ * Describes the transcript identity a refused append was scoped to.
+ *
+ * `appendTranscriptEventSync` returns `false` rather than throwing when the
+ * session row cannot be matched, so without this the caller can only report
+ * *that* a write was refused, never *which* identity missed. A sessionId
+ * arriving in `sessionKey` is the common cause and is invisible otherwise.
+ *
+ * This message reaches operators through `/compact` and `sessions.compact`
+ * as `result.reason`, and a canonical sessionKey can embed a channel peer id
+ * (a phone number, for example), so identities are rendered through the
+ * shared stable-hash redaction rather than interpolated verbatim. Hashing
+ * with the same function preserves the one diagnostic signal that matters
+ * here: a sessionId substituted into the sessionKey field produces two
+ * equal hashes.
+ */
+function describeTranscriptWriteScope(scope: {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): string {
+  const parts = [
+    `sessionKeyHash=${redactIdentifier(scope.sessionKey)}`,
+    `sessionIdHash=${redactIdentifier(scope.sessionId)}`,
+  ];
+  if (scope.agentId) {
+    parts.push(`agentIdHash=${redactIdentifier(scope.agentId)}`);
+  }
+  return parts.join(" ");
 }
 
 export class SessionManagerPersistence extends SessionManagerCore {
@@ -177,15 +209,19 @@ export class SessionManagerPersistence extends SessionManagerCore {
           updatedAt: Date.now(),
         })
       ) {
-        throw new Error("Session transcript header was not persisted");
+        throw new Error(
+          `Session transcript header was not persisted: ${describeTranscriptWriteScope(scope)}`,
+        );
       }
       const header = this.fileEntries[0];
       if (!header || header.type !== "session") {
-        throw new Error("Session transcript header was not persisted");
+        throw new Error(
+          `Session transcript header was not persisted: ${describeTranscriptWriteScope(scope)}`,
+        );
       }
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, header),
-        "Session transcript header was not persisted",
+        `Session transcript header was not persisted: ${describeTranscriptWriteScope(scope)}`,
       );
       this.persistenceHeaderPending = false;
     }
@@ -193,7 +229,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (leafEntry) {
       requireTranscriptEventAppend(
         appendTranscriptEventSync(scope, entry),
-        `Session transcript leaf control was not persisted: ${leafEntry.id}`,
+        `Session transcript leaf control was not persisted: ${leafEntry.id} ` +
+          describeTranscriptWriteScope(scope),
       );
       return undefined;
     }
@@ -209,7 +246,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
             ? { appendIntent: options.appendIntent }
             : undefined,
         ),
-        `Session transcript entry was not persisted: ${entry.id}`,
+        `Session transcript entry was not persisted: ${entry.id} ` +
+          describeTranscriptWriteScope(scope),
       );
       return undefined;
     }
@@ -225,7 +263,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
     } satisfies Parameters<typeof appendTranscriptMessageSync>[1];
     const result = appendTranscriptMessageSync(scope, appendOptions);
     if (!result) {
-      throw new Error(`Session transcript message was not persisted: ${entry.id}`);
+      throw new Error(
+        `Session transcript message was not persisted: ${entry.id} ` +
+          describeTranscriptWriteScope(scope),
+      );
     }
     if (result.messageId !== entry.id) {
       const idempotencyKey =
