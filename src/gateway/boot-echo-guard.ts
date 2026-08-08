@@ -10,7 +10,19 @@
 // adds a defense-in-depth substantial-echo check using the active boot prompt
 // as the comparison source. Refs #53732.
 
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 const MIN_ECHO_CHARS = 80;
+
+/** Slices using UTF-16-safe boundaries at `[start, start+minLen)` and returns
+ * the result only if it meets at least `minLen` characters — windows expanded
+ * to preserve surrogate pair integrity are kept as long as they satisfy the
+ * echo minimum.  Sub-minimum windows (truncated by string end or a retreating
+ * start position) are dropped to avoid false positives from short slices. */
+function sliceUtf16SafeMinLen(input: string, start: number, minLen: number): string {
+  const result = sliceUtf16Safe(input, start, start + minLen);
+  return result.length >= minLen ? result : "";
+}
 
 type BootEchoContext = {
   bootPrompt: string;
@@ -36,7 +48,8 @@ function getBootPromptChunks(normalizedBootPrompt: string, minLen: number): Set<
   }
   const chunks = new Set<string>();
   for (let i = 0; i <= normalizedBootPrompt.length - minLen; i += 1) {
-    chunks.add(normalizedBootPrompt.slice(i, i + minLen));
+    const chunk = sliceUtf16SafeMinLen(normalizedBootPrompt, i, minLen);
+    if (chunk) chunks.add(chunk);
   }
   chunksByLength.set(minLen, chunks);
   return chunks;
@@ -90,7 +103,8 @@ function containsSubstantialBootEcho(
   }
   const bootChunks = getBootPromptChunks(needle, minLen);
   for (let i = 0; i <= haystack.length - minLen; i += 1) {
-    if (bootChunks.has(haystack.slice(i, i + minLen))) {
+    const chunk = sliceUtf16SafeMinLen(haystack, i, minLen);
+    if (chunk && bootChunks.has(chunk)) {
       return true;
     }
   }

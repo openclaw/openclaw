@@ -1,0 +1,55 @@
+{
+  "issue": 110641,
+  "tier": "s",
+  "created_at": "2026-07-18T18:20:05Z",
+  "poll_interval_minutes": 8,
+  "max_review_rounds": 3,
+  "constraints": {
+    "min_chars": 200,
+    "max_lines": 30,
+    "require_real_log": true,
+    "require_screenshot": false
+  },
+  "items": [
+    {
+      "id": "evidence/log_exists",
+      "label": "提供真实终端运行日志",
+      "required": true,
+      "type": "file_exists",
+      "target": "*.log",
+      "rule": ""
+    },
+    {
+      "id": "evidence/not_mock_only",
+      "label": "证据非纯单元测试输出",
+      "required": true,
+      "type": "content_check",
+      "target": "pr-body.md",
+      "rule": "has_real_signal"
+    },
+    {
+      "id": "pr_body/rbp_fields",
+      "label": "PR body 含 6 个精确 RBP 字段",
+      "required": true,
+      "type": "content_check",
+      "target": "pr-body.md",
+      "rule": "has_rbp_fields"
+    },
+    {
+      "id": "pr_body/min_chars",
+      "label": "PR body 字数达标",
+      "required": true,
+      "type": "content_check",
+      "target": "pr-body.md",
+      "rule": "min_chars"
+    },
+    {
+      "id": "code/scope_check",
+      "label": "变更在规模约束内",
+      "required": true,
+      "type": "git_check",
+      "target": "",
+      "rule": "max_diff_lines"
+    }
+  ]
+}
