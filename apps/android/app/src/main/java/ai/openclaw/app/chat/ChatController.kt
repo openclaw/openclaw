@@ -134,6 +134,7 @@ class ChatController internal constructor(
   private val recordModelRecent: (String) -> Unit = {},
   private val onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   private val onOfflineDefaultAgentRestored: (String) -> Unit = {},
+  private val onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
 ) {
   internal constructor(
     scope: CoroutineScope,
@@ -147,6 +148,7 @@ class ChatController internal constructor(
     recordModelRecent: (String) -> Unit = {},
     onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
     onOfflineDefaultAgentRestored: (String) -> Unit = {},
+    onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
   ) : this(
     scope = scope,
     json = json,
@@ -171,6 +173,7 @@ class ChatController internal constructor(
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+    onAssistantReplyFinalized = onAssistantReplyFinalized,
   )
 
   suspend fun loadImageArtifact(artifactId: String): GatewayLoadedImage? {
@@ -5367,6 +5370,7 @@ class ChatController internal constructor(
             // Another client or chat.inject can finish the open session. Refresh
             // idle history without allowing its terminal state to own local UI.
             lastHandledTerminalRunId = runId
+            publishAssistantReplyFinalized(payload, runId)
             refreshCurrentHistoryBestEffort(updateSessionInfo = true)
           }
           return
@@ -5375,6 +5379,7 @@ class ChatController internal constructor(
           lastHandledTerminalRunId = runId
           retireRunTelemetry(runId)
         }
+        publishAssistantReplyFinalized(payload, runId)
         if (wasTimedOut) {
           val hasNewerRun =
             synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
@@ -5720,6 +5725,17 @@ class ChatController internal constructor(
         _streamingAssistantText.value = null
       }
     }
+  }
+
+  private fun publishAssistantReplyFinalized(
+    payload: JsonObject,
+    runId: String?,
+  ) {
+    if (payload["state"].asStringOrNull() != "final") return
+    val normalizedRunId = runId?.trim()?.takeIf(String::isNotEmpty) ?: return
+    val owner = currentChatComposerRoutingOwner() ?: return
+    val text = parseAssistantDeltaText(payload)?.trim()?.takeIf(String::isNotEmpty) ?: return
+    runCatching { onAssistantReplyFinalized(owner, normalizedRunId, text) }
   }
 
   private fun parseAssistantDeltaText(payload: JsonObject): String? {

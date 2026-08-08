@@ -22,6 +22,52 @@ class ChatControllerTerminalAckTest {
   private val json = chatControllerTestJson
 
   @Test
+  fun finalAssistantEventPublishesVerifiedRoutingOwnerOnce() =
+    runTest {
+      val finalized = mutableListOf<Triple<ChatComposerOwner, String, String>>()
+      val controller =
+        createChatController(
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { "main" },
+          onAssistantReplyFinalized = { owner, runId, text ->
+            finalized += Triple(owner, runId, text)
+          },
+        ) { method, _ ->
+          if (method == "chat.send") {
+            """{"runId":"run-notify","status":"started"}"""
+          } else {
+            "{}"
+          }
+        }
+      controller.prepareMainSessionKey("agent:main:main")
+      controller.handleGatewayEvent("health", null)
+      assertTrue(controller.sendMessageAwaitAcceptance("status", "off", emptyList()))
+      val terminal = chatTerminalPayload("agent:main:main", "run-notify", seq = 2, assistantText = "Done")
+
+      controller.handleGatewayEvent("chat", terminal)
+      controller.handleGatewayEvent("chat", terminal)
+      controller.handleGatewayEvent(
+        "chat",
+        chatTerminalPayload("agent:main:main", "run-error", seq = 3, state = "error", assistantText = "Partial"),
+      )
+
+      assertEquals(
+        listOf(
+          Triple(
+            ChatComposerOwner(
+              gatewayStableId = "gateway-a",
+              agentId = "main",
+              sessionKey = "agent:main:main",
+            ),
+            "run-notify",
+            "Done",
+          ),
+        ),
+        finalized,
+      )
+    }
+
+  @Test
   fun composerOwnerMustMatchBeforeSendAdmission() =
     runTest {
       val requestedMethods = mutableListOf<String>()

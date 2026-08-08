@@ -82,6 +82,10 @@ class NodeApp : Application() {
     runtimeScope.launch { peekRuntime()?.disconnect() }
   }
 
+  internal fun launchRuntimeTask(block: suspend () -> Unit) {
+    runtimeScope.launch { block() }
+  }
+
   /** Clears pairing auth without racing lazy process-runtime construction. */
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
     val runtime =

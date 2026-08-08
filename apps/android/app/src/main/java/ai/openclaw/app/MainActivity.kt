@@ -233,6 +233,10 @@ class MainActivity : AppCompatActivity() {
       viewModel.handleShareLaunchIntent(intent)
       return
     }
+    parseConversationNotificationLaunchIntent(intent)?.let { target ->
+      viewModel.openConversationNotification(target)
+      return
+    }
     parseHomeDestinationIntent(intent)?.let { destination ->
       viewModel.requestHomeDestination(destination)
       return

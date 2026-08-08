@@ -1860,6 +1860,11 @@ class NodeRuntime private constructor(
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
           onOfflineDefaultAgentRestored = ::syncMainSessionKey,
+          onAssistantReplyFinalized = { owner, runId, text ->
+            if (!_isForeground.value) {
+              ConversationReplyNotifier(appContext).show(owner, runId, text)
+            }
+          },
         )
       NodeRuntimeMode.ScreenshotFixture ->
         ChatController(
@@ -5214,6 +5219,39 @@ class NodeRuntime private constructor(
       attachments = attachments,
       expectedOwner = owner,
       idempotencyKey = idempotencyKey,
+    )
+
+  internal suspend fun openConversationNotificationTarget(
+    target: ConversationNotificationTarget,
+  ): Boolean =
+    routeConversationNotificationTarget(
+      target = target,
+      activeGatewayStableId = { prefs.gatewayRegistry.activeStableId.value },
+      switchGateway = ::switchToGateway,
+      switchSession = { sessionKey, agentId -> switchChatSession(sessionKey, agentId) },
+    )
+
+  internal suspend fun sendConversationNotificationReply(
+    target: ConversationNotificationTarget,
+    reply: String,
+    idempotencyKey: String,
+  ): Boolean =
+    routeConversationNotificationReply(
+      target = target,
+      reply = reply,
+      idempotencyKey = idempotencyKey,
+      activeGatewayStableId = { prefs.gatewayRegistry.activeStableId.value },
+      switchGateway = ::switchToGateway,
+      switchSession = { sessionKey, agentId -> switchChatSession(sessionKey, agentId) },
+      send = { owner, message, commandId ->
+        sendChatForOwnerAwaitAcceptance(
+          owner = owner,
+          message = message,
+          thinking = chatThinkingLevel.value,
+          attachments = emptyList(),
+          idempotencyKey = commandId,
+        )
+      },
     )
 
   internal suspend fun wasChatOutboxCommandAdmitted(id: String): Boolean = chat.wasOutboxCommandAdmitted(id)

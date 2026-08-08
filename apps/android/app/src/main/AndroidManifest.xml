@@ -103,6 +103,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <receiver
+            android:name=".ConversationReplyReceiver"
+            android:exported="false" />
         <!-- External sender tasks must converge on one visible composer and share queue. -->
         <activity
             android:name=".MainActivity"
