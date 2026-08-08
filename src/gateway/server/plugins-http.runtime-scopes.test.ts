@@ -2,6 +2,7 @@
  * Plugin HTTP runtime-scope integration tests.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -14,7 +15,10 @@ import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shar
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
-import { createGatewayPluginRequestHandler } from "./plugins-http.js";
+import {
+  createGatewayPluginRequestHandler,
+  createGatewayPluginUpgradeHandler,
+} from "./plugins-http.js";
 
 const SECURE_HOOK_PATH = "/secure-hook";
 const SECURE_ADMIN_HOOK_PATH = "/secure-admin-hook";
@@ -30,6 +34,11 @@ function createRoute(params: {
   gatewayRuntimeScopeSurface?: "write-default" | "trusted-operator";
   gatewayMethodDispatchAllowed?: boolean;
   handler?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>;
+  handleUpgrade?: (
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+  ) => boolean | Promise<boolean>;
 }) {
   return {
     pluginId: "route",
@@ -39,6 +48,7 @@ function createRoute(params: {
     gatewayMethodDispatchAllowed: params.gatewayMethodDispatchAllowed,
     match: params.match ?? "exact",
     handler: params.handler ?? (() => true),
+    handleUpgrade: params.handleUpgrade,
     source: "route",
   };
 }
@@ -318,6 +328,69 @@ describe("plugin HTTP route runtime scopes", () => {
       { route: "server-a", context: serverAContext },
       { route: "server-b", context: serverBContext },
     ]);
+  });
+
+  it("binds reloaded HTTP route handlers to their current registry", async () => {
+    const startupRegistry = createTestRegistry();
+    let observedRegistry: ReturnType<typeof createTestRegistry> | undefined;
+    const currentRegistry = createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: SECURE_HOOK_PATH,
+          auth: "gateway",
+          handler: () => {
+            observedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+            return true;
+          },
+        }),
+      ],
+    });
+    const handler = createGatewayPluginRequestHandler({
+      registry: startupRegistry,
+      getRouteRegistry: () => currentRegistry,
+      log: createMockLogger(),
+    });
+
+    const response = await dispatchTrustedGatewayRequest(handler, SECURE_HOOK_PATH);
+
+    expect(response.handled).toBe(true);
+    expect(observedRegistry).toBe(currentRegistry);
+  });
+
+  it("binds reloaded WebSocket upgrade handlers to their current registry", async () => {
+    const startupRegistry = createTestRegistry();
+    let observedRegistry: ReturnType<typeof createTestRegistry> | undefined;
+    const currentRegistry = createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: SECURE_HOOK_PATH,
+          auth: "gateway",
+          handleUpgrade: () => {
+            observedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+            return true;
+          },
+        }),
+      ],
+    });
+    const handler = createGatewayPluginUpgradeHandler({
+      registry: startupRegistry,
+      getRouteRegistry: () => currentRegistry,
+      log: createMockLogger(),
+    });
+
+    const handled = await handler(
+      { url: SECURE_HOOK_PATH } as IncomingMessage,
+      {} as Duplex,
+      Buffer.alloc(0),
+      undefined,
+      {
+        gatewayAuthSatisfied: true,
+        gatewayRequestOperatorScopes: ["operator.write"],
+      },
+    );
+
+    expect(handled).toBe(true);
+    expect(observedRegistry).toBe(currentRegistry);
   });
 
   it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {
