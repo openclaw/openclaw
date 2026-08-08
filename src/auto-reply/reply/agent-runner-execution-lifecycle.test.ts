@@ -653,4 +653,49 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       toolsAllow: ["message"],
     });
   });
+
+  it("retires queued cancellation ownership when execution freezes", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const onCancellationRetired = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onCancellationRetired,
+    };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      replyOperation,
+    });
+
+    expect(onCancellationRetired).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retire queued cancellation ownership on a pre-start failure that is retryable", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    const onCancellationRetired = vi.fn();
+    const followupRun = createFollowupRun();
+    followupRun.turnAdoptionLifecycle = {
+      onAdopted: async () => {},
+      onCancellationRetired,
+    };
+    // resolveCurrentTurnImages fails before execution starts — the follow-up
+    // runner classifies this as retryable, so the queued Gateway entry must
+    // remain abortable for the retry attempt.
+    state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("image resolution failed"));
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await expect(
+      executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun, replyOperation })),
+    ).rejects.toThrow("image resolution failed");
+
+    // Cancellation must NOT be retired — the follow-up runner will retry
+    // this turn, and the operator must still be able to abort it.
+    expect(onCancellationRetired).not.toHaveBeenCalled();
+  });
 });

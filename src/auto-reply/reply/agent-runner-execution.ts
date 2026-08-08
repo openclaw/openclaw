@@ -63,6 +63,7 @@ import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
+import { retireFollowupRunCancellation } from "./queue/types.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import {
@@ -544,6 +545,14 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
         commitTerminalOutcome();
       }
     });
+    // Execution reached a non-retryable terminal boundary (freezeAbort has
+    // fired inside commitTerminalOutcome). The queued Gateway cancel entry
+    // must retire at the same boundary so a late chat.abort cannot report
+    // the run aborted while finalizing delivery completes. This is deferred
+    // from commitTerminalOutcome because pre-start failures (e.g. image
+    // resolution) are retryable — the followup runner requeues them when
+    // executionStarted is false, so their queued entry must remain abortable.
+    retireFollowupRunCancellation(executionParams.followupRun);
     if (internal.kind === "final") {
       if (isReplyOperationRestartAbort(executionParams.replyOperation)) {
         return { runId, outcome: { kind: "aborted", reason: "restart" } };
