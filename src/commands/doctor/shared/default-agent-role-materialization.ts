@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../../agents/agent-scope-config.js";
+import { hasEnvVarRef } from "../../../config/env-preserve.js";
 import type { AgentRouteBinding } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeRouteBindingChannelId } from "../../../routing/binding-scope.js";
@@ -9,6 +10,20 @@ import { isRecord } from "../../../utils.js";
 type DefaultAgentRoleMaterialization = {
   config: OpenClawConfig;
   changes: string[];
+};
+
+type MaterializeDefaultAgentRolesOptions = {
+  /**
+   * The pre-substitution parsed config (e.g. `snapshot.parsed` from the
+   * doctor preflight). When provided, the migration uses this to detect
+   * the write-path trip-prone shape: a unique authored literal
+   * `agentId: defaultAgentId` binding that the env-preserve matcher
+   * would see as a unique identity while any new sibling literal
+   * channel-wide binding would double `incomingMatches.length`. Without
+   * this, the migration falls back to the resolved-snapshot heuristic
+   * that over-skips when there is no env-template at all.
+   */
+  parsed?: unknown;
 };
 
 function resolveLegacyMultiAgentDefault(cfg: OpenClawConfig): string | undefined {
@@ -52,11 +67,39 @@ function isChannelWideBinding(binding: AgentRouteBinding, channelId: string): bo
   );
 }
 
+function valueContainsEnvVarRef(value: unknown): boolean {
+  if (typeof value === "string") {
+    return hasEnvVarRef(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(valueContainsEnvVarRef);
+  }
+  if (isRecord(value)) {
+    return Object.values(value).some(valueContainsEnvVarRef);
+  }
+  return false;
+}
+
+function bindingMatchesChannel(binding: AgentRouteBinding, channelId: string): boolean {
+  const match = binding.match;
+  if (!isRecord(match)) {
+    return false;
+  }
+  return (
+    normalizeRouteBindingChannelId(
+      typeof match.channel === "string" ? match.channel : undefined,
+    ) === channelId
+  );
+}
+
 /**
  * Materialize only ambient roles that currently fall through to a multi-agent default.
  * The marker remains authoritative in H2-0; these explicit targets are preparation for H2-1.
  */
-export function materializeDefaultAgentRoles(cfg: OpenClawConfig): DefaultAgentRoleMaterialization {
+export function materializeDefaultAgentRoles(
+  cfg: OpenClawConfig,
+  options: MaterializeDefaultAgentRolesOptions = {},
+): DefaultAgentRoleMaterialization {
   const defaultAgentId = resolveLegacyMultiAgentDefault(cfg);
   if (!defaultAgentId) {
     return { config: cfg, changes: [] };
@@ -70,24 +113,95 @@ export function materializeDefaultAgentRoles(cfg: OpenClawConfig): DefaultAgentR
         (binding): binding is AgentRouteBinding => isRecord(binding) && binding.type !== "acp",
       )
     : [];
-  const missingChannelBindings = canMaterializeBindings
-    ? listAmbientConfiguredChannelIds(cfg).filter(
-        (channelId) => !bindings.some((binding) => isChannelWideBinding(binding, channelId)),
-      )
-    : [];
-  if (missingChannelBindings.length > 0) {
+  // The writer's `restoreEnvVarRefs` matcher resolves `agentId` identity
+  // across the entire array and trips when appending a sibling literal
+  // `agentId: defaultAgentId` channel-wide binding would make the
+  // `incomingMatches.length` jump to 2 for a unique authored literal
+  // `agentId: defaultAgentId` entry. The matcher enters the identity
+  // path only when the parsed file carries an env-template; without one
+  // the array shortcut bypasses identity resolution entirely. We refuse
+  // to materialize any channel-wide default binding in the trip-prone
+  // shape (parsed has env-templates AND exactly one authored literal
+  // `agentId: defaultAgentId`). When the parsed config is not supplied,
+  // fall back to the resolved-snapshot heuristic on `bindings` alone:
+  // multiple literal entries are not trip-prone (authoredCount > 1),
+  // zero means no collision target, and exactly one is the conservative
+  // case the matcher cannot safely resolve.
+  const parsedBindingsSource = options.parsed;
+  const parsedBindings: unknown =
+    parsedBindingsSource !== undefined && isRecord(parsedBindingsSource)
+      ? parsedBindingsSource.bindings
+      : undefined;
+  const parsedLiteralDefaultAgentIdCount = Array.isArray(parsedBindings)
+    ? parsedBindings.filter(
+        (binding) =>
+          isRecord(binding) &&
+          typeof binding.agentId === "string" &&
+          !hasEnvVarRef(binding.agentId) &&
+          binding.agentId === defaultAgentId,
+      ).length
+    : 0;
+  const parsedHasEnvTemplate = Array.isArray(parsedBindings)
+    ? parsedBindings.some(valueContainsEnvVarRef)
+    : false;
+  const tripProne =
+    parsedBindingsSource !== undefined
+      ? parsedHasEnvTemplate && parsedLiteralDefaultAgentIdCount === 1
+      : bindings.filter(
+          (binding) =>
+            typeof binding.agentId === "string" &&
+            !hasEnvVarRef(binding.agentId) &&
+            binding.agentId === defaultAgentId,
+        ).length === 1;
+  const materializableChannelBindings: string[] = [];
+  const tripProneSkippedChannels: string[] = [];
+  const envRefSkippedChannels: string[] = [];
+  if (canMaterializeBindings) {
+    for (const channelId of listAmbientConfiguredChannelIds(cfg)) {
+      const channelBindings = bindings.filter((binding) =>
+        bindingMatchesChannel(binding, channelId),
+      );
+      if (channelBindings.some((binding) => isChannelWideBinding(binding, channelId))) {
+        continue;
+      }
+      if (tripProne) {
+        tripProneSkippedChannels.push(channelId);
+        continue;
+      }
+      if (channelBindings.some(valueContainsEnvVarRef)) {
+        envRefSkippedChannels.push(channelId);
+        continue;
+      }
+      materializableChannelBindings.push(channelId);
+    }
+  }
+  if (materializableChannelBindings.length > 0) {
     next = {
       ...next,
       bindings: [
         ...(Array.isArray(next.bindings) ? next.bindings : []),
-        ...missingChannelBindings.map((channel) => ({
+        ...materializableChannelBindings.map((channel) => ({
           agentId: defaultAgentId,
           match: { channel, accountId: "*" },
         })),
       ],
     };
     changes.push(
-      `Bound ${missingChannelBindings.join(", ")} unbound account routing to agent "${defaultAgentId}".`,
+      `Bound ${materializableChannelBindings.join(", ")} unbound account routing to agent "${defaultAgentId}".`,
+    );
+    if (envRefSkippedChannels.length > 0) {
+      changes.push(
+        `Skipped ${envRefSkippedChannels.join(", ")}: existing binding uses an environment reference.`,
+      );
+    }
+  }
+  // The trip-prone guard is a real warning: the writer would have thrown
+  // EnvRefArrayMutationError on save. Emit it even when nothing else was
+  // materializable so operators see the configuration that needs manual
+  // cleanup.
+  if (tripProneSkippedChannels.length > 0) {
+    changes.push(
+      `Skipped ${tripProneSkippedChannels.join(", ")}: identity-collision guard against ${defaultAgentId} would trip EnvRefArrayMutationError during write.`,
     );
   }
 

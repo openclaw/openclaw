@@ -253,7 +253,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     // Preserve doctor's write intent so the atomic writer does not restore the authored omission.
     explicitSetPaths.push(["agents", "entries"]);
   }
-  applyConfigMutation(materializeDefaultAgentRoles(state.candidate), {
+  applyConfigMutation(materializeDefaultAgentRoles(state.candidate, { parsed: snapshot.parsed }), {
     fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
   });
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
