@@ -988,6 +988,50 @@ describe("models.authStatus", () => {
     });
   });
 
+  it("adds Kimi API-key quota windows to auth status usage", async () => {
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [createApiKeyProfile("kimi")],
+      providers: [createStaticApiKeyProvider("kimi")],
+    });
+    mocks.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: 0,
+      providers: [
+        {
+          provider: "kimi",
+          displayName: "Kimi",
+          windows: [
+            { label: "5h", usedPercent: 8 },
+            { label: "7d", usedPercent: 3 },
+          ],
+        },
+      ],
+    });
+
+    const first = await readAuthStatus();
+    expect(first.providers[0]?.usage).toBeUndefined();
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      providers: ["kimi"],
+      agentDir: "/tmp/agent",
+      timeoutMs: 3500,
+    });
+    let result: ModelAuthStatusResult | undefined;
+    await waitForFast(async () => {
+      result = await readAuthStatus();
+      expect(result.providers[0]?.usage).toBeDefined();
+    });
+    const refreshed = expectDefined(result, "refreshed auth status");
+    expect(refreshed.providers[0]?.usage).toEqual({
+      providerId: "kimi",
+      windows: [
+        { label: "5h", usedPercent: 8 },
+        { label: "7d", usedPercent: 3 },
+      ],
+    });
+  });
+
   it("serves stale usage immediately while one background refresh replaces it", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const profile = {

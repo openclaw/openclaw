@@ -79,7 +79,7 @@ export type {
 } from "./models-auth-status.types.js";
 
 const log = createSubsystemLogger("models-auth-status");
-const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
+const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek", "kimi"]);
 
 /**
  * Invalidate auxiliary usage and prepared provider-auth state after an auth
