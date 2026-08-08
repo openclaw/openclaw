@@ -136,6 +136,19 @@ const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+const TURN_BUDGET_TIMEOUT_NOTICE =
+  "⚠️ I hit my time budget on this request and stopped before finishing. " +
+  "Ask me to continue, or simplify the request. " +
+  "If this happens often, raise `agents.defaults.timeoutSeconds` in your config.";
+// An idle-watchdog timeout is a provider-side stall, not an exhausted run budget.
+// `resolveEmbeddedRunTerminalTimeout` already makes this distinction for prompt
+// timeouts; tool-execution timeouts point at the same setting so the remediation
+// a user is told to change is the one that actually governs the timeout they hit.
+const TURN_IDLE_TIMEOUT_NOTICE =
+  "⚠️ The model stopped responding before its idle timeout elapsed, so I stopped before finishing. " +
+  "Ask me to continue, or simplify the request. " +
+  "If this happens often, raise `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers; " +
+  "`agents.defaults.timeoutSeconds` cannot extend a provider idle timeout.";
 
 /**
  * Marks whether retrying the attempt can safely replay the prompt. Concrete
@@ -220,6 +233,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   aborted: boolean;
   externalAbort: boolean;
   timedOut: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
   hadPotentialSideEffects?: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
@@ -242,6 +256,32 @@ export function resolveIncompleteTurnPayloadText(params: {
     !joinAssistantTexts(params.attempt.assistantTexts).length &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
+  const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  // payloadCount, not lastToolError, proves whether error policy exposed the failure.
+  // Keep every other delivery/continuation state as a reason not to double-notify.
+  const hasTimeoutTerminalOutput = hasAttemptTerminalState({
+    ...params.attempt,
+    lastToolError: undefined,
+  });
+  // Timeout phase and interruption precedence belong to the canonical attempt terminal.
+  // Only its tool-execution timeout may become an incomplete-turn payload here.
+  //
+  // This returns before the general suppression guard below, so it cannot inherit
+  // that guard's external-abort silence and has to reject externally owned
+  // interruptions itself. A `timeout` terminal carries `source: "external"` when an
+  // operator cancellation raced the timeout, so the two states genuinely co-occur;
+  // without this check that cancellation would be reported as an exhausted time budget.
+  if (
+    terminal.timedOut &&
+    terminal.timedOutDuringToolExecution &&
+    !terminal.externalAbort &&
+    !(params.aborted && params.externalAbort) &&
+    params.payloadCount === 0 &&
+    params.allowEmptyAssistantReplyAsSilent !== true &&
+    !hasTimeoutTerminalOutput
+  ) {
+    return terminal.idleTimedOut ? TURN_IDLE_TIMEOUT_NOTICE : TURN_BUDGET_TIMEOUT_NOTICE;
+  }
 
   if (
     (params.payloadCount !== 0 && !incompleteTerminalAssistant && !thinkingOnlyTerminal) ||

@@ -313,6 +313,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         aborted: terminalAborted,
         externalAbort: externalAbort || signalOwnedInterruption,
         timedOut: terminalTimedOut,
+        allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
         hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
         attempt,
       });
