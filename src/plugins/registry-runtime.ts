@@ -845,31 +845,37 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) =>
             await runWithPluginScope(async () => {
               const ownerPluginId = resolveRunSessionExecutionOwner(params);
-              return ownerPluginId
-                ? await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(params)
-                : await (
-                    agent.runEmbeddedAgent as unknown as (
-                      params: RunEmbeddedAgentParams,
-                    ) => ReturnType<PluginRuntime["agent"]["runEmbeddedAgent"]>
-                  )({
-                    ...params,
-                    preparedRunAdmission: prepareAgentRunAdmission({
-                      cfg:
-                        params.config ??
-                        (registryParams.runtime.config.current() as unknown as OpenClawConfig),
-                      operationalRunInstance: createOperationalRunInstanceRef(params.runId),
-                      facts: {
-                        runId: params.runId,
-                        agentId: params.sessionTarget?.agentId ?? params.agentId ?? "main",
-                        ingress: {
-                          kind: "plugin",
-                          boundary: "plugin-runtime",
-                          rawSourceRef: pluginId,
-                          state: "present",
-                        },
-                      },
-                    }),
-                  });
+              if (ownerPluginId) {
+                return await resolvePluginRuntime(ownerPluginId).agent.runEmbeddedAgent(params);
+              }
+              const preparedRunAdmission = prepareAgentRunAdmission({
+                cfg:
+                  params.config ??
+                  (registryParams.runtime.config.current() as unknown as OpenClawConfig),
+                operationalRunInstance: createOperationalRunInstanceRef(params.runId),
+                facts: {
+                  runId: params.runId,
+                  agentId: params.sessionTarget?.agentId ?? params.agentId ?? "main",
+                  ingress: {
+                    kind: "plugin",
+                    boundary: "plugin-runtime",
+                    rawSourceRef: pluginId,
+                    state: "present",
+                  },
+                },
+              });
+              try {
+                return await (
+                  agent.runEmbeddedAgent as unknown as (
+                    params: RunEmbeddedAgentParams,
+                  ) => ReturnType<PluginRuntime["agent"]["runEmbeddedAgent"]>
+                )({
+                  ...params,
+                  preparedRunAdmission,
+                });
+              } finally {
+                preparedRunAdmission.close();
+              }
             });
           const scopedAgent = Object.create(
             Object.getPrototypeOf(agent),

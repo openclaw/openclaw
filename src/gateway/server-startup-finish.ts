@@ -81,6 +81,8 @@ export async function finishGatewayStartup(params: {
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
+    bindApprovalPublicationContext,
+    validateAgentRuntimeApprovalAuthority,
     approvalSessionEvents,
     startupTrace,
     loadGatewayModelCatalog,
@@ -263,6 +265,7 @@ export async function finishGatewayStartup(params: {
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }
         : {}),
+      validateAgentRuntimeApprovalAuthority,
       terminalSessions,
       agentRunSeq,
       chatAbortControllers,
@@ -298,6 +301,7 @@ export async function finishGatewayStartup(params: {
       broadcastVoiceWakeRoutingChanged,
     });
   });
+  bindApprovalPublicationContext(gatewayRequestContext);
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,
     gatewayRequestContext,

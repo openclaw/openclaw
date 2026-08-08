@@ -123,10 +123,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "text-runtime": 192,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
-  // +3: legacy AgentHarness, AgentHarnessAttemptParams, and EmbeddedRunAttemptParams
-  // remain deprecated while external harnesses migrate to the required-capability V2 contracts.
+  // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
+  // deprecated while external harnesses migrate to required-capability V2 contracts.
   "agent-harness": 2,
-  "agent-harness-runtime": 7,
+  "agent-harness-runtime": 8,
   "agent-config-primitives": 2,
   "command-auth": 78,
   discord: 47,
@@ -226,8 +226,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared channel question-reaction store and preflight-audio factories.
       // +1: shared channel interactive dispatcher with canonical binding authorization.
       // +1: simple channel secret contract factory replacing repeated collectors.
-      // +5: required-capability V2 harness contracts through the focused and runtime barrels.
-      4840,
+      // +6: required-capability V2 harness contracts through the focused and runtime barrels,
+      // including the side-question compatibility split.
+      4841,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -290,8 +291,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: flushLogger projected through the deprecated text-runtime barrel.
       // +1: shared ingress error factory projected through channel-message.
       // +1: shared ingress retention defaults projected through channel-message.
-      // +5: source-compatible harness contracts retained during the V2 migration window.
-      1708,
+      // +6: source-compatible harness contracts retained during the V2 migration window.
+      1709,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

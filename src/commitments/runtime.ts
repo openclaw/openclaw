@@ -244,34 +244,39 @@ async function defaultExtractBatch(params: {
   const runId = `commitments-${randomUUID()}`;
   const modelRef = await resolveDefaultModel({ cfg, agentId: first.agentId });
   const { runEmbeddedAgent } = await import("../agents/embedded-agent.js");
-  const result = await runEmbeddedAgent({
-    preparedRunAdmission: prepareSystemAgentRunAdmission(
-      cfg,
-      runId,
-      first.agentId,
-      "commitments.extract",
-    ),
-    sessionId: runId,
-    sessionKey: `agent:${first.agentId}:commitments:${runId}`,
-    agentId: first.agentId,
-    trigger: "manual",
-    workspaceDir: resolveAgentWorkspaceDir(cfg, first.agentId),
-    config: cfg,
-    provider: modelRef.provider,
-    model: modelRef.model,
-    prompt: buildCommitmentExtractionPrompt({ cfg, items: params.items }),
-    disableTools: true,
-    thinkLevel: "off",
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    fastMode: true,
-    timeoutMs: resolved.extraction.timeoutSeconds * 1000,
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    cfg,
     runId,
-    bootstrapContextMode: "lightweight",
-    skillsSnapshot: { prompt: "", skills: [] },
-    suppressToolErrorWarnings: true,
-  });
-  return parseCommitmentExtractionOutput(joinPayloadText(result));
+    first.agentId,
+    "commitments.extract",
+  );
+  try {
+    const result = await runEmbeddedAgent({
+      preparedRunAdmission,
+      sessionId: runId,
+      sessionKey: `agent:${first.agentId}:commitments:${runId}`,
+      agentId: first.agentId,
+      trigger: "manual",
+      workspaceDir: resolveAgentWorkspaceDir(cfg, first.agentId),
+      config: cfg,
+      provider: modelRef.provider,
+      model: modelRef.model,
+      prompt: buildCommitmentExtractionPrompt({ cfg, items: params.items }),
+      disableTools: true,
+      thinkLevel: "off",
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      fastMode: true,
+      timeoutMs: resolved.extraction.timeoutSeconds * 1000,
+      runId,
+      bootstrapContextMode: "lightweight",
+      skillsSnapshot: { prompt: "", skills: [] },
+      suppressToolErrorWarnings: true,
+    });
+    return parseCommitmentExtractionOutput(joinPayloadText(result));
+  } finally {
+    preparedRunAdmission.close();
+  }
 }
 
 async function hydrateBatch(

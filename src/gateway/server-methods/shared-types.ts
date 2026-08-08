@@ -24,6 +24,7 @@ import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
@@ -276,6 +277,8 @@ export type GatewayRequestContext = {
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
   /** Durable per-session worker placement; absent when cloud workers are disabled. */
   workerSessionPlacementService?: WorkerSessionPlacementReader;
+  /** Use-time approval authority validation over the live run/worker owners. */
+  validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
   workerPlacementDispatchService?: WorkerPlacementDispatchContract;
   // Operator terminal session store. Absent in local/in-process contexts where

@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  createOperationalRunInstanceRef,
+  type OperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
+import {
   clearEmbeddedAgentRunAbortabilityForRunId,
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
@@ -45,6 +49,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 export type PreparedAgentRunDispatch = {
   activeGatewayWorkAdmission: SessionWorkAdmissionLease;
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
+  operationalRunInstance: OperationalRunInstanceRef;
   effectiveProviderOverride?: string;
   effectiveModelOverride?: string;
   effectiveThinking?: string;
@@ -186,6 +191,7 @@ export async function prepareAgentRunDispatch(params: {
         clone: false,
       }).storePath
     : `agent:${params.activeSessionAgentId}`;
+  const operationalRunInstance = createOperationalRunInstanceRef(params.runId);
   try {
     await params.acquireGatewayWorkAdmission(lifecycleStorePath);
     params.assertGatewayWorkAdmissionAllowed();
@@ -213,6 +219,7 @@ export async function prepareAgentRunDispatch(params: {
           controlUiVisible: !params.suppressVisibleSessionEffects,
           kind: "agent",
           lifecycleGeneration: params.lifecycleGeneration,
+          operationalRunInstance,
         }),
       );
     }
@@ -434,6 +441,7 @@ export async function prepareAgentRunDispatch(params: {
   return {
     activeGatewayWorkAdmission,
     activeRunAbort,
+    operationalRunInstance,
     effectiveProviderOverride,
     effectiveModelOverride,
     effectiveThinking,

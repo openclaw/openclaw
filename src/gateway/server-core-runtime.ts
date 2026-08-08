@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-identity-token.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -239,6 +240,11 @@ export async function startGatewayCoreRuntime(input: {
       return manager?.reconcileDurableTerminal(record) ?? false;
     },
   });
+  // One validator owns both request-time and manager-time checks. Worker claims
+  // are always read from the authoritative operational placement store.
+  const validateAgentRuntimeApprovalAuthority = createAgentRuntimeApprovalAuthorityValidator(
+    workerEnvironmentStartup?.placementStore,
+  );
 
   const {
     execApprovalManager,
@@ -247,6 +253,8 @@ export async function startGatewayCoreRuntime(input: {
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
+    bindApprovalPublicationContext,
+    unregisterApprovalAuthorityObserver,
     extraHandlers,
     coreGatewayHandlers,
   } = await startupTrace.measure("gateway.handlers", async () => {
@@ -255,6 +263,7 @@ export async function startGatewayCoreRuntime(input: {
     return {
       ...createGatewayAuxHandlers({
         log,
+        chatAbortControllers,
         activateRuntimeSecrets,
         sharedGatewaySessionGenerationState,
         resolveSharedGatewaySessionGenerationForConfig,
@@ -263,10 +272,25 @@ export async function startGatewayCoreRuntime(input: {
         stopChannel,
         getChannelAutostartSuppression: channelManager.getAutostartSuppression,
         logChannels,
+        registerWorkerTurnClaimClosedHandler:
+          workerEnvironmentStartup?.placementStore.registerTurnClaimClosedHandler,
+        validateAgentRuntimeDelegatedAuthority: (authority) =>
+          validateAgentRuntimeApprovalAuthority({
+            kind: "agentRuntime",
+            agentId: "approval-manager",
+            sessionKey: "approval-manager",
+            operationalRunInstance: authority.operationalRunInstance,
+            delegatedAuthority: authority,
+          }),
         onApprovalLifecycle: approvalSessionEvents.publish,
       }),
       coreGatewayHandlers: coreGatewayHandlersLocal,
     };
+  });
+  runtimeState.gatewayLifetimeSidecars.push({
+    stop: async () => {
+      unregisterApprovalAuthorityObserver();
+    },
   });
   approvalManagersForReplay.set("exec", execApprovalManager);
   approvalManagersForReplay.set("plugin", pluginApprovalManager);
@@ -553,6 +577,8 @@ export async function startGatewayCoreRuntime(input: {
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,
     systemAgentApprovalManager,
+    bindApprovalPublicationContext,
+    validateAgentRuntimeApprovalAuthority,
     attachedGatewayExtraHandlers,
     getAttachedGatewayMethodRegistry: () => attachedGatewayMethodRegistry,
     replaceAttachedPluginRuntime,

@@ -10,11 +10,17 @@ import {
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+  type AgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
+import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
 const AGENT_RUNTIME_IDENTITY_TOKEN_KIND = "agent-runtime";
@@ -31,6 +37,7 @@ export type AgentRuntimeIdentity = {
   agentId: string;
   sessionKey: string;
   operationalRunInstance: OperationalRunInstanceRef;
+  delegatedAuthority: AgentRuntimeDelegatedAuthority;
   approvalOwnerPluginId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
@@ -41,6 +48,15 @@ export type AgentRuntimeIdentity = {
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
+
+export type AgentRuntimeDelegatedAuthority = AgentRunDelegatedAuthority &
+  (
+    | { kind: "local" }
+    | {
+        kind: "worker";
+        turnClaim: WorkerSessionTurnClaim;
+      }
+  );
 
 export type AgentRuntimeSessionSpawnContext = {
   completionOwnerSessionKey?: string;
@@ -56,6 +72,7 @@ type AgentRuntimeIdentityTokenPayload = {
   agentId: string;
   sessionKey: string;
   operationalRunInstance: OperationalRunInstanceRef;
+  delegatedAuthority: AgentRuntimeDelegatedAuthority;
   approvalOwnerPluginId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
@@ -66,6 +83,75 @@ type AgentRuntimeIdentityTokenPayload = {
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
+
+function decodeWorkerTurnClaim(value: unknown): WorkerSessionTurnClaim | undefined {
+  if (!isRecord(value) || !isRecord(value.owner) || value.owner.kind !== "worker") {
+    return undefined;
+  }
+  const sessionId = normalizeOptionalString(value.sessionId);
+  const claimId = normalizeOptionalString(value.claimId);
+  const runId = normalizeOptionalString(value.runId);
+  const environmentId = normalizeOptionalString(value.owner.environmentId);
+  const placementGeneration = value.placementGeneration;
+  const ownerEpoch = value.owner.ownerEpoch;
+  if (
+    !sessionId ||
+    !claimId ||
+    !runId ||
+    !environmentId ||
+    !Number.isSafeInteger(placementGeneration) ||
+    (placementGeneration as number) < 0 ||
+    !Number.isSafeInteger(ownerEpoch) ||
+    (ownerEpoch as number) < 0
+  ) {
+    return undefined;
+  }
+  return {
+    sessionId,
+    claimId,
+    runId,
+    placementGeneration: placementGeneration as number,
+    owner: { kind: "worker", environmentId, ownerEpoch: ownerEpoch as number },
+  };
+}
+
+function decodeDelegatedAuthority(
+  value: unknown,
+  operationalRunInstance: OperationalRunInstanceRef,
+): AgentRuntimeDelegatedAuthority | undefined {
+  if (!isRecord(value) || (value.kind !== "local" && value.kind !== "worker")) {
+    return undefined;
+  }
+  const lifecycleGeneration = normalizeOptionalString(value.lifecycleGeneration);
+  const claimId = normalizeOptionalString(value.claimId);
+  const rawOperational = value.operationalRunInstance;
+  const instanceId = isRecord(rawOperational)
+    ? normalizeOptionalString(rawOperational.instanceId)
+    : undefined;
+  const runId = isRecord(rawOperational)
+    ? normalizeOptionalString(rawOperational.runId)
+    : undefined;
+  if (
+    !lifecycleGeneration ||
+    !claimId ||
+    instanceId !== operationalRunInstance.instanceId ||
+    runId !== operationalRunInstance.runId
+  ) {
+    return undefined;
+  }
+  const owner = {
+    operationalRunInstance,
+    lifecycleGeneration,
+    claimId,
+  };
+  if (value.kind === "local") {
+    return { kind: "local", ...owner };
+  }
+  const turnClaim = decodeWorkerTurnClaim(value.turnClaim);
+  return turnClaim?.runId === operationalRunInstance.runId
+    ? { kind: "worker", ...owner, turnClaim }
+    : undefined;
+}
 
 function decodeStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
@@ -237,6 +323,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       cronSelfManagementContext?: unknown;
       sessionSpawnContext?: unknown;
       executionIdentity?: unknown;
+      delegatedAuthority?: unknown;
     };
     if (
       raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
@@ -271,6 +358,17 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
         ? raw.turnSourceThreadId
         : undefined;
     if (!agentId || !sessionKey || !operationalInstanceId || !operationalRunId) {
+      return undefined;
+    }
+    const operationalRunInstance = Object.freeze({
+      instanceId: operationalInstanceId,
+      runId: operationalRunId,
+    });
+    const delegatedAuthority = decodeDelegatedAuthority(
+      raw.delegatedAuthority,
+      operationalRunInstance,
+    );
+    if (!delegatedAuthority) {
       return undefined;
     }
     const messageActionContext =
@@ -323,10 +421,8 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
       sessionKey,
-      operationalRunInstance: Object.freeze({
-        instanceId: operationalInstanceId,
-        runId: operationalRunId,
-      }),
+      operationalRunInstance,
+      delegatedAuthority,
       ...(approvalOwnerPluginId ? { approvalOwnerPluginId } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
       ...(turnSourceTo ? { turnSourceTo } : {}),
@@ -356,12 +452,30 @@ export async function mintAgentRuntimeIdentityToken(params: {
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
+  workerTurnClaim?: WorkerSessionTurnClaim;
 }): Promise<string> {
   const operationalInstanceId = normalizeOptionalString(params.operationalRunInstance.instanceId);
   const operationalRunId = normalizeOptionalString(params.operationalRunInstance.runId);
   if (!operationalInstanceId || !operationalRunId) {
     throw new Error("agent runtime identity requires an operational run instance");
   }
+  const activeAuthority = getActiveAgentRunDelegatedAuthority({
+    instanceId: operationalInstanceId,
+    runId: operationalRunId,
+  });
+  if (!activeAuthority) {
+    throw new Error("agent runtime identity requires active delegated run authority");
+  }
+  if (
+    params.workerTurnClaim &&
+    (params.workerTurnClaim.owner.kind !== "worker" ||
+      params.workerTurnClaim.runId !== operationalRunId)
+  ) {
+    throw new Error("worker delegated authority disagrees with the operational run");
+  }
+  const delegatedAuthority: AgentRuntimeDelegatedAuthority = params.workerTurnClaim
+    ? { kind: "worker", ...activeAuthority, turnClaim: params.workerTurnClaim }
+    : { kind: "local", ...activeAuthority };
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
     !normalizeOptionalString(params.messageActionContext.sourceReplyToolCallId)
@@ -401,6 +515,7 @@ export async function mintAgentRuntimeIdentityToken(params: {
       instanceId: operationalInstanceId,
       runId: operationalRunId,
     },
+    delegatedAuthority,
     ...(normalizeOptionalString(params.approvalOwnerPluginId)
       ? { approvalOwnerPluginId: normalizeOptionalString(params.approvalOwnerPluginId) }
       : {}),
@@ -445,6 +560,7 @@ export async function verifyAgentRuntimeIdentityToken(
     agentId: payload.agentId,
     sessionKey: payload.sessionKey,
     operationalRunInstance: payload.operationalRunInstance,
+    delegatedAuthority: payload.delegatedAuthority,
     ...(payload.approvalOwnerPluginId
       ? { approvalOwnerPluginId: payload.approvalOwnerPluginId }
       : {}),
@@ -461,4 +577,30 @@ export async function verifyAgentRuntimeIdentityToken(
       : {}),
     ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
   };
+}
+
+export type AgentRuntimeApprovalAuthorityValidator = (identity: AgentRuntimeIdentity) => boolean;
+
+type WorkerTurnClaimValidator = {
+  validateTurnClaim(claim: WorkerSessionTurnClaim): boolean;
+};
+
+export function validateAgentRuntimeDelegatedAuthority(
+  authority: AgentRuntimeDelegatedAuthority,
+  placements?: WorkerTurnClaimValidator,
+): boolean {
+  if (!validateAgentRunDelegatedAuthority(authority)) {
+    return false;
+  }
+  return authority.kind === "local"
+    ? true
+    : placements?.validateTurnClaim?.(authority.turnClaim) === true;
+}
+
+/** Builds the use-time approval gate from the run owner and canonical worker store. */
+export function createAgentRuntimeApprovalAuthorityValidator(
+  placements?: WorkerTurnClaimValidator,
+): AgentRuntimeApprovalAuthorityValidator {
+  return (identity) =>
+    validateAgentRuntimeDelegatedAuthority(identity.delegatedAuthority, placements);
 }
