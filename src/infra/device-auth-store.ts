@@ -24,14 +24,19 @@ type DeviceAuthDatabase = Pick<OpenClawStateKyselyDatabase, "device_auth_tokens"
 // the entry after its exclusive legacy import removes the retired file.
 const legacyPresenceCache = new Map<string, boolean>();
 
-function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
+export function legacyDeviceAuthStorePath(env?: NodeJS.ProcessEnv): string | null {
   const stateDir = resolveStateDir(env);
+  const filePath = path.join(stateDir, "identity", "device-auth.json");
   let hasLegacy = legacyPresenceCache.get(stateDir);
   if (hasLegacy === undefined) {
-    hasLegacy = fs.existsSync(path.join(stateDir, "identity", "device-auth.json"));
+    hasLegacy = fs.existsSync(filePath);
     legacyPresenceCache.set(stateDir, hasLegacy);
   }
-  if (hasLegacy) {
+  return hasLegacy ? filePath : null;
+}
+
+function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
+  if (legacyDeviceAuthStorePath(env) !== null) {
     throw new Error(
       "Legacy device auth requires migration; stop the Gateway and run `openclaw doctor --fix`.",
     );
