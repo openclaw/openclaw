@@ -88,7 +88,7 @@ export async function resolveSlackConversationInfo(params: {
   const userToken = normalizeOptionalString(account.userToken);
   const credentialRole = token ? (token === userToken ? "user" : "bot") : "none";
   const credentialFingerprint = token ? fingerprintSlackCredential(token) : "none";
-  const teamId = normalizeLowercaseStringOrEmpty(params.teamId) || "default";
+  const teamId = normalizeLowercaseStringOrEmpty(params.teamId) || "no-team-id";
   const cacheKey = `${account.accountId}:${teamId}:${operation}:${credentialRole}:${credentialFingerprint}:${channelId}`;
   if (!params.requireFreshName) {
     const cached = getCachedSlackConversationInfo(cacheKey);
