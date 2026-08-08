@@ -142,21 +142,66 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
   if (!parsed || typeof parsed !== "object") {
     return null;
   }
-  const type = (parsed as { type?: unknown }).type;
-  if (typeof type !== "string") {
-    return null;
-  }
-  switch (type) {
+  const msg = parsed as Record<string, unknown>;
+  // Validate the fields the bridge dereferences per frame type. Anything else
+  // is dropped as malformed: bindSocket invokes the handler without try/catch,
+  // so a bad frame reaching the bridge would escape as an uncaughtException.
+  switch (msg.type) {
     case "hello":
+      if (
+        typeof msg.userAgent !== "string" ||
+        typeof msg.browserVersion !== "string" ||
+        typeof msg.extensionVersion !== "string" ||
+        !isRelayTabInfoArray(msg.tabs)
+      ) {
+        return null;
+      }
+      break;
     case "tabs":
+      if (!isRelayTabInfoArray(msg.tabs)) {
+        return null;
+      }
+      break;
     case "cdpEvent":
+      if (typeof msg.tabId !== "number" || typeof msg.method !== "string") {
+        return null;
+      }
+      break;
     case "result":
     case "error":
+      if (typeof msg.seq !== "number") {
+        return null;
+      }
+      break;
     case "detached":
+      if (typeof msg.tabId !== "number") {
+        return null;
+      }
+      break;
     case "pong":
+      break;
     case "pageShare":
-      return parsed as ExtensionToRelayMessage;
+      if (!Number.isSafeInteger(msg.requestId)) {
+        return null;
+      }
+      break;
     default:
       return null;
   }
+  return parsed as ExtensionToRelayMessage;
+}
+
+function isRelayTabInfoArray(value: unknown): value is RelayTabInfo[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (tab) =>
+        tab !== null &&
+        typeof tab === "object" &&
+        typeof (tab as RelayTabInfo).tabId === "number" &&
+        typeof (tab as RelayTabInfo).url === "string" &&
+        typeof (tab as RelayTabInfo).title === "string" &&
+        typeof (tab as RelayTabInfo).active === "boolean",
+    )
+  );
 }
