@@ -68,15 +68,8 @@ function createEnterpriseClient(): EnterpriseTestClient {
   } as unknown as EnterpriseTestClient;
 }
 
-function enterpriseEventScope(
-  client: WebClient,
-  teamId = "T1",
-  uploadCompletionClient: WebClient = client,
-) {
+function eventScope(client: WebClient, teamId = "T1", uploadCompletionClient: WebClient = client) {
   return {
-    apiAppId: "A1",
-    enterpriseId: "E1",
-    isEnterpriseInstall: true as const,
     teamId,
     client,
     uploadCompletionClient,
@@ -90,8 +83,7 @@ function enterpriseOptions(
 ) {
   return {
     cfg: ENTERPRISE_CFG,
-    client,
-    enterpriseEventScope: enterpriseEventScope(client, teamId, uploadCompletionClient),
+    eventScope: eventScope(client, teamId, uploadCompletionClient),
   };
 }
 
@@ -158,16 +150,8 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     expect(injectedClient.chat.postMessage).not.toHaveBeenCalled();
   });
 
-  it("requires the exact validated listener client and an Enterprise account", async () => {
+  it("requires an Enterprise account for an event scope", async () => {
     const client = createEnterpriseClient();
-    const otherClient = createEnterpriseClient();
-
-    await expect(
-      sendMessageSlack("channel:C123", "hello", {
-        ...enterpriseOptions(client),
-        client: otherClient,
-      }),
-    ).rejects.toThrow("invalid_enterprise_slack_listener_scope");
     await expect(
       sendMessageSlack("channel:C123", "hello", {
         ...enterpriseOptions(client),
@@ -175,7 +159,6 @@ describe("sendMessageSlack Enterprise listener scope", () => {
       }),
     ).rejects.toThrow("unexpected_enterprise_slack_listener_scope");
     expect(client.chat.postMessage).not.toHaveBeenCalled();
-    expect(otherClient.chat.postMessage).not.toHaveBeenCalled();
   });
 
   it("uses the exact listener client without a token or team_id method payload", async () => {
@@ -243,11 +226,10 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     const replacementClient = createEnterpriseClient();
     const firstDeferred = deferredPostMessage("1.000");
     firstClient.chat.postMessage.mockReturnValueOnce(firstDeferred.promise);
-    const secondScope = enterpriseEventScope(secondClient, "T1");
+    const secondScope = eventScope(secondClient, "T1");
     const secondOptions = {
       cfg: ENTERPRISE_CFG,
-      client: secondClient as WebClient,
-      enterpriseEventScope: secondScope,
+      eventScope: secondScope,
     };
 
     const first = sendMessageSlack("C123", "first", enterpriseOptions(firstClient, "T1"));
@@ -256,7 +238,6 @@ describe("sendMessageSlack Enterprise listener scope", () => {
     await Promise.resolve();
     expect(secondClient.chat.postMessage).not.toHaveBeenCalled();
 
-    secondOptions.client = replacementClient;
     secondScope.client = replacementClient;
     firstDeferred.release();
     await Promise.all([first, second]);
@@ -312,14 +293,13 @@ describe("sendMessageSlack Enterprise listener scope", () => {
 
   it("rejects Enterprise media before upload without the one-shot completion client", async () => {
     const client = createEnterpriseClient();
-    const scope = enterpriseEventScope(client);
+    const scope = eventScope(client);
     delete (scope as { uploadCompletionClient?: WebClient }).uploadCompletionClient;
 
     await expect(
       sendMessageSlack("C123", "caption", {
         cfg: ENTERPRISE_CFG,
-        client,
-        enterpriseEventScope: scope,
+        eventScope: scope,
         mediaUrl: "https://example.com/image.png",
       }),
     ).rejects.toThrow("missing_enterprise_slack_upload_completion_client");

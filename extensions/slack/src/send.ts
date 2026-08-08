@@ -43,6 +43,7 @@ import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } 
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
+import type { SlackEventScope } from "./monitor/event-scope.js";
 import {
   buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
@@ -90,15 +91,6 @@ export type SlackSendIdentity = {
   iconEmoji?: string;
 };
 
-type SlackEnterpriseEventScope = Readonly<{
-  apiAppId: string;
-  enterpriseId: string;
-  teamId: string;
-  isEnterpriseInstall: true;
-  client: WebClient;
-  uploadCompletionClient?: WebClient;
-}>;
-
 type SlackResolvedDelivery = Readonly<{
   client: WebClient;
   credential: string;
@@ -129,8 +121,8 @@ type SlackSendOpts = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   client?: WebClient;
-  /** Monitor-private proof that `client` belongs to the validated Enterprise event turn. */
-  enterpriseEventScope?: SlackEnterpriseEventScope;
+  /** Monitor-private listener context validated from the active event. */
+  eventScope?: SlackEventScope;
   /** Monitor-private delivery limits already resolved for the active listener. */
   textLimit?: number;
   /** Slack-private marker for text that is already safe mrkdwn and must not be parsed again. */
@@ -388,25 +380,18 @@ function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
   return { kind: "channel", id: canonicalizeSlackApiTargetId("channel", match[1]) };
 }
 
-function resolveEnterpriseEventScope(params: {
+function resolveSlackSendEventScope(params: {
   account: ReturnType<typeof resolveSlackAccount>;
   opts: SlackSendOpts;
-}): SlackEnterpriseEventScope | undefined {
-  const scope = params.opts.enterpriseEventScope;
+}): SlackEventScope | undefined {
+  const scope = params.opts.eventScope;
   if (!scope) {
     return undefined;
   }
   if (params.account.config.enterpriseOrgInstall !== true) {
     throw new Error("unexpected_enterprise_slack_listener_scope");
   }
-  if (
-    !scope.isEnterpriseInstall ||
-    !normalizeOptionalString(scope.apiAppId) ||
-    !normalizeOptionalString(scope.enterpriseId) ||
-    !/^T[A-Z0-9]+$/i.test(scope.teamId) ||
-    !scope.client ||
-    params.opts.client !== scope.client
-  ) {
+  if (!/^T[A-Z0-9]+$/i.test(scope.teamId) || !scope.client) {
     throw new Error("invalid_enterprise_slack_listener_scope");
   }
   return scope;
@@ -414,7 +399,7 @@ function resolveEnterpriseEventScope(params: {
 
 function resolveSlackDelivery(params: {
   account: ReturnType<typeof resolveSlackAccount>;
-  eventScope?: SlackEnterpriseEventScope;
+  eventScope?: SlackEventScope;
   opts: Readonly<SlackSendOpts>;
   recipient: SlackRecipient;
 }): SlackResolvedDelivery {
@@ -1090,7 +1075,7 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
-  const eventScope = resolveEnterpriseEventScope({ account, opts });
+  const eventScope = resolveSlackSendEventScope({ account, opts });
   const recipient = eventScope ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
   if (!eventScope) {
     assertSlackDirectSendAllowed(account, recipient.teamId);

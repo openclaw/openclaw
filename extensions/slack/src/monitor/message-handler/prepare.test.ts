@@ -449,9 +449,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const ctx = createDefaultSlackCtx();
     ctx.teamId = "";
     const eventScope = {
-      apiAppId: "A1",
-      enterpriseId: "E1",
-      isEnterpriseInstall: true,
       teamId: "T123ENTERPRISE",
       client: {} as SlackEventScope["client"],
     } satisfies SlackEventScope;
@@ -484,9 +481,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       asChannel: true,
     });
     const eventScope = {
-      apiAppId: "A1",
-      enterpriseId: "E1",
-      isEnterpriseInstall: true,
       teamId: "T123ENTERPRISE",
       client: {} as SlackEventScope["client"],
     } satisfies SlackEventScope;
@@ -1204,9 +1198,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
           ...(scenario.enterpriseTeamId
             ? {
                 eventScope: {
-                  apiAppId: "A_ENTERPRISE",
-                  enterpriseId: "E_ENTERPRISE",
-                  isEnterpriseInstall: true,
                   teamId: scenario.enterpriseTeamId,
                   client: slackCtx.app.client,
                 },
@@ -1234,9 +1225,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
           ...(scenario.enterpriseTeamId
             ? {
                 eventScope: {
-                  apiAppId: "A_ENTERPRISE",
-                  enterpriseId: "E_ENTERPRISE",
-                  isEnterpriseInstall: true,
                   teamId: scenario.enterpriseTeamId,
                   client: slackCtx.app.client,
                 },
