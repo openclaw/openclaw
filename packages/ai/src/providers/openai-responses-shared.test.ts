@@ -345,6 +345,151 @@ describe("Responses reasoning effort", () => {
     expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
   });
 
+  it("uses provider-native reasoning effort values declared by the model map", () => {
+    const providerNativeModel = {
+      ...nativeOpenAIModel,
+      id: "qwen/qwen3-32b",
+      name: "Qwen 3 32B",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      compat: { supportsEncryptedReasoningReplay: false },
+      thinkingLevelMap: {
+        off: "none",
+        low: "default",
+        medium: "default",
+        high: "default",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const enabled = {} as never;
+    applyCommonResponsesParams(
+      enabled,
+      providerNativeModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    const summaryOnly = {} as never;
+    applyCommonResponsesParams(
+      summaryOnly,
+      providerNativeModel,
+      { messages: [] },
+      {
+        reasoningSummary: "concise",
+      },
+    );
+
+    const disabled = {} as never;
+    applyCommonResponsesParams(disabled, providerNativeModel, { messages: [] });
+
+    expect(enabled).toMatchObject({ reasoning: { effort: "default" } });
+    expect(summaryOnly).toMatchObject({
+      reasoning: { effort: "default" },
+    });
+    expect(disabled).toMatchObject({ reasoning: { effort: "none" } });
+    expect(enabled).not.toHaveProperty("include");
+    expect(summaryOnly).not.toHaveProperty("include");
+    expect(disabled).not.toHaveProperty("include");
+
+    const nativeOpenAI = {} as never;
+    applyCommonResponsesParams(
+      nativeOpenAI,
+      nativeOpenAIModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+    expect(nativeOpenAI).toMatchObject({
+      reasoning: { effort: "medium", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
+
+  it("omits reasoning for explicitly unsupported levels declared with null", () => {
+    const nullableModel = {
+      ...nativeOpenAIModel,
+      id: "qwen/qwen3-32b",
+      name: "Qwen 3 32B",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      compat: { supportsEncryptedReasoningReplay: false },
+      thinkingLevelMap: {
+        off: "none",
+        low: "default",
+        medium: null,
+        high: "default",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const explicit = {} as never;
+    applyCommonResponsesParams(
+      explicit,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    const summaryOnly = {} as never;
+    applyCommonResponsesParams(
+      summaryOnly,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningSummary: "concise",
+      },
+    );
+
+    const supportedSibling = {} as never;
+    applyCommonResponsesParams(
+      supportedSibling,
+      nullableModel,
+      { messages: [] },
+      {
+        reasoningEffort: "high",
+      },
+    );
+
+    expect(explicit).not.toHaveProperty("reasoning");
+    expect(summaryOnly).not.toHaveProperty("reasoning");
+    expect(supportedSibling).toMatchObject({ reasoning: { effort: "default" } });
+  });
+
+  it("preserves encrypted reasoning replay for compatible Responses endpoints by default", () => {
+    const compatibleModel = {
+      ...nativeOpenAIModel,
+      id: "custom-replay-model",
+      name: "Custom Replay Model",
+      provider: "custom-compatible",
+      baseUrl: "https://compatible.example.com/v1",
+      thinkingLevelMap: {
+        low: "provider-low",
+        medium: "provider-medium",
+        high: "provider-high",
+      },
+    } satisfies Model<"openai-responses">;
+
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      compatibleModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+        reasoningSummary: "concise",
+      },
+    );
+
+    expect(params).toMatchObject({
+      reasoning: { effort: "provider-medium", summary: "concise" },
+      include: ["reasoning.encrypted_content"],
+    });
+  });
+
   it("keeps max clamped to xhigh for earlier models", () => {
     const gpt55WithXHigh = {
       ...nativeOpenAIModel,

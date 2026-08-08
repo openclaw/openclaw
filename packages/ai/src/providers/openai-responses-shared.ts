@@ -19,6 +19,7 @@ import type {
   AssistantMessage,
   Context,
   Model,
+  ModelThinkingLevel,
   SimpleStreamOptions,
   StreamOptions,
   TextSignatureV1,
@@ -495,6 +496,34 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   return clampedReasoning;
 }
 
+function resolveResponsesReasoningEffortForPayload<TApi extends Api>(
+  model: Model<TApi>,
+  effort: ModelThinkingLevel,
+): string | undefined {
+  // Keep null entries: ThinkingLevelMap marks a level unsupported with null, so
+  // the payload must omit reasoning instead of emitting the generic value.
+  return resolveOpenAIReasoningEffortForModel({
+    model,
+    effort,
+    fallbackMap: model.thinkingLevelMap,
+  });
+}
+
+function supportsResponsesEncryptedReasoningReplay<TApi extends Api>(model: Model<TApi>): boolean {
+  if (model.api === "azure-openai-responses") {
+    return true;
+  }
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    const declared = (compat as { supportsEncryptedReasoningReplay?: unknown })
+      .supportsEncryptedReasoningReplay;
+    if (typeof declared === "boolean") {
+      return declared;
+    }
+  }
+  return true;
+}
+
 export function applyCommonResponsesParams<TApi extends Api>(
   params: ResponseCreateParamsStreaming,
   model: Model<TApi>,
@@ -523,19 +552,29 @@ export function applyCommonResponsesParams<TApi extends Api>(
 
   if (options?.reasoningEffort || options?.reasoningSummary) {
     const effort = options?.reasoningEffort
-      ? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
-      : "medium";
-    params.reasoning = {
-      effort: effort as NonNullable<typeof params.reasoning>["effort"],
-      summary: options?.reasoningSummary || "auto",
-    };
-    params.include = ["reasoning.encrypted_content"];
+      ? resolveResponsesReasoningEffortForPayload(model, options.reasoningEffort)
+      : resolveResponsesReasoningEffortForPayload(model, "medium");
+    if (!effort) {
+      return;
+    }
+    if (supportsResponsesEncryptedReasoningReplay(model)) {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+        summary: options?.reasoningSummary || "auto",
+      };
+      params.include = ["reasoning.encrypted_content"];
+    } else {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+      };
+    }
   } else if ((config?.setDefaultReasoningOff ?? true) && model.thinkingLevelMap?.off !== null) {
-    params.reasoning = {
-      effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<
-        typeof params.reasoning
-      >["effort"],
-    };
+    const effort = resolveResponsesReasoningEffortForPayload(model, "off");
+    if (effort) {
+      params.reasoning = {
+        effort: effort as NonNullable<typeof params.reasoning>["effort"],
+      };
+    }
   }
 }
 
