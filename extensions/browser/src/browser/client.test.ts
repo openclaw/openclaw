@@ -112,18 +112,31 @@ describe("browser client", () => {
   });
 
   it("forwards an explicit snapshot timeoutMs into the query string", async () => {
-    const calls: string[] = [];
-    stubSnapshotFetch(calls);
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return jsonResponse({
+          ok: true,
+          format: "ai",
+          targetId: "t1",
+          url: "https://x",
+          snapshot: "ok",
+        });
+      }),
+    );
 
     await browserSnapshot("http://127.0.0.1:18791", {
       format: "ai",
       timeoutMs: 4321,
     });
 
-    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
+    const snapshotCall = calls.find((call) => call.url.includes("/snapshot?"));
     expect(snapshotCall).toBeTruthy();
-    const parsed = new URL(snapshotCall as string);
+    const parsed = new URL(snapshotCall?.url ?? "");
     expect(parsed.searchParams.get("timeoutMs")).toBe("4321");
+    expect(snapshotCall?.init?.timeoutMs).toBeGreaterThan(4321);
   });
 
   it("clamps oversized snapshot timeoutMs before forwarding", async () => {
@@ -369,7 +382,7 @@ describe("browser client", () => {
     const doctor = calls.find((c) => c.url.endsWith("/doctor"));
     expect(doctor?.init?.timeoutMs).toBe(7_500);
     const deepDoctor = calls.find((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"));
-    expect(deepDoctor?.init?.timeoutMs).toBe(10_000);
+    expect(deepDoctor?.init?.timeoutMs).toBe(24_000);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
 
@@ -389,6 +402,27 @@ describe("browser client", () => {
     ) as { targetId?: unknown; timeoutMs?: unknown };
     expect(defaultScreenshotBody.targetId).toBe("t-default");
     expect(defaultScreenshotBody.timeoutMs).toBe(20_000);
+  });
+
+  it("allows callers to override the composed deep-doctor request timeout", async () => {
+    const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
+        calls.push({ url, init });
+        return jsonResponse({
+          ok: true,
+          profile: "openclaw",
+          transport: "cdp",
+          checks: [],
+          status: { enabled: true, running: true },
+        });
+      }),
+    );
+
+    await browserDoctor("http://127.0.0.1:18791", { deep: true, timeoutMs: 31_000 });
+
+    expect(calls[0]?.init?.timeoutMs).toBe(31_000);
   });
 
   it("marks internally selected close targets as exact", async () => {

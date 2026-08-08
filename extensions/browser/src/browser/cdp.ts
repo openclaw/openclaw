@@ -29,6 +29,7 @@ import {
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
+import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 export { appendCdpPath } from "./cdp.helpers.js";
 export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
@@ -37,11 +38,12 @@ export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-
 export async function getMainFrameDocumentIdentityViaCdp(opts: {
   wsUrl: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<string | undefined> {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => await readCdpMainFrameDocumentIdentity(send),
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, signal: opts.signal },
   );
 }
 
@@ -420,22 +422,70 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
 /** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
+  targetId?: string;
   limit?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
-  return await withCdpSocket(
-    opts.wsUrl,
-    async (send) => {
-      await prepareCdpPageSession(send);
-      const res = (await send("Accessibility.getFullAXTree")) as {
-        nodes?: RawAXNode[];
-      };
-      const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-      return { nodes: formatAriaSnapshot(nodes, limit) };
-    },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+  const timeoutMs = normalizeBrowserTimerDelayMs(
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 5000,
   );
+  const timeoutController = new AbortController();
+  const activeMethods = new Map<string, number>();
+  const targetLabel = opts.targetId ?? "current";
+  const activeMethodLabel = () =>
+    activeMethods.size > 0 ? [...activeMethods.keys()].join("|") : "socket handshake";
+  const timer = setTimeout(
+    () =>
+      timeoutController.abort(
+        new Error(
+          `Aria snapshot via CDP timed out after ${timeoutMs}ms ` +
+            `(targetId=${targetLabel}, method=${activeMethodLabel()}).`,
+        ),
+      ),
+    timeoutMs,
+  );
+  timer.unref?.();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, timeoutController.signal])
+    : timeoutController.signal;
+  try {
+    return await withCdpSocket(
+      opts.wsUrl,
+      async (send) => {
+        const trackedSend: CdpSendFn = async (method, params, sessionId) => {
+          activeMethods.set(method, (activeMethods.get(method) ?? 0) + 1);
+          try {
+            return await send(method, params, sessionId);
+          } finally {
+            const remaining = (activeMethods.get(method) ?? 1) - 1;
+            if (remaining > 0) {
+              activeMethods.set(method, remaining);
+            } else {
+              activeMethods.delete(method);
+            }
+          }
+        };
+        await prepareCdpPageSession(trackedSend);
+        signal.throwIfAborted();
+        const res = (await trackedSend("Accessibility.getFullAXTree")) as {
+          nodes?: RawAXNode[];
+        };
+        signal.throwIfAborted();
+        const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+        return { nodes: formatAriaSnapshot(nodes, limit) };
+      },
+      { commandTimeoutMs: timeoutMs, signal },
+    );
+  } catch (error) {
+    if (opts.signal?.aborted) {
+      throw opts.signal.reason ?? error;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Role snapshot ref metadata used by agent-facing snapshots. */
@@ -903,6 +953,7 @@ export async function snapshotRoleViaCdp(opts: {
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
   timeoutMs?: number;
+  signal?: AbortSignal;
   maxChars?: number;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
@@ -933,7 +984,7 @@ export async function snapshotRoleViaCdp(opts: {
         delta: opts.delta,
       });
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, signal: opts.signal },
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

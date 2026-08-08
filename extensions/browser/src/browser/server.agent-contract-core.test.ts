@@ -459,14 +459,25 @@ describe("browser control server", () => {
     )) as { ok: boolean; format?: string };
     expect(snapAria.ok).toBe(true);
     expect(snapAria.format).toBe("aria");
-    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
-      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
-      limit: 1,
-    });
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+        targetId: "abcd1234",
+        limit: 1,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    const snapshotTimeoutMs = (
+      cdpMocks.snapshotAria.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined
+    )?.timeoutMs;
+    expect(snapshotTimeoutMs).toBeGreaterThan(0);
+    expect(snapshotTimeoutMs).toBeLessThanOrEqual(5_000);
     expect(requirePwMock("storeAriaSnapshotRefsViaPlaywright")).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
+      signal: expect.any(AbortSignal),
+      isDocumentCurrent: expect.any(Function),
     });
 
     const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
@@ -475,14 +486,17 @@ describe("browser control server", () => {
     };
     expect(snapAi.ok).toBe(true);
     expect(snapAi.format).toBe("ai");
-    expect(requirePwMock("snapshotAiViaPlaywright")).toHaveBeenCalledWith({
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
+    expect(requirePwMock("snapshotAiViaPlaywright")).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+        signal: expect.any(AbortSignal),
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      }),
+    );
 
     const snapAiZero = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
       r.json(),
@@ -490,13 +504,16 @@ describe("browser control server", () => {
     expect(snapAiZero.ok).toBe(true);
     expect(snapAiZero.format).toBe("ai");
     const [lastCall] = requirePwMock("snapshotAiViaPlaywright").mock.calls.at(-1) ?? [];
-    expect(lastCall).toEqual({
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-      },
-    });
+    expect(lastCall).toEqual(
+      expect.objectContaining({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        signal: expect.any(AbortSignal),
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      }),
+    );
 
     requirePwMock("snapshotRoleViaPlaywright").mockRejectedValueOnce(
       new Error("playwright stale page"),
@@ -507,17 +524,27 @@ describe("browser control server", () => {
     expect(fallback.ok).toBe(true);
     expect(fallback.format).toBe("ai");
     expect(fallback.snapshot).toContain("Fallback");
-    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith({
-      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
-      urls: undefined,
-      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-      timeoutMs: undefined,
-      options: {
-        interactive: true,
-        compact: undefined,
-        maxDepth: undefined,
-      },
-    });
+    expect(requirePwMock("snapshotRoleViaPlaywright")).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+        urls: undefined,
+        maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+        signal: expect.any(AbortSignal),
+        options: {
+          interactive: true,
+          compact: undefined,
+          maxDepth: undefined,
+        },
+      }),
+    );
+    const fallbackTimeoutMs = (
+      cdpMocks.snapshotRoleViaCdp.mock.calls.at(-1)?.[0] as { timeoutMs?: number } | undefined
+    )?.timeoutMs;
+    expect(fallbackTimeoutMs).toBeGreaterThan(0);
+    expect(fallbackTimeoutMs).toBeLessThanOrEqual(5_000);
   });
 
   it("agent contract: snapshot surfaces pending dialog state without reading the blocked page", async () => {
@@ -595,8 +622,17 @@ describe("browser control server", () => {
     expectRecordFields(liveSnapshotCheck, { id: "live-snapshot", status: "pass" });
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      targetId: "abcd1234",
       limit: 25,
+      timeoutMs: expect.any(Number),
+      signal: expect.any(AbortSignal),
     });
+    const directSnapshotCall = cdpMocks.snapshotAria.mock.calls[0] as unknown as
+      | [{ timeoutMs: number }]
+      | undefined;
+    const directSnapshotTimeoutMs = directSnapshotCall?.[0].timeoutMs;
+    expect(directSnapshotTimeoutMs).toBeGreaterThan(0);
+    expect(directSnapshotTimeoutMs).toBeLessThanOrEqual(12_000);
   });
 
   it.each(NAVIGATION_TIMEOUT_CASES)(
@@ -645,6 +681,56 @@ describe("browser control server", () => {
       );
     },
   );
+  it("agent contract: doctor deep fails an unresponsive extension page command", async () => {
+    pwMocks.listPagesViaPlaywright = vi.fn(async () => [
+      {
+        targetId: "extension-target-1",
+        title: "Extension tab",
+        url: "https://example.com",
+        type: "page",
+      },
+    ]);
+    pwMocks.captureAriaSnapshotViaPlaywright = vi.fn(async () => {
+      throw new Error(
+        "extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
+      );
+    });
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+
+    const report = (await realFetch(`${base}/doctor?profile=chrome&deep=true`).then((r) =>
+      r.json(),
+    )) as {
+      ok: boolean;
+      checks?: Array<{ id?: string; status?: string; summary?: string }>;
+    };
+
+    expect(report.ok).toBe(false);
+    const liveSnapshotCheck = report.checks?.find((check) => check.id === "live-snapshot");
+    expectRecordFields(liveSnapshotCheck, { id: "live-snapshot", status: "fail" });
+    expect(liveSnapshotCheck?.summary).toContain(
+      "extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
+    );
+    const captureAriaSnapshot = requirePwMock("captureAriaSnapshotViaPlaywright");
+    expect(captureAriaSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: "extension-target-1",
+        limit: 25,
+        timeoutMs: expect.any(Number),
+        signal: expect.any(AbortSignal),
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+      }),
+    );
+    const extensionSnapshotCall = captureAriaSnapshot.mock.calls[0] as unknown as
+      | [{ timeoutMs: number }]
+      | undefined;
+    const extensionSnapshotTimeoutMs = extensionSnapshotCall?.[0].timeoutMs;
+    expect(extensionSnapshotTimeoutMs).toBeGreaterThan(0);
+    expect(extensionSnapshotTimeoutMs).toBeLessThanOrEqual(12_000);
+    expect(requirePwMock("snapshotAriaViaPlaywright")).not.toHaveBeenCalled();
+    expect(requirePwMock("storeAriaSnapshotRefsViaPlaywright")).not.toHaveBeenCalled();
+    expect(cdpMocks.snapshotAria).not.toHaveBeenCalled();
+  });
 
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();

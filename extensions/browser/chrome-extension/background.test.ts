@@ -20,9 +20,11 @@ type PageCaptureResult = {
 
 async function loadBackground({
   deferSocketClose = false,
+  deferCustodyInitialization = false,
   onConsentChanged,
 }: {
   deferSocketClose?: boolean;
+  deferCustodyInitialization?: boolean;
   onConsentChanged?: () => Promise<void>;
 } = {}) {
   const sockets: FakeWebSocket[] = [];
@@ -81,6 +83,18 @@ async function loadBackground({
   const clearAlarm = vi.fn(async () => true);
   const setBadgeText = vi.fn(async () => undefined);
   const setBadgeBackgroundColor = vi.fn(async () => undefined);
+  const debuggerAttach = vi.fn(async (): Promise<void> => {});
+  const debuggerDetach = vi.fn(async (): Promise<void> => {});
+  const debuggerGetTargets = vi.fn(async (): Promise<Array<Record<string, unknown>>> => []);
+  const tabGroupsQuery = vi.fn(async (): Promise<Array<Record<string, unknown>>> => []);
+  const tabsQuery = vi.fn(async (): Promise<Array<Record<string, unknown>>> => []);
+  let releaseCustodyInitialization: (() => void) | undefined;
+  if (deferCustodyInitialization) {
+    const custodyTabs = new Promise<Array<Record<string, unknown>>>((resolve) => {
+      releaseCustodyInitialization = () => resolve([]);
+    });
+    tabsQuery.mockImplementationOnce(async () => await custodyTabs);
+  }
   const chromeMock = {
     action: { setBadgeText, setBadgeBackgroundColor },
     commands: { onCommand: { addListener } },
@@ -101,9 +115,9 @@ async function loadBackground({
     debugger: {
       onEvent: { addListener },
       onDetach: { addListener },
-      attach: vi.fn(async () => undefined),
-      detach: vi.fn(async () => undefined),
-      getTargets: vi.fn(async () => []),
+      attach: debuggerAttach,
+      detach: debuggerDetach,
+      getTargets: debuggerGetTargets,
       sendCommand: vi.fn(async () => ({})),
     },
     runtime: {
@@ -136,13 +150,13 @@ async function loadBackground({
       executeScript: vi.fn(async (): Promise<Array<{ result: PageCaptureResult }>> => []),
     },
     tabGroups: {
-      query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
+      query: tabGroupsQuery,
       update: vi.fn(async () => undefined),
       onUpdated: { addListener },
       onRemoved: { addListener },
     },
     tabs: {
-      query: vi.fn(async (): Promise<Array<{ id: number; windowId: number }>> => []),
+      query: tabsQuery,
       get: vi.fn(async () => ({ id: 1, windowId: 1 })),
       group: vi.fn(async () => 1),
       ungroup: vi.fn(async () => undefined),
@@ -184,19 +198,194 @@ async function loadBackground({
     alarmListener,
     clearAlarm,
     createAlarm,
+    debuggerDetach: chromeMock.debugger.detach,
+    debuggerAttach,
+    debuggerGetTargets,
+    debuggerSendCommand: chromeMock.debugger.sendCommand,
     executeScript: chromeMock.scripting.executeScript,
     messageListener,
+    releaseCustodyInitialization,
     setBadgeText,
     sockets,
     storageRemove: chromeMock.storage.local.remove,
     storageSet: chromeMock.storage.local.set,
-    tabGroupsQuery: chromeMock.tabGroups.query,
+    tabGroupsQuery,
+    tabsQuery,
     tabsGet: chromeMock.tabs.get,
     tabsGroup: chromeMock.tabs.group,
-    tabsQuery: chromeMock.tabs.query,
     tabsUngroup: chromeMock.tabs.ungroup,
   };
 }
+
+describe("relay CDP cancellation", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("processes a detach command while the preceding CDP command is still pending", async () => {
+    const harness = await loadBackground();
+    const socket = harness.sockets[0];
+    expect(socket).toBeDefined();
+    socket?.open();
+    await Promise.resolve();
+
+    let rejectCommand!: (reason: unknown) => void;
+    harness.debuggerSendCommand.mockImplementationOnce(
+      async () =>
+        await new Promise<never>((_resolve, reject) => {
+          rejectCommand = reject;
+        }),
+    );
+    harness.debuggerDetach.mockImplementationOnce(async () => {
+      rejectCommand(new Error("Debugger detached while command was pending"));
+    });
+
+    socket?.receive({
+      type: "cdp",
+      seq: 41,
+      tabId: 7,
+      method: "Accessibility.enable",
+      params: {},
+    });
+    await vi.waitFor(() => expect(harness.debuggerSendCommand).toHaveBeenCalledOnce());
+
+    socket?.receive({ type: "detach", seq: 42, tabId: 7 });
+
+    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 7 }));
+    await vi.waitFor(() => {
+      const frames = socket?.send.mock.calls.map(([raw]) => JSON.parse(raw as string)) ?? [];
+      expect(frames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "error", seq: 41 }),
+          expect.objectContaining({ type: "result", seq: 42 }),
+        ]),
+      );
+    });
+  });
+
+  it("rejects an attach the debugger target list does not confirm", async () => {
+    const harness = await loadBackground();
+    harness.tabGroupsQuery.mockResolvedValue([{ id: 3, windowId: 1 }]);
+    harness.tabsQuery.mockResolvedValue([
+      { id: 7, windowId: 1, groupId: 3, url: "https://example.com", title: "Example" },
+    ]);
+    harness.debuggerGetTargets.mockResolvedValue([]);
+    const socket = harness.sockets[0];
+    socket?.open();
+    await Promise.resolve();
+
+    socket?.receive({ type: "attach", seq: 51, tabId: 7 });
+
+    await vi.waitFor(() =>
+      expect(harness.debuggerAttach).toHaveBeenCalledWith({ tabId: 7 }, "1.3"),
+    );
+    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledWith({ tabId: 7 }));
+    await vi.waitFor(() => {
+      const frames = socket?.send.mock.calls.map(([raw]) => JSON.parse(raw as string)) ?? [];
+      expect(frames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "error",
+            seq: 51,
+            message: expect.stringMatching(/did not confirm an attached target/i),
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("waits for an in-flight detach before reattaching the same tab", async () => {
+    const harness = await loadBackground();
+    harness.tabGroupsQuery.mockResolvedValue([{ id: 3, windowId: 1 }]);
+    harness.tabsQuery.mockResolvedValue([
+      { id: 7, windowId: 1, groupId: 3, url: "https://example.com", title: "Example" },
+    ]);
+    harness.debuggerGetTargets.mockResolvedValue([{ id: "target-7", tabId: 7, attached: true }]);
+    const socket = harness.sockets[0];
+    socket?.open();
+    await Promise.resolve();
+
+    socket?.receive({ type: "attach", seq: 61, tabId: 7 });
+    await vi.waitFor(() => {
+      const frames = socket?.send.mock.calls.map(([raw]) => JSON.parse(raw as string)) ?? [];
+      expect(frames).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "result", seq: 61 })]),
+      );
+    });
+
+    let finishDetach!: () => void;
+    harness.debuggerDetach.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          finishDetach = resolve;
+        }),
+    );
+    socket?.receive({ type: "detach", seq: 62, tabId: 7 });
+    await vi.waitFor(() => expect(harness.debuggerDetach).toHaveBeenCalledTimes(1));
+
+    socket?.receive({ type: "attach", seq: 63, tabId: 7 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.debuggerAttach).toHaveBeenCalledTimes(1);
+
+    finishDetach();
+    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => {
+      const frames = socket?.send.mock.calls.map(([raw]) => JSON.parse(raw as string)) ?? [];
+      expect(frames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "result", seq: 62 }),
+          expect.objectContaining({ type: "result", seq: 63 }),
+        ]),
+      );
+    });
+  });
+
+  it("lets startup revocation drain while custody gates attach and reattach", async () => {
+    const harness = await loadBackground({ deferCustodyInitialization: true });
+    harness.tabGroupsQuery.mockResolvedValue([{ id: 3, windowId: 1 }]);
+    harness.tabsQuery.mockResolvedValue([
+      { id: 7, windowId: 1, groupId: 3, url: "https://example.com", title: "Example" },
+    ]);
+    harness.debuggerGetTargets.mockResolvedValue([{ id: "target-7", tabId: 7, attached: true }]);
+    const operations: string[] = [];
+    harness.debuggerAttach.mockImplementation(async () => {
+      operations.push("attach");
+    });
+    harness.debuggerDetach.mockImplementation(async () => {
+      operations.push("detach");
+    });
+    const socket = harness.sockets[0];
+    socket?.open();
+    await Promise.resolve();
+
+    socket?.receive({ type: "attach", seq: 71, tabId: 7 });
+    socket?.receive({ type: "detach", seq: 72, tabId: 7 });
+    socket?.receive({ type: "attach", seq: 73, tabId: 7 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(operations).toEqual(["detach"]);
+
+    harness.releaseCustodyInitialization?.();
+
+    await vi.waitFor(() => expect(operations).toEqual(["detach", "attach"]));
+    await vi.waitFor(() => {
+      const frames = socket?.send.mock.calls.map(([raw]) => JSON.parse(raw as string)) ?? [];
+      expect(frames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "result", seq: 71 }),
+          expect.objectContaining({ type: "result", seq: 72 }),
+          expect.objectContaining({ type: "result", seq: 73 }),
+        ]),
+      );
+    });
+  });
+});
 
 async function startPendingPageShare(
   harness: Awaited<ReturnType<typeof loadBackground>>,

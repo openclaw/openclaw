@@ -37,7 +37,8 @@ export function createProfileResetOps({
   const resetProfile = async () => {
     if (!capabilities.supportsReset) {
       throw new BrowserResetUnsupportedError(
-        `reset-profile is only supported for local profiles (profile "${profile.name}" is remote).`,
+        `reset-profile is only supported for OpenClaw-managed local profiles ` +
+          `(profile "${profile.name}" uses ${capabilities.mode} mode).`,
       );
     }
 

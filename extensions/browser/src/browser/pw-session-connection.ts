@@ -1,10 +1,9 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Browser, BrowserContext, CDPSession, Page } from "playwright-core";
+import type { Browser, BrowserContext, Page } from "playwright-core";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
-import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
   assertCdpEndpointAllowed,
   getHeadersWithAuth,
@@ -31,6 +30,7 @@ import {
   type PendingBrowserConnection,
   type PlaywrightConnectionRetirement,
 } from "./pw-session-contracts.js";
+import { readPageTargetInfo } from "./pw-session-page-target-info.js";
 import {
   bindRoleRefsTarget,
   ensurePageState,
@@ -154,7 +154,7 @@ export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): Connected
   if (pending) {
     // Invalidation must also retire an in-flight connect. Otherwise it can
     // resolve after cleanup and repopulate the cache with the stale pipe.
-    pending.attempt.cancelled = true;
+    cancelPendingBrowserConnection(pending);
   }
   connectingByCdpUrl.delete(normalized);
   if (!cur) {
@@ -164,6 +164,14 @@ export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): Connected
     cur.browser.off("disconnected", cur.onDisconnected);
   }
   return cur;
+}
+
+function cancelPendingBrowserConnection(pending: PendingBrowserConnection): void {
+  if (pending.attempt.cancelled) {
+    return;
+  }
+  pending.attempt.cancelled = true;
+  pending.attempt.abortController.abort(new Error("Playwright connection attempt retired."));
 }
 
 /** Raised when a page target has been quarantined after policy denial. */
@@ -385,7 +393,9 @@ function observeBrowser(browser: Browser) {
 export async function connectBrowser(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
+  signal?: AbortSignal,
 ): Promise<ConnectedBrowser> {
+  signal?.throwIfAborted();
   const normalized = normalizeCdpUrl(cdpUrl);
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
@@ -394,12 +404,16 @@ export async function connectBrowser(
   // Run SSRF policy check only on cache miss so transient DNS failures
   // do not break active sessions that already hold a live CDP connection.
   await assertCdpEndpointAllowed(normalized, ssrfPolicy);
+  signal?.throwIfAborted();
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
-    return await connecting.promise;
+    return await waitForPendingBrowserConnection(normalized, connecting, signal);
   }
 
-  const connectionAttempt: PendingBrowserConnection["attempt"] = { cancelled: false };
+  const connectionAttempt: PendingBrowserConnection["attempt"] = {
+    cancelled: false,
+    abortController: new AbortController(),
+  };
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -411,6 +425,9 @@ export async function connectBrowser(
         const wsUrl = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy).catch(
           () => null,
         );
+        if (connectionAttempt.cancelled) {
+          throw new Error("Playwright connection attempt was superseded.");
+        }
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
         if (!wsUrl && hasUrlCredentials && !isWebSocketUrl(normalized)) {
           // Playwright preserves explicit headers across HTTP discovery redirects.
@@ -432,6 +449,9 @@ export async function connectBrowser(
         try {
           browser = await connectEndpoint(endpoint);
         } catch (err) {
+          if (connectionAttempt.cancelled) {
+            throw err;
+          }
           if (!isWebSocketUrl(normalized) || endpoint === normalized) {
             throw err;
           }
@@ -464,9 +484,7 @@ export async function connectBrowser(
           break;
         }
         const delay = resolveCdpConnectRetryDelayMs(attempt);
-        await new Promise((r) => {
-          setTimeout(r, delay);
-        });
+        await waitForPendingBrowserRetryDelay(delay, connectionAttempt);
       }
     }
     const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
@@ -480,9 +498,86 @@ export async function connectBrowser(
       connectingByCdpUrl.delete(normalized);
     }
   });
-  connectingByCdpUrl.set(normalized, { attempt: connectionAttempt, promise: pending });
+  const pendingConnection: PendingBrowserConnection = {
+    attempt: connectionAttempt,
+    promise: pending,
+    waiters: new Set(),
+  };
+  connectingByCdpUrl.set(normalized, pendingConnection);
 
-  return await pending;
+  return await waitForPendingBrowserConnection(normalized, pendingConnection, signal);
+}
+
+async function waitForPendingBrowserRetryDelay(
+  delayMs: number,
+  attempt: PendingBrowserConnection["attempt"],
+): Promise<void> {
+  if (attempt.cancelled) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(finish, delayMs);
+    timer.unref?.();
+    const onAbort = () => finish();
+    function finish() {
+      clearTimeout(timer);
+      attempt.abortController.signal.removeEventListener("abort", onAbort);
+      resolve();
+    }
+    attempt.abortController.signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function waitForPendingBrowserConnection(
+  normalizedCdpUrl: string,
+  pending: PendingBrowserConnection,
+  signal?: AbortSignal,
+): Promise<ConnectedBrowser> {
+  const waiter = Symbol("playwright-connection-waiter");
+  pending.waiters.add(waiter);
+  let abortListener: (() => void) | undefined;
+  const removeWaiter = (cancelWhenLast: boolean) => {
+    if (!pending.waiters.delete(waiter)) {
+      return;
+    }
+    if (
+      cancelWhenLast &&
+      pending.waiters.size === 0 &&
+      connectingByCdpUrl.get(normalizedCdpUrl) === pending
+    ) {
+      connectingByCdpUrl.delete(normalizedCdpUrl);
+      cancelPendingBrowserConnection(pending);
+    }
+  };
+  try {
+    if (!signal) {
+      return await pending.promise;
+    }
+    signal.throwIfAborted();
+    void pending.promise.catch(() => {});
+    const aborted = new Promise<never>((_resolve, reject) => {
+      abortListener = () => {
+        // Remove this waiter synchronously before inspecting the shared set.
+        // Multiple AbortControllers can fire in the same turn; the last one
+        // must retire the producer even though the other finally blocks have
+        // not run yet.
+        removeWaiter(true);
+        reject(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error(String(signal.reason ?? "Playwright connection aborted.")),
+        );
+      };
+      signal.addEventListener("abort", abortListener, { once: true });
+    });
+    void aborted.catch(() => {});
+    return await Promise.race([pending.promise, aborted]);
+  } finally {
+    removeWaiter(false);
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
 }
 
 export async function getAllPages(browser: Browser): Promise<Page[]> {
@@ -491,19 +586,31 @@ export async function getAllPages(browser: Browser): Promise<Page[]> {
   return pages;
 }
 
-async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] }): Promise<{
+async function partitionAccessiblePages(opts: {
+  cdpUrl: string;
+  pages: Page[];
+  signal?: AbortSignal;
+}): Promise<{
   accessible: Array<{ page: Page; targetId: string | null }>;
   blockedCount: number;
 }> {
   const accessible: Array<{ page: Page; targetId: string | null }> = [];
   let blockedCount = 0;
   for (const page of opts.pages) {
+    opts.signal?.throwIfAborted();
     if (isBlockedPageRef(opts.cdpUrl, page)) {
       blockedCount += 1;
       continue;
     }
     ensurePageState(page);
-    const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+    let targetInfo: PageTargetInfo | null = null;
+    try {
+      targetInfo = await pageTargetInfo(page, opts.signal);
+    } catch {
+      opts.signal?.throwIfAborted();
+    }
+    opts.signal?.throwIfAborted();
+    const targetId = targetInfo?.targetId ?? null;
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
     if (!targetId) {
@@ -530,53 +637,10 @@ type PageTargetInfo = { targetId: string; title: string };
 // temporary CDP session. Settled reads evict themselves so later calls observe fresh metadata.
 const targetInfoReads = new WeakMap<Page, Promise<PageTargetInfo | null>>();
 
-async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
-  let session: CDPSession | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  let detachStarted = false;
-  const detach = () => {
-    if (!session || detachStarted) {
-      return;
-    }
-    detachStarted = true;
-    void session.detach().catch(() => {});
-  };
-  const timeout = new Promise<null>((resolve) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      detach();
-      resolve(null);
-    }, PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS);
-    timer.unref?.();
-  });
-  const read = (async () => {
-    session = await page.context().newCDPSession(page);
-    if (timedOut) {
-      detach();
-      return null;
-    }
-    try {
-      const { targetInfo } = await session.send("Target.getTargetInfo");
-      const targetId = normalizeOptionalString(targetInfo.targetId) ?? "";
-      if (!targetId) {
-        return null;
-      }
-      return { targetId, title: targetInfo.title };
-    } finally {
-      detach();
-    }
-  })();
-  try {
-    return await Promise.race([read, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+export function pageTargetInfo(page: Page, signal?: AbortSignal): Promise<PageTargetInfo | null> {
+  if (signal) {
+    return readPageTargetInfo(page, signal);
   }
-}
-
-export function pageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
   const existing = targetInfoReads.get(page);
   if (existing) {
     return existing;
@@ -595,13 +659,17 @@ export function pageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
 async function getPageForTargetIdOnce(opts: {
   cdpUrl: string;
   targetId?: string;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
+  opts.signal?.throwIfAborted();
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.signal);
+  opts.signal?.throwIfAborted();
   const pages = await getAllPages(browser);
+  opts.signal?.throwIfAborted();
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
   }
@@ -609,7 +677,9 @@ async function getPageForTargetIdOnce(opts: {
   const { accessible, blockedCount } = await partitionAccessiblePages({
     cdpUrl: opts.cdpUrl,
     pages,
+    signal: opts.signal,
   });
+  opts.signal?.throwIfAborted();
   if (!accessible.length) {
     if (blockedCount > 0) {
       throw new BlockedBrowserTargetError();
@@ -633,12 +703,14 @@ async function getPageForTargetIdOnce(opts: {
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<Page> {
   const reusedCachedBrowser = hasCachedPlaywrightBrowserConnection(opts.cdpUrl);
   try {
     return await getPageForTargetIdOnce(opts);
   } catch (err) {
+    opts.signal?.throwIfAborted();
     if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
       throw err;
     }

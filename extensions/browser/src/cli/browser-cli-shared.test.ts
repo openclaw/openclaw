@@ -79,4 +79,32 @@ describe("callBrowserRequest", () => {
     expect(call?.[1]).toMatchObject({ timeout: "60000" });
     expect(call?.[2]).toMatchObject({ timeoutMs: 60_000 });
   });
+
+  it("caps a request-specific timeout to an explicit parent timeout", async () => {
+    await callBrowserRequest(
+      { json: true, timeout: "1000" },
+      { method: "GET", path: "/status" },
+      { timeoutMs: 45_000 },
+    );
+
+    const call = gatewayMocks.callGatewayFromCli.mock.calls[0] as unknown as
+      | CallGatewayFromCliArgs
+      | undefined;
+    expect(call?.[1]).toMatchObject({ timeout: "1000" });
+    expect(call?.[2]).toMatchObject({ timeoutMs: 1_000 });
+  });
+
+  it("keeps request-specific timeouts when the parent value is Commander's default", async () => {
+    await callBrowserRequest(
+      { json: true, timeout: "30000", timeoutIsDefault: true },
+      { method: "GET", path: "/status" },
+      { timeoutMs: 45_000 },
+    );
+
+    const call = gatewayMocks.callGatewayFromCli.mock.calls[0] as unknown as
+      | CallGatewayFromCliArgs
+      | undefined;
+    expect(call?.[1]).toMatchObject({ timeout: "45000" });
+    expect(call?.[2]).toMatchObject({ timeoutMs: 45_000 });
+  });
 });

@@ -6,8 +6,9 @@
  */
 import type { ResolvedBrowserProfile } from "./config.js";
 
-type BrowserProfileMode =
+export type BrowserProfileMode =
   | "local-managed"
+  | "local-attach-only"
   | "local-existing-session"
   | "local-extension"
   | "remote-cdp";
@@ -65,6 +66,19 @@ export function getBrowserProfileCapabilities(
       usesPersistentPlaywright: true,
       supportsPerTabWs: false,
       supportsJsonTabEndpoints: false,
+      supportsReset: false,
+      supportsManagedTabLimit: false,
+    };
+  }
+
+  if (profile.attachOnly) {
+    return {
+      mode: "local-attach-only",
+      isRemote: false,
+      usesChromeMcp: false,
+      usesPersistentPlaywright: false,
+      supportsPerTabWs: true,
+      supportsJsonTabEndpoints: true,
       supportsReset: false,
       supportsManagedTabLimit: false,
     };

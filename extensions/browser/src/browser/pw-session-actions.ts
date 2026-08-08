@@ -60,9 +60,11 @@ import {
 export async function getObservedBrowserStateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<BrowserObservedState> {
   const page = await getPageForTargetId(opts);
+  opts.signal?.throwIfAborted();
   return getObservedBrowserStateForPage(page);
 }
 
@@ -70,9 +72,11 @@ export async function getObservedBrowserStateViaPlaywright(opts: {
 export async function getMainFrameDocumentIdentityViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  signal?: AbortSignal;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<string | undefined> {
   const page = await getPageForTargetId(opts);
-  return await readMainFrameDocumentIdentityForPage(page);
+  return await readMainFrameDocumentIdentityForPage(page, opts.signal);
 }
 
 export function refLocator(page: Page, ref: string) {

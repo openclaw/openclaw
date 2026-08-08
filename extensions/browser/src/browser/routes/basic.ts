@@ -1,3 +1,7 @@
+import {
+  BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS,
+  BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS,
+} from "../cdp-timeouts.js";
 /**
  * Basic browser control routes.
  *
@@ -13,7 +17,11 @@ import {
   inspectChromeGraphicsDiagnostics,
 } from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
-import { buildBrowserDoctorReport } from "../doctor.js";
+import {
+  buildBrowserDoctorReport,
+  type BrowserDoctorCheck,
+  type BrowserDoctorReport,
+} from "../doctor.js";
 import { BrowserError, toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
@@ -21,7 +29,7 @@ import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { parseSystemProfileDomains } from "../system-profile-domains.js";
 import { dismissSystemProfileImportPrompt } from "../system-profile-import-state.js";
-import { resolveProfileContext } from "./agent.shared.js";
+import { getPwAiModule, resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import {
   jsonBrowserError,
@@ -34,8 +42,99 @@ import {
 const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
 const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
-const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
+const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
+const LIVE_SNAPSHOT_PROBE_TIMEOUT_MS = BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS;
+
+function quoteBrowserProfileCliArg(value: string): string {
+  return /^[A-Za-z0-9_/:=.,@%+-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function browserProfileCommand(profileCtx: ProfileContext, command: string): string {
+  return `openclaw browser --browser-profile ${quoteBrowserProfileCliArg(profileCtx.profile.name)} ${command}`;
+}
+
+async function awaitTaskWithAbort<T>(task: Promise<T>, signal: AbortSignal): Promise<T> {
+  // Some underlying libraries do not accept AbortSignal. Observe late failure
+  // before racing so returning at the caller deadline cannot create an
+  // unhandled rejection when the abandoned task eventually settles.
+  void task.catch(() => {});
+  signal.throwIfAborted();
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortListener = () => {
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error(String(signal.reason ?? "aborted")),
+      );
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  void aborted.catch(() => {});
+  try {
+    return await Promise.race([task, aborted]);
+  } finally {
+    if (abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
+  }
+}
+
+function liveProbeFailureFixHint(profileCtx: ProfileContext, statusRunning: boolean): string {
+  const retryCommand = browserProfileCommand(profileCtx, "doctor --deep");
+  switch (getBrowserProfileCapabilities(profileCtx.profile).mode) {
+    case "local-extension":
+      return `Reload the shared Chrome tab or reconnect the OpenClaw Chrome extension, then retry with ${retryCommand}.`;
+    case "local-attach-only":
+      return `Keep the externally managed Chromium target open and responsive, or reconnect the target, then retry with ${retryCommand}.`;
+    case "local-existing-session":
+      return `Keep the attached Chromium target open and responsive, then retry with ${retryCommand}.`;
+    case "remote-cdp":
+      return `Restore the remote CDP endpoint and selected page, then retry with ${retryCommand}.`;
+    case "local-managed":
+      return statusRunning
+        ? `Reload the stalled page or stop and restart the managed browser, then retry with ${retryCommand}.`
+        : `Run ${browserProfileCommand(profileCtx, "start")}, then retry with ${retryCommand}.`;
+    default:
+      throw new Error("Unsupported browser profile capability mode");
+  }
+}
+
+function reconcileSuccessfulLiveProbe(
+  report: BrowserDoctorReport,
+  liveProbe: BrowserDoctorCheck,
+): void {
+  if (liveProbe.status === "fail") {
+    return;
+  }
+  const transportCheckId =
+    report.transport === "extension"
+      ? "extension-relay"
+      : report.transport === "chrome-mcp"
+        ? "attach-target"
+        : "cdp-websocket";
+  if (!transportCheckId) {
+    return;
+  }
+  const transportCheck = report.checks.find((check) => check.id === transportCheckId);
+  if (!transportCheck) {
+    return;
+  }
+  if (transportCheck.status !== "pass") {
+    transportCheck.status = "pass";
+    transportCheck.summary =
+      report.transport === "extension"
+        ? "OpenClaw Chrome extension transport validated by the live snapshot probe"
+        : report.transport === "chrome-mcp"
+          ? "Chrome MCP target validated by the live snapshot probe"
+          : "CDP WebSocket validated by the live snapshot probe";
+    delete transportCheck.fixHint;
+  }
+  report.status.running = true;
+  report.status.cdpReady = true;
+  report.status.pageReady = true;
+}
 
 function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
   return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
@@ -262,16 +361,41 @@ async function buildBrowserStatus(
   };
 }
 
-async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSignal) {
+async function runBrowserLiveProbe(
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+  signal: AbortSignal,
+  statusRunning: boolean,
+) {
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  const deadlineAtMs = Date.now() + LIVE_SNAPSHOT_PROBE_TIMEOUT_MS;
+  const deadlineAbort = new AbortController();
+  const deadlineTimer = setTimeout(
+    () => {
+      deadlineAbort.abort(
+        new Error(`Live snapshot probe timed out after ${LIVE_SNAPSHOT_PROBE_TIMEOUT_MS}ms.`),
+      );
+    },
+    Math.max(1, deadlineAtMs - Date.now()),
+  );
+  deadlineTimer.unref?.();
+  const probeSignal = AbortSignal.any([signal, deadlineAbort.signal]);
   try {
-    const tab = await profileCtx.ensureTabAvailable(undefined, { signal });
+    const tab = await awaitTaskWithAbort(
+      profileCtx.ensureTabAvailable(undefined, {
+        signal: probeSignal,
+        createIfMissing: false,
+      }),
+      probeSignal,
+    );
     if (capabilities.usesChromeMcp) {
+      const remainingTimeoutMs = Math.max(1, deadlineAtMs - Date.now());
       await takeChromeMcpSnapshot({
         profileName: profileCtx.profile.name,
         profile: profileCtx.profile,
         targetId: tab.targetId,
-        signal,
+        timeoutMs: remainingTimeoutMs,
+        signal: probeSignal,
       });
       return {
         id: "live-snapshot",
@@ -280,15 +404,40 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
         summary: `Chrome MCP snapshot succeeded on ${tab.suggestedTargetId ?? tab.targetId}`,
       };
     }
-    if (!tab.wsUrl) {
-      return {
-        id: "live-snapshot",
-        label: "Live snapshot",
-        status: "warn" as const,
-        summary: "No per-tab CDP WebSocket available for the lightweight live snapshot probe",
-      };
-    }
-    const snap = await snapshotAria({ wsUrl: tab.wsUrl, limit: 25 });
+    // The CDP/Playwright snapshot owners already turn the remaining numeric
+    // budget into a single abort signal that records the active target and
+    // method. Keep request cancellation, but do not let the route-level
+    // deadline race that contextual timeout and replace it with a generic
+    // live-probe error. Chrome MCP still needs probeSignal above because its
+    // lock wait and tool call would otherwise each restart the same budget.
+    const snap = tab.wsUrl
+      ? await snapshotAria({
+          wsUrl: tab.wsUrl,
+          targetId: tab.targetId,
+          limit: 25,
+          timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
+          signal,
+        })
+      : await (async () => {
+          const pw = await awaitTaskWithAbort(getPwAiModule(), probeSignal);
+          if (!pw) {
+            throw new Error("Playwright is not available for the live snapshot probe.");
+          }
+          // Lazy module loading is part of the advertised probe budget. If it
+          // consumed the deadline, do not begin fresh page work; otherwise give
+          // the snapshot owner only the time that remains so its contextual
+          // target/method timeout still owns an in-flight capture.
+          probeSignal.throwIfAborted();
+          return await pw.captureAriaSnapshotViaPlaywright({
+            cdpUrl: profileCtx.profile.cdpUrl,
+            targetId: tab.targetId,
+            limit: 25,
+            timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
+            signal,
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          });
+        })();
+    probeSignal.throwIfAborted();
     return {
       id: "live-snapshot",
       label: "Live snapshot",
@@ -307,9 +456,29 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
       label: "Live snapshot",
       status: "fail" as const,
       summary: String(err),
-      fixHint: "Run openclaw browser start, then retry with openclaw browser doctor --deep.",
+      fixHint: liveProbeFailureFixHint(profileCtx, statusRunning),
     };
+  } finally {
+    clearTimeout(deadlineTimer);
   }
+}
+
+function isAuthoritativelyStoppedManagedProfile(
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+  status: { running: boolean },
+): boolean {
+  const profile = profileCtx.profile;
+  const ownsBrowserLaunch =
+    profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly;
+  if (!ownsBrowserLaunch || status.running) {
+    return false;
+  }
+  // A missing managed-process handle is authoritative for an OpenClaw-owned
+  // local browser. Extension, attach-only, and remote profiles have no such
+  // process owner, so a short reachability miss must not suppress their longer
+  // bounded live probe.
+  return ctx.state().profiles.get(profileCtx.profile.name)?.running == null;
 }
 
 function hasQueryKey(query: BrowserRequest["query"], key: string): boolean {
@@ -421,9 +590,29 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         signal: req.signal,
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
-          const doctorReport = buildBrowserDoctorReport({ status });
-          if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
-            doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
+          const doctorReport = buildBrowserDoctorReport({
+            status,
+            mode: getBrowserProfileCapabilities(profileCtx.profile).mode,
+          });
+          const liveRequested =
+            toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true;
+          if (liveRequested) {
+            const managedProfileStopped = isAuthoritativelyStoppedManagedProfile(
+              ctx,
+              profileCtx,
+              status,
+            );
+            const liveProbe = managedProfileStopped
+              ? {
+                  id: "live-snapshot",
+                  label: "Live snapshot",
+                  status: "fail" as const,
+                  summary: "Live snapshot probe requires a running browser profile.",
+                  fixHint: `Run ${browserProfileCommand(profileCtx, "start")}, then retry with ${browserProfileCommand(profileCtx, "doctor --deep")}.`,
+                }
+              : await runBrowserLiveProbe(ctx, profileCtx, signal, status.running);
+            reconcileSuccessfulLiveProbe(doctorReport, liveProbe);
+            doctorReport.checks.push(liveProbe);
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");
           }
           return doctorReport;

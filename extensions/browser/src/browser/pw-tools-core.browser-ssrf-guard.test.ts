@@ -36,7 +36,9 @@ const sessionMocks = vi.hoisted(() => ({
   gotoPageWithNavigationGuard: vi.fn(async () => null),
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
   isPolicyDenyNavigationError: vi.fn((_err: unknown) => false),
+  invalidateRoleRefsForTarget: vi.fn(() => {}),
   markObservedDialogsHandledRemotelyForPage: vi.fn(() => ({})),
+  normalizeCdpUrl: vi.fn((raw: string) => raw.replace(/\/$/, "")),
   quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   refLocator: vi.fn(() => {
     if (!pageState.locator) {
@@ -1096,6 +1098,8 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("re-checks current page URL before aria snapshots", async () => {
     pageState.page = {
+      on: vi.fn(),
+      off: vi.fn(),
       url: vi.fn(() => "https://example.com"),
     };
 

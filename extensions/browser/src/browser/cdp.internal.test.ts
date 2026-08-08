@@ -374,6 +374,48 @@ describe("cdp internal", () => {
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
       expect(snap.nodes).toStrictEqual([]);
     });
+
+    it("uses one deadline across session preparation and AX collection", async () => {
+      wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+      await new Promise<void>((resolve) => {
+        wss?.once("listening", resolve);
+      });
+      const port = (wss.address() as { port: number }).port;
+      let resolveAxRequest!: () => void;
+      const axRequested = new Promise<void>((resolve) => {
+        resolveAxRequest = resolve;
+      });
+      wss.on("connection", (socket) => {
+        socket.on("message", (raw) => {
+          const msg = JSON.parse(rawDataToString(raw)) as CdpMockMessage;
+          if (msg.method === "Page.enable") {
+            setTimeout(() => {
+              socket.send(JSON.stringify({ id: msg.id, result: {} }));
+            }, 50);
+            return;
+          }
+          if (msg.method === "Accessibility.getFullAXTree") {
+            resolveAxRequest();
+            return;
+          }
+          if (AUTO_REPLY_METHODS.has(msg.method ?? "")) {
+            socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          }
+        });
+      });
+
+      const snapshot = snapshotAria({
+        wsUrl: `ws://127.0.0.1:${port}/devtools/browser/TEST`,
+        targetId: "TEST",
+        timeoutMs: 150,
+      });
+      void snapshot.catch(() => {});
+      await axRequested;
+
+      await expect(snapshot).rejects.toThrow(
+        /Aria snapshot via CDP timed out after 150ms.*targetId=TEST.*method=Accessibility\.getFullAXTree/,
+      );
+    });
   });
 
   describe("snapshotRoleViaCdp", () => {

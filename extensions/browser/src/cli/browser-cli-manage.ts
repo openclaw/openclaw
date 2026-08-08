@@ -3,10 +3,13 @@
  * checks.
  */
 import type { Command } from "commander";
+import type { BrowserDoctorReport } from "../browser-runtime.js";
+import { BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS } from "../browser/cdp-timeouts.js";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
   parseBrowserPositiveIntegerValue,
   printBrowserJsonResult as printJsonResult,
   resolveBrowserProfileQuery as resolveProfileQuery,
@@ -36,6 +39,7 @@ type BrowserDoctorCheck = {
   name: string;
   ok: boolean;
   detail?: string;
+  fixHint?: string;
   warning?: boolean;
 };
 
@@ -68,6 +72,7 @@ async function callTabAction(
 async function fetchBrowserStatus(
   parent: BrowserParentOpts,
   profile?: string,
+  timeoutMs = BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
 ): Promise<BrowserStatus> {
   return await callBrowserRequest<BrowserStatus>(
     parent,
@@ -77,7 +82,7 @@ async function fetchBrowserStatus(
       query: resolveProfileQuery(profile),
     },
     {
-      timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS,
+      timeoutMs,
     },
   );
 }
@@ -133,7 +138,18 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
   const prefix = check.warning ? "WARN" : check.ok ? "OK" : "FAIL";
-  return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
+  return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}${check.fixHint ? ` Fix: ${check.fixHint}` : ""}`;
+}
+
+function mapCanonicalDoctorCheck(check: BrowserDoctorReport["checks"][number]): BrowserDoctorCheck {
+  const name = check.id === "plugin-enabled" ? "plugin" : check.id;
+  return {
+    name,
+    ok: check.status !== "fail",
+    warning: check.status === "warn" || check.status === "info",
+    detail: check.summary,
+    fixHint: check.fixHint,
+  };
 }
 
 function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
@@ -154,12 +170,44 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
   return "Gateway auth SecretRef is unavailable in this command path; browser doctor cannot reach the admin-scoped browser.request endpoint. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD, then retry.";
 }
 
+function resolveBrowserDoctorTimeoutMs(parent: BrowserParentOpts, deep: boolean): number {
+  if (typeof parent.timeout === "string" && !parent.timeoutIsDefault) {
+    return parseBrowserPositiveIntegerOption(parent.timeout, "--timeout");
+  }
+  return deep ? BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS : BROWSER_MANAGE_REQUEST_TIMEOUT_MS;
+}
+
+function remainingBrowserDoctorTimeoutMs(deadlineAtMs: number, totalTimeoutMs: number): number {
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`Browser doctor timed out after ${totalTimeoutMs}ms.`);
+  }
+  return Math.max(1, Math.floor(remainingMs));
+}
+
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
-  let status: BrowserStatus | null;
+  let status: BrowserStatus;
+  let canonicalDoctor: BrowserDoctorReport | null = null;
+  const totalTimeoutMs = resolveBrowserDoctorTimeoutMs(parent, deep === true);
+  const deadlineAtMs = Date.now() + totalTimeoutMs;
+  const remainingTimeoutMs = () => remainingBrowserDoctorTimeoutMs(deadlineAtMs, totalTimeoutMs);
 
   try {
-    status = await fetchBrowserStatus(parent, profile);
+    if (deep) {
+      canonicalDoctor = await callBrowserRequest<BrowserDoctorReport>(
+        parent,
+        {
+          method: "GET",
+          path: "/doctor",
+          query: resolveProfileQuery(profile, { deep: true }),
+        },
+        { timeoutMs: remainingTimeoutMs() },
+      );
+      status = canonicalDoctor.status;
+    } else {
+      status = await fetchBrowserStatus(parent, profile, remainingTimeoutMs());
+    }
     checks.push({
       name: "gateway",
       ok: true,
@@ -184,13 +232,16 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     ok: true,
     detail: `${status.profile ?? "openclaw"} (${usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")})`,
   });
-  checks.push({
-    name: "browser",
-    ok: status.running,
-    detail: status.running
-      ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
-      : "not running; run `openclaw browser start`",
-  });
+  const canonicalOwnsTransportReadiness = deep === true && canonicalDoctor !== null;
+  if (!canonicalOwnsTransportReadiness) {
+    checks.push({
+      name: "browser",
+      ok: status.running,
+      detail: status.running
+        ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
+        : "not running; run `openclaw browser start`",
+    });
+  }
   if (status.graphics) {
     checks.push({
       name: "graphics",
@@ -204,7 +255,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
       parent,
       { method: "GET", path: "/profiles" },
-      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+      { timeoutMs: remainingTimeoutMs() },
     );
     checks.push({
       name: "profiles",
@@ -215,6 +266,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     checks.push({
       name: "profiles",
       ok: false,
+      warning: canonicalOwnsTransportReadiness,
       detail: String(err),
     });
   }
@@ -228,7 +280,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
           path: "/tabs",
           query: resolveProfileQuery(profile),
         },
-        { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+        { timeoutMs: remainingTimeoutMs() },
       );
       const tabs = result.tabs ?? [];
       checks.push({
@@ -240,48 +292,48 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       checks.push({
         name: "tabs",
         ok: false,
+        warning: canonicalOwnsTransportReadiness,
         detail: String(err),
       });
     }
   }
 
-  if (deep && status.running) {
-    try {
-      const result = await callBrowserRequest<
-        | { ok: true; format: "aria"; nodes?: unknown[] }
-        | { ok: true; format: "ai"; snapshot?: string }
-      >(
-        parent,
-        {
-          method: "GET",
-          path: "/snapshot",
-          query: resolveProfileQuery(profile, { format: "aria", limit: 25 }),
-        },
-        { timeoutMs: 10_000 },
-      );
-      const count =
-        result.format === "aria"
-          ? Array.isArray(result.nodes)
-            ? result.nodes.length
-            : 0
-          : typeof result.snapshot === "string"
-            ? result.snapshot.split("\n").length
-            : 0;
-      checks.push({
-        name: "live-snapshot",
-        ok: count > 0,
-        detail: count > 0 ? `${count} nodes/lines` : "snapshot returned no content",
-      });
-    } catch (err) {
+  if (deep && canonicalDoctor) {
+    if (!canonicalDoctor.checks.some((check) => check.id === "live-snapshot")) {
       checks.push({
         name: "live-snapshot",
         ok: false,
-        detail: String(err),
+        detail: "canonical browser doctor returned no live snapshot result",
+      });
+    }
+    for (const canonicalCheck of canonicalDoctor.checks) {
+      const mapped = mapCanonicalDoctorCheck(canonicalCheck);
+      const existing = checks.find((check) => check.name === mapped.name);
+      if (!existing) {
+        checks.push(mapped);
+      } else if (!existing.fixHint && mapped.fixHint) {
+        // The canonical deep-doctor report owns recovery guidance. Preserve a
+        // local enrichment row when present, but do not discard its actionable
+        // hint merely because both rows map to the same display name.
+        existing.fixHint = mapped.fixHint;
+      }
+    }
+    if (!canonicalDoctor.ok && canonicalDoctor.checks.every((check) => check.status !== "fail")) {
+      checks.push({
+        name: "canonical-doctor",
+        ok: false,
+        detail: "browser server reported an unsuccessful diagnostic",
       });
     }
   }
 
-  return { ok: checks.every((check) => check.ok), checks, status };
+  return {
+    ok:
+      checks.every((check) => check.ok || check.warning === true) &&
+      (!deep || canonicalDoctor?.ok === true),
+    checks,
+    status,
+  };
 }
 
 type BrowserProfileDriver = "openclaw" | "existing-session" | "extension";

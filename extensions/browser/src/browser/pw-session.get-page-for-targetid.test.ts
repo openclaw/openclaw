@@ -21,6 +21,7 @@ type MockPageSpec = {
   url?: string;
   title?: string;
   targetLookupError?: string;
+  targetLookupGate?: Promise<void>;
   navigateDuringTargetLookup?: boolean;
   subframeNavigationDuringTargetLookup?: boolean;
 };
@@ -28,6 +29,7 @@ type MockPageSpec = {
 type BrowserMockBundle = {
   browser: import("playwright-core").Browser;
   browserClose: ReturnType<typeof vi.fn>;
+  newCdpSession: ReturnType<typeof vi.fn>;
   pages: import("playwright-core").Page[];
   pageHandlers: Array<Map<string, Array<(...args: unknown[]) => void>>>;
   pageActions: Array<{
@@ -64,34 +66,36 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
     return page;
   });
 
+  const newCdpSession = vi.fn(async (page: import("playwright-core").Page) => {
+    const spec = specByPage.get(page);
+    return {
+      send: vi.fn(async (method: string) => {
+        if (method !== "Target.getTargetInfo") {
+          return {};
+        }
+        await spec?.targetLookupGate;
+        if (spec?.targetLookupError) {
+          throw new Error(spec.targetLookupError);
+        }
+        if (spec?.navigateDuringTargetLookup) {
+          const pageIndex = pageObjects.indexOf(page);
+          pageHandlers[pageIndex]?.get("framenavigated")?.[0]?.(page.mainFrame());
+        }
+        if (spec?.subframeNavigationDuringTargetLookup) {
+          const pageIndex = pageObjects.indexOf(page);
+          pageHandlers[pageIndex]?.get("framenavigated")?.[0]?.({
+            url: () => "https://frame.example/new",
+          });
+        }
+        return { targetInfo: { targetId: spec?.targetId } };
+      }),
+      detach: vi.fn(async () => {}),
+    };
+  });
   const context: import("playwright-core").BrowserContext = {
     pages: () => pageObjects,
     on: vi.fn(),
-    newCDPSession: vi.fn(async (page: import("playwright-core").Page) => {
-      const spec = specByPage.get(page);
-      return {
-        send: vi.fn(async (method: string) => {
-          if (method !== "Target.getTargetInfo") {
-            return {};
-          }
-          if (spec?.targetLookupError) {
-            throw new Error(spec.targetLookupError);
-          }
-          if (spec?.navigateDuringTargetLookup) {
-            const pageIndex = pageObjects.indexOf(page);
-            pageHandlers[pageIndex]?.get("framenavigated")?.[0]?.(page.mainFrame());
-          }
-          if (spec?.subframeNavigationDuringTargetLookup) {
-            const pageIndex = pageObjects.indexOf(page);
-            pageHandlers[pageIndex]?.get("framenavigated")?.[0]?.({
-              url: () => "https://frame.example/new",
-            });
-          }
-          return { targetInfo: { targetId: spec?.targetId } };
-        }),
-        detach: vi.fn(async () => {}),
-      };
-    }),
+    newCDPSession: newCdpSession,
   } as unknown as import("playwright-core").BrowserContext;
 
   const browser = {
@@ -101,7 +105,14 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
-  return { browser, browserClose, pages: pageObjects, pageHandlers, pageActions };
+  return {
+    browser,
+    browserClose,
+    newCdpSession,
+    pages: pageObjects,
+    pageHandlers,
+    pageActions,
+  };
 }
 
 function installBrowser(pages: MockPageSpec[]): BrowserMockBundle {
@@ -289,5 +300,118 @@ describe("pw-session getPageForTargetId", () => {
       "connectOverCDP exploded",
     );
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("retires a connection attempt created by an aborted page lookup", async () => {
+    let resolveLateConnection!: (browser: import("playwright-core").Browser) => void;
+    const lateConnection = new Promise<import("playwright-core").Browser>((resolve) => {
+      resolveLateConnection = resolve;
+    });
+    const late = makeBrowser([{ targetId: "LATE" }]);
+    const fresh = makeBrowser([{ targetId: "FRESH" }]);
+    connectOverCdpSpy
+      .mockImplementationOnce(async () => await lateConnection)
+      .mockResolvedValueOnce(fresh.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const controller = new AbortController();
+    const cancellation = new Error("page lookup cancelled");
+
+    const lookup = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9666",
+      targetId: "LATE",
+      signal: controller.signal,
+    });
+    void lookup.catch(() => {});
+    await vi.waitFor(() => expect(connectOverCdpSpy).toHaveBeenCalledOnce());
+    controller.abort(cancellation);
+
+    await expect(lookup).rejects.toBe(cancellation);
+    resolveLateConnection(late.browser);
+    await vi.waitFor(() => expect(late.browserClose).toHaveBeenCalledOnce());
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:9666",
+        targetId: "FRESH",
+      }),
+    ).resolves.toBe(fresh.pages[0]);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires a shared connection attempt when all waiters cancel in one turn", async () => {
+    let resolveLateConnection!: (browser: import("playwright-core").Browser) => void;
+    const lateConnection = new Promise<import("playwright-core").Browser>((resolve) => {
+      resolveLateConnection = resolve;
+    });
+    const late = makeBrowser([{ targetId: "LATE" }]);
+    const fresh = makeBrowser([{ targetId: "FRESH" }]);
+    connectOverCdpSpy
+      .mockImplementationOnce(async () => await lateConnection)
+      .mockResolvedValueOnce(fresh.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const firstCancellation = new Error("first page lookup cancelled");
+    const secondCancellation = new Error("second page lookup cancelled");
+
+    const first = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9667",
+      targetId: "LATE",
+      signal: firstController.signal,
+    });
+    const second = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9667",
+      targetId: "LATE",
+      signal: secondController.signal,
+    });
+    void first.catch(() => {});
+    void second.catch(() => {});
+    await vi.waitFor(() => expect(connectOverCdpSpy).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    firstController.abort(firstCancellation);
+    secondController.abort(secondCancellation);
+
+    await expect(first).rejects.toBe(firstCancellation);
+    await expect(second).rejects.toBe(secondCancellation);
+    resolveLateConnection(late.browser);
+    await vi.waitFor(() => expect(late.browserClose).toHaveBeenCalledOnce());
+
+    await expect(
+      getPageForTargetId({
+        cdpUrl: "http://127.0.0.1:9667",
+        targetId: "FRESH",
+      }),
+    ).resolves.toBe(fresh.pages[0]);
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops target enumeration after the active lookup observes cancellation", async () => {
+    let releaseFirstLookup!: () => void;
+    const firstLookupGate = new Promise<void>((resolve) => {
+      releaseFirstLookup = resolve;
+    });
+    const bundle = installBrowser([
+      { targetId: "TARGET_A", targetLookupGate: firstLookupGate },
+      { targetId: "TARGET_B" },
+    ]);
+    const controller = new AbortController();
+    const cancellation = new Error("target enumeration cancelled");
+
+    const lookup = getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9777",
+      targetId: "TARGET_B",
+      signal: controller.signal,
+    });
+    void lookup.catch(() => {});
+    await vi.waitFor(() => expect(bundle.newCdpSession).toHaveBeenCalledOnce());
+    controller.abort(cancellation);
+
+    await expect(lookup).rejects.toBe(cancellation);
+    releaseFirstLookup();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bundle.newCdpSession).toHaveBeenCalledTimes(1);
   });
 });

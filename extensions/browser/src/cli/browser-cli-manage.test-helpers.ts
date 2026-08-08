@@ -73,7 +73,10 @@ export function createBrowserManageProgram(params?: { withParentTimeout?: boolea
   if (params?.withParentTimeout) {
     browser.option("--timeout <ms>", "Timeout in ms", "30000");
   }
-  registerBrowserManageCommands(browser, parentOpts);
+  registerBrowserManageCommands(browser, (cmd) => ({
+    ...parentOpts(cmd),
+    ...browserCliSharedModule.resolveBrowserParentOpts(cmd),
+  }));
   return program;
 }
 

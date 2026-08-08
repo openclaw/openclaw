@@ -1,7 +1,8 @@
 // Browser tests cover browser cli manage plugin behavior.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserManageProgram,
+  findBrowserManageCall,
   getBrowserManageCallBrowserRequestMock,
 } from "./browser-cli-manage.test-helpers.js";
 import { getBrowserCliRuntime, getBrowserCliRuntimeCapture } from "./browser-cli.test-support.js";
@@ -558,6 +559,415 @@ describe("browser manage output", () => {
     expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("keeps deep doctor open long enough to surface the relay deadline context", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(
+      async (_opts: unknown, req, runtimeOpts) => {
+        if (req.path === "/profiles") {
+          return { profiles: [{ name: "chrome", running: true }] };
+        }
+        if (req.path === "/tabs") {
+          return {
+            running: true,
+            tabs: [{ targetId: "extension-target-1", title: "Example", url: "https://x.test" }],
+          };
+        }
+        if (req.path === "/doctor") {
+          if ((runtimeOpts?.timeoutMs ?? 0) <= 15_000) {
+            throw new Error("browser request timed out before the relay deadline");
+          }
+          return {
+            ok: false,
+            profile: "chrome",
+            transport: "extension",
+            status: {
+              enabled: true,
+              profile: "chrome",
+              driver: "extension",
+              transport: "extension",
+              running: true,
+              cdpReady: true,
+            },
+            checks: [
+              {
+                id: "live-snapshot",
+                label: "Live snapshot",
+                status: "fail",
+                summary:
+                  "Error: extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
+              },
+            ],
+          };
+        }
+        return {};
+      },
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    expect(lastRuntimeLog()).toContain(
+      "FAIL live-snapshot: Error: extension relay command timed out: cdp (tabId=7, method=Accessibility.getFullAXTree)",
+    );
+    expect(findBrowserManageCall("/doctor")?.[2]?.timeoutMs).toBeGreaterThan(15_000);
+    expect(findBrowserManageCall("/doctor")?.[1]?.query).toMatchObject({
+      profile: "chrome",
+      deep: true,
+    });
+    expect(findBrowserManageCall("/snapshot")).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("shares one 24-second default budget across deep-doctor requests", async () => {
+    vi.useFakeTimers();
+    try {
+      getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+        if (req.path === "/doctor") {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5_000);
+          });
+          return {
+            ok: true,
+            status: {
+              enabled: true,
+              profile: "chrome",
+              driver: "extension",
+              transport: "extension",
+              running: true,
+              cdpReady: true,
+            },
+            checks: [
+              {
+                id: "live-snapshot",
+                label: "Live snapshot",
+                status: "pass",
+                summary: "snapshot succeeded",
+              },
+            ],
+          };
+        }
+        if (req.path === "/profiles") {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 4_000);
+          });
+          return { profiles: [{ name: "chrome", running: true }] };
+        }
+        if (req.path === "/tabs") {
+          return { running: true, tabs: [] };
+        }
+        return {};
+      });
+
+      const program = createBrowserManageProgram();
+      const pending = program.parseAsync(
+        ["browser", "--browser-profile", "chrome", "doctor", "--deep"],
+        { from: "user" },
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(4_000);
+      await pending;
+
+      expect(findBrowserManageCall("/doctor")?.[2]?.timeoutMs).toBe(24_000);
+      expect(findBrowserManageCall("/profiles")?.[2]?.timeoutMs).toBe(19_000);
+      expect(findBrowserManageCall("/tabs")?.[2]?.timeoutMs).toBe(15_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not report success when the canonical deep-doctor report is unsuccessful", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: false,
+          profile: "chrome",
+          transport: "extension",
+          status: {
+            enabled: true,
+            profile: "chrome",
+            driver: "extension",
+            transport: "extension",
+            running: true,
+            cdpReady: true,
+          },
+          checks: [
+            {
+              id: "plugin-enabled",
+              label: "Browser plugin",
+              status: "pass",
+              summary: "enabled",
+            },
+            {
+              id: "profile",
+              label: "Profile",
+              status: "pass",
+              summary: "chrome via extension",
+            },
+            {
+              id: "extension-relay",
+              label: "Chrome extension relay",
+              status: "pass",
+              summary: "OpenClaw Chrome extension is connected",
+            },
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "pass",
+              summary: "snapshot succeeded",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        return {
+          running: true,
+          tabs: [{ targetId: "extension-target-1", title: "Example", url: "https://x.test" }],
+        };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    expect(lastRuntimeLog()).toContain(
+      "FAIL canonical-doctor: browser server reported an unsuccessful diagnostic",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("preserves the canonical plugin recovery hint in deep doctor output", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: false,
+          profile: "chrome",
+          transport: "extension",
+          status: {
+            enabled: false,
+            profile: "chrome",
+            driver: "extension",
+            transport: "extension",
+            running: false,
+            cdpReady: false,
+          },
+          checks: [
+            {
+              id: "plugin-enabled",
+              label: "Browser plugin",
+              status: "fail",
+              summary: "disabled in config",
+              fixHint: "Enable the browser plugin and restart the Gateway.",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: false }] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    expect(lastRuntimeLog()).toContain(
+      "FAIL plugin: disabled in config Fix: Enable the browser plugin and restart the Gateway.",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("trusts a successful canonical deep doctor after a short CDP status miss", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: true,
+          profile: "attached",
+          transport: "cdp",
+          status: {
+            enabled: true,
+            profile: "attached",
+            driver: "openclaw",
+            transport: "cdp",
+            running: false,
+            cdpReady: false,
+          },
+          checks: [
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "pass",
+              summary: "snapshot succeeded after the short status miss",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        throw new Error("supplementary profile listing timed out");
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "attached", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("OK live-snapshot: snapshot succeeded after the short status miss");
+    expect(output).toContain("WARN profiles: Error: supplementary profile listing timed out");
+    expect(output).not.toContain("FAIL browser: not running");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("keeps tab enrichment failures advisory when canonical deep doctor succeeds", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: true,
+          profile: "remote",
+          transport: "cdp",
+          status: {
+            enabled: true,
+            profile: "remote",
+            driver: "openclaw",
+            transport: "cdp",
+            running: true,
+            cdpReady: true,
+          },
+          checks: [
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "pass",
+              summary: "remote snapshot succeeded",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "remote", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        throw new Error("supplementary tab listing timed out");
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "remote", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("WARN tabs: Error: supplementary tab listing timed out");
+    expect(output).toContain("OK live-snapshot: remote snapshot succeeded");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("reports a stopped deep-doctor profile without probing tabs or snapshots", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: false,
+          status: {
+            enabled: true,
+            profile: "openclaw",
+            driver: "openclaw",
+            transport: "cdp",
+            running: false,
+            cdpReady: false,
+          },
+          checks: [
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "fail",
+              summary: "Live snapshot probe requires a running browser profile.",
+              fixHint: "Start or connect the browser profile, then retry.",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "openclaw", running: false }] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "doctor", "--deep"], { from: "user" });
+
+    expect(lastRuntimeLog()).not.toContain("FAIL browser: not running");
+    expect(lastRuntimeLog()).toContain(
+      "FAIL live-snapshot: Live snapshot probe requires a running browser profile.",
+    );
+    expect(findBrowserManageCall("/doctor")).toBeDefined();
+    expect(findBrowserManageCall("/tabs")).toBeUndefined();
+    expect(findBrowserManageCall("/snapshot")).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("prints canonical extension pairing guidance instead of managed-browser startup advice", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/doctor") {
+        return {
+          ok: false,
+          profile: "chrome",
+          transport: "extension",
+          status: {
+            enabled: true,
+            profile: "chrome",
+            driver: "extension",
+            transport: "extension",
+            running: false,
+            cdpReady: false,
+          },
+          checks: [
+            {
+              id: "extension-relay",
+              label: "Chrome extension relay",
+              status: "fail",
+              summary: "OpenClaw Chrome extension is not connected",
+              fixHint:
+                "Install the OpenClaw Chrome extension, pair it, and paste the pairing string into the extension popup.",
+            },
+            {
+              id: "live-snapshot",
+              label: "Live snapshot",
+              status: "fail",
+              summary: "OpenClaw Chrome extension is not connected",
+            },
+          ],
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "chrome", running: false }] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "--browser-profile", "chrome", "doctor", "--deep"], {
+      from: "user",
+    });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain(
+      "FAIL extension-relay: OpenClaw Chrome extension is not connected Fix: Install the OpenClaw Chrome extension, pair it, and paste the pairing string into the extension popup.",
+    );
+    expect(output).not.toContain("FAIL browser: not running; run `openclaw browser start`");
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints one complete JSON browser doctor failure before setting exit status", async () => {

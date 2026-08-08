@@ -231,6 +231,7 @@ export async function screenshotWithLabelsViaPlaywright(
     fullPage?: boolean;
     ref?: string;
     element?: string;
+    signal?: AbortSignal;
   },
 ): Promise<{
   buffer: Buffer;
@@ -238,121 +239,169 @@ export async function screenshotWithLabelsViaPlaywright(
   skipped: number;
   annotations: AnnotationItem[];
 }> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const type = opts.type ?? "png";
-  const maxLabels =
-    typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
-      ? Math.max(1, Math.floor(opts.maxLabels))
-      : ANNOTATION_MAX_LABELS_DEFAULT;
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
+  const awaitStep = async <T>(
+    stepPromise: Promise<T>,
+    onActionResolvedAfterAbort?: () => void,
+  ): Promise<T> => {
+    const result = await awaitActionWithAbort(
+      stepPromise,
+      abortPromise,
+      onActionResolvedAfterAbort,
+    );
+    throwIfInteractionAborted(opts.signal);
+    return result;
+  };
+  try {
+    const page = await awaitStep(getPageForTargetId(opts));
+    ensurePageState(page);
+    throwIfInteractionAborted(opts.signal);
+    restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+    throwIfInteractionAborted(opts.signal);
+    const type = opts.type ?? "png";
+    const maxLabels =
+      typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
+        ? Math.max(1, Math.floor(opts.maxLabels))
+        : ANNOTATION_MAX_LABELS_DEFAULT;
 
-  const refKey = normalizeOptionalString(opts.ref) ?? undefined;
-  const elementSelector = normalizeOptionalString(opts.element) ?? undefined;
-  const space: CoordinateSpace = opts.fullPage
-    ? "fullpage"
-    : refKey || elementSelector
-      ? "element"
-      : "viewport";
-
-  // Read scroll + viewport size. Scroll converts Playwright's viewport-space
-  // boundingBoxes into document-space inputs; the viewport size lets the helper
-  // restore the shipped `labelsSkipped` semantics by counting off-viewport refs
-  // as skipped (in viewport capture mode).
-  const view = await page.evaluate(() => ({
-    x: window.scrollX || 0,
-    y: window.scrollY || 0,
-    width: window.innerWidth || 0,
-    height: window.innerHeight || 0,
-  }));
-  const scroll = { x: view.x, y: view.y };
-
-  let elementRect: { x: number; y: number; width: number; height: number } | undefined;
-  if (space === "element") {
-    const box = await resolveElementBoundingBoxForLabels(page, refKey, elementSelector);
-    if (!box) {
-      throw new Error(
-        `screenshotWithLabelsViaPlaywright: element not found for ${
-          refKey ? `ref="${refKey}"` : `selector="${elementSelector ?? ""}"`
-        }`,
-      );
-    }
-    // Convert viewport-space bbox to document space.
-    elementRect = {
-      x: box.x + scroll.x,
-      y: box.y + scroll.y,
-      width: box.width,
-      height: box.height,
+    const refKey = normalizeOptionalString(opts.ref) ?? undefined;
+    const elementSelector = normalizeOptionalString(opts.element) ?? undefined;
+    const space: CoordinateSpace = opts.fullPage
+      ? "fullpage"
+      : refKey || elementSelector
+        ? "element"
+        : "viewport";
+    const resolveLabelBoundingBox = async (
+      locatorPromise: Promise<{ x: number; y: number; width: number; height: number } | null>,
+    ) => {
+      try {
+        return await awaitStep(locatorPromise);
+      } catch {
+        throwIfInteractionAborted(opts.signal);
+        return null;
+      }
     };
-  }
 
-  const refKeys = Object.keys(opts.refs ?? {});
-  const inputs: RawAnnotationInput[] = [];
-  let bboxFailures = 0;
-  for (const ref of refKeys) {
-    const refInfo = opts.refs[ref];
-    if (refInfo === undefined) {
-      continue;
-    }
-    const box = await refLocator(page, ref)
-      .boundingBox()
-      .catch(() => null);
-    if (!box) {
-      bboxFailures += 1;
-      continue;
-    }
-    inputs.push({
-      ref,
-      role: refInfo.role,
-      name: refInfo.name,
-      doc: {
+    // Read scroll + viewport size. Scroll converts Playwright's viewport-space
+    // boundingBoxes into document-space inputs; the viewport size lets the helper
+    // restore the shipped `labelsSkipped` semantics by counting off-viewport refs
+    // as skipped (in viewport capture mode).
+    const view = await awaitStep(
+      page.evaluate(() => ({
+        x: window.scrollX || 0,
+        y: window.scrollY || 0,
+        width: window.innerWidth || 0,
+        height: window.innerHeight || 0,
+      })),
+    );
+    const scroll = { x: view.x, y: view.y };
+
+    let elementRect: { x: number; y: number; width: number; height: number } | undefined;
+    if (space === "element") {
+      const box = await resolveLabelBoundingBox(
+        resolveElementBoundingBoxForLabels(page, refKey, elementSelector),
+      );
+      if (!box) {
+        throw new Error(
+          `screenshotWithLabelsViaPlaywright: element not found for ${
+            refKey ? `ref="${refKey}"` : `selector="${elementSelector ?? ""}"`
+          }`,
+        );
+      }
+      // Convert viewport-space bbox to document space.
+      elementRect = {
         x: box.x + scroll.x,
         y: box.y + scroll.y,
         width: box.width,
         height: box.height,
-      },
-    });
-  }
-
-  const plan = planAnnotations({
-    inputs,
-    space,
-    scroll,
-    viewport: { width: view.width, height: view.height },
-    elementRect,
-    maxLabels,
-  });
-
-  try {
-    if (plan.overlayItems.length > 0) {
-      const captureY = space === "element" ? elementRect?.y : space === "viewport" ? scroll.y : 0;
-      await page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems, captureY }));
+      };
     }
-    const buffer =
-      space === "element"
-        ? await captureElementScreenshotForLabels(
-            page,
-            refKey,
-            elementSelector,
-            type,
-            opts.timeoutMs,
-          )
-        : await page.screenshot({
-            type,
-            fullPage: Boolean(opts.fullPage),
-            timeout: opts.timeoutMs,
-          });
-    return {
-      // `labels` reports overlay boxes actually drawn on the captured image
-      // (in-viewport, within budget); off-viewport refs are surfaced via
-      // `annotations` but not drawn, and are reflected in `skipped`.
-      buffer,
-      labels: plan.overlayItems.length,
-      skipped: plan.skipped + bboxFailures,
-      annotations: plan.annotations,
-    };
+
+    const refKeys = Object.keys(opts.refs ?? {});
+    const inputs: RawAnnotationInput[] = [];
+    let bboxFailures = 0;
+    for (const ref of refKeys) {
+      const refInfo = opts.refs[ref];
+      if (refInfo === undefined) {
+        continue;
+      }
+      const box = await resolveLabelBoundingBox(refLocator(page, ref).boundingBox());
+      if (!box) {
+        bboxFailures += 1;
+        continue;
+      }
+      inputs.push({
+        ref,
+        role: refInfo.role,
+        name: refInfo.name,
+        doc: {
+          x: box.x + scroll.x,
+          y: box.y + scroll.y,
+          width: box.width,
+          height: box.height,
+        },
+      });
+    }
+
+    const plan = planAnnotations({
+      inputs,
+      space,
+      scroll,
+      viewport: { width: view.width, height: view.height },
+      elementRect,
+      maxLabels,
+    });
+    throwIfInteractionAborted(opts.signal);
+
+    const clearOverlay = () => page.evaluate(buildOverlayClearScript()).catch(() => {});
+    try {
+      if (plan.overlayItems.length > 0) {
+        const captureY = space === "element" ? elementRect?.y : space === "viewport" ? scroll.y : 0;
+        await awaitStep(
+          page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems, captureY })),
+          () => {
+            void clearOverlay();
+          },
+        );
+      }
+      const buffer =
+        space === "element"
+          ? await awaitStep(
+              captureElementScreenshotForLabels(
+                page,
+                refKey,
+                elementSelector,
+                type,
+                opts.timeoutMs,
+              ),
+            )
+          : await awaitStep(
+              page.screenshot({
+                type,
+                fullPage: Boolean(opts.fullPage),
+                timeout: opts.timeoutMs,
+              }),
+            );
+      return {
+        // `labels` reports overlay boxes actually drawn on the captured image
+        // (in-viewport, within budget); off-viewport refs are surfaced via
+        // `annotations` but not drawn, and are reflected in `skipped`.
+        buffer,
+        labels: plan.overlayItems.length,
+        skipped: plan.skipped + bboxFailures,
+        annotations: plan.annotations,
+      };
+    } finally {
+      const cleanupPromise = clearOverlay();
+      if (opts.signal?.aborted) {
+        void cleanupPromise;
+      } else {
+        await awaitActionWithAbort(cleanupPromise, abortPromise);
+        throwIfInteractionAborted(opts.signal);
+      }
+    }
   } finally {
-    await page.evaluate(buildOverlayClearScript()).catch(() => {});
+    cleanup();
   }
 }
 
@@ -362,18 +411,10 @@ async function resolveElementBoundingBoxForLabels(
   cssSelector: string | undefined,
 ): Promise<{ x: number; y: number; width: number; height: number } | null> {
   if (refKey) {
-    try {
-      return await refLocator(page, refKey).boundingBox();
-    } catch {
-      return null;
-    }
+    return await refLocator(page, refKey).boundingBox();
   }
   if (cssSelector) {
-    try {
-      return await page.locator(cssSelector).first().boundingBox();
-    } catch {
-      return null;
-    }
+    return await page.locator(cssSelector).first().boundingBox();
   }
   return null;
 }

@@ -34,6 +34,13 @@ const PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS = 2000;
 export const PROFILE_ATTACH_RETRY_TIMEOUT_MS = 1200;
 export const CHROME_MCP_ATTACH_READY_WINDOW_MS = 8000;
 export const CHROME_MCP_ATTACH_READY_POLL_MS = 200;
+/** Maximum passive status work before a deep-doctor live probe begins. */
+export const BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS = 7_000;
+/** One complete deadline shared by deep-doctor tab selection and snapshot capture. */
+export const BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS = 12_000;
+/** Outer deep-doctor budget, including time for request cleanup after the live probe. */
+export const BROWSER_DEEP_DOCTOR_REQUEST_TIMEOUT_MS =
+  BROWSER_DEEP_DOCTOR_STATUS_TIMEOUT_MS + BROWSER_DEEP_DOCTOR_LIVE_PROBE_TIMEOUT_MS + 5_000;
 
 /** Return true when a profile can use the short loopback CDP probe class. */
 export function usesFastLoopbackCdpProbeClass(params: {

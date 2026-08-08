@@ -79,6 +79,84 @@ describe("buildBrowserDoctorReport", () => {
     expect(attachCheck?.status).toBe("fail");
   });
 
+  it("does not apply managed launch checks to remote CDP profiles", () => {
+    const report = buildBrowserDoctorReport({
+      mode: "remote-cdp",
+      platform: "linux",
+      env: {},
+      uid: 0,
+      status: {
+        enabled: true,
+        profile: "remote",
+        driver: "openclaw",
+        transport: "cdp",
+        running: true,
+        cdpReady: true,
+        cdpHttp: true,
+        pid: null,
+        cdpPort: null,
+        cdpUrl: "https://browser.example/cdp",
+        chosenBrowser: null,
+        detectedBrowser: null,
+        detectedExecutablePath: null,
+        detectError: "configured executable does not exist",
+        userDataDir: null,
+        color: "#00AA00",
+        headless: false,
+        noSandbox: false,
+        executablePath: "/missing/chromium",
+        attachOnly: false,
+      },
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks.map((check) => check.id)).not.toEqual(
+      expect.arrayContaining(["managed-executable", "display", "linux-sandbox"]),
+    );
+    expect(report.checks.map((check) => check.id)).toEqual(
+      expect.arrayContaining(["cdp-http", "cdp-websocket"]),
+    );
+  });
+
+  it("does not apply managed launch checks to attach-only profiles", () => {
+    const report = buildBrowserDoctorReport({
+      mode: "local-attach-only",
+      platform: "linux",
+      env: {},
+      uid: 0,
+      status: {
+        enabled: true,
+        profile: "attached",
+        driver: "openclaw",
+        transport: "cdp",
+        running: true,
+        cdpReady: true,
+        cdpHttp: true,
+        pid: null,
+        cdpPort: 18801,
+        cdpUrl: "http://127.0.0.1:18801",
+        chosenBrowser: null,
+        detectedBrowser: null,
+        detectedExecutablePath: null,
+        detectError: "configured executable does not exist",
+        userDataDir: null,
+        color: "#00AA00",
+        headless: false,
+        noSandbox: false,
+        executablePath: "/missing/chromium",
+        attachOnly: true,
+      },
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks.map((check) => check.id)).not.toEqual(
+      expect.arrayContaining(["managed-executable", "display", "linux-sandbox"]),
+    );
+    expect(report.checks.map((check) => check.id)).toEqual(
+      expect.arrayContaining(["cdp-http", "cdp-websocket"]),
+    );
+  });
+
   it("keeps managed launch warnings non-fatal", () => {
     const report = buildBrowserDoctorReport({
       platform: "linux",

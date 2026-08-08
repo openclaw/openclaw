@@ -548,6 +548,38 @@ describe("cdp.helpers internal", () => {
       ).rejects.toThrow(/CDP command Page\.captureScreenshot timed out after 5ms/);
       await vi.waitFor(() => expect(closed).toBe(true));
     });
+
+    it("aborts an in-flight CDP command with the caller reason and closes the socket", async () => {
+      const server = await startWsServer();
+      wss = server.wss;
+      const controller = new AbortController();
+      const cancellation = new Error("browser request cancelled");
+      let commandReceived!: () => void;
+      const received = new Promise<void>((resolve) => {
+        commandReceived = resolve;
+      });
+      let closed = false;
+      server.wss.on("connection", (socket) => {
+        socket.on("message", () => {
+          commandReceived();
+        });
+        socket.on("close", () => {
+          closed = true;
+        });
+      });
+
+      const pending = withCdpSocket(
+        server.url,
+        async (send) => await send("Accessibility.getFullAXTree"),
+        { commandTimeoutMs: 5_000, signal: controller.signal },
+      );
+      void pending.catch(() => {});
+      await received;
+      controller.abort(cancellation);
+
+      await expect(pending).rejects.toBe(cancellation);
+      await vi.waitFor(() => expect(closed).toBe(true));
+    });
   });
 
   describe("withCdpSocket", () => {
@@ -598,6 +630,38 @@ describe("cdp.helpers internal", () => {
           throw new Error("callback boom");
         }),
       ).rejects.toThrow(/callback boom/);
+    });
+
+    it("rejects with the exact abort reason when the callback finishes after cancellation", async () => {
+      const server = await startWsServer();
+      wss = server.wss;
+      const controller = new AbortController();
+      const cancellation = new Error("role snapshot cancelled during enrichment");
+      let releaseCallback!: () => void;
+      const callbackRelease = new Promise<void>((resolve) => {
+        releaseCallback = resolve;
+      });
+      let markCallbackStarted!: () => void;
+      const callbackStarted = new Promise<void>((resolve) => {
+        markCallbackStarted = resolve;
+      });
+
+      const pending = withCdpSocket(
+        server.url,
+        async () => {
+          markCallbackStarted();
+          await callbackRelease;
+          return { partial: true };
+        },
+        { signal: controller.signal },
+      );
+      void pending.catch(() => {});
+      await callbackStarted;
+
+      controller.abort(cancellation);
+      releaseCallback();
+
+      await expect(pending).rejects.toBe(cancellation);
     });
   });
 

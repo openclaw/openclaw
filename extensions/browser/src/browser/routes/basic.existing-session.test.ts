@@ -2,13 +2,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
-const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
-  inspectChromeGraphicsDiagnosticsMock: vi.fn(),
+const {
+  captureAriaSnapshotViaPlaywrightMock,
+  getPwAiModuleMock,
+  inspectChromeGraphicsDiagnosticsMock,
+  takeChromeMcpSnapshotMock,
+} = vi.hoisted(() => {
+  const captureAriaSnapshotMock = vi.fn();
+  return {
+    captureAriaSnapshotViaPlaywrightMock: captureAriaSnapshotMock,
+    getPwAiModuleMock: vi.fn(async () => ({
+      captureAriaSnapshotViaPlaywright: captureAriaSnapshotViaPlaywrightMock,
+    })),
+    inspectChromeGraphicsDiagnosticsMock: vi.fn(),
+    takeChromeMcpSnapshotMock: vi.fn(async () => ({})),
+  };
+});
+
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: getPwAiModuleMock,
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
-  takeChromeMcpSnapshot: vi.fn(async () => ({})),
+  takeChromeMcpSnapshot: takeChromeMcpSnapshotMock,
 }));
 
 vi.mock("../chrome.graphics.js", async (importOriginal) => {
@@ -188,7 +205,13 @@ function responseBodyRecord(response: { body: unknown }): Record<string, unknown
 
 describe("basic browser routes", () => {
   beforeEach(() => {
+    captureAriaSnapshotViaPlaywrightMock.mockReset();
+    getPwAiModuleMock.mockReset();
+    getPwAiModuleMock.mockResolvedValue({
+      captureAriaSnapshotViaPlaywright: captureAriaSnapshotViaPlaywrightMock,
+    });
     inspectChromeGraphicsDiagnosticsMock.mockReset();
+    takeChromeMcpSnapshotMock.mockClear();
   });
 
   it("releases the doctor transaction, restarts once, and retries the live probe", async () => {

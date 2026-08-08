@@ -73,6 +73,7 @@ type AuxiliaryTabSession = {
   tabId: number;
   parentSessionId: string;
   client: CdpClientState;
+  inFlightExtensionSeqs: Set<number>;
 };
 
 /** Browser identity reported by the paired extension. */
@@ -100,6 +101,8 @@ export class ExtensionRelayBridge {
   private extension: { socket: BridgeSocket; identity: ExtensionIdentity } | null = null;
   private readonly clients = new Set<CdpClientState>();
   private readonly tabs = new Map<number, TabState>();
+  /** Detach ownership survives a TabState replacement during unshare/re-share. */
+  private readonly detachingTabs = new Map<number, Promise<void>>();
   /** Browser-level sessions created by Playwright for page-scoped CDP access. */
   private readonly browserSessions = new Map<string, CdpClientState>();
   /** Extra root-page sessions multiplexed over one chrome.debugger attachment. */
@@ -353,15 +356,21 @@ export class ExtensionRelayBridge {
   private callExtension(
     command: RelayCommandBody,
     timeoutMs = EXTENSION_COMMAND_TIMEOUT_MS,
+    onStart?: (seq: number) => void,
   ): Promise<unknown> {
     const seq = this.nextSeq++;
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingExtension.delete(seq);
-        reject(new Error(`extension relay command timed out: ${command.type}`));
+        const commandDetail =
+          command.type === "cdp"
+            ? `cdp (tabId=${command.tabId}, method=${command.method})`
+            : command.type;
+        reject(new Error(`extension relay command timed out: ${commandDetail}`));
       }, timeoutMs);
       timer.unref?.();
       this.pendingExtension.set(seq, { resolve, reject, timer });
+      onStart?.(seq);
       try {
         this.sendToExtension({ ...command, seq });
       } catch (err) {
@@ -376,9 +385,10 @@ export class ExtensionRelayBridge {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
     for (const [tabId, tab] of this.tabs) {
       if (!nextIds.has(tabId)) {
-        if (tab.attached) {
-          this.emitDetachedFromTarget(tabId, tab.attached.sessionId, tab.attached.targetId);
-        }
+        // Establish tab-ID-owned detach state even while the original attach is
+        // unresolved. A same-ID replacement must wait for Chrome to revoke that
+        // attachment before it can publish a fresh session.
+        void this.detachTab(tabId, tab);
         this.tabs.delete(tabId);
       }
     }
@@ -404,6 +414,10 @@ export class ExtensionRelayBridge {
   }
 
   private async ensureTabAttached(tabId: number): Promise<{ targetId: string; sessionId: string }> {
+    const detaching = this.detachingTabs.get(tabId);
+    if (detaching) {
+      await detaching;
+    }
     const tab = this.tabs.get(tabId);
     if (!tab) {
       throw new Error(`tab ${tabId} is not shared with OpenClaw`);
@@ -418,7 +432,10 @@ export class ExtensionRelayBridge {
       const result = (await this.callExtension({ type: "attach", tabId })) as {
         targetId?: unknown;
       } | null;
-      const targetId = typeof result?.targetId === "string" ? result.targetId : `tab-${tabId}`;
+      if (typeof result?.targetId !== "string" || result.targetId.length === 0) {
+        throw new Error(`extension did not confirm an attached target for tab ${tabId}`);
+      }
+      const targetId = result.targetId;
       const sessionId = `openclaw-tab-${tabId}-${this.nextSessionOrdinal++}`;
       const attached = { targetId, sessionId };
       // Identity check, not just presence: the tab could have left the group and
@@ -426,8 +443,10 @@ export class ExtensionRelayBridge {
       // the TabState. Writing onto the new TabState would bind stale attach data.
       const current = this.tabs.get(tabId);
       if (current !== tab) {
-        // Original tab vanished (or was recreated); best-effort detach the banner.
-        void this.callExtension({ type: "detach", tabId }).catch(() => {});
+        // Original tab vanished (or was recreated). Reuse the tab-ID-owned
+        // lifecycle started by syncTabs instead of sending an untracked detach
+        // that can race and tear down the replacement attachment.
+        await this.detachTab(tabId, tab);
         throw new Error(`tab ${tabId} closed during attach`);
       }
       current.attached = attached;
@@ -439,6 +458,28 @@ export class ExtensionRelayBridge {
     } finally {
       tab.attaching = undefined;
     }
+  }
+
+  private detachTab(tabId: number, tab: TabState): Promise<void> {
+    const existing = this.detachingTabs.get(tabId);
+    if (existing) {
+      return existing;
+    }
+    const attached = tab.attached;
+    if (attached) {
+      tab.attached = undefined;
+      this.emitDetachedFromTarget(tabId, attached.sessionId, attached.targetId);
+    }
+    const detaching = this.callExtension({ type: "detach", tabId })
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.detachingTabs.get(tabId) === detaching) {
+          this.detachingTabs.delete(tabId);
+        }
+      });
+    this.detachingTabs.set(tabId, detaching);
+    return detaching;
   }
 
   private targetInfoForTab(tab: TabState, targetId: string): Record<string, unknown> {
@@ -508,6 +549,7 @@ export class ExtensionRelayBridge {
           params: { sessionId: auxiliarySessionId, targetId },
         }),
       );
+      this.rejectAuxiliaryCommands(auxiliary, "CDP session detached before command completed");
       this.auxiliaryTabSessions.delete(auxiliarySessionId);
     }
     // Reap this tab's child sessions (iframes/workers) by owner tabId. Callers
@@ -523,6 +565,19 @@ export class ExtensionRelayBridge {
         client.announcedSessions.delete(childSessionId);
       }
     }
+  }
+
+  private rejectAuxiliaryCommands(auxiliary: AuxiliaryTabSession, message: string): void {
+    for (const seq of auxiliary.inFlightExtensionSeqs) {
+      const pending = this.pendingExtension.get(seq);
+      if (!pending) {
+        continue;
+      }
+      this.pendingExtension.delete(seq);
+      clearTimeout(pending.timer);
+      pending.reject(new Error(message));
+    }
+    auxiliary.inFlightExtensionSeqs.clear();
   }
 
   private forwardExtensionEvent(
@@ -633,10 +688,7 @@ export class ExtensionRelayBridge {
     }
     for (const [tabId, tab] of this.tabs) {
       if (tab.attached) {
-        const { sessionId, targetId } = tab.attached;
-        tab.attached = undefined;
-        this.emitDetachedFromTarget(tabId, sessionId, targetId);
-        void this.callExtension({ type: "detach", tabId }).catch(() => {});
+        void this.detachTab(tabId, tab);
       }
     }
   }
@@ -712,19 +764,40 @@ export class ExtensionRelayBridge {
       this.respondError(client, request, `Session not found: ${sessionId}`, -32001);
       return;
     }
+    if (auxiliary && request.method === "Runtime.runIfWaitingForDebugger") {
+      // Playwright sends this best-effort preflight before Target.detachFromTarget.
+      // The relay owns the auxiliary session, so a stalled renderer must not
+      // prevent cancellation from reaching the real chrome.debugger attachment.
+      this.respond(client, request, {});
+      return;
+    }
     const route = this.tabBySessionId(sessionId);
     if (!route) {
       this.respondError(client, request, `Session not found: ${sessionId}`, -32001);
       return;
     }
-    const result = await this.callExtension({
-      type: "cdp",
-      tabId: route.tabId,
-      ...(route.child ? { sessionId } : {}),
-      method: request.method,
-      params: request.params,
-    });
-    this.respond(client, request, result);
+    let extensionSeq: number | undefined;
+    try {
+      const result = await this.callExtension(
+        {
+          type: "cdp",
+          tabId: route.tabId,
+          ...(route.child ? { sessionId } : {}),
+          method: request.method,
+          params: request.params,
+        },
+        EXTENSION_COMMAND_TIMEOUT_MS,
+        (seq) => {
+          extensionSeq = seq;
+          auxiliary?.inFlightExtensionSeqs.add(seq);
+        },
+      );
+      this.respond(client, request, result);
+    } finally {
+      if (extensionSeq !== undefined) {
+        auxiliary?.inFlightExtensionSeqs.delete(extensionSeq);
+      }
+    }
   }
 
   private async handleBrowserScopedRequest(
@@ -845,6 +918,7 @@ export class ExtensionRelayBridge {
             tabId: found.tabId,
             parentSessionId: request.sessionId,
             client,
+            inFlightExtensionSeqs: new Set(),
           });
           this.respond(client, request, { sessionId });
           return;
@@ -870,7 +944,20 @@ export class ExtensionRelayBridge {
         }
         const auxiliary = sessionId ? this.auxiliaryTabSessions.get(sessionId) : undefined;
         if (auxiliary?.client === client) {
-          this.auxiliaryTabSessions.delete(sessionId as string);
+          if (auxiliary.inFlightExtensionSeqs.size > 0) {
+            const tab = this.tabs.get(auxiliary.tabId);
+            if (tab?.attached) {
+              await this.detachTab(auxiliary.tabId, tab);
+            } else {
+              this.rejectAuxiliaryCommands(
+                auxiliary,
+                "CDP session detached before command completed",
+              );
+              this.auxiliaryTabSessions.delete(sessionId as string);
+            }
+          } else {
+            this.auxiliaryTabSessions.delete(sessionId as string);
+          }
           this.respond(client, request, {});
           return;
         }
@@ -882,10 +969,7 @@ export class ExtensionRelayBridge {
         if (route && !route.child) {
           const tab = this.tabs.get(route.tabId);
           if (tab?.attached) {
-            const { sessionId: rootSession, targetId } = tab.attached;
-            tab.attached = undefined;
-            this.emitDetachedFromTarget(route.tabId, rootSession, targetId);
-            await this.callExtension({ type: "detach", tabId: route.tabId }).catch(() => {});
+            await this.detachTab(route.tabId, tab);
           }
         }
         this.respond(client, request, {});
