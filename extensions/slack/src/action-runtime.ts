@@ -44,21 +44,6 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
-const enterpriseGridActionTools = new Set([
-  "deleteMessage",
-  "downloadFile",
-  "editMessage",
-  "emojiList",
-  "listPins",
-  "memberInfo",
-  "pinMessage",
-  "react",
-  "reactions",
-  "readMessages",
-  "sendMessage",
-  "unpinMessage",
-  "uploadFile",
-]);
 const SLACK_REACTION_USER_LIMIT = 100;
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
@@ -574,9 +559,6 @@ export async function handleSlackAction(
   const accountId = readStringParam(params, "accountId");
   const { resolveSlackAccount, resolveSlackOperationToken } = await loadSlackAccountsRuntime();
   const account = resolveSlackAccount({ cfg, accountId });
-  if (account.config.enterpriseOrgInstall === true && !enterpriseGridActionTools.has(action)) {
-    throw new Error("Slack action tools are unavailable for Enterprise Grid org installs.");
-  }
   const resolveChannelTarget = () =>
     resolveSlackActionChannelTarget(
       account,
