@@ -32,6 +32,7 @@ import { buildInboundContext, clearGroupPendingHistory } from "./inbound-pipelin
 import { createInteractionHandler } from "./interaction-handler.js";
 import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
+import { handleInboundProcessingError } from "./reply-session-conflict.js";
 import type {
   CoreGatewayContext,
   GatewayAccount,
@@ -233,9 +234,14 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       );
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
-      if (event.turnAdoptionLifecycle) {
-        throw err;
-      }
+      await handleInboundProcessingError(err, {
+        event,
+        account,
+        log,
+        senderSendText,
+        buildDeliveryTargetFn: buildDeliveryTarget,
+        accountToCredsFn: accountToCreds,
+      });
     } finally {
       inbound.typing.keepAlive?.stop();
       if (event.type === "group" && event.groupOpenid && inbound.group) {
@@ -336,3 +342,10 @@ async function startTypingForEvent(
     return { keepAlive: null };
   }
 }
+
+// ============ terminal notice for exhausted session-init conflicts ============
+//
+// The terminal-notice function and its dependency interface live in
+// ./reply-session-conflict.ts so they can be imported directly from tests
+// without re-exporting them from this file.  This keeps knip's production
+// graph clean (no test-only exports).

@@ -11,9 +11,21 @@ import {
   setOutboundAudioPort,
 } from "../messaging/outbound.js";
 import type { InboundContext } from "./inbound-context.js";
+import type { QueuedMessage } from "./message-queue.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
+import { handleInboundProcessingError } from "./reply-session-conflict.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
+/**
+ * Run `body` with `crypto.getRandomValues` overridden so that the first
+ * element of the supplied `Uint32Array` becomes `value`. Restores the
+ * original implementation regardless of how `body` exits (supports both
+ * sync and async bodies).
+ *
+ * Implemented via `Object.defineProperty` on the `Crypto` prototype to
+ * avoid `as any` casts and the corresponding oxlint directives, while
+ * remaining typed end-to-end.
+ */
 const sendVoiceMessageMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
@@ -1148,4 +1160,247 @@ describe("dispatchOutbound", () => {
     }
   });
 });
+
+describe("dispatchOutbound session conflict", () => {
+  function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
+    const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
+    err.name = "ReplySessionInitConflictError";
+    return err;
+  }
+
+  it("re-throws a reply-session-init conflict after cleanup", async () => {
+    const conflictError = makeConflictError();
+    const runtime = makeRuntime({
+      onDispatch: async () => {
+        throw conflictError;
+      },
+    });
+    runtime.channel.inbound.run = vi.fn(async () => {
+      throw conflictError;
+    });
+
+    await expect(dispatchOutbound(makeInbound(), { runtime, cfg: {}, account })).rejects.toThrow(
+      conflictError,
+    );
+  });
+
+  it("does not re-throw an unrelated error after cleanup", async () => {
+    const normalError = new Error("some unrelated error");
+    const runtime = makeRuntime({
+      onDispatch: async () => {
+        throw normalError;
+      },
+    });
+    runtime.channel.inbound.run = vi.fn(async () => {
+      throw normalError;
+    });
+
+    await expect(
+      dispatchOutbound(makeInbound(), { runtime, cfg: {}, account }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not re-throw when dispatchPromise resolves normally", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: "ok" }, { kind: "final" });
+      },
+    });
+
+    await expect(
+      dispatchOutbound(makeInbound(), { runtime, cfg: {}, account }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not re-throw a similarly-worded but different error", async () => {
+    const runtime = makeRuntime({
+      onDispatch: async () => {
+        throw new Error("reply session initialization conflicted and failed");
+      },
+    });
+    runtime.channel.inbound.run = vi.fn(async () => {
+      throw new Error("reply session initialization conflicted and failed");
+    });
+
+    await expect(
+      dispatchOutbound(makeInbound(), { runtime, cfg: {}, account }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("handleInboundProcessingError production decision boundary", () => {
+  const localSendTextMock = vi.fn(
+    async (
+      _target: { type: string; id: string },
+      _content: string,
+      _creds: { appId: string; clientSecret: string },
+      _opts?: { msgId?: string; messageReference?: string; forcePlainText?: boolean },
+    ): Promise<{ id: string; timestamp: string }> => ({
+      id: "msg-local",
+      timestamp: "2026-04-25T00:00:00.000Z",
+    }),
+  );
+  const localBuildDeliveryTargetMock = vi.fn(
+    (event: {
+      type: "c2c" | "channel" | "dm" | "group" | "guild";
+      senderId: string;
+      groupOpenid?: string;
+    }): {
+      type: "c2c" | "channel" | "dm" | "group" | "guild";
+      id: string;
+    } => ({
+      type: event.type === "group" ? "group" : "c2c",
+      id: event.type === "group" ? (event.groupOpenid ?? "") : event.senderId,
+    }),
+  );
+  const localAccountToCredsMock = vi.fn(() => ({
+    appId: "app",
+    clientSecret: "secret",
+  }));
+  const localErrorLogMock = vi.fn();
+  const localLog = {
+    error: localErrorLogMock,
+    info: vi.fn(),
+    debug: vi.fn(),
+  };
+
+  function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
+    const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
+    err.name = "ReplySessionInitConflictError";
+    return err;
+  }
+
+  function makeDurableLifecycle() {
+    return {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+  }
+
+  function makeEvent(overrides: Record<string, unknown> = {}): QueuedMessage {
+    return {
+      type: "c2c",
+      senderId: "user-openid",
+      content: "hello",
+      messageId: "msg-1",
+      timestamp: "2026-04-25T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function makeDeps(event: QueuedMessage) {
+    return {
+      event,
+      account: {
+        accountId: "qq-main",
+        appId: "app",
+        clientSecret: "secret",
+        markdownSupport: false,
+        config: {},
+      },
+      log: localLog,
+      senderSendText: localSendTextMock,
+      buildDeliveryTargetFn: localBuildDeliveryTargetMock as unknown as Parameters<
+        typeof handleInboundProcessingError
+      >[1]["buildDeliveryTargetFn"],
+      accountToCredsFn: localAccountToCredsMock,
+    };
+  }
+
+  beforeEach(() => {
+    localSendTextMock.mockReset();
+    localBuildDeliveryTargetMock.mockReset();
+    localAccountToCredsMock.mockReset();
+    localErrorLogMock.mockReset();
+  });
+
+  it("rethrows conflict error and skips terminal notice for durable events", async () => {
+    const lifecycle = makeDurableLifecycle();
+    const durableEvent = makeEvent({ turnAdoptionLifecycle: lifecycle });
+    const err = makeConflictError();
+
+    await expect(handleInboundProcessingError(err, makeDeps(durableEvent))).rejects.toThrow(err);
+
+    expect(localSendTextMock).not.toHaveBeenCalled();
+    expect(localErrorLogMock).not.toHaveBeenCalled();
+  });
+
+  it("sends exactly one terminal notice and resolves (does not rethrow) for non-durable conflict", async () => {
+    const nonDurableEvent = makeEvent();
+    const err = makeConflictError();
+
+    await expect(
+      handleInboundProcessingError(err, makeDeps(nonDurableEvent)),
+    ).resolves.toBeUndefined();
+
+    expect(localSendTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows non-conflict error without sending terminal notice for durable events", async () => {
+    const lifecycle = makeDurableLifecycle();
+    const durableEvent = makeEvent({ turnAdoptionLifecycle: lifecycle });
+    const err = new Error("transient upstream 503");
+
+    await expect(handleInboundProcessingError(err, makeDeps(durableEvent))).rejects.toThrow(err);
+
+    expect(localSendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves (does not send notice or rethrow) for non-conflict error on non-durable events", async () => {
+    const nonDurableEvent = makeEvent();
+    const err = new Error("transient upstream 503");
+
+    await expect(
+      handleInboundProcessingError(err, makeDeps(nonDurableEvent)),
+    ).resolves.toBeUndefined();
+
+    expect(localSendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("logs terminal_notice_failed without retrying when notice send fails", async () => {
+    const nonDurableEvent = makeEvent();
+    localSendTextMock.mockRejectedValueOnce(new Error("network error"));
+    const err = makeConflictError();
+
+    await expect(
+      handleInboundProcessingError(err, makeDeps(nonDurableEvent)),
+    ).resolves.toBeUndefined();
+
+    expect(localSendTextMock).toHaveBeenCalledTimes(1);
+    const logCalls = localErrorLogMock.mock.calls.map((call: unknown[]) => call[0]) as string[];
+    expect(logCalls.some((msg) => msg.includes("terminal_notice_failed"))).toBe(true);
+  });
+});
+
+describe("reply-session-conflict shared helpers", () => {
+  // Import the real helpers — this ensures the test does not duplicate
+  // production regex or ID logic.
+
+  it("isReplySessionInitConflictError matches the shared-core error shape", async () => {
+    const { isReplySessionInitConflictError: isSharedCoreConflict } = await vi.importActual<
+      typeof import("./reply-session-conflict.js")
+    >("./reply-session-conflict.js");
+
+    function makeConflictError(sessionKey = "qqbot:c2c:user-openid"): Error {
+      const err = new Error(`reply session initialization conflicted for ${sessionKey}`);
+      err.name = "ReplySessionInitConflictError";
+      return err;
+    }
+
+    expect(isSharedCoreConflict(makeConflictError())).toBe(true);
+    expect(isSharedCoreConflict(makeConflictError("qqbot:group:g12345"))).toBe(true);
+
+    expect(isSharedCoreConflict(new Error("unrelated error"))).toBe(false);
+    expect(isSharedCoreConflict(new Error("reply session initialization conflicted"))).toBe(false);
+    expect(
+      isSharedCoreConflict(new Error("reply session initialization conflicted and failed")),
+    ).toBe(false);
+    expect(isSharedCoreConflict(new Error("timeout"))).toBe(false);
+    expect(isSharedCoreConflict(new Error(""))).toBe(false);
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
