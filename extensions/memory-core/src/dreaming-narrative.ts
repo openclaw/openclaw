@@ -13,6 +13,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
+import { getDreamingTranslations, type DreamingLanguage } from "./dreaming-i18n.js";
 import {
   DREAMING_SESSION_KEY_PREFIX,
   scrubDreamingNarrativeArtifacts,
@@ -153,6 +154,7 @@ export async function appendFallbackNarrativeEntry(params: {
   data: NarrativePhaseData;
   nowMs: number;
   timezone?: string;
+  language?: DreamingLanguage;
   logger: Logger;
   reason: string;
 }): Promise<void> {
@@ -164,6 +166,7 @@ export async function appendFallbackNarrativeEntry(params: {
       narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
+      language: params.language,
     });
     params.logger.info(
       `memory-core: narrative generation used fallback for ${params.data.phase} phase because ${params.reason}.`,
@@ -234,6 +237,7 @@ async function startNarrativeRunOrFallback(params: {
   workspaceDir: string;
   nowMs: number;
   timezone?: string;
+  language?: DreamingLanguage;
   model?: string;
   logger: Logger;
 }): Promise<string | null> {
@@ -260,6 +264,7 @@ async function startNarrativeRunOrFallback(params: {
       data: params.data,
       nowMs: params.nowMs,
       timezone: params.timezone,
+      language: params.language,
       logger: params.logger,
       reason: "subagent runtime is request-scoped",
     });
@@ -304,9 +309,14 @@ function buildNarrativeSessionKey(params: {
 
 // ── Prompt building ────────────────────────────────────────────────────
 
-function buildNarrativePrompt(data: NarrativePhaseData): string {
+function buildNarrativePrompt(data: NarrativePhaseData, language?: DreamingLanguage): string {
   const lines: string[] = [];
+  const languageInstruction = formatNarrativeLanguageInstruction(language);
   lines.push("Write a dream diary entry from these memory fragments:\n");
+  if (languageInstruction) {
+    lines.push(`Language: ${languageInstruction}`);
+    lines.push("");
+  }
 
   for (const snippet of data.snippets.slice(0, 12)) {
     lines.push(`- ${snippet}`);
@@ -408,19 +418,24 @@ function formatNarrativeDate(epochMs: number, timezone?: string): string {
 
 // ── DREAMS.md file I/O ─────────────────────────────────────────────────
 
-function ensureDiarySection(existing: string): string {
+function ensureDiarySection(existing: string, language?: DreamingLanguage): string {
   if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
     return existing;
   }
-  const diarySection = `# Dream Diary\n\n${DIARY_START_MARKER}\n${DIARY_END_MARKER}\n`;
+  const translations = getDreamingTranslations(language);
+  const diarySection = `# ${translations.dreamDiary}\n\n${DIARY_START_MARKER}\n${DIARY_END_MARKER}\n`;
   if (existing.trim().length === 0) {
     return diarySection;
   }
   return diarySection + "\n" + existing;
 }
 
-function replaceDiaryContent(existing: string, diaryContent: string): string {
-  const ensured = ensureDiarySection(existing);
+function replaceDiaryContent(
+  existing: string,
+  diaryContent: string,
+  language?: DreamingLanguage,
+): string {
+  const ensured = ensureDiarySection(existing, language);
   const startIdx = ensured.indexOf(DIARY_START_MARKER);
   const endIdx = ensured.indexOf(DIARY_END_MARKER);
   if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
@@ -437,6 +452,24 @@ function splitDiaryBlocks(diaryContent: string): string[] {
     .split(/\n---\n/)
     .map((block) => block.trim())
     .filter((block) => block.length > 0);
+}
+
+function formatNarrativeLanguageInstruction(language?: DreamingLanguage): string | null {
+  switch (language) {
+    case "zh-CN":
+      return "Write the diary entry in Simplified Chinese (简体中文).";
+    case "zh-TW":
+      return "Write the diary entry in Traditional Chinese (繁體中文).";
+    case "ja":
+      return "Write the diary entry in Japanese (日本語).";
+    case "ko":
+      return "Write the diary entry in Korean (한국어).";
+    case "en":
+    case undefined:
+      return null;
+    default:
+      return `Write the diary entry in the configured language: ${language}.`;
+  }
 }
 
 function clampDiaryContextEntry(entry: string): string {
@@ -743,6 +776,7 @@ async function appendNarrativeEntry(params: {
   narrative: string;
   nowMs: number;
   timezone?: string;
+  language?: DreamingLanguage;
 }): Promise<string> {
   const dateStr = formatNarrativeDate(params.nowMs, params.timezone);
   const entry = buildDiaryEntry(params.narrative, dateStr);
@@ -763,7 +797,8 @@ async function appendNarrativeEntry(params: {
           "\n" +
           existing.slice(startIdx);
       } else {
-        const diarySection = `# Dream Diary\n\n${DIARY_START_MARKER}${entry}\n${DIARY_END_MARKER}\n`;
+        const translations = getDreamingTranslations(params.language);
+        const diarySection = `# ${translations.dreamDiary}\n\n${DIARY_START_MARKER}${entry}\n${DIARY_END_MARKER}\n`;
         updated = existing.trim().length === 0 ? diarySection : `${diarySection}\n${existing}`;
       }
       return { content: updated, result: dreamsPath };
@@ -781,6 +816,7 @@ export type DreamNarrativeRequest = {
   data: NarrativePhaseData;
   nowMs?: number;
   timezone?: string;
+  language?: DreamingLanguage;
   model?: string;
   logger: Logger;
 };
@@ -804,7 +840,7 @@ async function generateAndAppendDreamNarrative(
     workspaceDir: params.workspaceDir,
     phase: params.data.phase,
   });
-  const message = buildNarrativePrompt(params.data);
+  const message = buildNarrativePrompt(params.data, params.language);
   let cleanupFailure: string | undefined;
   await withNarrativeSessionLock(sessionKey, async () => {
     const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
@@ -840,6 +876,7 @@ async function generateAndAppendDreamNarrative(
             workspaceDir: params.workspaceDir,
             nowMs,
             timezone: params.timezone,
+            language: params.language,
             model: attemptModel,
             logger: params.logger,
           });
@@ -883,6 +920,7 @@ async function generateAndAppendDreamNarrative(
             data: params.data,
             nowMs,
             timezone: params.timezone,
+            language: params.language,
             logger: params.logger,
             reason: `the narrative run ended with ${formatNarrativeTerminalStatus({
               status: result.status,
@@ -918,6 +956,7 @@ async function generateAndAppendDreamNarrative(
           data: params.data,
           nowMs,
           timezone: params.timezone,
+          language: params.language,
           logger: params.logger,
           reason: "the narrative run produced no text",
         });
@@ -929,6 +968,7 @@ async function generateAndAppendDreamNarrative(
         narrative,
         nowMs,
         timezone: params.timezone,
+        language: params.language,
       });
 
       params.logger.info(
