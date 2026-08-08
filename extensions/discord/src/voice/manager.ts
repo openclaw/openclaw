@@ -14,6 +14,7 @@ import {
 } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
+import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { parseDiscordTarget } from "../target-parsing.js";
 import { decodeOpusStream, decodeOpusStreamChunks, writeVoiceWavFile } from "./audio.js";
 import {
@@ -37,6 +38,7 @@ import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
 import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
 import {
+  discordRealtimeVoiceRequiresVerifiedOwner,
   DiscordRealtimeVoiceSession,
   type DiscordVoiceMode,
   isDiscordRealtimeVoiceMode,
@@ -97,6 +99,8 @@ type VoiceChannelResidency = {
   channelId: string;
 };
 
+type FollowedUserVoiceChannelResidency = VoiceChannelResidency & { userId: string };
+
 function isVoiceConnectionDestroyed(
   connection: DiscordVoiceConnection,
   voiceSdk: DiscordVoiceSdk,
@@ -150,7 +154,9 @@ function normalizeDiscordUserId(value: string): string | undefined {
   const withoutUserPrefix = withoutDiscordPrefix.startsWith("user:")
     ? withoutDiscordPrefix.slice(5)
     : withoutDiscordPrefix;
-  return withoutUserPrefix.trim() || undefined;
+  const normalized = withoutUserPrefix.trim();
+  const mention = /^<@!?(\d+)>$/.exec(normalized);
+  return (mention?.[1] ?? normalized) || undefined;
 }
 
 function normalizeDiscordUserIds(entries: string[] | undefined): Set<string> {
@@ -274,7 +280,7 @@ export class DiscordVoiceManager {
   private readonly membership: DiscordVoiceMembershipTracker;
   private readonly allowedChannels: VoiceChannelResidency[] | null;
   private readonly followUserIds: Set<string>;
-  private readonly followedUserChannels = new Map<string, VoiceChannelResidency>();
+  private readonly followedUserChannels = new Map<string, FollowedUserVoiceChannelResidency>();
   private readonly followedVoiceGuilds = new Set<string>();
   private followUsersReconcileTimer: NodeJS.Timeout | null = null;
   private followUsersReconcileTask: Promise<void> | null = null;
@@ -380,10 +386,14 @@ export class DiscordVoiceManager {
           continue;
         }
         logVoiceVerbose(`autoJoin: joining guild ${entry.guildId} channel ${entry.channelId}`);
-        const result = await this.join({
-          guildId: entry.guildId,
-          channelId: entry.channelId,
-        });
+        const requester = this.resolveAutomaticRequester();
+        const result = await this.join(
+          {
+            guildId: entry.guildId,
+            channelId: entry.channelId,
+          },
+          { automatic: true, ...(requester ? { requester } : {}) },
+        );
         if (!result.ok) {
           logger.warn(
             `discord voice: autoJoin skipped guild=${entry.guildId} channel=${entry.channelId}: ${result.message}`,
@@ -421,9 +431,32 @@ export class DiscordVoiceManager {
     });
   }
 
+  private resolveAutomaticRequester(
+    preferredSenderId?: string,
+  ): { senderId: string; senderIsOwner: true } | undefined {
+    const candidates = preferredSenderId ? [preferredSenderId] : (this.ownerAllowFrom ?? []);
+    for (const candidate of candidates) {
+      const senderId = normalizeDiscordUserId(candidate);
+      if (!senderId || senderId === "*") {
+        continue;
+      }
+      if (
+        resolveDiscordOwnerAccess({
+          allowFrom: this.ownerAllowFrom,
+          sender: { id: senderId },
+          allowNameMatching: false,
+        }).ownerAllowed
+      ) {
+        return { senderId, senderIsOwner: true };
+      }
+    }
+    return undefined;
+  }
+
   async join(
     params: { guildId: string; channelId: string },
     options?: {
+      automatic?: boolean;
       preserveFollowState?: boolean;
       requester?: { senderId: string; senderIsOwner: boolean };
       transcripts?: VoiceSessionEntry["transcripts"];
@@ -490,6 +523,7 @@ export class DiscordVoiceManager {
   private async joinUnlocked(
     params: { guildId: string; channelId: string },
     options?: {
+      automatic?: boolean;
       preserveFollowState?: boolean;
       requester?: { senderId: string; senderIsOwner: boolean };
       transcripts?: VoiceSessionEntry["transcripts"];
@@ -498,8 +532,38 @@ export class DiscordVoiceManager {
     const { guildId, channelId } = params;
     const voiceConfig = this.params.discordConfig.voice;
     const voiceMode = resolveDiscordVoiceMode(voiceConfig);
-
     const existing = this.sessions.get(guildId);
+    const requester = options?.requester ?? existing?.requester;
+    if (
+      options?.automatic === true &&
+      isDiscordRealtimeVoiceMode(voiceMode) &&
+      (!requester?.senderId.trim() || !requester.senderIsOwner)
+    ) {
+      try {
+        if (
+          discordRealtimeVoiceRequiresVerifiedOwner({
+            cfg: this.params.cfg,
+            realtimeConfig: voiceConfig?.realtime,
+          })
+        ) {
+          return {
+            ok: false,
+            message:
+              "Failed to start Discord realtime voice: Direct-agent realtime voice requires a verified owner to start the session",
+            guildId,
+            channelId,
+          };
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          message: `Failed to start Discord realtime voice: ${formatErrorMessage(err)}`,
+          guildId,
+          channelId,
+        };
+      }
+    }
+
     if (existing && existing.channelId === channelId) {
       if (!existing.requester && options?.requester) {
         existing.requester = options.requester;
@@ -748,7 +812,7 @@ export class DiscordVoiceManager {
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
       capture: createVoiceCaptureState(),
-      requester: options?.requester,
+      requester,
       transcripts: options?.transcripts,
       receiveRecovery: createVoiceReceiveRecoveryState(),
       isStopped: () => stopped,
@@ -1025,7 +1089,11 @@ export class DiscordVoiceManager {
         );
         await this.join(
           { guildId, channelId },
-          { preserveFollowState: this.isFollowOwnedGuild(guildId) },
+          {
+            automatic: true,
+            preserveFollowState: this.isFollowOwnedGuild(guildId),
+            requester: existing.requester,
+          },
         );
       }
       return;
@@ -1056,7 +1124,8 @@ export class DiscordVoiceManager {
       logger.warn(
         `discord voice: rejoining allowed voice channel guild=${guildId} channel=${target.channelId}`,
       );
-      await this.join(target);
+      const requester = existing?.requester ?? this.resolveAutomaticRequester();
+      await this.join(target, { automatic: true, ...(requester ? { requester } : {}) });
     }
   }
 
@@ -1101,7 +1170,7 @@ export class DiscordVoiceManager {
       }
       return;
     }
-    this.followedUserChannels.set(followKey, { guildId, channelId });
+    this.followedUserChannels.set(followKey, { guildId, channelId, userId });
     if (existing?.channelId === channelId) {
       this.followedVoiceGuilds.add(guildId);
       return;
@@ -1119,7 +1188,11 @@ export class DiscordVoiceManager {
     logger.info(
       `discord voice: following user guild=${guildId} user=${userId} channel=${channelId}`,
     );
-    const result = await this.join({ guildId, channelId }, { preserveFollowState: true });
+    const requester = this.resolveAutomaticRequester(userId);
+    const result = await this.join(
+      { guildId, channelId },
+      { automatic: true, preserveFollowState: true, ...(requester ? { requester } : {}) },
+    );
     if (!result.ok) {
       const current = this.sessions.get(guildId);
       if (current?.channelId === channelId) {
@@ -1386,7 +1459,7 @@ export class DiscordVoiceManager {
   private resolveFollowedUserHandoffTarget(
     guildId: string,
     currentChannelId: string,
-  ): VoiceChannelResidency | null {
+  ): FollowedUserVoiceChannelResidency | null {
     for (const entry of this.followedUserChannels.values()) {
       if (
         entry.guildId === guildId &&
@@ -1410,7 +1483,12 @@ export class DiscordVoiceManager {
       logger.info(
         `discord voice: followed user ${params.reason} guild=${params.guildId} user=${params.userId}; moving to remaining followed user channel=${target.channelId}`,
       );
-      const result = await this.join(target, { preserveFollowState: true });
+      const requester = this.resolveAutomaticRequester(target.userId);
+      const result = await this.join(target, {
+        automatic: true,
+        preserveFollowState: true,
+        ...(requester ? { requester } : {}),
+      });
       if (result.ok) {
         this.followedVoiceGuilds.add(params.guildId);
       } else {

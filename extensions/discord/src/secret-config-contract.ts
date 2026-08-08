@@ -134,10 +134,10 @@ function collectRealtimeProviderApiKeyAssignments(params: {
       inactiveReason: params.inactiveReason,
       owner: {
         ownerKind: "capability",
-        ownerId: "realtime-voice",
+        ownerId: `${params.pathPrefix}.providers.${providerId}`,
         requiredForGateway: false,
         disposition: "isolate",
-        contract: params.realtime,
+        contract: providerConfig,
       },
       apply: (value) => {
         providerConfig.apiKey = value;

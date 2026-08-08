@@ -73,6 +73,16 @@ describe("Discord secret config contract", () => {
         ref: { source: "env", provider: "default", id: "DISCORD_WORK_REALTIME_CODEX" },
       },
     ]);
+    expect(context.assignments.map(({ path, ownerId }) => ({ path, ownerId }))).toEqual([
+      {
+        path: "channels.discord.voice.realtime.providers.codex.apiKey",
+        ownerId: "channels.discord.voice.realtime.providers.codex",
+      },
+      {
+        path: "channels.discord.accounts.work.voice.realtime.providers.codex.apiKey",
+        ownerId: "channels.discord.accounts.work.voice.realtime.providers.codex",
+      },
+    ]);
     expect(context.warnings).toStrictEqual([]);
   });
 });

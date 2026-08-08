@@ -115,6 +115,29 @@ type DiscordRealtimeSpeakerContext = VoiceRealtimeSpeakerContext & { userId: str
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
+export function discordRealtimeVoiceRequiresVerifiedOwner(params: {
+  cfg: OpenClawConfig;
+  realtimeConfig: DiscordRealtimeVoiceConfig;
+}): boolean {
+  const resolved = resolveConfiguredRealtimeVoiceProvider({
+    configuredProviderId: params.realtimeConfig?.provider,
+    providerConfigs: buildProviderConfigs(params.realtimeConfig),
+    providerConfigOverrides: buildProviderConfigOverrides(params.realtimeConfig),
+    cfg: params.cfg,
+    defaultModel: params.realtimeConfig?.model,
+    boundAgentSession: true,
+    noRegisteredProviderMessage: "No configured realtime voice provider registered",
+  });
+  return (
+    resolveRealtimeVoiceProviderCapabilities({
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      cfg: params.cfg,
+      surface: "bridge",
+    })?.handlesAgentTurns === true
+  );
+}
+
 type PendingSpeakerTurnStats = {
   inputDiscordBytes: number;
   inputRealtimeBytes: number;
