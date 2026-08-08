@@ -147,4 +147,20 @@ describe("Control UI theme contrast", () => {
       expect(contrastRatio(slashArgsFg, background)).toBeGreaterThanOrEqual(4.5);
     }
   });
+
+  it("limits the white assistant surface to light-mode completed message bubbles", () => {
+    expect(groupedCss).toContain(
+      ':root[data-theme-mode="light"][data-assistant-message-surface="white"]',
+    );
+    expect(groupedCss).toContain(".chat-bubble--assistant-surface");
+    expect(groupedCss).not.toMatch(
+      /data-assistant-message-surface="white"[^{}]*\.chat-bubble:not/u,
+    );
+    expect(groupedCss).toMatch(
+      /data-assistant-message-surface="white"[^{}]*\{[^{}]*background:\s*#fff;/u,
+    );
+    expect(groupedCss).not.toContain(
+      ':root[data-theme-mode="dark"][data-assistant-message-surface="white"]',
+    );
+  });
 });
