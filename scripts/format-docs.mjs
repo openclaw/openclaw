@@ -114,7 +114,10 @@ export function resolveOxfmtInvocation(args, params = {}) {
   const platform = params.platform ?? process.platform;
   const existsSync = params.existsSync ?? fs.existsSync;
   const shimName = platform === "win32" ? "oxfmt.cmd" : "oxfmt";
-  const shimPath = resolveRepoToolBinPath(shimName, { cwd: repoRoot, fileExists: existsSync });
+  const shimPath = resolveRepoToolBinPath(shimName, {
+    cwd: repoRoot,
+    fileExists: existsSync,
+  });
 
   if (existsSync(shimPath)) {
     if (platform === "win32") {
