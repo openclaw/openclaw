@@ -355,14 +355,13 @@ export function renderContextNotice(
   const providerCosts = model ? latestProviderCostStats(options.messages) : null;
   const provider = providerCosts?.provider ?? model?.provider;
   const responseModel = providerCosts?.model ?? model?.model;
-  const sessionProviderKeys = new Set(
-    [model?.provider, providerCosts?.provider]
-      .filter((value): value is string => Boolean(value))
-      .map((value) => value.trim().toLowerCase()),
-  );
-  const currentGroup = quotaGroups.find((group) =>
-    group.providers.some((id) => sessionProviderKeys.has(id.trim().toLowerCase())),
-  );
+  // Quota order follows the session provider; response history is only its fallback.
+  const quotaProvider = (session?.modelProvider?.trim() || providerCosts?.provider)?.toLowerCase();
+  const currentGroup = quotaProvider
+    ? quotaGroups.find((group) =>
+        group.providers.some((id) => id.trim().toLowerCase() === quotaProvider),
+      )
+    : undefined;
   const planGroups = currentGroup
     ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
     : quotaGroups;
