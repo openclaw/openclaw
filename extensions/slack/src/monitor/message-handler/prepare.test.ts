@@ -469,9 +469,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:user:U123");
     expect(prepared.ctxPayload.NativeChannelId).toBe("D999");
     expect(prepared.replyTarget).toBe("channel:D999");
-    expect(prepared.turn.record.updateLastRoute).toMatchObject({
-      channel: "slack",
-      to: "team:T123ENTERPRISE:user:U123",
+    expect(prepared.turn.record).toMatchObject({
+      updateLastRoute: {
+        channel: "slack",
+        to: "team:T123ENTERPRISE:user:U123",
+      },
     });
   });
 
@@ -506,9 +508,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:channel:C123CHANNEL");
     expect(prepared.ctxPayload.NativeChannelId).toBe("C123CHANNEL");
     expect(prepared.replyTarget).toBe("channel:C123CHANNEL");
-    expect(prepared.turn.record.updateLastRoute).toMatchObject({
-      channel: "slack",
-      to: "team:T123ENTERPRISE:channel:C123CHANNEL",
+    expect(prepared.turn.record).toMatchObject({
+      updateLastRoute: {
+        channel: "slack",
+        to: "team:T123ENTERPRISE:channel:C123CHANNEL",
+      },
     });
   });
 

@@ -1070,7 +1070,7 @@ export async function sendMessageSlack(
       token,
       recipient,
       blocks,
-      ...(enterpriseDelivery ? { enterpriseDelivery } : {}),
+      enterpriseDelivery,
     }),
   );
   const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(queuedOpts.threadTs);

@@ -104,10 +104,6 @@ describe("sendMessageSlack customize-scope fallback", () => {
     { target: "channel:companychat", expected: "companychat" },
     { target: "#companychat", expected: "companychat" },
     { target: "#c08gqh53ejm", expected: "c08gqh53ejm" },
-    {
-      target: "team:T123:channel:C08GQH53EJM",
-      expected: "team:T123:channel:C08GQH53EJM",
-    },
   ])("resolves API target $target as $expected", async ({ target, expected }) => {
     const client = createSlackSendTestClient();
     vi.mocked(client.chat.postMessage).mockResolvedValueOnce({ ts: "171234.567" });
@@ -119,6 +115,21 @@ describe("sendMessageSlack customize-scope fallback", () => {
     });
 
     expect(readPostMessagePayload(client, 0)).toMatchObject({ channel: expected });
+  });
+
+  it("resolves a workspace-qualified target for an Enterprise Grid install", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage).mockResolvedValueOnce({ ts: "171234.567" });
+
+    await sendMessageSlack("team:T123:channel:C08GQH53EJM", "hello", {
+      token: "xoxb-test",
+      cfg: {
+        channels: { slack: { botToken: "xoxb-test", enterpriseOrgInstall: true } },
+      },
+      client,
+    });
+
+    expect(readPostMessagePayload(client, 0)).toMatchObject({ channel: "C08GQH53EJM" });
   });
 
   it("opens a DM with the canonical form of a folded bare user id", async () => {
