@@ -86,6 +86,32 @@ async function withTricklingWhitespaceServer(
   }
 }
 
+async function withOpenBodyServer(
+  initialBody: Uint8Array,
+  run: (baseUrl: string) => Promise<void>,
+): Promise<void> {
+  const server: Server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/x-ndjson" });
+    response.write(initialBody);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  try {
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+}
+
 async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
   const events: unknown[] = [];
   for await (const event of stream) {
@@ -132,6 +158,23 @@ describe("ollama production stream UTF-8 rejection over real HTTP", () => {
         expect(events.some((event) => typeOf(event) === "error")).toBe(false);
       },
     );
+  });
+
+  it("bounds a large valid tail delivered with the terminal record", async () => {
+    const terminalChunk = new TextEncoder().encode(`${TERMINAL_NDJSON}\n`);
+    const tail = new Uint8Array(256 * 1024 + 1).fill(0x20);
+    const initialBody = new Uint8Array(terminalChunk.byteLength + tail.byteLength);
+    initialBody.set(terminalChunk);
+    initialBody.set(tail, terminalChunk.byteLength);
+
+    await withOpenBodyServer(initialBody, async (baseUrl) => {
+      const started = Date.now();
+      const stream = createOllamaStreamFn(baseUrl)(model, context, {});
+      const events = await collectStreamEvents(await Promise.resolve(stream));
+      expect(events.some((event) => typeOf(event) === "done")).toBe(true);
+      expect(events.some((event) => typeOf(event) === "error")).toBe(false);
+      expect(Date.now() - started).toBeLessThan(1_500);
+    });
   });
 
   it("completes within the terminal-tail deadline for a slow periodic tail", async () => {

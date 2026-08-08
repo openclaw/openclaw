@@ -866,13 +866,14 @@ export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
+  const encoder = new TextEncoder();
   let buffer = "";
   let pendingRecordBytes = 0;
   let terminalRecord: OllamaChatResponse | undefined;
   let terminalTailBytes = 0;
   let terminalTailDeadline: number | undefined;
   try {
-    while (true) {
+    readLoop: while (true) {
       const { done, value } = terminalRecord
         ? await readWithTerminalTailDeadline(reader, terminalTailDeadline)
         : await reader.read();
@@ -883,8 +884,10 @@ export async function* parseNdjsonStream(
       if (terminalRecord) {
         // A terminal record was already parsed; the remaining body bytes only
         // need fatal UTF-8 validation before the completion is exposed.
-        decoder.decode(value, { stream: true });
-        terminalTailBytes += value.byteLength;
+        const decodedTail = decoder.decode(value, { stream: true });
+        // Count decoded bytes so a UTF-8 sequence split across reads is counted
+        // when completed instead of losing the bytes buffered by TextDecoder.
+        terminalTailBytes += encoder.encode(decodedTail).byteLength;
         if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
           // Bound the post-terminal validation drain: a peer that keeps
           // sending valid trailing bytes must not withhold completion forever.
@@ -896,7 +899,7 @@ export async function* parseNdjsonStream(
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
-      for (const line of lines) {
+      for (const [lineIndex, line] of lines.entries()) {
         const trimmed = line.trim();
         if (!trimmed) {
           continue;
@@ -915,7 +918,16 @@ export async function* parseNdjsonStream(
           // would otherwise complete successfully without validation.
           terminalRecord = parsed;
           terminalTailDeadline = Date.now() + OLLAMA_TERMINAL_TAIL_DEADLINE_MS;
+          const terminalTailText = `${line.slice(line.trimEnd().length)}\n${lines
+            .slice(lineIndex + 1)
+            .join("\n")}${lineIndex + 1 < lines.length ? "\n" : ""}${buffer}`;
+          terminalTailBytes += encoder.encode(terminalTailText).byteLength;
           buffer = "";
+          if (terminalTailBytes > OLLAMA_TERMINAL_TAIL_MAX_BYTES) {
+            // The terminal-containing read can already carry enough valid tail
+            // bytes to satisfy the bounded validation window.
+            break readLoop;
+          }
           break;
         }
         yield parsed;
@@ -952,12 +964,19 @@ async function readWithTerminalTailDeadline(
   if (remainingMs <= 0) {
     return { done: true as const, value: undefined };
   }
-  return await Promise.race([
-    reader.read(),
-    new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
-      setTimeout(() => resolve({ done: true as const, value: undefined }), remainingMs);
-    }),
-  ]);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+        timeout = setTimeout(() => resolve({ done: true as const, value: undefined }), remainingMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function resolveOllamaChatUrl(baseUrl: string): string {

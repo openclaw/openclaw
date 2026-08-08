@@ -1101,6 +1101,23 @@ function mockNdjsonReader(
   } as unknown as ReadableStreamDefaultReader<Uint8Array>;
 }
 
+function mockChunkSequenceReader(chunks: Array<Uint8Array | null>) {
+  let index = 0;
+  return {
+    read: vi.fn(async () => {
+      const value = chunks[index++];
+      return value === null
+        ? { done: true as const, value: undefined }
+        : { done: false as const, value };
+    }),
+    releaseLock: () => {},
+    cancel: async () => {},
+    closed: Promise.resolve(undefined),
+  } as unknown as ReadableStreamDefaultReader<Uint8Array> & {
+    read: ReturnType<typeof vi.fn>;
+  };
+}
+
 function createPendingCancelNdjsonStream(lines: string[]) {
   const encoder = new TextEncoder();
   let markCancelStarted!: () => void;
@@ -1157,6 +1174,104 @@ async function expectNoParsedChunks(reader: ReadableStreamDefaultReader<Uint8Arr
 }
 
 describe("parseNdjsonStream", () => {
+  it("clears the terminal-tail deadline when the reader completes first", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const reader = mockChunkSequenceReader([
+        encoder.encode('{"model":"m","message":{"role":"assistant","content":""},"done":true}\n'),
+        encoder.encode("\n"),
+        null,
+      ]);
+      const chunks = [];
+      for await (const chunk of parseNdjsonStream(reader)) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toHaveLength(1);
+      expect(reader.read).toHaveBeenCalledTimes(3);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts terminal-tail bytes already present in the terminal read", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}',
+      );
+      const value = new Uint8Array(terminal.byteLength + 256 * 1024 + 2);
+      value.set(terminal);
+      value.fill(0x20, terminal.byteLength, value.length - 1);
+      value[value.length - 1] = 0x0a;
+      let readCount = 0;
+      const read = vi.fn(async () => {
+        readCount += 1;
+        if (readCount === 1) {
+          return { done: false as const, value };
+        }
+        return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+      });
+      const reader = {
+        read,
+        releaseLock: () => {},
+        cancel: async () => {},
+        closed: Promise.resolve(undefined),
+      } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const chunks = await chunksPromise;
+
+      expect(chunks).toHaveLength(1);
+      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts a UTF-8 tail sequence when it completes in a later read", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      const terminal = encoder.encode(
+        '{"model":"m","message":{"role":"assistant","content":""},"done":true}\n',
+      );
+      const firstTail = new Uint8Array(256 * 1024 - 1 + 1).fill(0x20);
+      firstTail[firstTail.length - 1] = 0xc3;
+      const first = new Uint8Array(terminal.byteLength + firstTail.byteLength);
+      first.set(terminal);
+      first.set(firstTail, terminal.byteLength);
+      const reader = mockChunkSequenceReader([first, new Uint8Array([0xa9]), null]);
+
+      const chunksPromise = (async () => {
+        const chunks = [];
+        for await (const chunk of parseNdjsonStream(reader)) {
+          chunks.push(chunk);
+        }
+        return chunks;
+      })();
+      await vi.advanceTimersByTimeAsync(2_000);
+      const chunks = await chunksPromise;
+
+      expect(chunks).toHaveLength(1);
+      expect(requireEntry(chunks, 0, "terminal Ollama chunk").done).toBe(true);
+      expect(reader.read).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels an oversized unterminated record", async () => {
     const oversizedRecord = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
     let canceled = false;
