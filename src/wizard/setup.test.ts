@@ -2077,6 +2077,129 @@ describe("runSetupWizard", () => {
     expect(opts.openaiApiKey).toBe("sk-flag-value");
   });
 
+  it("honors forced provider model selection when keeping the existing model config", async () => {
+    const existingConfig: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValue(configSnapshot(existingConfig));
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        wizard: {
+          setup: {
+            modelSelection: {
+              promptWhenAuthChoiceProvided: true,
+              allowKeepCurrent: false,
+            },
+          },
+        },
+      },
+      method: {
+        id: "local",
+        label: "Ollama",
+        kind: "custom",
+        run: vi.fn(async () => ({ profiles: [] })),
+      },
+      wizard: {
+        modelSelection: {
+          promptWhenAuthChoiceProvided: true,
+          allowKeepCurrent: false,
+        },
+      },
+    });
+    promptDefaultModel.mockResolvedValueOnce({ model: "ollama/llama3.2" });
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "Setup mode" ? "keep-model" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "ollama",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: await makeCaseDir("keep-model-forced-provider-selection-"),
+      },
+      createRuntime(),
+      buildWizardPrompter({ select }),
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeep: false, preferredProvider: "demo-provider" }),
+    );
+    expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toEqual({
+      primary: "ollama/llama3.2",
+    });
+  });
+
+  it("keeps the existing primary while configuring a custom provider", async () => {
+    const existingConfig: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValue(configSnapshot(existingConfig));
+    promptCustomApiConfig.mockImplementationOnce(async (args) => ({
+      config: {
+        ...args.config,
+        agents: {
+          ...args.config.agents,
+          defaults: {
+            ...args.config.agents?.defaults,
+            model: {
+              primary: args.setAsPrimary === false ? "openai/gpt-5.5" : "custom/local-model",
+            },
+          },
+        },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://llm.example.com/v1",
+              models: [],
+            },
+          },
+        },
+      },
+    }));
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "Setup mode" ? "keep-model" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "custom-api-key",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: await makeCaseDir("keep-model-custom-provider-"),
+      },
+      createRuntime(),
+      buildWizardPrompter({ select }),
+    );
+
+    expect(promptCustomApiConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ setAsPrimary: false }),
+    );
+    const finalConfig = persistedWizardConfigs().at(-1);
+    expect(finalConfig?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(finalConfig?.models?.providers?.custom).toBeDefined();
+  });
+
   it("passes preserveExistingDefaultModel to applyAuthChoice to protect existing default model", async () => {
     applyAuthChoice.mockReset();
     applyAuthChoice.mockImplementationOnce(async (args) => ({

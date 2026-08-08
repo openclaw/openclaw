@@ -119,6 +119,7 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
 export async function runSetupModelAuthStep(params: {
   config: OpenClawConfig;
   stagedCandidate?: SetupModelAuthCandidate;
+  preserveExistingModelSelection?: boolean;
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -200,6 +201,7 @@ export async function runSetupModelAuthStep(params: {
         runtime,
         config: nextConfig,
         secretInputMode: opts.secretInputMode,
+        setAsPrimary: !params.preserveExistingModelSelection,
       });
       nextConfig = customResult.config;
       prompter.disableBackNavigation?.();
@@ -304,7 +306,10 @@ export async function runSetupModelAuthStep(params: {
       resolvePreferredProviderForAuthChoice,
     });
     const shouldPromptModelSelection =
-      authChoiceFromPrompt || authChoiceModelSelectionPolicy?.promptWhenAuthChoiceProvided;
+      authChoiceFromPrompt ||
+      (authChoiceModelSelectionPolicy.promptWhenAuthChoiceProvided &&
+        (!params.preserveExistingModelSelection ||
+          !authChoiceModelSelectionPolicy.allowKeepCurrent));
     if (shouldPromptModelSelection) {
       const modelSelection = await promptDefaultModel({
         config: nextConfig,
