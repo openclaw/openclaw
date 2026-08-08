@@ -10,6 +10,7 @@ import {
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { buildTelegramRichMarkdown, splitTelegramRichMessageTextChunks } from "./rich-message.js";
+import { telegramMonospaceWidth } from "./text-width.js";
 
 function tableMarkdown(columns: number): string {
   return [
@@ -351,6 +352,25 @@ describe("markdownToTelegramRichBlocks", () => {
     const { blocks } = markdownToTelegramRichBlocks(tableMarkdown(2), { tableMode: "code" });
     expect(blocks.some((block) => block.type === "pre")).toBe(true);
     expect(blocks.some((block) => block.type === "table")).toBe(false);
+  });
+
+  it("aligns degraded ASCII table columns containing CJK by monospace display width", () => {
+    const columns = 21;
+    const header = `| ${Array.from({ length: columns }, (_value, index) => `H${index + 1}`).join(" | ")} |`;
+    const separator = `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`;
+    const row = `| ${Array.from({ length: columns }, (_value, index) => (index === 1 ? "小明" : String(index + 1))).join(" | ")} |`;
+    const { blocks, degradationReasons } = markdownToTelegramRichBlocks(
+      [header, separator, row].join("\n"),
+      { tableMode: "block" },
+    );
+    expect(degradationReasons).toEqual(["table-ascii"]);
+    const pre = blocks.find((block) => block.type === "pre");
+    expect(pre?.type).toBe("pre");
+    if (pre?.type !== "pre") {
+      return;
+    }
+    const lineWidths = pre.text.split("\n").map((line) => telegramMonospaceWidth(line));
+    expect(new Set(lineWidths).size).toBe(1);
   });
 
   it("does not auto-linkify bare URLs when entity detection is skipped", () => {
