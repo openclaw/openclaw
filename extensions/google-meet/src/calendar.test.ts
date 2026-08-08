@@ -66,6 +66,25 @@ describe("Google Calendar requests", () => {
     expect(signal?.aborted).toBe(true);
     await rejection;
   });
+
+  it.each([
+    ["null", "null"],
+    ["array", "[]"],
+  ])("rejects a %s events.list envelope with a stable provider error", async (_kind, body) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+    await expect(listGoogleMeetCalendarEvents({ accessToken: "test-token" })).rejects.toThrow(
+      "Google Calendar events.list: malformed JSON response",
+    );
+  });
 });
 
 describe("Google Meet calendar URL extraction", () => {
