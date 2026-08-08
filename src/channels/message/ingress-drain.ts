@@ -25,6 +25,7 @@ import {
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
 export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
+import { armIngressStallWatchdog } from "./ingress-drain-stall-watchdog.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -34,7 +35,6 @@ import {
   DEFAULT_INGRESS_RETRY_BASE_MS,
   DEFAULT_INGRESS_RETRY_MAX_MS,
   resolveIngressFailureDisposition,
-  shouldDeadLetterRetryableIngressEvent,
   resolveIngressRetryDelayMs,
   sleepIngressRetryDelay,
   type IngressNonRetryableFailure,
@@ -109,6 +109,12 @@ export type CreateChannelIngressDrainOptions<
   ) => boolean;
   ownerId?: string;
   adoptionStallTimeoutMs?: number;
+  /**
+   * Bounded wait for an aborted pre-adoption dispatch to exit before its claim
+   * is released for retry. Prevents a re-claim from racing an abort-ignoring
+   * callback. Defaults to DEFAULT_INGRESS_STALL_QUIESCE_MS.
+   */
+  stallQuiesceMs?: number;
   claimLeaseMs?: number;
   /**
    * Whether a claimed event keeps occupying its ingress serialization lane after
@@ -436,59 +442,17 @@ export function createChannelIngressDrain<
   };
 
   const armStallWatchdog = (state: ActiveHandlerState<TPayload, TMetadata>) => {
-    clearStallTimer(state);
-    state.stallTimer = setTimeout(() => {
-      // Pre-adoption only (dispatching OR deferred). Timer is not cleared by deferral.
-      if (state.phase !== "dispatching" && state.phase !== "deferred") {
-        return;
-      }
-      const ageMs = now() - state.startedAt;
-      const displayId = state.eventId.replace(/^0+(?=\d)/, "") || state.eventId;
-      const message = `Channel ingress claim→adoption stalled for event ${displayId} on lane ${state.laneKey} after ${ageMs}ms; marking failed (handler-timeout).`;
-      // Closed guillotine flag — catch must not string-sniff errors.
-      state.guillotined = true;
-      clearStallTimer(state);
-      log(message);
-      try {
-        state.abortController.abort(new Error(message));
-      } catch {
-        // AbortController.abort is not fallible in practice.
-      }
-      // Same bounded-retry/hold-ownership policy as tombstone: a fail write
-      // error must not falsely settle (would stop heartbeat and wedge recovery).
-      // A pre-adoption stall means the event was never handled: the dispatch is
-      // aborted above and no reply was produced. Dead-lettering here silently
-      // destroys an inbound user message whenever the agent is simply busy for
-      // longer than the stall window, and nothing ever requeues it. Release it
-      // back to the queue so the shared retry policy owns the outcome, and
-      // dead-letter only once attempts AND minimum age are exhausted.
-      const stallAttempt = (state.claim.attempts ?? 0) + 1;
-      const stallExhausted = shouldDeadLetterRetryableIngressEvent(
-        state.claim,
-        stallAttempt,
-        options.retryPolicy,
-        now(),
-      );
-      if (!stallExhausted) {
-        log(
-          `ingress drain: stalled event ${displayId} released for retry (attempt ${stallAttempt}); message preserved.`,
-        );
-      }
-      void state
-        .settleOnce(async () => {
-          if (stallExhausted) {
-            await failClaim(state.claim, "handler-timeout", message);
-            return;
-          }
-          await releaseClaim(state.claim, message);
-        })
-        .catch((err: unknown) => {
-          log(
-            `ingress drain: failed to dead-letter stalled event ${displayId}; holding claim: ${formatError(err)}`,
-          );
-        });
-    }, adoptionStallTimeoutMs);
-    state.stallTimer.unref?.();
+    armIngressStallWatchdog(state, {
+      adoptionStallTimeoutMs,
+      stallQuiesceMs: options.stallQuiesceMs,
+      retryPolicy: options.retryPolicy,
+      now,
+      log,
+      formatError,
+      clearStallTimer,
+      failClaim,
+      releaseClaim,
+    });
   };
 
   const createLifecycle = (
