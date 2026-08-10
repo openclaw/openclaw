@@ -24,6 +24,7 @@ import {
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { registerGatewayPayloadLimitNodeTests } from "./gateway-payload-limit.node.test-support.ts";
 import { expectSignedPayloadFields } from "./gateway-signature.test-support.ts";
 import {
   getLatestWebSocket,
@@ -268,6 +269,13 @@ function emitAuthFailure(
 }
 
 describe("GatewayBrowserClient", () => {
+  registerGatewayPayloadLimitNodeTests({
+    defaultGatewayUrl: DEFAULT_GATEWAY_URL,
+    getLatestWebSocket,
+    startConnect,
+    continueConnect,
+    useNodeFakeTimers,
+  });
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockImplementation(
@@ -633,7 +641,7 @@ describe("GatewayBrowserClient", () => {
     const sentBefore = ws.sent.length;
     const request = client.request(method, params);
     if (delta < 0) {
-      await expect(request).rejects.toThrow("Request exceeds the Gateway payload limit");
+      await expect(request).rejects.toThrow("exceeds negotiated max payload");
       expect(ws.sent).toHaveLength(sentBefore);
     } else {
       const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
@@ -645,6 +653,34 @@ describe("GatewayBrowserClient", () => {
     expect(maxPayload).toBeGreaterThan(
       JSON.stringify({ type: "req", id: REQUEST_FRAME_ID, method, params }).length + delta,
     );
+  });
+
+  it("keeps hello callback errors inside connect dispatch", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onHello = vi.fn(() => {
+      throw new Error("hello callback failed");
+    });
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onHello,
+    });
+
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      emitHello(ws, connectFrame.id, { role: "operator", scopes: [] });
+
+      await vi.waitFor(() => expect(onHello).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      expect(ws.lastClose).toBeNull();
+      expect(consoleError).toHaveBeenCalledWith(
+        "[gateway] hello handler error:",
+        expect.any(Error),
+      );
+    } finally {
+      client.stop();
+      consoleError.mockRestore();
+    }
   });
 
   it("does not let a stale hello runtime import publish or migrate recovery", async () => {
