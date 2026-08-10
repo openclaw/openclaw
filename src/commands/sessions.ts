@@ -37,6 +37,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
@@ -77,8 +78,6 @@ const TOKENS_PAD = 20;
 const DEFAULT_SESSIONS_LIMIT = 100;
 const TOP_N_SELECTION_LIMIT = 200;
 const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
-
-const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
 /**
  * Inline ACP model overlay — catalog #20.
@@ -182,12 +181,12 @@ const formatTokensCell = (
   rich: boolean,
 ) => {
   if (total === undefined) {
-    const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
+    const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
     const label = `unknown/${ctxLabel} (?%)`;
     return rich ? theme.muted(label.padEnd(TOKENS_PAD)) : label.padEnd(TOKENS_PAD);
   }
-  const totalLabel = formatKTokens(total);
-  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
+  const totalLabel = formatTokenCount(total);
+  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
   const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
   const label = `${totalLabel}/${ctxLabel} (${pct ?? "?"}%)`;
   const padded = label.padEnd(TOKENS_PAD);

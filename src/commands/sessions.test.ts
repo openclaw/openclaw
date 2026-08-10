@@ -57,6 +57,95 @@ describe("sessionsCommand", () => {
     );
   });
 
+  it.each([
+    { totalTokens: 0, contextTokens: 420, expected: "0/420 (0%)" },
+    { totalTokens: 1, contextTokens: 999, expected: "1/999 (0%)" },
+    { totalTokens: 420, contextTokens: 999, expected: "420/999 (42%)" },
+    { totalTokens: 999, contextTokens: 1_000, expected: "999/1.0k (100%)" },
+    { totalTokens: 1_000, contextTokens: 200_000, expected: "1.0k/200k (1%)" },
+    { totalTokens: 999_499, contextTokens: 1_000_000, expected: "999k/1.0m (100%)" },
+    { totalTokens: 999_500, contextTokens: 1_000_000, expected: "1.0m/1.0m (100%)" },
+    { totalTokens: 1_000_000, contextTokens: 2_500_000, expected: "1.0m/2.5m (40%)" },
+  ])(
+    "formats actual session-table token boundaries ($totalTokens/$contextTokens)",
+    async ({ totalTokens, contextTokens, expected }) => {
+      const store = await writeStore({
+        "agent:main:boundary": {
+          sessionId: "boundary-session",
+          updatedAt: Date.now() - 60_000,
+          totalTokens,
+          totalTokensFresh: true,
+          contextTokens,
+          model: "test:opus",
+        },
+      });
+
+      const { runtime, logs } = makeRuntime();
+      await sessionsCommand({ store }, runtime);
+      cleanupStore(store);
+
+      const row = logs.find((line) => line.includes("id:boundary-session")) ?? "";
+      expect(row).toContain(expected);
+    },
+  );
+
+  it("formats unknown totals with the actual session context-token boundary", async () => {
+    const store = await writeStore({
+      "agent:main:unknown-boundary": {
+        sessionId: "unknown-boundary-session",
+        updatedAt: Date.now() - 60_000,
+        contextTokens: 999,
+        model: "test:opus",
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("id:unknown-boundary-session")) ?? "";
+    expect(row).toContain("unknown/999 (?%)");
+  });
+
+  it("keeps exact numeric token counts unchanged in JSON output", async () => {
+    const store = await writeStore({
+      "agent:main:small": {
+        sessionId: "small-boundary-session",
+        updatedAt: Date.now() - 60_000,
+        totalTokens: 420,
+        totalTokensFresh: true,
+        contextTokens: 999,
+        model: "test:opus",
+      },
+      "agent:main:large": {
+        sessionId: "large-boundary-session",
+        updatedAt: Date.now() - 120_000,
+        totalTokens: 1_000_000,
+        totalTokensFresh: true,
+        contextTokens: 2_500_000,
+        model: "test:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ key: string; totalTokens: number; contextTokens: number }>;
+    }>(sessionsCommand, store);
+    expect(payload.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "agent:main:small",
+          totalTokens: 420,
+          contextTokens: 999,
+        }),
+        expect.objectContaining({
+          key: "agent:main:large",
+          totalTokens: 1_000_000,
+          contextTokens: 2_500_000,
+        }),
+      ]),
+    );
+  });
+
   it("renders the agent runtime in the tabular view", async () => {
     setMockSessionsConfig(() => ({
       agents: {
