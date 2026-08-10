@@ -17,6 +17,7 @@ describe("AppSidebar new group dialog", () => {
     try {
       const { sidebar, harness } = await mountMultiSelect([
         "sessions.groups.put",
+        "sessions.groups.add",
         "sessions.patchMany",
       ]);
       click(rowLink(sidebar, "agent:main:a"), { altKey: true });
@@ -30,12 +31,12 @@ describe("AppSidebar new group dialog", () => {
       // Opening the owned dialog is inert: nothing reaches the Gateway until a
       // name is submitted, and the submitted name is trimmed.
       await waitForInputDialog();
-      expect(harness.groupsPut).not.toHaveBeenCalled();
+      expect(harness.groupsAdd).not.toHaveBeenCalled();
       expect(harness.patchMany).not.toHaveBeenCalled();
       await submitInputDialog("  Projects  ");
 
       await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
-      expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);
+      expect(harness.groupsAdd).toHaveBeenCalledWith("Projects");
       expect(harness.patchMany).toHaveBeenCalledWith(
         [
           { key: "agent:main:a", agentId: "main" },
@@ -43,7 +44,7 @@ describe("AppSidebar new group dialog", () => {
         ],
         { category: "Projects" },
       );
-      expect(harness.groupsPut.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(harness.groupsAdd.mock.invocationCallOrder[0]).toBeLessThan(
         harness.patchMany.mock.invocationCallOrder[0]!,
       );
       expect(harness.patch).not.toHaveBeenCalled();
@@ -61,10 +62,11 @@ describe("AppSidebar new group dialog", () => {
     try {
       const { sidebar, harness } = await mountMultiSelect([
         "sessions.groups.put",
+        "sessions.groups.add",
         "sessions.patchMany",
       ]);
       let landCatalogWrite!: () => void;
-      harness.groupsPut.mockReturnValueOnce(
+      harness.groupsAdd.mockReturnValueOnce(
         new Promise((resolve) => {
           landCatalogWrite = () => resolve("completed");
         }),
@@ -79,7 +81,7 @@ describe("AppSidebar new group dialog", () => {
 
       await waitForInputDialog();
       await submitInputDialog("Projects");
-      await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(harness.groupsAdd).toHaveBeenCalledOnce());
 
       // Both rows leave the list while the catalog write is still in flight;
       // patching their keys now could recreate sessions that were removed.
@@ -113,11 +115,12 @@ describe("AppSidebar new group dialog", () => {
     try {
       const { sidebar, harness } = await mountMultiSelect([
         "sessions.groups.put",
+        "sessions.groups.add",
         "sessions.patch",
         "sessions.patchMany",
       ]);
       let landCatalogWrite!: () => void;
-      harness.groupsPut.mockReturnValueOnce(
+      harness.groupsAdd.mockReturnValueOnce(
         new Promise((resolve) => {
           landCatalogWrite = () => resolve("completed");
         }),
@@ -132,7 +135,7 @@ describe("AppSidebar new group dialog", () => {
 
       await waitForInputDialog();
       await submitInputDialog("Projects");
-      await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(harness.groupsAdd).toHaveBeenCalledOnce());
 
       // Only one of the two selected rows survives the catalog write. Moving the
       // survivor is still correct, but the other row was requested and skipped.

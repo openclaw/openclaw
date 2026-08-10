@@ -84,6 +84,8 @@ const CURRENT_TRAIN_METHODS = [
   "diagnostics.lanes",
   "device.pair.setupStatus",
   "sessions.patchMany",
+  "sessions.groups.add",
+  "sessions.groups.reorder",
   "sessions.groups.update",
   "sessions.groups.defaults",
   "sessions.recover",
