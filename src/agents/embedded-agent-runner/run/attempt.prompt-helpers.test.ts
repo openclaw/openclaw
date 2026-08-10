@@ -287,6 +287,81 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     forgetPromptBuildDrainCacheForRun("tools-allow-run");
   });
 
+  it("isolates prompt-build message mutation across repeated rebuilds", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset().mockResolvedValue({
+      queuedInjections: [],
+    });
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "authoritative" }],
+        metadata: { retained: true },
+      },
+    ];
+    const observedTexts: unknown[] = [];
+    const runBeforePromptBuild = vi.fn(async (event: { messages: unknown[] }) => {
+      const message = event.messages[0] as {
+        content: Array<{ text: string }>;
+        metadata: { retained: boolean };
+      };
+      observedTexts.push(message.content[0]?.text);
+      message.content[0]!.text = "mutated by plugin";
+      message.metadata.retained = false;
+      return undefined;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild,
+    };
+
+    await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages,
+      hookCtx: {},
+      hookRunner,
+    });
+    await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi again",
+      messages,
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(observedTexts).toEqual(["authoritative", "authoritative"]);
+    expect(messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "authoritative" }],
+        metadata: { retained: true },
+      },
+    ]);
+  });
+
+  it("does not clone history when no message-bearing prompt hook applies", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset().mockResolvedValue({
+      queuedInjections: [],
+    });
+    const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "heartbeat_prompt_contribution"),
+      runHeartbeatPromptContribution: vi.fn(async () => undefined),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+    };
+
+    await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hi",
+      messages: [{ role: "user", content: "history" }],
+      hookCtx: { trigger: "user" },
+      hookRunner,
+    });
+
+    expect(structuredCloneSpy).not.toHaveBeenCalled();
+    structuredCloneSpy.mockRestore();
+  });
+
   it("does not drain global injections or heartbeat contributions for commitment-only runs", async () => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
     const runAgentTurnPrepare = vi.fn(async () => ({ prependContext: "turn policy" }));

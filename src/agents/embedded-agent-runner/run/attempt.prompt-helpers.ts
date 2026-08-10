@@ -123,15 +123,23 @@ export async function resolvePromptBuildHookResult(params: {
   if (runId && !commitmentOnly && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
+  const runsTurnPrepare = Boolean(
+    params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare"),
+  );
+  const runsPromptBuild = Boolean(params.hookRunner?.hasHooks("before_prompt_build"));
+  // Message-bearing plugins receive a fresh deep snapshot for every rebuild.
+  // Without an applicable hook, retaining authoritative history avoids a full copy.
+  const hookMessages =
+    runsTurnPrepare || runsPromptBuild ? structuredClone(params.messages) : params.messages;
   // Hook ordering mirrors the prompt assembly boundary: queued injections first,
   // then prepare/heartbeat contributions, then prompt-build hooks.
   const turnPrepareResult =
-    params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
+    runsTurnPrepare && params.hookRunner?.runAgentTurnPrepare
       ? await params.hookRunner
           .runAgentTurnPrepare(
             {
               prompt: params.prompt,
-              messages: params.messages,
+              messages: hookMessages,
               queuedInjections: queuedContext.queuedInjections,
             },
             params.hookCtx,
@@ -160,20 +168,21 @@ export async function resolvePromptBuildHookResult(params: {
             return undefined;
           })
       : undefined;
-  const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
-    ? await params.hookRunner
-        .runBeforePromptBuild(
-          {
-            prompt: params.prompt,
-            messages: params.messages,
-          },
-          params.hookCtx,
-        )
-        .catch((hookErr: unknown) => {
-          log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
-          return undefined;
-        })
-    : undefined;
+  const promptBuildResult =
+    runsPromptBuild && params.hookRunner
+      ? await params.hookRunner
+          .runBeforePromptBuild(
+            {
+              prompt: params.prompt,
+              messages: hookMessages,
+            },
+            params.hookCtx,
+          )
+          .catch((hookErr: unknown) => {
+            log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
+            return undefined;
+          })
+      : undefined;
   return {
     systemPrompt: promptBuildResult?.systemPrompt,
     ...(promptBuildResult?.toolsAllow !== undefined
