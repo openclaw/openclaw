@@ -471,17 +471,21 @@ describe("startWhatsAppQaDriverSession", () => {
     });
   });
 
-  it("observes a poll vote inside an ephemeralMessage envelope", async () => {
+  it("observes a poll vote delivered inside an ephemeralMessage envelope", async () => {
+    // Regression: this path used to read `message.pollUpdateMessage`
+    // directly, so a wrapped vote (what disappearing-message chats deliver)
+    // was classified as an ordinary message instead of poll_vote — the same
+    // defect already fixed on the production inbound path.
     const session = await startSession();
     const chatJid = "999@s.whatsapp.net";
     const pollCreatorJid = "111@s.whatsapp.net";
     const voterJid = "222@s.whatsapp.net";
     const pollMsgId = "poll-wrapped-1";
+
     const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
       section: "pollCreationMessage",
       options: ["Yes", "No"],
     });
-
     emitMessages(
       incoming(pollCreationMessage, {
         id: pollMsgId,
@@ -497,22 +501,19 @@ describe("startWhatsAppQaDriverSession", () => {
       pollMsgId,
       voterJid,
     });
+    const voteMessage = buildPollUpdateMessageForTests({
+      creationKey: {
+        remoteJid: chatJid,
+        id: pollMsgId,
+        fromMe: false,
+        participant: pollCreatorJid,
+      },
+      vote,
+      senderTimestampMs: 1_700_000_200_000,
+    });
     emitMessages(
       incoming(
-        {
-          ephemeralMessage: {
-            message: buildPollUpdateMessageForTests({
-              creationKey: {
-                remoteJid: chatJid,
-                id: pollMsgId,
-                fromMe: false,
-                participant: pollCreatorJid,
-              },
-              vote,
-              senderTimestampMs: 1_700_000_200_000,
-            }),
-          },
-        },
+        { ephemeralMessage: { message: voteMessage } },
         {
           id: "vote-wrapped-1",
           remoteJid: chatJid,
@@ -522,7 +523,8 @@ describe("startWhatsAppQaDriverSession", () => {
       ),
     );
 
-    expect(session.getObservedMessages().at(-1)).toMatchObject({
+    const observedMessages = session.getObservedMessages();
+    expect(observedMessages[observedMessages.length - 1]).toMatchObject({
       kind: "poll_vote",
       pollVote: {
         pollMessageId: pollMsgId,
@@ -531,6 +533,11 @@ describe("startWhatsAppQaDriverSession", () => {
         selectedOptions: ["No"],
       },
     });
+  });
+
+  it("passes the connection timeout to the shared connection waiter", async () => {
+    await startSession({ connectionTimeoutMs: 45_000 });
+    expect(mocks.waitForWaConnection).toHaveBeenCalledWith(sock, { timeoutMs: 45_000 });
   });
 
   it("passes a bounded socket adapter to the send API", async () => {
