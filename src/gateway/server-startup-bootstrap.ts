@@ -152,6 +152,12 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
   }
   const startupTrace = createGatewayStartupTrace(log);
+  using startupTraceFailureCleanup = {
+    complete: false, // Close only if bootstrap cannot hand the trace to the kernel.
+    [Symbol.dispose]() {
+      return this.complete ? undefined : startupTrace.close();
+    },
+  };
   const startupConfigModulePromise = import("./server-startup-config.js");
   const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {
     cacheRejections: true,
@@ -542,6 +548,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
   }
 
+  startupTraceFailureCleanup.complete = true;
   return {
     opts,
     minimalTestGateway,

@@ -109,6 +109,7 @@ export async function resetPreparedModelCatalogForTestCore(): Promise<void> {
 export async function createGatewayKernel(port = 18789, opts: GatewayServerOptions = {}) {
   ensureOpenClawCliOnPath();
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
+  let closeStartupTrace: (() => void) | undefined;
   try {
     const bootstrap = await prepareGatewayServerBootstrap({
       port,
@@ -118,6 +119,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
       loadWorkerEnvironmentStartupModule,
       formatRuntimeGatewayAuthTokenWarning,
     });
+    closeStartupTrace = bootstrap.startupTrace.close;
     const runtime = await prepareGatewayKernelState({
       bootstrap,
       port,
@@ -159,6 +161,7 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     });
     return await prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth });
   } catch (error) {
+    closeStartupTrace?.();
     if (lifecycleRuntime) {
       await lifecycleRuntime.closeOnStartupFailure();
     } else {

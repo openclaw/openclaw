@@ -17,6 +17,32 @@ import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js
 import { createGatewayKernel } from "./server-kernel.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
+const startupTraceEventLoopDelay = vi.hoisted(() => ({
+  instances: [] as Array<{
+    disable: ReturnType<typeof vi.fn>;
+    enable: ReturnType<typeof vi.fn>;
+    percentile: ReturnType<typeof vi.fn>;
+    reset: ReturnType<typeof vi.fn>;
+  }>,
+}));
+
+vi.mock("node:perf_hooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:perf_hooks")>();
+  return {
+    ...actual,
+    monitorEventLoopDelay: vi.fn(() => {
+      const instance = {
+        disable: vi.fn(),
+        enable: vi.fn(),
+        percentile: vi.fn(() => 0),
+        reset: vi.fn(),
+      };
+      startupTraceEventLoopDelay.instances.push(instance);
+      return { ...instance, max: 0 };
+    }),
+  };
+});
+
 describe("createGatewayKernel", () => {
   it("dispatches health and an agent turn without creating a transport", async () => {
     const port = await getFreePort();
@@ -202,12 +228,15 @@ describe("createGatewayKernel", () => {
   });
 
   it("runs kernel teardown when required TLS material is unavailable", async () => {
+    vi.clearAllMocks();
+    startupTraceEventLoopDelay.instances.length = 0;
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-tls-failure",
       layout: "home",
       env: {
         OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
         OPENCLAW_GATEWAY_TOKEN: undefined,
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
@@ -243,8 +272,31 @@ describe("createGatewayKernel", () => {
           sidecarStartup: "defer",
         }),
       ).rejects.toThrow("gateway tls: cert/key missing");
+      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
       expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      await state.cleanup();
+    }
+  });
+
+  it("closes startup tracing when invalid config prevents bootstrap from returning", async () => {
+    vi.clearAllMocks();
+    startupTraceEventLoopDelay.instances.length = 0;
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-invalid-config",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        VITEST: "1",
+      },
+    });
+    await state.writeConfig({ gateway: { mode: 42 } });
+    state.applyEnv();
+    try {
+      await expect(createGatewayKernel()).rejects.toThrow("Invalid config");
+      expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
     } finally {
       await state.cleanup();
     }

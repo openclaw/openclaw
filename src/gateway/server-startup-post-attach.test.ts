@@ -425,6 +425,7 @@ function createStartupTraceRecorder() {
     marks,
     measures,
     startupTrace: {
+      close: () => {},
       detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => {
         details.push({ name, metrics });
       },
@@ -1997,6 +1998,37 @@ describe("startGatewayPostAttachRuntime", () => {
     );
     expect(logChannels.info).toHaveBeenCalledWith(
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+    );
+  });
+
+  it("continues startup tracing after a recovered channel startup error", async () => {
+    const trace = createStartupTraceRecorder();
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+
+    await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {
+        throw new Error("channel unavailable");
+      }),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels,
+      startupTrace: trace.startupTrace,
+    });
+
+    expect(logChannels.error).toHaveBeenCalledWith(
+      "channel startup failed: Error: channel unavailable",
+    );
+    expect(trace.measures.indexOf("sidecars.channel-start")).toBeGreaterThanOrEqual(0);
+    expect(trace.measures.indexOf("sidecars.plugin-services")).toBeGreaterThan(
+      trace.measures.indexOf("sidecars.channel-start"),
     );
   });
 

@@ -56,6 +56,7 @@ export async function startGatewayServerCore(
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
   } catch (err) {
+    gatewayKernel.startupTrace.close();
     await closeOnStartupFailure();
     throw err;
   }

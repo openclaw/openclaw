@@ -13,6 +13,7 @@ type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
 
 export type GatewayStartupTrace = {
+  close: () => void;
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
   mark: (name: string) => void;
   measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
@@ -31,6 +32,7 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   let timelineConfig: OpenClawConfig | undefined;
   let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
+  let closed = false;
   const timelineOptions = () => ({
     ...(timelineConfig ? { config: timelineConfig } : {}),
     env: process.env,
@@ -39,13 +41,18 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
     isDiagnosticsTimelineEnabled(timelineOptions()) &&
     isTruthyEnvValue(process.env.OPENCLAW_DIAGNOSTICS_EVENT_LOOP);
   const ensureEventLoopDelay = () => {
-    if (eventLoopDelay || (!logEnabled && !eventLoopTimelineEnabled())) {
+    if (closed || eventLoopDelay || (!logEnabled && !eventLoopTimelineEnabled())) {
       return;
     }
     eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
     eventLoopDelay.enable();
   };
   ensureEventLoopDelay();
+  const close = () => {
+    eventLoopDelay?.disable();
+    eventLoopDelay = undefined;
+    closed = true;
+  };
   const started = performance.now();
   let last = started;
   let spanSequence = 0;
@@ -122,6 +129,7 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
     }
   };
   return {
+    close,
     setConfig(config: OpenClawConfig) {
       timelineConfig = config;
       ensureEventLoopDelay();
@@ -143,7 +151,7 @@ export function createGatewayStartupTrace(log: GatewayLogger) {
       emitEventLoopTimelineSample(name, eventLoopSample);
       last = now;
       if (name === "ready") {
-        eventLoopDelay?.disable();
+        close();
       }
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {
