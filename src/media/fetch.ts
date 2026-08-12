@@ -616,7 +616,11 @@ function shouldRetryMediaFetch(err: unknown): boolean {
       return false;
     }
     if (err.code === "http_error") {
-      return typeof err.status === "number" && (err.status === 408 || err.status >= 500);
+      // 429 is retryable to match channel extensions (LINE/SMS/Telegram).
+      return (
+        typeof err.status === "number" &&
+        (err.status === 408 || err.status === 429 || err.status >= 500)
+      );
     }
     if (err.code === "fetch_failed") {
       if (isAbortError(err) || isAbortError(err.cause)) {
