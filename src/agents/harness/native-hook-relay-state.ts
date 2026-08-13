@@ -7,16 +7,18 @@ function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
   const globalRecord = globalThis as typeof globalThis & {
     [key: symbol]: NativeHookRelaySharedState | undefined;
   };
-  globalRecord[NATIVE_HOOK_RELAY_STATE_SYMBOL] ??= {
+  const state = (globalRecord[NATIVE_HOOK_RELAY_STATE_SYMBOL] ??= {
     relays: new Map(),
     relayBridges: new Map(),
+    retiredRelayBridges: new Set(),
     invocations: [],
     pendingPermissionApprovals: new Map(),
     pendingPreToolUseApprovals: new Map(),
     permissionApprovalWindows: new Map(),
     permissionAllowAlwaysApprovals: new Map(),
-  };
-  return globalRecord[NATIVE_HOOK_RELAY_STATE_SYMBOL];
+  });
+  state.retiredRelayBridges ??= new Set();
+  return state;
 }
 
 export const nativeHookRelayState = getNativeHookRelaySharedState();

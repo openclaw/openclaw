@@ -21,6 +21,7 @@ import type {
   NativeHookRelayBridgeRegistration,
   NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
+  RetiredNativeHookRelayBridge,
 } from "./native-hook-relay-types.js";
 import {
   isJsonObject,
@@ -37,7 +38,7 @@ export {
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
 
-const { relays, relayBridges } = nativeHookRelayState;
+const { relays, relayBridges, retiredRelayBridges } = nativeHookRelayState;
 
 type InvokeNativeHookRelay = (
   params: InvokeNativeHookRelayParams,
@@ -183,26 +184,36 @@ export function unregisterNativeHookRelayBridge(
     return;
   }
   relayBridges.delete(relayId);
-  bridge.server.close();
-  const removeRecord = () => {
-    try {
-      deleteNativeHookRelayBridgeRecordIfOwned({ ...bridge, pid: process.pid });
-    } catch (error) {
-      log.debug("failed to remove native hook relay bridge record", { error, relayId });
-    }
-  };
   const deferBridgeRecordRemovalMs = normalizePositiveInteger(
     options?.deferBridgeRecordRemovalMs,
     0,
   );
   if (deferBridgeRecordRemovalMs > 0) {
-    // During stable-id replacement, retain the old locator until the successor
-    // upserts. The token-scoped timer cannot delete that successor.
-    const timeout = setTimeout(removeRecord, deferBridgeRecordRemovalMs);
-    timeout.unref();
+    // Keep the stale endpoint semantic until its locator grace expires; the
+    // token-scoped delete cannot remove a successor bridge record.
+    let retiredBridge: RetiredNativeHookRelayBridge;
+    const closeTimer = setTimeout(() => {
+      bridge.server.close(() => retiredRelayBridges.delete(retiredBridge));
+      removeNativeHookRelayBridgeRecord(bridge);
+    }, deferBridgeRecordRemovalMs);
+    retiredBridge = { bridge, closeTimer };
+    retiredRelayBridges.add(retiredBridge);
+    closeTimer.unref();
     return;
   }
-  removeRecord();
+  bridge.server.close();
+  removeNativeHookRelayBridgeRecord(bridge);
+}
+
+function removeNativeHookRelayBridgeRecord(bridge: NativeHookRelayBridgeRegistration): void {
+  try {
+    deleteNativeHookRelayBridgeRecordIfOwned({ ...bridge, pid: process.pid });
+  } catch (error) {
+    log.debug("failed to remove native hook relay bridge record", {
+      error,
+      relayId: bridge.relayId,
+    });
+  }
 }
 
 async function handleNativeHookRelayBridgeRequest(
@@ -312,8 +323,15 @@ export function readNativeHookRelayBridgeRecordIfExists(
 }
 
 export function clearNativeHookRelayBridgesForTests(): void {
-  for (const relayId of relayBridges.keys()) {
-    unregisterNativeHookRelayBridge(relayId);
+  for (const bridge of relayBridges.values()) {
+    unregisterNativeHookRelayBridge(bridge.relayId);
+    bridge.server.closeAllConnections();
+  }
+  for (const retiredBridge of retiredRelayBridges) {
+    clearTimeout(retiredBridge.closeTimer);
+    retiredBridge.bridge.server.close();
+    retiredBridge.bridge.server.closeAllConnections();
+    retiredRelayBridges.delete(retiredBridge);
   }
   clearNativeHookRelayBridgeRecordsForTests();
 }
