@@ -22,7 +22,7 @@ import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
-import { finishFailedGatewayHttpResponse } from "../http-common.js";
+import { finishFailedGatewayHttpResponse, sendGatewayAuthFailure } from "../http-common.js";
 import {
   bindHttpResponseAuthority,
   finishGatewayHttpAuthorityError,
@@ -215,6 +215,8 @@ export type PluginRouteDispatchContext = {
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
   gatewayRequestClientIp?: string;
+  /** Re-check node capability fallback immediately before plugin dispatch. */
+  gatewayRequestNodeCapabilityRevalidate?: () => boolean;
 };
 
 export type PluginHttpRequestHandler = (
@@ -335,9 +337,6 @@ export function createGatewayPluginRequestHandler(params: {
       }
       try {
         const runRoute = async () => {
-          if (isLegacyPluginRouteHandoff(req, route)) {
-            return respondPluginHttpRouteHandoff(req, res);
-          }
           return (
             (await withPluginRouteRuntimeScope(
               createPluginRouteRuntimeScope({
@@ -350,8 +349,21 @@ export function createGatewayPluginRequestHandler(params: {
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
               }),
-              async () =>
-                runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
+              async () => {
+                if (
+                  dispatchContext?.gatewayRequestNodeCapabilityRevalidate &&
+                  !dispatchContext.gatewayRequestNodeCapabilityRevalidate()
+                ) {
+                  sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" });
+                  return true;
+                }
+                if (isLegacyPluginRouteHandoff(req, route)) {
+                  return respondPluginHttpRouteHandoff(req, res);
+                }
+                return runPluginHttpRoute(registry, route, route.handler, () =>
+                  route.handler(req, res),
+                );
+              },
             )) !== false
           );
         };
@@ -461,6 +473,13 @@ export function createGatewayPluginUpgradeHandler(params: {
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
               }),
               async () => {
+                if (
+                  dispatchContext?.gatewayRequestNodeCapabilityRevalidate &&
+                  !dispatchContext.gatewayRequestNodeCapabilityRevalidate()
+                ) {
+                  rejectWebSocketUpgrade(socket, { status: 401 });
+                  return true;
+                }
                 const handleUpgrade = route.handleUpgrade!;
                 return runPluginHttpRoute(registry, route, handleUpgrade, () =>
                   handleUpgrade(req, socket, head),
