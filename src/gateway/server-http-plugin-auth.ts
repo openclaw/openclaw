@@ -1,6 +1,8 @@
+import type { ServerResponse } from "node:http";
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
+import { sendGatewayAuthFailure } from "./http-common.js";
 import type { PluginNodeCapabilitySurface } from "./plugin-node-capability.js";
 import {
   isProtectedPluginRoutePathFromContext,
@@ -10,6 +12,17 @@ import {
 export type ResolvePluginNodeCapabilityRoute = (
   pathContext: PluginRoutePathContext,
 ) => PluginNodeCapabilitySurface | undefined;
+
+export function rejectStalePluginNodeCapability(
+  res: ServerResponse,
+  revalidate: (() => boolean) | undefined,
+): boolean {
+  if (!revalidate || revalidate()) {
+    return false;
+  }
+  sendGatewayAuthFailure(res, { ok: false, reason: "token_mismatch" });
+  return true;
+}
 
 // Bypass paths come from plugin-declared artifacts, not config bytes alone. A
 // metadata lifecycle reset can replace that contract while the config object
