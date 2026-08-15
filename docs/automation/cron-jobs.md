@@ -1131,8 +1131,8 @@ openclaw cron add --name inbox-poll --cron "*/15 * * * *" \
 
 **Security (durable contract):** the precheck command is a **persisted Gateway-host shell admission step**. It runs unattended with a bounded timeout (default 30s, capped at 5m) in the Gateway environment:
 
-- **POSIX:** `$SHELL -c` (fallback `/bin/sh`)
-- **Windows:** `%ComSpec% /d /s /c` (fallback `cmd.exe`)
+- **POSIX:** fixed trusted `/bin/sh -c` (inherited `$SHELL` is ignored)
+- **Windows:** fixed trusted `cmd.exe` via `resolveTrustedWindowsCmdExe` with `/d /s /c` (inherited `%ComSpec%` is ignored)
 
 Host-shell authorization reuses the **same surface as exec / system-run**:
 
@@ -1145,13 +1145,13 @@ Denied prechecks record `status=error` with reason `precheck-policy-denied` and 
 
 This PR proposes `job.precheck` as a **second** persisted cron admission surface next to condition `trigger` (dual-contract). Maintainers may accept, reject, or reshape before merge — author comments are not owner approval.
 
-|                    | `precheck`                                              | condition `trigger`                     |
-| ------------------ | ------------------------------------------------------- | --------------------------------------- |
-| Executor           | host shell (POSIX `$SHELL -c` / Windows `cmd.exe`)      | code-mode / tool executor               |
-| Purpose            | cheapest run-vs-skip before _any_ payload               | watchers with JS state / tools / `fire` |
-| Outcome vocabulary | `precheck-no-work` skip, `precheck-policy-denied` error | `fire` / not-met                        |
-| Ordering           | always first when set                                   | after precheck when both set            |
-| Authz              | `cron.triggers.enabled` + exec deny/allowlist/full      | `cron.triggers.enabled` + code-mode     |
+|                    | `precheck`                                                  | condition `trigger`                     |
+| ------------------ | ----------------------------------------------------------- | --------------------------------------- |
+| Executor           | fixed trusted host shell (`/bin/sh -c` / trusted `cmd.exe`) | code-mode / tool executor               |
+| Purpose            | cheapest run-vs-skip before _any_ payload                   | watchers with JS state / tools / `fire` |
+| Outcome vocabulary | `precheck-no-work` skip, `precheck-policy-denied` error     | `fire` / not-met                        |
+| Ordering           | always first when set                                       | after precheck when both set            |
+| Authz              | `cron.triggers.enabled` + exec deny/allowlist/full          | `cron.triggers.enabled` + code-mode     |
 
 **Why not unify into triggers only:** forcing host-shell pollers through code-mode burns a heavier executor and a different failure model for “exit 2 means quiet.” **Why not drop triggers:** stateful JSON/`fire`/tool watchers cannot be expressed as a single shell exit code without reinventing code-mode inside `precheck`.
 
