@@ -153,7 +153,7 @@
   padding: 0;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
-  border-radius: 50%;
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   font: 600 var(--control-ui-text-xs) / 1 var(--font-body);
@@ -518,6 +518,9 @@ wa-radio-group.settings-segmented::part(radios) {
   gap: 2px;
 }
 
+/* Segmented thumbs keep the nested rounded-rect formula (track radius minus
+   track padding). Pill segments inside a rounded-rect track read as loose
+   chips and lose the shared-track grouping, so they opt out of --btn-radius. */
 .settings-segmented__btn {
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
@@ -689,7 +692,7 @@ select.settings-select:not([multiple]) {
   height: 24px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);

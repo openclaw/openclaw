@@ -348,6 +348,8 @@
   gap: 2px;
 }
 
+/* Segmented thumb: keeps the nested rounded-rect formula, not --btn-radius.
+   See .settings-segmented__btn in settings.css for the full rationale. */
 .chart-toggle .toggle-btn {
   border: none;
   border-radius: calc(var(--radius-md) - 3px);

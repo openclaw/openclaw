@@ -22,6 +22,8 @@
   background: white;
 }
 
+/* Segmented thumb: keeps the nested rounded-rect formula, not --btn-radius.
+   See .settings-segmented__btn in settings.css for the full rationale. */
 .config-mode-toggle__btn {
   flex: 1;
   padding: 6px 12px;
@@ -532,7 +534,7 @@
   min-height: 58px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: var(--card);
   color: var(--text);
   text-align: left;

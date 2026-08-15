@@ -32,7 +32,9 @@
 }
 
 /* Failing stat is a drill-down into run history filtered to errors. It sits
-   inside the stats group, so it is a bare button (no card chrome). */
+   inside the stats group, so it is a bare button (no card chrome). Negative
+   margin spreads its hit area over the whole stat tile, so it keeps the tile
+   radius instead of the platform pill, which would outline the tile. */
 .cron-stat--action {
   position: relative;
   text-align: left;

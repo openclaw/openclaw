@@ -300,7 +300,7 @@
   padding: 4px;
   min-width: 24px;
   min-height: 24px;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--btn-radius);
   color: var(--muted);
   opacity: 0;
   pointer-events: none;

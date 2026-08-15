@@ -104,7 +104,7 @@
   height: var(--shell-chrome-control-size);
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   color: var(--muted);
   box-shadow: var(--shadow-sm);
@@ -845,7 +845,7 @@ openclaw-settings-save-indicator {
   padding: 0;
   flex-shrink: 0;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   transition:
@@ -1195,6 +1195,8 @@ html.openclaw-native-macos
   margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
 }
 
+/* Full-width banner action inside the update card, so it keeps the card radius;
+   a pill stretched across the sidebar reads as a giant lozenge. */
 .sidebar-update-card__action {
   min-width: 0;
   flex: 1 1 auto;
@@ -2076,7 +2078,7 @@ body.update-dialog-open .sidebar-update-card__status {
   flex: 0 0 var(--sidebar-child-session-toggle-width, 31px);
   padding: 0 3px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
 }
@@ -2403,7 +2405,7 @@ body.update-dialog-open .sidebar-update-card__status {
   justify-content: center;
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
@@ -3130,7 +3132,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   height: 22px;
   flex: none;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--btn-radius);
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);

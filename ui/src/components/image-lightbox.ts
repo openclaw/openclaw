@@ -97,9 +97,9 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      padding: 0 12px;
+      padding: 0 14px;
       border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: var(--radius-md);
+      border-radius: var(--btn-radius);
       background: rgba(255, 255, 255, 0.08);
       color: #fff;
       font: inherit;

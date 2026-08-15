@@ -37,7 +37,7 @@
   margin-top: 8px;
   padding: 4px 10px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--btn-radius);
   background: color-mix(in srgb, var(--secondary) 78%, transparent);
   color: var(--muted);
   font: inherit;
