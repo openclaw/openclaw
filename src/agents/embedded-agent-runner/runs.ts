@@ -41,6 +41,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
+import { recordInterruptedSessionTrajectoryEnd } from "../../trajectory/interrupted-end.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-admission.js";
 import {
@@ -1085,7 +1086,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
   updatedAt: number;
 }): Promise<void> {
   try {
-    await updateSessionEntry(
+    const persisted = await updateSessionEntry(
       {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -1121,6 +1122,16 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
         requireWriteSuccess: false,
       },
     );
+    // A stale snapshot returns the unchanged running entry; only a committed
+    // killed transition records the interrupted terminal trajectory event.
+    if (persisted?.status === "killed") {
+      await recordInterruptedSessionTrajectoryEnd({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        storePath: params.storePath,
+      });
+    }
   } catch (err) {
     // Registry ownership is already gone; preserve the completed recovery result.
     diag.warn(

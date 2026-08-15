@@ -15,6 +15,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -279,6 +280,15 @@ describe("force-clear terminal state persistence", () => {
     expect(entry?.abortedLastRun).toBe(true);
     expect(entry?.endedAt).toBeGreaterThanOrEqual(startedAt);
     expect(entry?.runtimeMs).toBe(12_345);
+    // A force-cleared run can never emit a normal lifecycle terminal event;
+    // the killed transition records the interrupted trajectory ending itself.
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({ sessionId, storePath });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
   });
 
   it("persists a force-cleared bare row under its fixed-store owner", async () => {

@@ -65,6 +65,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
@@ -537,6 +538,18 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.restartRecoveryRuns).toEqual([
       { runId: "key-only-run", lifecycleGeneration },
       { runId: "restart-run", lifecycleGeneration },
+    ]);
+    // The marker records the canonical interrupted terminal event so a
+    // restart-interrupted session is never silently absent from its trajectory.
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "main-session",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
     ]);
   });
 
@@ -2929,6 +2942,18 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:completed"]?.restartRecoveryRuns).toHaveLength(1);
     expect(store["agent:main:already-marked"]?.restartRecoveryRuns).toHaveLength(1);
+    // The startup-orphan marker writes the same canonical interrupted terminal
+    // event, so a crash-orphaned session has a durable trajectory ending.
+    const orphanTrajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "main-session",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    expect(orphanTrajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
 
     const recovered = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
 

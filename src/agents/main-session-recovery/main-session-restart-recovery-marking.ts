@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
+import { recordInterruptedSessionTrajectoryEnd } from "../../trajectory/interrupted-end.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -33,6 +34,8 @@ import {
 async function markRecoveryStore(params: {
   storePath: string;
   statuses?: Array<NonNullable<SessionEntry["status"]>>;
+  env: NodeJS.ProcessEnv;
+  trajectoryReason?: string;
   plan: (
     entry: SessionEntry,
     sessionKey: string,
@@ -41,7 +44,8 @@ async function markRecoveryStore(params: {
     | { action: "retire_terminal" }
     | undefined;
 }) {
-  return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
+  const markedSessions: Array<{ sessionKey: string; sessionId: string }> = [];
+  const storeResult = await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     storePath: params.storePath,
     statuses: params.statuses,
     requireWriteSuccess: true,
@@ -78,11 +82,30 @@ async function markRecoveryStore(params: {
           ...plan,
         });
         replacements.push({ sessionKey, entry });
+        markedSessions.push({ sessionKey, sessionId: entry.sessionId });
         counts.marked++;
       }
       return { result: counts, replacements };
     },
   });
+  // State commit succeeded first, so only genuinely interrupted sessions get a
+  // terminal trajectory event; a failed or stale transition never fabricates one.
+  for (const marked of markedSessions) {
+    try {
+      await recordInterruptedSessionTrajectoryEnd({
+        env: params.env,
+        sessionKey: marked.sessionKey,
+        sessionId: marked.sessionId,
+        storePath: params.storePath,
+        reason: params.trajectoryReason,
+      });
+    } catch (err) {
+      mainSessionRecoveryLog.warn(
+        `failed to record interrupted trajectory end for ${marked.sessionKey}: ${String(err)}`,
+      );
+    }
+  }
+  return storeResult;
 }
 
 export async function markRestartAbortedMainSessions(params: {
@@ -172,6 +195,8 @@ export async function markRestartAbortedMainSessions(params: {
   for (const storePath of storePaths) {
     const storeResult = await markRecoveryStore({
       storePath,
+      env,
+      trajectoryReason: params.reason,
       plan: (entry, sessionKey) => {
         const registeredActiveRuns = listAgentRunsForSession({
           sessionKey,
@@ -252,6 +277,10 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
+  const env =
+    params.stateDir === undefined
+      ? process.env
+      : { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
 
   // Check each store path once at startup so rows added later in that same path remain current.
   // Add paths only after every marking write succeeds so a failed scan retries safely.
@@ -262,6 +291,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     const storeResult = await markRecoveryStore({
       storePath,
       statuses: ["running"],
+      env,
       plan: (entry, sessionKey) => {
         if (entry.status !== "running" || entry.abortedLastRun === true) {
           return undefined;
