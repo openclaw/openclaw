@@ -1114,11 +1114,11 @@ Optional **shell precheck** on any job ([#112371](https://github.com/openclaw/op
 
 **Default exit-code contract**
 
-| Exit  | Meaning                                                   |
-| ----- | --------------------------------------------------------- |
-| `0`   | Work exists → run payload                                 |
-| `2`   | No work → `skipped` / `precheck-no-work`                  |
-| other | Precheck error (`status=error`), unless `onError: "skip"` |
+| Exit  | Meaning                                                                                                                 |
+| ----- | ----------------------------------------------------------------------------------------------------------------------- |
+| `0`   | Work exists → run payload                                                                                               |
+| `2`   | No work → `skipped` / `precheck-no-work`                                                                                |
+| other | Precheck error (`status=error`); with `onError: "skip"` → `skipped` / `precheck-skipped-error` (not `precheck-no-work`) |
 
 Stdout prefixes `WORK_NEEDED` / `NO_WORK` at the start of stdout override the exit code when present.
 
