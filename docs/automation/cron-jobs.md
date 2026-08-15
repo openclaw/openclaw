@@ -1141,9 +1141,9 @@ Host-shell authorization reuses the **same surface as exec / system-run**:
 
 Denied prechecks record `status=error` with reason `precheck-policy-denied` and **do not** start a payload/model turn. Treat commands like any other unattended shell you schedule — only trusted scripts, secrets in files/env (not inline), known directory preferred over ad-hoc one-liners.
 
-**Shipped product decision (2026-07-31 — authoritative for this PR; not parked on a maintainer ticket):**
+**Proposed product shape (contributor design; owner accept/reject still required):**
 
-OpenClaw **ships `job.precheck` as a second, first-class persisted cron admission surface** next to condition `trigger`. Dual-contract by design. Maintainers who disagree should request changes on this PR; silence is not treated as a reason to leave the feature half-finished or under perpetual bot review.
+This PR proposes `job.precheck` as a **second** persisted cron admission surface next to condition `trigger` (dual-contract). Maintainers may accept, reject, or reshape before merge — author comments are not owner approval.
 
 |                    | `precheck`                                              | condition `trigger`                     |
 | ------------------ | ------------------------------------------------------- | --------------------------------------- |
@@ -1155,7 +1155,7 @@ OpenClaw **ships `job.precheck` as a second, first-class persisted cron admissio
 
 **Why not unify into triggers only:** forcing host-shell pollers through code-mode burns a heavier executor and a different failure model for “exit 2 means quiet.” **Why not drop triggers:** stateful JSON/`fire`/tool watchers cannot be expressed as a single shell exit code without reinventing code-mode inside `precheck`.
 
-**Operator contract:** both fields may appear on one job; precheck always runs first. Host-shell precheck is approved as a durable unattended Gateway execution boundary under the existing exec-policy stack (not a bypass). Docs + schema ship this as the long-term model.
+**Operator contract (if accepted):** both fields may appear on one job; precheck always runs first. Host-shell precheck would be a durable unattended Gateway execution boundary under the existing exec-policy stack (not a bypass).
 
 Example precheck scripts (any language; exit `0`=work, `2`=skip, or print `WORK_NEEDED`/`NO_WORK`):
 
