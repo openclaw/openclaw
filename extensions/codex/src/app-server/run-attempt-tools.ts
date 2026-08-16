@@ -85,7 +85,10 @@ export function resolveCodexDynamicToolDirectNames(
   if (hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)) {
     names.push("openclaw");
   }
-  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+  // Keep directness stable across source delivery modes while the tool is
+  // enabled. Disabled tools can remain registered for schema stability, but
+  // must not be advertised as immediately callable.
+  if (params.disableMessageTool !== true) {
     names.push("message");
   }
   // Restricted plugin runs replace Codex's native tool surface with an exact

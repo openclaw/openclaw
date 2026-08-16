@@ -534,8 +534,11 @@ describe("message tool gateway timeout", () => {
     });
   });
 
-  it("does not advertise source-reply finality on ordinary message tools", () => {
-    expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
+  it("advertises source-reply finality without exposing idempotency controls", () => {
+    expect(getToolProperties(createMessageTool()).final).toMatchObject({
+      type: "boolean",
+      description: expect.stringContaining("Ignored for other sends"),
+    });
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
 
@@ -1053,7 +1056,7 @@ describe("poll vote echo guard", () => {
 });
 
 describe("message tool secret scoping", () => {
-  it("marks message-tool-only source replies in the tool description", () => {
+  it("keeps per-turn source reply guidance out of the tool description", () => {
     const scopedTool = createMessageTool({
       sourceReplyDeliveryMode: "message_tool_only",
     });
@@ -1063,24 +1066,26 @@ describe("message tool secret scoping", () => {
     });
     const defaultTool = createMessageTool();
 
-    expect(scopedTool.description).toContain('visible reply: action="send" + message');
+    expect(scopedTool.description).toBe(defaultTool.description);
+    expect(explicitTargetTool.description).toBe(defaultTool.description);
     expect(getToolProperties(scopedTool).final).toMatchObject({ type: "boolean" });
-    expect(scopedTool.description).toContain("target defaults current source");
-    expect(scopedTool.description).toContain("Final answer private");
-    expect(explicitTargetTool.description).toContain("send needs target");
-    expect(explicitTargetTool.description).not.toContain("target defaults current source");
-    expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
-    expect(getToolProperties(defaultTool)).not.toHaveProperty("final");
+    expect(getToolProperties(explicitTargetTool).final).toMatchObject({ type: "boolean" });
+    expect(getToolProperties(defaultTool).final).toMatchObject({ type: "boolean" });
   });
 
-  it("forwards source reply delivery mode through createOpenClawTools", () => {
-    const tool = createOpenClawTools({
+  it("keeps the tool definition stable through createOpenClawTools", () => {
+    const messageToolOnly = createOpenClawTools({
       config: {} as never,
       sourceReplyDeliveryMode: "message_tool_only",
     }).find((candidate) => candidate.name === "message");
+    const automatic = createOpenClawTools({
+      config: {} as never,
+      sourceReplyDeliveryMode: "automatic",
+    }).find((candidate) => candidate.name === "message");
 
-    expect(tool?.description).toContain('visible reply: action="send" + message');
-    expect(getToolProperties(tool!).final).toMatchObject({ type: "boolean" });
+    expect(messageToolOnly?.description).toBe(automatic?.description);
+    expect(JSON.stringify(messageToolOnly?.parameters)).toBe(JSON.stringify(automatic?.parameters));
+    expect(getToolProperties(messageToolOnly!).final).toMatchObject({ type: "boolean" });
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {
@@ -1308,6 +1313,29 @@ describe("message tool secret scoping", () => {
     expect(terminal?.sourceReplyToolCallId).toBe("message_terminal");
     expect(progress?.params).not.toHaveProperty("final");
     expect(terminal?.params).not.toHaveProperty("final");
+  });
+
+  it("ignores source-reply finality outside message-tool-only source turns", async () => {
+    mockSendResult();
+    const tool = createMessageTool({
+      getRuntimeConfig: mocks.getRuntimeConfig,
+      runMessageAction: mocks.runMessageAction as never,
+      agentId: "main",
+      agentSessionKey: "agent:main:telegram:direct:123",
+      sourceReplyDeliveryMode: "automatic",
+    });
+
+    await tool.execute("automatic-progress", {
+      action: "send",
+      message: "ordinary send",
+      to: "123",
+      final: false,
+    });
+
+    const input = firstRunMessageActionInput();
+    expect(input?.params).not.toHaveProperty("final");
+    expect(input?.sourceReplyFinal).toBeUndefined();
+    expect(input?.sourceReplyToolCallId).toBeUndefined();
   });
 
   it("assigns remote terminal source-reply receipts to the caller", async () => {
@@ -2399,6 +2427,16 @@ describe("message tool secret scoping", () => {
 });
 
 describe("message tool delivery mode schema", () => {
+  it("keeps the serialized tool definition stable across source reply delivery modes", () => {
+    const automatic = createMessageTool({ sourceReplyDeliveryMode: "automatic" });
+    const messageToolOnly = createMessageTool({
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(messageToolOnly.description).toBe(automatic.description);
+    expect(JSON.stringify(messageToolOnly.parameters)).toBe(JSON.stringify(automatic.parameters));
+  });
+
   it("hides bestEffort when required durable delivery is not available", () => {
     const plugin = createChannelPlugin({
       id: "discord",

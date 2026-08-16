@@ -94,6 +94,7 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -152,26 +153,7 @@ const testing = {
   buildDeveloperInstructions,
   buildDynamicTools,
   filterCodexDynamicTools,
-  resolveCodexDynamicToolDirectNames(
-    params: EmbeddedRunAttemptParams,
-    hostSystemAgentActive = false,
-  ): string[] {
-    const names: string[] = [];
-    if (
-      hostSystemAgentActive &&
-      params.toolsAllow?.length === 1 &&
-      params.toolsAllow[0] === "openclaw"
-    ) {
-      names.push("openclaw");
-    }
-    if (params.sourceReplyDeliveryMode === "message_tool_only") {
-      names.push("message");
-    }
-    if (params.pluginHarnessToolPolicyRestricted === true) {
-      names.push("update_plan");
-    }
-    return names;
-  },
+  resolveCodexDynamicToolDirectNames,
   setOpenClawCodingToolsFactoryForTests(
     factory: NonNullable<typeof dynamicToolBuildState.openClawCodingToolsFactory>,
   ): void {
@@ -1646,15 +1628,15 @@ describe("runCodexAppServerAttempt", () => {
     expect(binding.mcpServersFingerprint).toBeUndefined();
     expect((await readCodexAppServerBinding(sessionFile))?.mcpServersFingerprint).toBeUndefined();
   });
-  it("scopes Codex developer reply instructions to message-tool-only delivery", () => {
+  it("keeps Codex developer reply instructions stable across source delivery modes", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.sourceReplyDeliveryMode = "message_tool_only";
-    expect(
-      testing.buildDeveloperInstructions(params, {
-        dynamicTools: [createMessageDynamicTool("Message test tool")],
-      }),
-    ).toContain("Visible source replies are not automatically delivered for this run.");
+    const messageToolOnlyInstructions = testing.buildDeveloperInstructions(params, {
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
+    });
+    expect(messageToolOnlyInstructions).toContain("Follow the current turn's source-delivery");
+    expect(messageToolOnlyInstructions).toContain("For progress, set `final=false`.");
     const withoutMessageToolInstructions = testing.buildDeveloperInstructions(params, {
       dynamicTools: [],
     });
@@ -1665,11 +1647,28 @@ describe("runCodexAppServerAttempt", () => {
     expect(withoutMessageToolInstructions).not.toContain("Use `message`");
     expect(withoutMessageToolInstructions).not.toContain("reacting to its current message");
     params.sourceReplyDeliveryMode = "automatic";
-    const automaticInstructions = testing.buildDeveloperInstructions(params);
+    const automaticInstructions = testing.buildDeveloperInstructions(params, {
+      dynamicTools: [createMessageDynamicTool("Message test tool")],
+    });
+    expect(automaticInstructions).toBe(messageToolOnlyInstructions);
     expect(automaticInstructions).toContain("reply normally in your final assistant message");
-    expect(automaticInstructions).not.toContain("message(action=send)");
+    expect(automaticInstructions).toContain("message(action=send)");
     expect(automaticInstructions).toContain("reacting to its current message");
     expect(automaticInstructions).toContain("Reactions are not delivered automatically.");
+  });
+
+  it("keeps the message tool direct across source delivery modes", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.sourceReplyDeliveryMode = "automatic";
+    const automaticNames = testing.resolveCodexDynamicToolDirectNames(params);
+
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(automaticNames);
+    expect(automaticNames).toContain("message");
+
+    params.disableMessageTool = true;
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).not.toContain("message");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
@@ -2175,10 +2174,18 @@ describe("runCodexAppServerAttempt", () => {
       normalRegisteredTools,
     );
     expect(bridge.availableSpecs.map((tool) => tool.name)).not.toContain("message");
-    expect(bridge.specs.map((tool) => tool.name)).toContain("message");
-    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
-      codexDynamicToolsFingerprint(normalBridge.specs),
+    const disabledMessageSpec = flattenSpecsWithNamespace(bridge.specs).find(
+      (tool) => tool.name === "message",
     );
+    expect(disabledMessageSpec).toMatchObject({
+      namespace: "openclaw",
+      deferLoading: true,
+    });
+    const enabledMessageSpec = flattenSpecsWithNamespace(normalBridge.specs).find(
+      (tool) => tool.name === "message",
+    );
+    expect(enabledMessageSpec).not.toHaveProperty("namespace");
+    expect(enabledMessageSpec).not.toHaveProperty("deferLoading");
     await expect(
       bridge.handleToolCall({
         threadId: "thread-1",
