@@ -1205,11 +1205,16 @@ class SessionsPage extends OpenClawLightDomElement {
       message: t("sessionsView.sessionArchived"),
       actionLabel: t("common.undo"),
       onAction: () => {
-        void scope.sessions.patch(
-          row.key,
-          { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
-          { agentId, expectedSessionId: row.sessionId },
-        );
+        // The mutations store owns the visible outcome and the stale-row refresh for a
+        // rejected undo, so this only keeps the rejection from going unhandled: the
+        // toast host outlives this page and has no error surface of its own.
+        void scope.sessions
+          .patch(
+            row.key,
+            { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
+            { agentId, expectedSessionId: row.sessionId },
+          )
+          .catch(() => {});
       },
     });
   }

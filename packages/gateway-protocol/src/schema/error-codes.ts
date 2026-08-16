@@ -22,9 +22,13 @@ export {
   type ProjectCloneFailureCause,
   type UnknownAgentIdErrorDetails,
   type WizardNotFoundErrorDetails,
+  type SessionChangedErrorDetails,
+  type SessionCompanionBusyErrorDetails,
   isMcpAppViewExpiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
+  readSessionChangedError,
+  sessionChangedErrorDetails,
 } from "../gateway-error-details.js";
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
@@ -60,6 +64,17 @@ export const ProjectCloneErrorDetailsSchema = closedObject({
   }),
 });
 
+/** Session mutation rejected because the named identity no longer holds the key. */
+export const SessionChangedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SESSION_CHANGED),
+  successorSessionId: Type.Optional(NonEmptyString),
+});
+
+/** Companion ask rejected because that session's companion is already answering. */
+export const SessionCompanionBusyErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.SESSION_COMPANION_BUSY),
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   MissingScopeErrorDetailsSchema,
@@ -68,6 +83,8 @@ export const GatewayErrorDetailsSchema = Type.Union([
   ProjectCloneErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetailsSchema,
+  SessionChangedErrorDetailsSchema,
+  SessionCompanionBusyErrorDetailsSchema,
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

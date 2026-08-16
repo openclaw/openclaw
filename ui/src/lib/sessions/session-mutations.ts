@@ -1,8 +1,10 @@
+import { readSessionChangedError } from "@openclaw/gateway-client/browser";
 import type {
   GatewaySessionRow,
   SessionsListResult,
   SessionsPatchResult,
 } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
@@ -55,6 +57,43 @@ export function createSessionMutations(host: SessionMutationsHost) {
   >();
   const confirmedArchives = new Map<string, ConfirmedArchiveState>();
   const preparedWorkSessionKeys = new Set<string>();
+
+  /**
+   * A session-changed rejection proves the published row no longer describes the key,
+   * so the refresh that repairs it happens here at the mutation owner - no caller did it,
+   * and the row stayed on screen until an incidental sessions.changed push arrived. The
+   * outcome is published here too because the archive-undo toast and the unread
+   * auto-patch have no error branch of their own.
+   */
+  const settleSessionChangedRejection = async (
+    key: string,
+    error: unknown,
+    scope: Parameters<SessionConnectionOwner["isCurrent"]>[0],
+    agentId?: string | null,
+  ): Promise<boolean> => {
+    const changed = readSessionChangedError(error);
+    if (!changed) {
+      return false;
+    }
+    // The refresh republishes state, so the outcome is published after it or the fresh
+    // list would immediately clear the error the operator still needs to read.
+    await host.refreshReplacement(agentId);
+    if (!host.connection.isCurrent(scope)) {
+      return true;
+    }
+    host.publish(
+      {
+        ...host.readState(),
+        // A successor is named only when the Gateway proved lineage, so a replacement
+        // never invites the operator to retry onto a session they did not pick.
+        error: changed.successorSessionId
+          ? t("sessionsView.sessionChangedContinued", { key })
+          : t("sessionsView.sessionChangedReplaced", { key }),
+      },
+      "operation",
+    );
+    return true;
+  };
 
   const setModelOverride = (key: string, value: string | null | undefined) => {
     const normalizedKey = key.trim();
@@ -387,6 +426,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
+      if (await settleSessionChangedRejection(key, error, scope, options.agentId)) {
+        throw error;
+      }
       if (ownsModelOverride()) {
         host.publish({ ...host.readState(), error: String(error) }, "operation");
       }
@@ -421,7 +463,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         return { deleted: false };
       }
-      host.publish({ ...host.readState(), error: String(error) }, "operation");
+      if (!(await settleSessionChangedRejection(key, error, scope, options.agentId))) {
+        host.publish({ ...host.readState(), error: String(error) }, "operation");
+      }
       throw error;
     }
   };
@@ -436,6 +480,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const deleted: string[] = [];
     const errors: string[] = [];
     const preservedWorktrees: SessionDeleteBatchResult["preservedWorktrees"] = [];
+    // A changed identity leaves that row stale even when the batch deletes nothing, so
+    // the refresh below cannot be gated on `deleted` alone.
+    let sessionChanged = false;
     for (const target of targets) {
       if (!host.connection.isCurrent(scope)) {
         break;
@@ -452,6 +499,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
           }
         }
       } catch (error) {
+        sessionChanged ||= readSessionChangedError(error) !== null;
         errors.push(String(error));
       }
     }
@@ -468,6 +516,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
       for (const key of deleted) {
         setModelOverride(key, undefined);
       }
+    }
+    if ((deleted.length > 0 || sessionChanged) && host.connection.isCurrent(scope)) {
       await host.refreshReplacement();
     }
     return host.connection.isCurrent(scope)

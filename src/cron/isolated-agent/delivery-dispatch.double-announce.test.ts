@@ -2100,11 +2100,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   it("does not retire a replacement runtime when guarded cleanup finds a changed session", async () => {
     const changedError = new Error("session changed") as Error & {
       gatewayCode: string;
-      details: { reason: string };
+      details: { code: string };
     };
     changedError.name = "GatewayClientRequestError";
     changedError.gatewayCode = "INVALID_REQUEST";
-    changedError.details = { reason: "session-changed" };
+    changedError.details = { code: "SESSION_CHANGED" };
     vi.mocked(callGateway).mockRejectedValueOnce(changedError);
 
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
@@ -2166,11 +2166,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     const changedError = new Error("session changed") as Error & {
       gatewayCode: string;
-      details: { reason: string };
+      details: { code: string };
     };
     changedError.name = "GatewayClientRequestError";
     changedError.gatewayCode = "INVALID_REQUEST";
-    changedError.details = { reason: "session-changed" };
+    changedError.details = { code: "SESSION_CHANGED" };
     vi.mocked(callGateway).mockRejectedValueOnce(changedError);
     loadCronSessionEntryLatestMock.mockReturnValue({
       sessionId: "test-session-id",

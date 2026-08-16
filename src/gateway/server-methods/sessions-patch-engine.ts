@@ -8,7 +8,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import {
   applySessionEntryCanonicalReplacements,
   type SessionEntryCanonicalReplacement,
@@ -41,7 +40,11 @@ import {
   validateSessionPatchArchiveProjection,
 } from "./sessions-patch-archive.js";
 import { persistSessionPatchModelSelection } from "./sessions-patch-model-selection.js";
-import { resolveSessionWorkerPlacementPatchError, sessionLog } from "./sessions-shared.js";
+import {
+  resolveSessionWorkerPlacementPatchError,
+  sessionIdentityChangedError,
+  sessionLog,
+} from "./sessions-shared.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -97,12 +100,6 @@ function unexpectedPatchError(key: string, error: unknown): ErrorShape {
       retryable: true,
     },
   );
-}
-
-function sessionChangedError(key: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
-    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-  });
 }
 
 function pluginOwnershipError(params: {
@@ -405,7 +402,12 @@ async function executeSessionPatchMutations(params: {
                         ) {
                           projectedOutcomes.push({
                             ok: false,
-                            error: sessionChangedError(target.key),
+                            error: sessionIdentityChangedError({
+                              action: "patch",
+                              currentEntry: existingEntry,
+                              expectedSessionId: target.fullPatch.expectedSessionId,
+                              key: target.key,
+                            }),
                           });
                           continue;
                         }

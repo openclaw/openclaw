@@ -403,7 +403,7 @@ test("sessions.delete rejects a stale expected session id without interrupting i
     expect(deleted.ok).toBe(false);
     expect(deleted.error?.message).toBe(`Session ${sessionKey} changed before deletion. Retry.`);
     expect((deleted.error as { details?: unknown } | undefined)?.details).toEqual({
-      reason: "session-changed",
+      code: "SESSION_CHANGED",
     });
     expect(interrupted).toBe(false);
   } finally {

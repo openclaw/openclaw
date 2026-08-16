@@ -2,11 +2,11 @@
 import {
   ErrorCodes,
   errorShape,
+  sessionChangedErrorDetails,
   validateSessionsCompactionBranchParams,
   validateSessionsCompactionRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions.js";
 import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
@@ -45,7 +45,7 @@ function respondCheckpointConflict(
     errorShape(
       ErrorCodes.INVALID_REQUEST,
       `Session ${key} changed before checkpoint ${action}. Retry.`,
-      { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
+      { details: sessionChangedErrorDetails() },
     ),
   );
 }
@@ -311,7 +311,7 @@ export const sessionCheckpointHandlers: GatewayRequestHandlers = {
             errorShape(
               ErrorCodes.INVALID_REQUEST,
               `Session ${key} changed before checkpoint restore. Retry.`,
-              { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
+              { details: sessionChangedErrorDetails() },
             ),
           );
           return;

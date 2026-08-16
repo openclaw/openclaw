@@ -5,6 +5,15 @@ export {
   isMcpAppViewExpiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
+  readSessionChangedError,
+  sessionChangedErrorDetails,
+  type GatewayErrorDetails,
+  type McpAppViewExpiredErrorDetails,
+  type MissingScopeErrorDetails,
+  type ProjectCloneErrorDetails,
+  type ProjectCloneFailureCause,
+  type UserPrefsLimitExceededErrorDetails,
+  type WizardNotFoundErrorDetails,
 } from "./gateway-error-details.js";
 export * from "./session-agent-status.js";
 export * from "./terminal-validators.js";
@@ -18,15 +27,6 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
-export type {
-  GatewayErrorDetails,
-  McpAppViewExpiredErrorDetails,
-  MissingScopeErrorDetails,
-  UserPrefsLimitExceededErrorDetails,
-  ProjectCloneErrorDetails,
-  ProjectCloneFailureCause,
-  WizardNotFoundErrorDetails,
-} from "./schema/error-codes.js";
 export * from "./schema/board.js";
 export {
   SessionCreatedActorSchema,

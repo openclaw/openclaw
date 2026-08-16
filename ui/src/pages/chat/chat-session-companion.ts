@@ -1,3 +1,4 @@
+import { GatewayErrorDetailCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionCompanionExchange,
   SessionsCompanionAskResult,
@@ -6,7 +7,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
-const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
+const COMPANION_BUSY_DETAIL_CODE = GatewayErrorDetailCodes.SESSION_COMPANION_BUSY;
 const MAX_COMPANION_EXCHANGES = 24;
 const COMPANION_ASK_TIMEOUT_MS = 70_000;
 

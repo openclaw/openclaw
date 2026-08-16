@@ -651,7 +651,7 @@ describe("subagent registry recovery scheduling", () => {
       throw Object.assign(new Error("session changed"), {
         name: "GatewayClientRequestError",
         gatewayCode: "INVALID_REQUEST",
-        details: { reason: "session-changed" },
+        details: { code: "SESSION_CHANGED" },
       });
     });
 

@@ -434,6 +434,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       publishSidebarSessionList(this, snapshot);
     }
     this.sessionsLoading = snapshot.loading;
+    // The default sidebar subscribes here, not through the filtered archived/all
+    // subscription, so without this mirror a mutation error is written to the store
+    // and never rendered - the rejection ends with no visible outcome at all.
+    if (snapshot.error) {
+      this.sessionMutationError = snapshot.error;
+    }
     this.notify();
   };
 

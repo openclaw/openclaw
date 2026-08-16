@@ -3,11 +3,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  sessionChangedErrorDetails,
+  type ErrorShape,
   type SessionOperationEvent,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { sessionEntryContinuesIdentity } from "../../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -244,6 +247,26 @@ export function emitSessionOperation(
     connIds,
     { dropIfSlow: true },
   );
+}
+
+/**
+ * Sole owner of the identity-conflict rejection every session mutation returns. Callers
+ * pass the entry they read at the conflict check, so a successor is named whenever its
+ * lineage proves continuation and never guessed onto a session the caller never picked.
+ */
+export function sessionIdentityChangedError(params: {
+  action: "patch" | "deletion";
+  currentEntry: SessionEntry | undefined;
+  expectedSessionId: string | undefined;
+  key: string;
+}): ErrorShape {
+  const { action, currentEntry, expectedSessionId, key } = params;
+  const successor = sessionEntryContinuesIdentity(currentEntry, expectedSessionId)
+    ? currentEntry?.sessionId
+    : undefined;
+  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before ${action}. Retry.`, {
+    details: sessionChangedErrorDetails(successor),
+  });
 }
 
 export function isWorkerDispatchInputError(error: unknown): boolean {

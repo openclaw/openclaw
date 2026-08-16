@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
+  sessionChangedErrorDetails,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
@@ -11,7 +12,6 @@ import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.
 import {
   resolveSessionWorkStartError,
   SESSION_TOTAL_TOKENS_VERSION,
-  SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
 import {
@@ -244,7 +244,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               errorShape(
                 ErrorCodes.INVALID_REQUEST,
                 `Session ${key} changed before compaction. Retry.`,
-                { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
+                { details: sessionChangedErrorDetails() },
               ),
             );
             return;
@@ -302,7 +302,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               errorShape(
                 ErrorCodes.INVALID_REQUEST,
                 `Session ${key} changed before compaction. Retry.`,
-                { details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON } },
+                { details: sessionChangedErrorDetails() },
               ),
             );
             return;
@@ -462,7 +462,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 false,
                 undefined,
                 errorShape(ErrorCodes.INVALID_REQUEST, reason, {
-                  details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
+                  details: sessionChangedErrorDetails(),
                 }),
               );
               return;

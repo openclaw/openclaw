@@ -8,7 +8,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
@@ -26,6 +25,7 @@ import {
 import {
   isAgentMainSessionKey,
   resolveSessionWorkerPlacementPatchError,
+  sessionIdentityChangedError,
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -47,12 +47,6 @@ type SessionPatchArchiveTarget = {
   requestedAgentId?: string;
   storePath: string;
 };
-
-function archiveChangedError(key: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
-    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-  });
-}
 
 function archiveUnavailableError(key: string, message: "active" | "stopping"): ErrorShape {
   return errorShape(
@@ -113,9 +107,6 @@ export async function prepareSessionPatchArchive(params: {
     ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
     exactRead: true,
   });
-  if (freshResolved.storePath !== target.storePath) {
-    return err(archiveChangedError(target.key));
-  }
   const fresh = resolveCanonicalGatewaySessionStoreKey({
     cfg,
     key: target.key,
@@ -123,6 +114,19 @@ export async function prepareSessionPatchArchive(params: {
     agentId: target.requestedAgentId,
   });
   const freshCanonicalKey = fresh.target.canonicalKey ?? target.key;
+  // Both conflict exits below report the entry that now holds the key, so a same-key
+  // rollover is named as the continuation it is rather than an unrelated replacement.
+  // The store-path check moved under this read for that reason; it still always rejects.
+  const archiveChangedError = (): ErrorShape =>
+    sessionIdentityChangedError({
+      action: "patch",
+      currentEntry: fresh.entry,
+      expectedSessionId: target.fullPatch.expectedSessionId,
+      key: target.key,
+    });
+  if (freshResolved.storePath !== target.storePath) {
+    return err(archiveChangedError());
+  }
   const ownershipError = resolvePluginSessionOwnershipError({
     action: "patch",
     entry: fresh.entry,
@@ -140,7 +144,7 @@ export async function prepareSessionPatchArchive(params: {
       patch: target.fullPatch,
     })
   ) {
-    return err(archiveChangedError(target.key));
+    return err(archiveChangedError());
   }
   const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
     freshCanonicalKey,
@@ -255,7 +259,12 @@ export function validateSessionPatchArchiveProjection(params: {
       patch: params.fullPatch,
     })
   ) {
-    return archiveChangedError(params.key);
+    return sessionIdentityChangedError({
+      action: "patch",
+      currentEntry: params.existingEntry,
+      expectedSessionId: params.fullPatch.expectedSessionId,
+      key: params.key,
+    });
   }
   return (
     protectedArchiveError(params.cfg, params.primaryKey) ??

@@ -8,6 +8,29 @@ export function sessionEntryForkedFromParent(
   return entry?.forkSource !== undefined || entry?.forkedFromParent === true;
 }
 
+/**
+ * True when this entry's recorded lineage proves it continues `expectedSessionId`.
+ * Only a same-key rollover stamps that lineage (see
+ * `preserveSqliteSameKeySessionRolloverLineage`), so an explicit delete-then-recreate
+ * under the same key records nothing and is reported as a replacement rather than a
+ * successor: retrying a mutation against it would write to a session the caller never
+ * named. `usageFamilySessionIds` carries the whole chain, so a second rollover still
+ * resolves to the identity the caller started from.
+ */
+export function sessionEntryContinuesIdentity(
+  entry: Pick<SessionEntry, "previousSessionId" | "usageFamilySessionIds"> | undefined,
+  expectedSessionId: string | undefined,
+): boolean {
+  const expected = expectedSessionId?.trim();
+  if (!entry || !expected) {
+    return false;
+  }
+  return (
+    entry.previousSessionId?.trim() === expected ||
+    (entry.usageFamilySessionIds ?? []).some((sessionId) => sessionId.trim() === expected)
+  );
+}
+
 export function preserveSqliteSameKeySessionRolloverLineage(params: {
   next: SessionEntry;
   previous: SessionEntry;

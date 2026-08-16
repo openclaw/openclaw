@@ -852,6 +852,10 @@ export const en: TranslationMap = {
     sessionState: "Session state",
     all: "All",
     sessionArchived: "Session archived",
+    sessionChangedReplaced:
+      "Session {key} was replaced before the change was applied, so nothing changed. The list has been refreshed.",
+    sessionChangedContinued:
+      "Session {key} continued as a new session before the change was applied, so nothing changed. The list has been refreshed.",
     sessionsArchived: "Archived {count} sessions",
     deleteAllArchived: "Delete all archived…",
     deleteAllArchivedConfirm: "Delete {count} archived sessions and their transcripts?",

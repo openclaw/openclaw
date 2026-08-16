@@ -1085,7 +1085,7 @@ test("sessions.compact rejects stale terminal persistence after the session chan
   const response = await compactResult;
   expect(response.ok).toBe(false);
   expect(response.error).toMatchObject({
-    details: { reason: "session-changed" },
+    details: { code: "SESSION_CHANGED" },
   });
   const replacedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(replacedEntry?.sessionId).toBe("sess-replacement");

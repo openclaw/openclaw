@@ -1,5 +1,5 @@
+import { readSessionChangedError } from "../../../packages/gateway-protocol/src/index.js";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
@@ -44,7 +44,7 @@ export async function cleanupCronRunSessionAfterRun(params: {
     });
     return result.deleted === true ? "deleted" : "changed";
   } catch (error) {
-    if (isSessionChangedGatewayError(error)) {
+    if (readSessionChangedError(error)) {
       return "changed";
     }
     if (params.job.sessionTarget === "isolated") {
@@ -65,18 +65,4 @@ function shouldDeleteCronRunSessionAfterRun(params: {
   agentSessionKey: string;
 }): boolean {
   return params.job.deleteAfterRun === true && isCronSessionKey(params.agentSessionKey);
-}
-
-function isSessionChangedGatewayError(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
-    return false;
-  }
-  const requestError = error as Error & { gatewayCode?: unknown; details?: unknown };
-  const details = requestError.details;
-  return (
-    requestError.gatewayCode === "INVALID_REQUEST" &&
-    typeof details === "object" &&
-    details !== null &&
-    (details as { reason?: unknown }).reason === SESSION_LIFECYCLE_CHANGED_ERROR_REASON
-  );
 }

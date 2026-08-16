@@ -75,7 +75,7 @@ test.each([
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        details: { reason: "session-changed" },
+        details: { code: "SESSION_CHANGED" },
       },
     });
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
@@ -160,7 +160,7 @@ test.each([
       ok: false,
       error: {
         message: `Session ${sessionKey} changed before patch. Retry.`,
-        details: { reason: "session-changed" },
+        details: { code: "SESSION_CHANGED" },
       },
     });
     expect(loadSessionEntry({ sessionKey, storePath })).toEqual(replacementBefore);
@@ -236,7 +236,7 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        details: { reason: "session-changed" },
+        details: { code: "SESSION_CHANGED" },
       },
     });
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({

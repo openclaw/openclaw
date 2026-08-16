@@ -1044,9 +1044,12 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
 
     const archived = await archive;
     expect(archived.ok).toBe(false);
-    expect(archived.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      details: { reason: "session-changed" },
+    expect(archived.error?.code).toBe("INVALID_REQUEST");
+    // A same-key sessionId change stamps rollover lineage, so this rejection names the
+    // successor. Matching exactly keeps a silently dropped successor from passing here.
+    expect((archived.error as { details?: unknown } | undefined)?.details).toEqual({
+      code: "SESSION_CHANGED",
+      successorSessionId: "session-archive-generation-replacement",
     });
     expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
       sessionId: "session-archive-generation-replacement",

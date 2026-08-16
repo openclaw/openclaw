@@ -30,6 +30,7 @@ export const GatewayErrorDetailCodes = {
   PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
   WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
+  SESSION_CHANGED: "SESSION_CHANGED",
 } as const;
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
@@ -61,6 +62,21 @@ export type WizardNotFoundErrorDetails = {
   code: typeof GatewayErrorDetailCodes.WIZARD_NOT_FOUND;
 };
 
+/**
+ * A session mutation named an identity the store no longer holds, so nothing was
+ * applied. `successorSessionId` is present only for a proven continuation; see
+ * `sessionEntryContinuesIdentity` for what counts as proof.
+ */
+export type SessionChangedErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SESSION_CHANGED;
+  successorSessionId?: string;
+};
+
+/** The session's companion agent is already answering another question. */
+export type SessionCompanionBusyErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.SESSION_COMPANION_BUSY;
+};
+
 export type ProjectCloneFailureCause =
   | "invalid_url"
   | "auth_required"
@@ -81,7 +97,9 @@ export type GatewayErrorDetails =
   | UserPrefsLimitExceededErrorDetails
   | ProjectCloneErrorDetails
   | UnknownAgentIdErrorDetails
-  | WizardNotFoundErrorDetails;
+  | WizardNotFoundErrorDetails
+  | SessionChangedErrorDetails
+  | SessionCompanionBusyErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;
@@ -109,6 +127,35 @@ export function readMissingScopeErrorDetails(details: unknown): MissingScopeErro
     code: GatewayErrorDetailCodes.MISSING_SCOPE,
     missingScope,
     requiredScopes,
+  };
+}
+
+/** Builds session-changed details. Pass a successor only for a proven continuation. */
+export function sessionChangedErrorDetails(
+  successorSessionId?: string,
+): SessionChangedErrorDetails {
+  const successor = successorSessionId?.trim();
+  return {
+    code: GatewayErrorDetailCodes.SESSION_CHANGED,
+    ...(successor ? { successorSessionId: successor } : {}),
+  };
+}
+
+/**
+ * Reads a session-changed rejection off a gateway error envelope or a batch outcome
+ * error. The detail code is the discriminant on its own, so callers no longer pair an
+ * error-code check with a message or `reason` string match.
+ */
+export function readSessionChangedError(error: unknown): SessionChangedErrorDetails | null {
+  const record = asProtocolRecord(asProtocolRecord(error)?.details);
+  if (record?.code !== GatewayErrorDetailCodes.SESSION_CHANGED) {
+    return null;
+  }
+  const successorSessionId =
+    typeof record.successorSessionId === "string" ? record.successorSessionId.trim() : "";
+  return {
+    code: GatewayErrorDetailCodes.SESSION_CHANGED,
+    ...(successorSessionId ? { successorSessionId } : {}),
   };
 }
 

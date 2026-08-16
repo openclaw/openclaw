@@ -429,7 +429,7 @@ describe("sessions.patchMany orchestration", () => {
           key: "agent:main:batch-1",
           error: {
             code: "INVALID_REQUEST",
-            details: { reason: "session-changed" },
+            details: { code: "SESSION_CHANGED" },
             message: "Session agent:main:batch-1 changed before patch. Retry.",
           },
         },
