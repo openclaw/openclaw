@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { recordInterruptedSessionTrajectoryEnd } from "../../trajectory/interrupted-end.js";
 import {
   retryMainSessionRecoveryMutation,
   scheduleMainSessionRecoveryMutation,
@@ -174,6 +175,70 @@ export async function commitMainSessionRecovery(params: {
       };
     },
   });
+}
+
+/**
+ * Builds the idempotent restore closure for a Gateway-admitted recovery that
+ * aborts before dispatch (or after an ambiguous dispatch settlement fails).
+ * The committed interruption clears the row's run id, so only this exact
+ * applied transition mints the terminal trajectory event; a deferred repair
+ * retry re-enters the closure and must not fabricate a duplicate.
+ */
+export function createRestoreAdmittedRecoveryInterrupted(params: {
+  agentId: string;
+  lifecycleGeneration: string;
+  logWarn: (message: string) => void;
+  runId: string;
+  sessionId: () => string;
+  sessionKey: string;
+  shouldContinue?: () => boolean;
+  storePath: string;
+}): () => Promise<MainSessionRecoveryPendingTarget | undefined> {
+  let restored = false;
+  return async () => {
+    if (restored || params.shouldContinue?.() === false) {
+      return undefined;
+    }
+    const recovery = await commitMainSessionRecovery({
+      command: {
+        kind: "mark_admitted_recovery_interrupted",
+        lifecycleGeneration: params.lifecycleGeneration,
+        now: Date.now(),
+        runId: params.runId,
+        sessionId: params.sessionId(),
+      },
+      requireWriteSuccess: true,
+      ...(params.shouldContinue ? { shouldContinue: params.shouldContinue } : {}),
+      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    });
+    restored = true;
+    if (
+      recovery.transition.kind !== "applied" ||
+      recovery.entry?.sessionId !== params.sessionId() ||
+      !recovery.sessionKey ||
+      params.shouldContinue?.() === false
+    ) {
+      return undefined;
+    }
+    try {
+      await recordInterruptedSessionTrajectoryEnd({
+        agentId: params.agentId,
+        runId: params.runId,
+        sessionKey: recovery.sessionKey,
+        sessionId: recovery.entry.sessionId,
+        storePath: params.storePath,
+      });
+    } catch (error) {
+      params.logWarn(
+        `failed to record interrupted trajectory end for ${recovery.sessionKey}: ${String(error)}`,
+      );
+    }
+    return {
+      sessionId: recovery.entry.sessionId,
+      sessionKey: recovery.sessionKey,
+      storePath: params.storePath,
+    };
+  };
 }
 
 export async function refreshMainSessionRecoveryOwner(

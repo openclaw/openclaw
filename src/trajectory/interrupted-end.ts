@@ -1,7 +1,8 @@
 // Records the canonical interrupted terminal event for sessions whose state
 // owner marks them aborted outside the normal attempt-settle path (restart
-// markers, force-cleared runs). Callers must only invoke this after their
-// state transition has committed, so a failed transition never fabricates one.
+// markers, force-cleared runs, admitted-recovery restorations). Callers must
+// only invoke this after their state transition has committed, so a failed
+// transition never fabricates one.
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 

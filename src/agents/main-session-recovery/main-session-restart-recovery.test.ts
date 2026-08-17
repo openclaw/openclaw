@@ -595,6 +595,36 @@ describe("main-session-restart-recovery", () => {
     ]);
   });
 
+  it("records an interrupted trajectory ending for config-less fixed-store global sessions", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStorePath(storePath, {
+      global: runningSessionEntry("global-session", { lifecycleRunId: "global-run" }),
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["global"],
+    });
+
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    const store = readStore(storePath);
+    expect(store.global?.abortedLastRun).toBe(true);
+    // A config-less unscoped row commits under the legacy implicit owner, and
+    // its interrupted terminal event must land in that same durable owner.
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "global-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "global-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
   it("does not scan stale stores for agents absent from the configured roster", async () => {
     const configuredSessionsDir = await makeSessionsDir("main");
     await writeMainSession({ sessionsDir: configuredSessionsDir });
@@ -2154,6 +2184,22 @@ describe("main-session-restart-recovery", () => {
     expect(entry).toMatchObject({ status: "running", abortedLastRun: true });
     expect(entry?.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
     expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
+    // The committed interruption restore clears the row's run id, so the
+    // canonical terminal event must carry the recovery fence's run id.
+    const recoveryRunId = entry?.restartRecoveryRuns?.find(
+      (run) => run.lifecycleGeneration === getAgentEventLifecycleGeneration(),
+    )?.runId;
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "main-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: recoveryRunId,
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
   });
 
   it("settles an admitted recovery that completed before its ambiguous response", async () => {

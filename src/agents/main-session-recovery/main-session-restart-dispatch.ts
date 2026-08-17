@@ -39,7 +39,10 @@ import {
   type MainSessionRecoveryObservation,
   type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
-import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import {
+  commitMainSessionRecovery,
+  createRestoreAdmittedRecoveryInterrupted,
+} from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 
@@ -683,7 +686,30 @@ export async function resumeMainSession(params: {
         log.warn(
           `failed to settle ambiguous restart recovery ${params.sessionKey}: ${String(settlementError)}`,
         );
-        await repairAcceptedRecovery();
+        const restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
+          agentId: params.agentId,
+          lifecycleGeneration,
+          logWarn: (message) => log.warn(message),
+          runId: recoveryRunId,
+          sessionId: () => params.entry.sessionId,
+          sessionKey: params.sessionKey,
+          shouldContinue: params.shouldContinue,
+          storePath: params.storePath,
+        });
+        const restored = await repairMainSessionRecoveryMutation({
+          mutation: restoreAdmittedRecovery,
+          onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+          onError: (restoreError) => {
+            if (params.shouldContinue?.() !== false) {
+              log.warn(
+                `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
+              );
+            }
+          },
+        });
+        if (params.shouldContinue?.() !== false) {
+          scheduleMainSessionRecoveryPendingTarget(restored);
+        }
       }
     }
     if (reservation) {

@@ -11,6 +11,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import {
   commitMainSessionRecovery,
+  createRestoreAdmittedRecoveryInterrupted,
   type MainSessionRecoveryPendingTarget,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
@@ -419,35 +420,15 @@ export async function prepareAgentRunDispatch(params: {
         );
       }
       const admittedRecoverySessionKey = recoveryAdmission.sessionKey ?? recoverySessionKey;
-      let restored = false;
-      restoreAdmittedRestartRecoveryInterrupted = async () => {
-        if (restored) {
-          return undefined;
-        }
-        const recovery = await commitMainSessionRecovery({
-          command: {
-            kind: "mark_admitted_recovery_interrupted",
-            lifecycleGeneration: params.lifecycleGeneration,
-            now: Date.now(),
-            runId: params.runId,
-            sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
-          },
-          requireWriteSuccess: true,
-          target: { sessionKey: admittedRecoverySessionKey, storePath: lifecycleStorePath },
-        });
-        restored = true;
-        const expectedSessionId =
-          params.request.expectedExistingSessionId ?? params.getAdmittedSessionId();
-        return recovery.transition.kind === "applied" &&
-          recovery.entry?.sessionId === expectedSessionId &&
-          recovery.sessionKey
-          ? {
-              sessionId: recovery.entry.sessionId,
-              sessionKey: recovery.sessionKey,
-              storePath: lifecycleStorePath,
-            }
-          : undefined;
-      };
+      restoreAdmittedRestartRecoveryInterrupted = createRestoreAdmittedRecoveryInterrupted({
+        agentId: params.activeSessionAgentId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        logWarn: (message) => params.context.logGateway.warn(message),
+        runId: params.runId,
+        sessionId: () => params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
+        sessionKey: admittedRecoverySessionKey,
+        storePath: lifecycleStorePath,
+      });
     } catch (err) {
       activeRunAbort.cleanup({ force: true });
       activeGatewayWorkAdmission.release();

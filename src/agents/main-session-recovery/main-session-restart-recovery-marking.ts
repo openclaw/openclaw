@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, parseAgentSessionKey } from "../../routing/session-key.js";
 import { recordInterruptedSessionTrajectoryEnd } from "../../trajectory/interrupted-end.js";
 import {
   listActiveEmbeddedRunSessionIds,
@@ -45,11 +45,13 @@ function resolveInterruptedSessionOwner(params: {
   }
   // Global and legacy-alias keys in a fixed store are owned by the configured
   // compatibility agent (an explicit persisted owner or the legacy default).
-  // Agent-scoped keys already returned above, so this only applies to unscoped keys.
+  // Without config the store writer resolves those rows to the legacy implicit
+  // owner. Agent-scoped keys already returned above, so this only applies to
+  // unscoped keys.
   if (params.cfg) {
     return resolveSessionStoreCompatibilityAgentId(params.cfg);
   }
-  return undefined;
+  return LEGACY_IMPLICIT_AGENT_ID;
 }
 
 async function markRecoveryStore(params: {
@@ -110,10 +112,12 @@ async function markRecoveryStore(params: {
           }
           // SAFETY: replacement snapshots are persisted InternalSessionEntry rows containing the internal lifecycleRunId field.
           const interruptedRunId = (entry as InternalSessionEntry).lifecycleRunId;
-          const sessionOwnerAgentId = resolveInterruptedSessionOwner({
-            cfg: params.cfg,
-            sessionKey,
-          });
+          // The row was just committed in this scan's durable owner partition
+          // (or the store's default-owner pass when no partition is recorded),
+          // so the scanned owner is the authoritative trajectory owner; key and
+          // config resolution only covers the unscanned default-owner pass.
+          const sessionOwnerAgentId =
+            ownerAgentId ?? resolveInterruptedSessionOwner({ cfg: params.cfg, sessionKey });
           if (plan.replaceRuns) {
             entry.restartRecoveryRuns = plan.runs;
           }
