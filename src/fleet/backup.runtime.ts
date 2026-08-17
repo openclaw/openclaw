@@ -56,6 +56,12 @@ const RESTORE_VERIFY_TIMEOUT_MS = 60_000;
 const RESTORE_VERIFY_POLL_MS = 1_000;
 const RESTORE_EXTRACT_TIMEOUT_MS = 30 * 60_000;
 
+function missingContainerRecoveryHint(
+  record: Pick<FleetCellRecord, "tenantId" | "runtime">,
+): string {
+  return `remove the stale registration without purging data (openclaw fleet rm ${record.tenantId} --force), recreate a stopped cell with the intended image (openclaw fleet create ${record.tenantId} --runtime ${record.runtime} --no-start --image <image>), then retry fleet restore`;
+}
+
 type FleetBackupManifest = {
   schemaVersion: 1;
   kind: "openclaw-fleet-cell-backup";
@@ -459,7 +465,7 @@ export async function restoreFleetCell(params: {
   );
   if (inspectionResult.kind === "missing") {
     throw new Error(
-      `Fleet cell container is missing for ${params.record.tenantId}; remove the stale registration without purging data (openclaw fleet rm ${params.record.tenantId} --force), recreate a stopped cell with the intended image (openclaw fleet create ${params.record.tenantId} --no-start --image <image>), then retry fleet restore.`,
+      `Fleet cell container is missing for ${params.record.tenantId}; ${missingContainerRecoveryHint(params.record)}.`,
     );
   }
   const inspection = assertManagedInspection(params.record, inspectionResult);
@@ -780,22 +786,51 @@ export async function restoreFleetCell(params: {
       // A --force restore stopped a running cell but failed before removal.
       // Restart the same managed generation so an aborted restore does not
       // strand a healthy tenant stopped; the original error stays primary.
+      let missingContainerError: Error | undefined;
       try {
-        // Same generation by identity, so no attempt-label comparison is needed:
-        // the cell name may already point at something this must not start.
-        const current = assertManagedInspection(
-          params.record,
-          await params.containers.inspect(params.record.runtime, inspection.containerId),
+        // Keep the inspected identity pinned so a replacement that claims the
+        // cell name cannot be started as if it were the stopped cell.
+        const currentInspection = await params.containers.inspect(
+          params.record.runtime,
+          inspection.containerId,
         );
-        if (!current.running) {
-          await params.checkpoint();
-          await params.containers.start(params.record.runtime, current.containerId);
+        if (currentInspection.kind === "missing") {
+          // The old ID is gone; inspect the registered name only to distinguish
+          // a truly missing cell from a new generation or a foreign container.
+          const namedInspection = await params.containers.inspect(
+            params.record.runtime,
+            params.record.containerName,
+          );
+          if (namedInspection.kind === "missing") {
+            missingContainerError = new Error(
+              `${errorMessage(error)}. The previous cell container is missing; ${missingContainerRecoveryHint(params.record)}.`,
+              { cause: error },
+            );
+          } else {
+            const current = assertManagedInspection(params.record, namedInspection);
+            if (
+              !current.running &&
+              current.labels[FLEET_ATTEMPT_LABEL] === inspection.labels[FLEET_ATTEMPT_LABEL]
+            ) {
+              await params.checkpoint();
+              await params.containers.start(params.record.runtime, current.containerId);
+            }
+          }
+        } else {
+          const current = assertManagedInspection(params.record, currentInspection);
+          if (!current.running) {
+            await params.checkpoint();
+            await params.containers.start(params.record.runtime, current.containerId);
+          }
         }
       } catch {
         throw new Error(
           `${errorMessage(error)}. The previous cell could not be restarted or verified; run \`openclaw fleet start ${params.record.tenantId}\` before retrying fleet restore.`,
           { cause: error },
         );
+      }
+      if (missingContainerError) {
+        throw missingContainerError;
       }
     }
     throw error;
