@@ -846,15 +846,7 @@ Before connecting Gmail transport, merge a dedicated reader and hook policy into
         tools: {
           profile: "minimal",
           allow: ["session_status"],
-          deny: [
-            "group:fs",
-            "group:runtime",
-            "group:web",
-            "browser",
-            "cron",
-            "gateway",
-            "nodes",
-          ],
+          deny: ["group:fs", "group:runtime", "group:web", "browser", "cron", "gateway", "nodes"],
         },
       },
     },
