@@ -260,6 +260,7 @@ describe("force-clear terminal state persistence", () => {
         startedAt,
         runtimeMs: 12_345,
         status: "running",
+        lifecycleRunId: "force-clear-run",
       },
     );
 
@@ -286,6 +287,7 @@ describe("force-clear terminal state persistence", () => {
     expect(trajectoryEvents).toEqual([
       expect.objectContaining({
         type: "session.ended",
+        runId: "force-clear-run",
         data: expect.objectContaining({ status: "interrupted", aborted: true }),
       }),
     ]);

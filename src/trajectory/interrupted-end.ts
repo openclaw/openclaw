@@ -11,6 +11,7 @@ export async function recordInterruptedSessionTrajectoryEnd(params: {
   sessionId: string;
   storePath: string;
   agentId?: string;
+  runId?: string;
   reason?: string;
 }): Promise<void> {
   const agentId = params.agentId ?? parseAgentSessionKey(params.sessionKey)?.agentId;
@@ -19,6 +20,7 @@ export async function recordInterruptedSessionTrajectoryEnd(params: {
   }
   const recorder = createTrajectoryRuntimeRecorder({
     env: params.env ?? process.env,
+    runId: params.runId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionTarget: {

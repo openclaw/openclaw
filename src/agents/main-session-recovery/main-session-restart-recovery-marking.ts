@@ -44,7 +44,7 @@ async function markRecoveryStore(params: {
     | { action: "retire_terminal" }
     | undefined;
 }) {
-  const markedSessions: Array<{ sessionKey: string; sessionId: string }> = [];
+  const markedSessions: Array<{ sessionKey: string; sessionId: string; runId?: string }> = [];
   const storeResult = await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     storePath: params.storePath,
     statuses: params.statuses,
@@ -72,6 +72,7 @@ async function markRecoveryStore(params: {
           counts.skipped++;
           continue;
         }
+        const interruptedRunId = entry.lifecycleRunId;
         if (plan.replaceRuns) {
           entry.restartRecoveryRuns = plan.runs;
         }
@@ -82,7 +83,7 @@ async function markRecoveryStore(params: {
           ...plan,
         });
         replacements.push({ sessionKey, entry });
-        markedSessions.push({ sessionKey, sessionId: entry.sessionId });
+        markedSessions.push({ sessionKey, sessionId: entry.sessionId, runId: interruptedRunId });
         counts.marked++;
       }
       return { result: counts, replacements };
@@ -94,6 +95,7 @@ async function markRecoveryStore(params: {
     try {
       await recordInterruptedSessionTrajectoryEnd({
         env: params.env,
+        runId: marked.runId,
         sessionKey: marked.sessionKey,
         sessionId: marked.sessionId,
         storePath: params.storePath,

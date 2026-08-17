@@ -1086,6 +1086,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
   updatedAt: number;
 }): Promise<void> {
   try {
+    let interruptedRunId: string | undefined;
     const persisted = await updateSessionEntry(
       {
         agentId: params.agentId,
@@ -1107,6 +1108,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
         ) {
           return null;
         }
+        interruptedRunId = entry.lifecycleRunId;
         const endedAt = Date.now();
         return {
           status: "killed",
@@ -1127,6 +1129,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
     if (persisted?.status === "killed") {
       await recordInterruptedSessionTrajectoryEnd({
         agentId: params.agentId,
+        runId: interruptedRunId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         storePath: params.storePath,
