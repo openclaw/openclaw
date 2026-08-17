@@ -1087,6 +1087,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
 }): Promise<void> {
   try {
     let interruptedRunId: string | undefined;
+    let committedTransition = false;
     const persisted = await updateSessionEntry(
       {
         agentId: params.agentId,
@@ -1109,6 +1110,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
           return null;
         }
         interruptedRunId = entry.lifecycleRunId;
+        committedTransition = true;
         const endedAt = Date.now();
         return {
           status: "killed",
@@ -1124,9 +1126,9 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
         requireWriteSuccess: false,
       },
     );
-    // A stale snapshot returns the unchanged running entry; only a committed
-    // killed transition records the interrupted terminal trajectory event.
-    if (persisted?.status === "killed") {
+    // A stale snapshot or already-killed row returns an unchanged entry; only
+    // this invocation's own running-to-killed transition records the event.
+    if (committedTransition && persisted?.status === "killed") {
       await recordInterruptedSessionTrajectoryEnd({
         agentId: params.agentId,
         runId: interruptedRunId,
