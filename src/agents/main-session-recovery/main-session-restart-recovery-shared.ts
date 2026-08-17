@@ -12,6 +12,7 @@ import {
   hasSessionEntriesByStatusReadOnly,
   type SessionTranscriptTurnExpectedState,
 } from "../../config/sessions/session-accessor.js";
+import { listDurableSqliteTargetOwnersForSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
@@ -123,7 +124,17 @@ export async function resolveRestartRecoveryStorePaths(params: {
   }
   // Agent databases also hold auth and model-catalog state. Enter the writer
   // lane only when the session owner proves that a running row may need repair.
+  // Fixed stores partition rows across per-agent SQLite siblings, so a running
+  // session under any durable owner keeps the store in the recovery scan.
   return [...storePaths]
-    .filter((storePath) => hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]))
+    .filter((storePath) => {
+      const owners = listDurableSqliteTargetOwnersForSessionStorePath(storePath);
+      if (owners.length === 0) {
+        return hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]);
+      }
+      return owners.some((agentId) =>
+        hasSessionEntriesByStatusReadOnly({ env, storePath, agentId }, ["running"]),
+      );
+    })
     .toSorted((a, b) => a.localeCompare(b));
 }

@@ -142,7 +142,8 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
     tailEvents?: number;
   },
 ): SqliteTrajectoryRuntimeEventRow[] {
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+  const dbOptions = toDatabaseOptions(scope);
+  const database = openOpenClawAgentDatabase(dbOptions);
   const db = getTrajectoryKysely(database.db);
   const tailEvents =
     scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
@@ -170,7 +171,8 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
   if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
     query = query.limit(Math.max(0, Math.floor(maxEvents)));
   }
-  const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
+  const result = executeSqliteQuerySync(database.db, query);
+  const rows = result.rows.map((row) => ({
     event: JSON.parse(row.event_json) as TrajectoryEvent,
     seq: row.seq,
   }));

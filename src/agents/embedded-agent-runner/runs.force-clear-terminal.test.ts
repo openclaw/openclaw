@@ -253,6 +253,7 @@ describe("force-clear terminal state persistence", () => {
     const sessionId = "session-1";
     const startedAt = Date.now() - 60_000;
 
+    // SAFETY: test-only partial entry; upsertSessionEntryCore fills the remaining fields.
     await upsertSessionEntryCore({ sessionKey, storePath }, {
       sessionId,
       updatedAt: startedAt,
@@ -514,6 +515,7 @@ describe("force-clear terminal state persistence", () => {
     const sessionId = "session-already-killed";
     const startedAt = Date.now() - 60_000;
 
+    // SAFETY: test-only partial entry; upsertSessionEntryCore fills the remaining fields.
     await upsertSessionEntryCore({ sessionKey, storePath }, {
       sessionId,
       updatedAt: startedAt,

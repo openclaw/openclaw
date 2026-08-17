@@ -21,6 +21,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { listDurableSqliteTargetOwnersForSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { resolveAgentRestartRecoveryExecutionIdentityAdmission } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -393,9 +394,12 @@ async function writeMainSession({
 }
 
 function readStore(storePath: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
+  const owners = listDurableSqliteTargetOwnersForSessionStorePath(storePath);
+  const entries =
+    owners.length > 0
+      ? owners.flatMap((agentId) => listSessionEntriesCore({ agentId, storePath }))
+      : listSessionEntriesCore({ storePath });
+  return Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
 }
 
 async function writeTranscript(
@@ -549,6 +553,43 @@ describe("main-session-restart-recovery", () => {
       expect.objectContaining({
         type: "session.ended",
         runId: "restart-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
+  it("records an interrupted trajectory ending for fixed-store global sessions", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("global-session", { lifecycleRunId: "global-run" }),
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    const result = await markRestartAbortedMainSessions({
+      cfg,
+      sessionKeys: ["global"],
+    });
+
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    const store = readStore(storePath);
+    expect(store.global?.abortedLastRun).toBe(true);
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      agentId: "ops",
+      sessionId: "global-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "global-run",
         data: expect.objectContaining({ status: "interrupted", aborted: true }),
       }),
     ]);
@@ -2965,6 +3006,49 @@ describe("main-session-restart-recovery", () => {
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
+  });
+
+  it("records an interrupted trajectory ending for orphaned fixed-store global sessions", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    const cutoff = Date.now() - 60_000;
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("orphan-global-session", {
+        lifecycleRunId: "orphan-global-run",
+        updatedAt: cutoff - 10_000,
+      }),
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    const result = await markStartupOrphanedMainSessionsForRecovery({
+      cfg,
+      activeSessionKeys: [],
+      activeSessionIds: [],
+      updatedBeforeMs: cutoff,
+    });
+
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    const store = readStore(storePath);
+    expect(store.global?.abortedLastRun).toBe(true);
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      agentId: "ops",
+      sessionId: "orphan-global-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "orphan-global-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
   });
 
   it("does not create empty agent databases while scanning startup recovery", async () => {

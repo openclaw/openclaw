@@ -1,16 +1,20 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { resolveSessionStoreCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
+  type InternalSessionEntry,
   type InternalSessionEntry as SessionEntry,
   type RestartRecoveryRun,
   resolveAllAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import { listDurableSqliteTargetOwnersForSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { recordInterruptedSessionTrajectoryEnd } from "../../trajectory/interrupted-end.js";
 import {
   listActiveEmbeddedRunSessionIds,
@@ -31,9 +35,27 @@ import {
   resolveRestartRecoveryStorePaths,
 } from "./main-session-restart-recovery-shared.js";
 
+function resolveInterruptedSessionOwner(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionKey: string;
+}): string | undefined {
+  const parsed = parseAgentSessionKey(params.sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  // Global and legacy-alias keys in a fixed store are owned by the configured
+  // compatibility agent (an explicit persisted owner or the legacy default).
+  // Agent-scoped keys already returned above, so this only applies to unscoped keys.
+  if (params.cfg) {
+    return resolveSessionStoreCompatibilityAgentId(params.cfg);
+  }
+  return undefined;
+}
+
 async function markRecoveryStore(params: {
   storePath: string;
   statuses?: Array<NonNullable<SessionEntry["status"]>>;
+  cfg?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   trajectoryReason?: string;
   plan: (
@@ -44,70 +66,98 @@ async function markRecoveryStore(params: {
     | { action: "retire_terminal" }
     | undefined;
 }) {
-  const markedSessions: Array<{ sessionKey: string; sessionId: string; runId?: string }> = [];
-  const storeResult = await applySessionEntryReplacements<{ marked: number; skipped: number }>({
-    storePath: params.storePath,
-    statuses: params.statuses,
-    requireWriteSuccess: true,
-    update: (entries) => {
-      const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
-      const counts = { marked: 0, skipped: 0 };
-      for (const { sessionKey, entry } of entries) {
-        const plan = params.plan(entry, sessionKey);
-        if (!plan) {
-          continue;
-        }
-        if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
-          counts.skipped++;
-          continue;
-        }
-        if (plan.action === "retire_terminal") {
-          transitionMainSessionRecovery(entry, {
-            kind: "observe",
-            cycleId: randomUUID(),
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+  // Fixed stores may partition rows across per-agent SQLite siblings. Scan each
+  // durable owner so global/legacy-alias keys under an explicit compatibility
+  // agent are processed in their own database, not silently dropped by the
+  // default-owner resolution.
+  const owners = listDurableSqliteTargetOwnersForSessionStorePath(params.storePath);
+  const agentIdsToScan = owners.length > 0 ? owners : [undefined];
+  const aggregated = { marked: 0, skipped: 0 };
+  for (const ownerAgentId of agentIdsToScan) {
+    const markedSessions: Array<{
+      sessionKey: string;
+      sessionId: string;
+      runId?: string;
+      agentId?: string;
+    }> = [];
+    const groupResult = await applySessionEntryReplacements<{ marked: number; skipped: number }>({
+      storePath: params.storePath,
+      statuses: params.statuses,
+      requireWriteSuccess: true,
+      ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
+      update: (entries) => {
+        const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
+        const counts = { marked: 0, skipped: 0 };
+        for (const { sessionKey, entry } of entries) {
+          const plan = params.plan(entry, sessionKey);
+          if (!plan) {
+            continue;
+          }
+          if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+            counts.skipped++;
+            continue;
+          }
+          if (plan.action === "retire_terminal") {
+            transitionMainSessionRecovery(entry, {
+              kind: "observe",
+              cycleId: randomUUID(),
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+              sessionKey,
+            });
+            replacements.push({ sessionKey, entry });
+            counts.skipped++;
+            continue;
+          }
+          // SAFETY: replacement snapshots are persisted InternalSessionEntry rows containing the internal lifecycleRunId field.
+          const interruptedRunId = (entry as InternalSessionEntry).lifecycleRunId;
+          const sessionOwnerAgentId = resolveInterruptedSessionOwner({
+            cfg: params.cfg,
             sessionKey,
           });
+          if (plan.replaceRuns) {
+            entry.restartRecoveryRuns = plan.runs;
+          }
+          transitionMainSessionRecovery(entry, {
+            kind: "mark_interrupted",
+            cycleId: randomUUID(),
+            now: Date.now(),
+            ...plan,
+          });
           replacements.push({ sessionKey, entry });
-          counts.skipped++;
-          continue;
+          markedSessions.push({
+            sessionKey,
+            sessionId: entry.sessionId,
+            runId: interruptedRunId,
+            agentId: sessionOwnerAgentId,
+          });
+          counts.marked++;
         }
-        const interruptedRunId = (entry as SessionEntry).lifecycleRunId;
-        if (plan.replaceRuns) {
-          entry.restartRecoveryRuns = plan.runs;
-        }
-        transitionMainSessionRecovery(entry, {
-          kind: "mark_interrupted",
-          cycleId: randomUUID(),
-          now: Date.now(),
-          ...plan,
+        return { result: counts, replacements };
+      },
+    });
+    aggregated.marked += groupResult.marked;
+    aggregated.skipped += groupResult.skipped;
+    // State commit succeeded first, so only genuinely interrupted sessions get a
+    // terminal trajectory event; a failed or stale transition never fabricates one.
+    for (const marked of markedSessions) {
+      try {
+        await recordInterruptedSessionTrajectoryEnd({
+          agentId: marked.agentId,
+          env: params.env,
+          runId: marked.runId,
+          sessionKey: marked.sessionKey,
+          sessionId: marked.sessionId,
+          storePath: params.storePath,
+          reason: params.trajectoryReason,
         });
-        replacements.push({ sessionKey, entry });
-        markedSessions.push({ sessionKey, sessionId: entry.sessionId, runId: interruptedRunId });
-        counts.marked++;
+      } catch (err) {
+        mainSessionRecoveryLog.warn(
+          `failed to record interrupted trajectory end for ${marked.sessionKey}: ${String(err)}`,
+        );
       }
-      return { result: counts, replacements };
-    },
-  });
-  // State commit succeeded first, so only genuinely interrupted sessions get a
-  // terminal trajectory event; a failed or stale transition never fabricates one.
-  for (const marked of markedSessions) {
-    try {
-      await recordInterruptedSessionTrajectoryEnd({
-        env: params.env,
-        runId: marked.runId,
-        sessionKey: marked.sessionKey,
-        sessionId: marked.sessionId,
-        storePath: params.storePath,
-        reason: params.trajectoryReason,
-      });
-    } catch (err) {
-      mainSessionRecoveryLog.warn(
-        `failed to record interrupted trajectory end for ${marked.sessionKey}: ${String(err)}`,
-      );
     }
   }
-  return storeResult;
+  return aggregated;
 }
 
 export async function markRestartAbortedMainSessions(params: {
@@ -197,6 +247,7 @@ export async function markRestartAbortedMainSessions(params: {
   for (const storePath of storePaths) {
     const storeResult = await markRecoveryStore({
       storePath,
+      cfg: params.cfg,
       env,
       trajectoryReason: params.reason,
       plan: (entry, sessionKey) => {
@@ -293,6 +344,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
     const storeResult = await markRecoveryStore({
       storePath,
       statuses: ["running"],
+      cfg: params.cfg,
       env,
       plan: (entry, sessionKey) => {
         if (entry.status !== "running" || entry.abortedLastRun === true) {
