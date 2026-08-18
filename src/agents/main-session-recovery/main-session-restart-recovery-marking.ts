@@ -15,7 +15,7 @@ import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import { LEGACY_IMPLICIT_AGENT_ID, parseAgentSessionKey } from "../../routing/session-key.js";
-import { recordInterruptedSessionTrajectoryEnd } from "../../trajectory/interrupted-end.js";
+import { appendInterruptedSessionTrajectoryEndSync } from "../../trajectory/interrupted-end.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -138,28 +138,22 @@ async function markRecoveryStore(params: {
         }
         return { result: counts, replacements };
       },
+      afterWriteInTransaction: () => {
+        for (const marked of markedSessions) {
+          appendInterruptedSessionTrajectoryEndSync({
+            agentId: marked.agentId,
+            env: params.env,
+            runId: marked.runId,
+            sessionKey: marked.sessionKey,
+            sessionId: marked.sessionId,
+            storePath: params.storePath,
+            reason: params.trajectoryReason,
+          });
+        }
+      },
     });
     aggregated.marked += groupResult.marked;
     aggregated.skipped += groupResult.skipped;
-    // State commit succeeded first, so only genuinely interrupted sessions get a
-    // terminal trajectory event; a failed or stale transition never fabricates one.
-    for (const marked of markedSessions) {
-      try {
-        await recordInterruptedSessionTrajectoryEnd({
-          agentId: marked.agentId,
-          env: params.env,
-          runId: marked.runId,
-          sessionKey: marked.sessionKey,
-          sessionId: marked.sessionId,
-          storePath: params.storePath,
-          reason: params.trajectoryReason,
-        });
-      } catch (err) {
-        mainSessionRecoveryLog.warn(
-          `failed to record interrupted trajectory end for ${marked.sessionKey}: ${String(err)}`,
-        );
-      }
-    }
   }
   return aggregated;
 }

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { recordInterruptedSessionTrajectoryEnd } from "../../trajectory/interrupted-end.js";
+import { appendInterruptedSessionTrajectoryEndSync } from "../../trajectory/interrupted-end.js";
 import {
   retryMainSessionRecoveryMutation,
   scheduleMainSessionRecoveryMutation,
@@ -62,6 +62,7 @@ export async function commitMainSessionRecovery(params: {
   scanAliases?: boolean;
   shouldContinue?: () => boolean;
   target: MainSessionRecoveryStoreTarget;
+  afterWriteInTransaction?: (result: MainSessionRecoveryStoreResult) => void;
 }): Promise<MainSessionRecoveryStoreResult> {
   const reservationCleanup =
     params.command.kind === "cancel_reservation" || params.command.kind === "abandon_reservation"
@@ -83,6 +84,9 @@ export async function commitMainSessionRecovery(params: {
     requireWriteSuccess: params.requireWriteSuccess,
     ...(scansAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
+    ...(params.afterWriteInTransaction
+      ? { afterWriteInTransaction: params.afterWriteInTransaction }
+      : {}),
     update: (entries) => {
       // Recheck inside the synchronous commit: shutdown can begin while this
       // recovery owner is waiting to acquire the session-store transaction.
@@ -210,6 +214,22 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
       requireWriteSuccess: true,
       ...(params.shouldContinue ? { shouldContinue: params.shouldContinue } : {}),
       target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      afterWriteInTransaction: (result) => {
+        if (
+          result.transition.kind !== "applied" ||
+          result.entry?.sessionId !== params.sessionId() ||
+          !result.sessionKey
+        ) {
+          return;
+        }
+        appendInterruptedSessionTrajectoryEndSync({
+          agentId: params.agentId,
+          runId: params.runId,
+          sessionKey: result.sessionKey,
+          sessionId: result.entry.sessionId,
+          storePath: params.storePath,
+        });
+      },
     });
     restored = true;
     if (
@@ -218,19 +238,6 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
       !recovery.sessionKey
     ) {
       return undefined;
-    }
-    try {
-      await recordInterruptedSessionTrajectoryEnd({
-        agentId: params.agentId,
-        runId: params.runId,
-        sessionKey: recovery.sessionKey,
-        sessionId: recovery.entry.sessionId,
-        storePath: params.storePath,
-      });
-    } catch (error) {
-      params.logWarn(
-        `failed to record interrupted trajectory end for ${recovery.sessionKey}: ${String(error)}`,
-      );
     }
     return {
       sessionId: recovery.entry.sessionId,

@@ -41,7 +41,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
-import { recordInterruptedSessionTrajectoryEnd } from "../../trajectory/interrupted-end.js";
+import { appendInterruptedSessionTrajectoryEndSync } from "../../trajectory/interrupted-end.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-admission.js";
 import {
@@ -1087,8 +1087,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
 }): Promise<void> {
   try {
     let interruptedRunId: string | undefined;
-    let committedTransition = false;
-    const persisted = await updateSessionEntry(
+    await updateSessionEntry(
       {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -1110,7 +1109,6 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
           return null;
         }
         interruptedRunId = entry.lifecycleRunId;
-        committedTransition = true;
         const endedAt = Date.now();
         return {
           status: "killed",
@@ -1124,19 +1122,21 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
         skipMaintenance: true,
         takeCacheOwnership: true,
         requireWriteSuccess: false,
+        afterWriteInTransaction: (result) => {
+          // Only this invocation's own running-to-killed transition records the
+          // event; a stale snapshot returns an unchanged entry and skips the hook.
+          if (result.status === "killed") {
+            appendInterruptedSessionTrajectoryEndSync({
+              agentId: params.agentId,
+              runId: interruptedRunId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              storePath: params.storePath,
+            });
+          }
+        },
       },
     );
-    // A stale snapshot or already-killed row returns an unchanged entry; only
-    // this invocation's own running-to-killed transition records the event.
-    if (committedTransition && persisted?.status === "killed") {
-      await recordInterruptedSessionTrajectoryEnd({
-        agentId: params.agentId,
-        runId: interruptedRunId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        storePath: params.storePath,
-      });
-    }
   } catch (err) {
     // Registry ownership is already gone; preserve the completed recovery result.
     diag.warn(
