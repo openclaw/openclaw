@@ -9,7 +9,10 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
 } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
-import { listDurableSqliteTargetOwnersForSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import {
+  listDurableSqliteTargetOwnersForSessionStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -76,6 +79,13 @@ async function markRecoveryStore(params: {
   const agentIdsToScan = owners.length > 0 ? owners : [undefined];
   const aggregated = { marked: 0, skipped: 0 };
   for (const ownerAgentId of agentIdsToScan) {
+    // Resolve the trajectory database target for this owner partition before
+    // opening the session write transaction so filesystem/registry inspection
+    // does not run while the session lock is held.
+    const trajectoryTarget = resolveSqliteTargetFromSessionStorePath(
+      params.storePath,
+      ownerAgentId ? { agentId: ownerAgentId } : {},
+    );
     const markedSessions: Array<{
       sessionKey: string;
       sessionId: string;
@@ -141,7 +151,8 @@ async function markRecoveryStore(params: {
       afterWriteInTransaction: () => {
         for (const marked of markedSessions) {
           appendInterruptedSessionTrajectoryEndSync({
-            agentId: marked.agentId,
+            agentDatabaseAgentId: trajectoryTarget.agentId ?? marked.agentId,
+            agentDatabasePath: trajectoryTarget.path,
             env: params.env,
             runId: marked.runId,
             sessionKey: marked.sessionKey,

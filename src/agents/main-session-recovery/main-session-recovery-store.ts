@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { appendInterruptedSessionTrajectoryEndSync } from "../../trajectory/interrupted-end.js";
 import {
@@ -199,6 +200,12 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
   storePath: string;
 }): () => Promise<MainSessionRecoveryPendingTarget | undefined> {
   let restored = false;
+  // Resolve the trajectory database target before opening the session write
+  // transaction so filesystem/registry inspection does not run while the
+  // session lock is held.
+  const trajectoryTarget = resolveSqliteTargetFromSessionStorePath(params.storePath, {
+    agentId: params.agentId,
+  });
   return async () => {
     if (restored || params.shouldContinue?.() === false) {
       return undefined;
@@ -223,7 +230,8 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
           return;
         }
         appendInterruptedSessionTrajectoryEndSync({
-          agentId: params.agentId,
+          agentDatabaseAgentId: trajectoryTarget.agentId ?? params.agentId,
+          agentDatabasePath: trajectoryTarget.path,
           runId: params.runId,
           sessionKey: result.sessionKey,
           sessionId: result.entry.sessionId,

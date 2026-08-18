@@ -30,6 +30,7 @@ const TRAJECTORY_RUNTIME_DELETE_RUN_BATCH_SIZE = 100;
 
 export type SqliteTrajectoryRuntimeScope = {
   agentId?: string;
+  agentDatabasePath?: string;
   env?: NodeJS.ProcessEnv;
   maxGlobalRuntimeBytes?: number;
   maxRuntimeBytes?: number;
@@ -275,10 +276,23 @@ function getTrajectoryKysely(database: import("node:sqlite").DatabaseSync) {
 
 function toDatabaseOptions(scope: {
   agentId?: string;
+  agentDatabasePath?: string;
   env?: NodeJS.ProcessEnv;
   storePath: string;
 }): OpenClawAgentDatabaseOptions {
   const requestedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : undefined;
+  if (scope.agentDatabasePath) {
+    if (!requestedAgentId) {
+      throw new Error(
+        "Trajectory store scope requires an explicit agent id when agentDatabasePath is provided.",
+      );
+    }
+    return {
+      agentId: requestedAgentId,
+      env: scope.env,
+      path: scope.agentDatabasePath,
+    };
+  }
   const target = resolveSqliteTargetFromSessionStorePath(
     scope.storePath,
     requestedAgentId ? { agentId: requestedAgentId } : {},
