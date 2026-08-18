@@ -721,6 +721,48 @@ describe("main session recovery store", () => {
     ]);
   });
 
+  it("records the trajectory ending even if shutdown begins immediately after the rollback commits", async () => {
+    await write(
+      interruptedEntry({
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-1",
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration }],
+      }),
+    );
+
+    let continuation = true;
+    const restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
+      agentId: "main",
+      lifecycleGeneration,
+      logWarn: () => {},
+      runId: "recovery-1",
+      sessionId: () => "session-1",
+      sessionKey,
+      shouldContinue: () => continuation,
+      storePath,
+    });
+
+    const resultPromise = restoreAdmittedRecovery();
+    continuation = false;
+    await expect(resultPromise).resolves.toEqual({
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+    });
+
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      sessionId: "session-1",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "recovery-1",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
   it("records no trajectory ending when the admitted recovery restore is rejected", async () => {
     await write(
       interruptedEntry({

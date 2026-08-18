@@ -215,8 +215,7 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
     if (
       recovery.transition.kind !== "applied" ||
       recovery.entry?.sessionId !== params.sessionId() ||
-      !recovery.sessionKey ||
-      params.shouldContinue?.() === false
+      !recovery.sessionKey
     ) {
       return undefined;
     }
