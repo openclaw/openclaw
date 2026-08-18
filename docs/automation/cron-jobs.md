@@ -1128,7 +1128,7 @@ openclaw cron add --name inbox-poll --cron "*/15 * * * *" \
 
 Host-shell authorization reuses the **same surface as exec / system-run**:
 
-1. `cron.triggers.enabled` must be **true** (unattended host-shell switch), and
+1. Host-shell prechecks are **enabled by default**; set `cron.triggers.enabled: false` to disable unattended host-shell precheck/trigger scripts, and
 2. exec security `deny|allowlist|full` (approvals file + shell allowlist analysis).
 
 Denied prechecks record `status=error` with reason `precheck-policy-denied` and **do not** start a payload/model turn. Treat commands like any other unattended shell you schedule — only trusted scripts, secrets in files/env (not inline), known directory preferred over ad-hoc one-liners.
