@@ -220,6 +220,8 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
   sessionKey: string;
   stateDir?: string;
   storePath: string;
+  /** Durable SQLite partition owner; exact reads without it select the store's default partition. */
+  agentId?: string;
 }): void {
   const recover = () =>
     runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -233,6 +235,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
         sessionKey: params.sessionKey,
         stateDir: params.stateDir,
         storePath: params.storePath,
+        agentId: params.agentId,
         gatewayRuntime,
       });
     });
@@ -249,6 +252,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
           sessionKey: params.sessionKey,
         },
         storePath: params.storePath,
+        agentId: params.agentId,
       });
       if (result.failed === 0 && (result.started > 0 || result.settled > 0 || !stillPending)) {
         return true;

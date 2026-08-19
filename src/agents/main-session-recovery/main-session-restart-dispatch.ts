@@ -333,6 +333,7 @@ function scheduleRestartRecoveryReservationRollback(
           sessionId: entry.sessionId,
           sessionKey,
           storePath: params.storePath,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
         });
       }
     },
@@ -710,7 +711,7 @@ export async function resumeMainSession(params: {
           | undefined;
         try {
           restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
-            agentId: params.agentId,
+            agentId: params.dbAgentId ?? params.agentId,
             lifecycleGeneration,
             logWarn: (message) => log.warn(message),
             runId: recoveryRunId,
@@ -758,6 +759,7 @@ export async function resumeMainSession(params: {
           reservation: reservation!,
           sessionKey: params.sessionKey,
           storePath: params.storePath,
+          agentId: params.dbAgentId,
         });
       });
     }

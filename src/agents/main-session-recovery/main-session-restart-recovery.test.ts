@@ -2081,6 +2081,7 @@ describe("main-session-restart-recovery", () => {
         sessionId: "main-session",
         sessionKey: "agent:main:main",
         storePath,
+        agentId: "main",
       });
     } finally {
       schedulePendingSpy.mockRestore();
@@ -4054,6 +4055,58 @@ describe("main-session-restart-recovery", () => {
       abortedLastRun: false,
     });
     expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("retries an ops-partition owner-release recovery through its durable owner", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("global-session", {
+        lifecycleRunId: "global-run",
+        pendingFinalDelivery: makePendingFinalDelivery(),
+        restartRecoveryForceSafeTools: true,
+      }),
+    );
+    const markResult = await markRestartAbortedMainSessions({ cfg, sessionKeys: ["global"] });
+    expect(markResult).toEqual({ marked: 1, skipped: 0 });
+
+    vi.mocked(callGateway)
+      .mockRejectedValueOnce(new Error("temporary dispatch failure"))
+      .mockResolvedValueOnce({ runId: "run-resumed" })
+      .mockResolvedValueOnce({ runId: "run-resumed", status: "running" });
+
+    scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease({
+      delayMs: 0,
+      expectedSessionId: "global-session",
+      getConfig: () => cfg,
+      getGatewayRuntime: () => mockRecoveryRuntime,
+      maxRetries: 3,
+      sessionKey: "global",
+      storePath,
+      agentId: "ops",
+    });
+
+    // Without the carried owner the exact retry reads the store's default
+    // partition, finds nothing, and silently stops before any dispatch.
+    await waitForFast(() => {
+      expect(loadSessionEntry({ agentId: "ops", sessionKey: "global", storePath })).toMatchObject({
+        abortedLastRun: false,
+      });
+    });
+    await waitForFast(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(callGateway).toHaveBeenCalledTimes(3);
+    expect(gatewayParams()).toMatchObject({ agentId: "ops", sessionKey: "global" });
   });
 
   it("tombstones exhausted recovery with replacement-session instructions", async () => {

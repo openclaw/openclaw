@@ -99,6 +99,7 @@ describe("main session recovery store interrupted trajectory transaction failure
       sessionId: "session-1",
       sessionKey,
       storePath,
+      agentId: "main",
     });
     expect(read()).toMatchObject({
       abortedLastRun: true,

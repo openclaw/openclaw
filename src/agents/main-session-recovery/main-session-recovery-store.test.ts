@@ -523,6 +523,26 @@ describe("main session recovery store", () => {
     });
   });
 
+  it("carries the durable partition owner into the owner-release retry target", async () => {
+    await write(interruptedEntry());
+    const claim = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration,
+      sessionId: "session-1",
+      target: { sessionKey, storePath, agentId: "main" },
+    });
+    if (claim.kind !== "claimed") {
+      throw new Error("expected foreground owner claim");
+    }
+    expect(claim.lease.agentId).toBe("main");
+
+    await expect(releaseMainSessionRecoveryOwner(claim.lease)).resolves.toEqual({
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+      agentId: "main",
+    });
+  });
+
   it("does not let an old lease release a same-token claim from a new cycle", async () => {
     await write(interruptedEntry());
     const oldClaim = await claimRecovery();
@@ -702,6 +722,7 @@ describe("main session recovery store", () => {
       sessionId: "session-1",
       sessionKey,
       storePath,
+      agentId: "main",
     });
     const restoredEntry = read();
     expect(restoredEntry).toMatchObject({
@@ -755,6 +776,7 @@ describe("main session recovery store", () => {
       sessionId: "session-1",
       sessionKey,
       storePath,
+      agentId: "main",
     });
 
     const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({

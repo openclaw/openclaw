@@ -223,6 +223,17 @@ describe("agent run admission phase restart recovery", () => {
 
     await expect(prepareAgentRunDispatch(params)).resolves.toBeUndefined();
 
+    // The admission commit must carry the durable partition owner: without it
+    // the accessor resolves the store's default partition for a global row
+    // owned by another agent and rejects the reservation before dispatch.
+    expect(commitRecoverySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        command: expect.objectContaining({ kind: "admit_recovery" }),
+        target: { sessionKey, storePath },
+      }),
+    );
+
     // The preparation exit restores the admitted row through the interrupted
     // terminal-event path instead of leaving it admitted with no dispatch.
     // (The restore closure runs inside the store module, so spy it by its
@@ -246,6 +257,7 @@ describe("agent run admission phase restart recovery", () => {
         sessionId: "session-1",
         sessionKey,
         storePath,
+        agentId: "main",
       }),
     );
     expect(params.io.emitAcceptance).toHaveBeenCalledWith([

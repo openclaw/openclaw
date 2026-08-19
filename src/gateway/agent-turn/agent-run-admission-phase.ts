@@ -423,6 +423,10 @@ export async function prepareAgentRunDispatch(params: {
           sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
         },
         requireWriteSuccess: true,
+        // The durable fixed-store partition owner, not the store's default:
+        // admitting without it selects the default partition for a global row
+        // owned by another agent (e.g. ops) and rejects the reservation.
+        agentId: params.activeSessionAgentId,
         target: { sessionKey: recoverySessionKey, storePath: lifecycleStorePath },
       });
       if (recoveryAdmission.transition.kind !== "admitted_recovery") {

@@ -21,6 +21,8 @@ import {
 type MainSessionRecoveryStoreTarget = {
   sessionKey: string;
   storePath: string;
+  /** Durable SQLite partition owner; carried into deferred retry targets so exact reads stay on the owning partition. */
+  agentId?: string;
 };
 
 export type MainSessionRecoveryOwnerLease = MainSessionRecoveryOwnerClaim &
@@ -253,6 +255,10 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
       sessionId: recovery.entry.sessionId,
       sessionKey: recovery.sessionKey,
       storePath: params.storePath,
+      // Deferred retries reopen this exact store without the admission
+      // context; the owner must travel with the target or the retry reads
+      // the store's default partition and leaves the ops-owned row pending.
+      agentId: params.agentId,
     };
   };
 }
@@ -269,6 +275,7 @@ export async function refreshMainSessionRecoveryOwner(
       : { kind: "validate_foreground", claim: lease },
     requireWriteSuccess: true,
     target: lease,
+    agentId: lease.agentId,
   });
   const accepted = runId
     ? result.transition.kind === "applied"
@@ -303,6 +310,7 @@ export async function claimMainSessionRecoveryOwner(params: {
     command,
     requireWriteSuccess: true,
     target: params.target,
+    agentId: params.target.agentId,
   });
   if (claim.transition.kind === "rejected" && claim.transition.reason === "session_replaced") {
     claim = await commitMainSessionRecovery({
@@ -310,6 +318,7 @@ export async function claimMainSessionRecoveryOwner(params: {
       requireWriteSuccess: true,
       scanAliases: true,
       target: params.target,
+      agentId: params.target.agentId,
     });
   }
   if (claim.transition.kind === "foreground_claimed") {
@@ -318,7 +327,13 @@ export async function claimMainSessionRecoveryOwner(params: {
     }
     return {
       kind: "claimed",
-      lease: { ...claim.transition.claim, storePath: params.target.storePath },
+      lease: {
+        ...claim.transition.claim,
+        storePath: params.target.storePath,
+        // The lease is the only owner provenance the release retry sees;
+        // dropping it here reopens the durable row from the default partition.
+        ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+      },
       entry: claim.entry,
       sessionKey: claim.sessionKey,
     } as const;
@@ -370,6 +385,7 @@ export async function inspectMainSessionRecoveryRequired(params: {
     expectedSessionId: params.expectedSessionId,
     requireWriteSuccess: true,
     target: params.target,
+    agentId: params.target.agentId,
   });
   if (result.transition.kind === "rejected" && result.transition.reason === "session_replaced") {
     result = await commitMainSessionRecovery({
@@ -378,6 +394,7 @@ export async function inspectMainSessionRecoveryRequired(params: {
       requireWriteSuccess: true,
       scanAliases: true,
       target: params.target,
+      agentId: params.target.agentId,
     });
   }
   if (result.transition.kind === "observed") {
@@ -406,6 +423,7 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
       command: { kind: "release_foreground", claim: lease },
       requireWriteSuccess: true,
       target: lease,
+      agentId: lease.agentId,
     }),
   );
   const { entry, sessionKey } = released;
@@ -418,7 +436,14 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
   ) {
     return undefined;
   }
-  return { sessionId: entry.sessionId, sessionKey, storePath: lease.storePath };
+  return {
+    sessionId: entry.sessionId,
+    sessionKey,
+    storePath: lease.storePath,
+    // The release retry may run after the claiming context is gone; only the
+    // lease-carried owner keeps the follow-up recovery on the durable partition.
+    ...(lease.agentId ? { agentId: lease.agentId } : {}),
+  };
 }
 
 export async function releaseMainSessionRecoveryOwner(
