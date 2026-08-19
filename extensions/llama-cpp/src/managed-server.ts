@@ -10,6 +10,7 @@ import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssr
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
+  DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE,
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
@@ -338,6 +339,9 @@ function renderLlamaServerPreset(params: {
   lines.push(
     `[${embeddingId}]`,
     `model = ${assertIniValue(params.embeddingModelPath, "llama.cpp embedding model path")}`,
+    // Stanza-scoped: independent of the chat stanza's ctx-size. Never pass
+    // --ctx-size on the router command line; CLI args override preset keys.
+    `ctx-size = ${DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE}`,
     "embedding = true",
     "",
   );

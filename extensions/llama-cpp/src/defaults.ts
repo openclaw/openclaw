@@ -31,6 +31,10 @@ export const DEFAULT_LLAMA_CPP_MODEL_SHA256 =
 // the first turn. 64K leaves real headroom for history and tool output; Gemma 4
 // supports far more, and the 16 GiB offer floor already bounds weaker machines.
 export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 65536;
+// Embedding server context. Uncapped, llama.cpp reserves the model's full
+// training context per slot; 8,192 covers the Gateway's per-input ceiling
+// (MAX_EMBEDDING_INPUT_CHARS, chars >= tokens) so no direct caller loses capacity.
+export const DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE = 8192;
 
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
