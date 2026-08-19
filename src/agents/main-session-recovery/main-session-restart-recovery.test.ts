@@ -595,6 +595,51 @@ describe("main-session-restart-recovery", () => {
     ]);
   });
 
+  it("recovers an ops-owned fixed-store global session from the same partition", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("global-session", {
+        lifecycleRunId: "global-run",
+        pendingFinalDelivery: makePendingFinalDelivery(),
+        restartRecoveryForceSafeTools: true,
+      }),
+    );
+
+    const markResult = await markRestartAbortedMainSessions({
+      cfg,
+      sessionKeys: ["global"],
+    });
+    expect(markResult).toEqual({ marked: 1, skipped: 0 });
+
+    const recovery = await recoverRestartAbortedMainSessions({ cfg });
+    expect(recovery).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+
+    expect(gatewayParams()).toMatchObject({ agentId: "ops", sessionKey: "global" });
+
+    const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+      agentId: "ops",
+      sessionId: "global-session",
+      storePath,
+    });
+    expect(trajectoryEvents).toEqual([
+      expect.objectContaining({
+        type: "session.ended",
+        runId: "global-run",
+        data: expect.objectContaining({ status: "interrupted", aborted: true }),
+      }),
+    ]);
+  });
+
   it("records an interrupted trajectory ending for config-less fixed-store global sessions", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -637,7 +682,8 @@ describe("main-session-restart-recovery", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
-    const storePaths = await resolveRestartRecoveryStorePaths({ cfg, stateDir: tmpDir });
+    const targets = await resolveRestartRecoveryStorePaths({ cfg, stateDir: tmpDir });
+    const storePaths = targets.map((target) => target.storePath);
 
     expect(storePaths).toContain(path.join(configuredSessionsDir, "sessions.json"));
     expect(storePaths).not.toContain(path.join(staleSessionsDir, "sessions.json"));
@@ -653,8 +699,8 @@ describe("main-session-restart-recovery", () => {
       session: { store: storePath },
     } as OpenClawConfig;
 
-    await expect(resolveRestartRecoveryStorePaths({ cfg, stateDir: tmpDir })).resolves.toContain(
-      storePath,
+    await expect(resolveRestartRecoveryStorePaths({ cfg, stateDir: tmpDir })).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ storePath })]),
     );
   });
 

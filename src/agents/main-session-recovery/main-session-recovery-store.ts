@@ -63,6 +63,7 @@ export async function commitMainSessionRecovery(params: {
   scanAliases?: boolean;
   shouldContinue?: () => boolean;
   target: MainSessionRecoveryStoreTarget;
+  agentId?: string;
   afterWriteInTransaction?: (result: MainSessionRecoveryStoreResult) => void;
 }): Promise<MainSessionRecoveryStoreResult> {
   const reservationCleanup =
@@ -85,6 +86,7 @@ export async function commitMainSessionRecovery(params: {
     requireWriteSuccess: params.requireWriteSuccess,
     ...(scansAliases ? {} : { sessionKeys: [params.target.sessionKey] }),
     storePath: params.target.storePath,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.afterWriteInTransaction
       ? { afterWriteInTransaction: params.afterWriteInTransaction }
       : {}),
@@ -220,6 +222,7 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
       requireWriteSuccess: true,
       ...(params.shouldContinue ? { shouldContinue: params.shouldContinue } : {}),
       target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      agentId: params.agentId,
       afterWriteInTransaction: (result) => {
         if (
           result.transition.kind !== "applied" ||

@@ -153,11 +153,13 @@ async function settleRestartRecoveryDispatch(params: {
   sessionKeys: readonly string[];
   shouldContinue?: () => boolean;
   storePath: string;
+  agentId?: string;
   terminalStatus?: RestartRecoveryTerminalStatus;
 }): Promise<void> {
   await applySessionEntryReplacements({
     sessionKeys: params.sessionKeys,
     storePath: params.storePath,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     update: (entries) => {
       if (params.shouldContinue?.() === false) {
         return { result: undefined };
@@ -247,6 +249,7 @@ async function settleAcceptedRestartRecovery(params: {
   sessionKeys: readonly string[];
   shouldContinue?: () => boolean;
   storePath: string;
+  agentId?: string;
   terminalStatus?: RestartRecoveryTerminalStatus;
 }): Promise<boolean> {
   const admission = await commitMainSessionRecovery({
@@ -259,6 +262,7 @@ async function settleAcceptedRestartRecovery(params: {
     },
     shouldContinue: params.shouldContinue,
     target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    agentId: params.agentId,
   });
   if (
     admission.transition.kind !== "admitted_recovery" &&
@@ -279,6 +283,7 @@ async function settleAcceptedRestartRecovery(params: {
     await commitMainSessionRecovery({
       command: { kind: "abandon_reservation", reservation: params.reservation },
       target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      agentId: params.agentId,
     });
   }
   if (params.shouldContinue?.() !== false) {
@@ -294,12 +299,14 @@ async function rollbackRestartRecoveryReservation(params: {
   reservation: MainSessionRecoveryReservation;
   sessionKey: string;
   storePath: string;
+  agentId?: string;
 }) {
   return await retryMainSessionRecoveryMutation(async () =>
     commitMainSessionRecovery({
       command: { kind: params.kind, reservation: params.reservation },
       requireWriteSuccess: true,
       target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      agentId: params.agentId,
     }),
   );
 }
@@ -334,6 +341,8 @@ function scheduleRestartRecoveryReservationRollback(
 
 export async function resumeMainSession(params: {
   agentId: string;
+  /** Durable SQLite owner partition for reads/writes. Defaults to the store's resolved owner when omitted. */
+  dbAgentId?: string;
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -400,6 +409,7 @@ export async function resumeMainSession(params: {
       reservation: current,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
+      agentId: params.dbAgentId,
     });
     reservation = undefined;
     return { current, result };
@@ -463,6 +473,7 @@ export async function resumeMainSession(params: {
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
       target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      agentId: params.dbAgentId,
     });
     if (reserved.transition.kind !== "reserved") {
       return "skipped";
@@ -477,6 +488,7 @@ export async function resumeMainSession(params: {
     const recoveryStatePrepared = await applySessionEntryReplacements({
       sessionKeys: [params.sessionKey],
       storePath: params.storePath,
+      agentId: params.dbAgentId,
       update: (entries) => {
         if (params.shouldContinue?.() === false) {
           return { result: false };
@@ -619,6 +631,7 @@ export async function resumeMainSession(params: {
         sessionKeys: recoverySessionKeys,
         shouldContinue: params.shouldContinue,
         storePath: params.storePath,
+        agentId: params.dbAgentId,
         terminalStatus,
       }))
     ) {
@@ -672,6 +685,7 @@ export async function resumeMainSession(params: {
             sessionKeys: recoverySessionKeys,
             shouldContinue: params.shouldContinue,
             storePath: params.storePath,
+            agentId: params.dbAgentId,
             terminalStatus,
           });
           if (!settled) {
@@ -705,7 +719,7 @@ export async function resumeMainSession(params: {
             shouldContinue: params.shouldContinue,
             storePath: params.storePath,
             trajectoryTarget: resolveSqliteTargetFromSessionStorePath(params.storePath, {
-              agentId: params.agentId,
+              agentId: params.dbAgentId ?? params.agentId,
             }),
           });
         } catch (resolveError) {
