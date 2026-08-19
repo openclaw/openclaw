@@ -79,7 +79,7 @@ export function normalizeStringSet(values: Iterable<string> | undefined): Set<st
 
 export const normalizeFiniteTimestamp = asFiniteNumber;
 
-export type RestartRecoveryStoreTarget = {
+type RestartRecoveryStoreTarget = {
   storePath: string;
   /** Durable SQLite owner partition that contains running rows. Undefined means the store's default owner. */
   agentId?: string;

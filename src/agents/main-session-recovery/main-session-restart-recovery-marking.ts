@@ -349,7 +349,10 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   // Startup marking scans all durable owners internally, so we only need distinct paths here.
   const storePaths = new Set<string>();
   const recoveryTargets = (await resolveRestartRecoveryStorePaths(params)).filter((target) => {
-    if (params.startupCheckedStorePaths?.has(target.storePath)) {
+    if (
+      params.startupCheckedStorePaths?.has(target.storePath) ||
+      storePaths.has(target.storePath)
+    ) {
       return false;
     }
     storePaths.add(target.storePath);
