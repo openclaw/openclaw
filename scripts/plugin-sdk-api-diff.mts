@@ -225,26 +225,11 @@ async function main(): Promise<void> {
     { commit: baseCommit, name: "base" },
     { commit: headCommit, name: "head" },
   ] as const;
-  const addedWorktrees: string[] = [];
   const abortController = new AbortController();
   let interruptedExitCode: number | undefined;
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = (): Promise<void> => {
-    cleanupPromise ??= (async () => {
-      let cleanupError: Error | undefined;
-      for (const worktree of addedWorktrees.toReversed()) {
-        try {
-          git(repoRoot, ["worktree", "remove", "--force", worktree]);
-        } catch (error) {
-          cleanupError ??=
-            error instanceof Error ? error : new Error("Plugin SDK API worktree cleanup failed");
-        }
-      }
-      await fs.rm(temporaryRoot, { force: true, recursive: true });
-      if (cleanupError) {
-        throw cleanupError;
-      }
-    })();
+    cleanupPromise ??= fs.rm(temporaryRoot, { force: true, recursive: true });
     return cleanupPromise;
   };
   const stop = (exitCode: number): void => {
@@ -258,12 +243,13 @@ async function main(): Promise<void> {
 
   try {
     for (const root of roots) {
-      const worktree = path.join(temporaryRoot, root.name);
-      git(repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree, root.commit]);
-      addedWorktrees.push(worktree);
-      git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
-      git(worktree, ["checkout", "--detach", root.commit]);
-      await installRevisionDependencies(worktree, abortController.signal);
+      const revisionRoot = path.join(temporaryRoot, root.name);
+      // Each revision owns its Git metadata while hard-linking immutable objects;
+      // API diff runs must not mutate or scan the caller's worktree registry.
+      git(repoRoot, ["clone", "--no-checkout", "--local", "--no-tags", repoRoot, revisionRoot]);
+      git(revisionRoot, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
+      git(revisionRoot, ["checkout", "--detach", root.commit]);
+      await installRevisionDependencies(revisionRoot, abortController.signal);
     }
 
     const baseRenderPath = path.join(temporaryRoot, "base.json");

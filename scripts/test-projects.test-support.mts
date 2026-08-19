@@ -146,7 +146,10 @@ type ChangedTestTargetPlan = {
   skippedBroadFallbackPaths?: string[];
 };
 
-type ImportGraphOptions = { tooling?: boolean };
+type ImportGraphOptions = {
+  targetedScans?: { remaining: number };
+  tooling?: boolean;
+};
 type VitestSpecShape = Pick<VitestRunSpec, "config" | "env">;
 type WatchableVitestSpecShape = VitestSpecShape & Pick<VitestRunSpec, "watchMode">;
 type ImportGraph = {
@@ -813,6 +816,11 @@ const TOOLING_IMPORTABLE_FILE_EXTENSIONS = [
 const TOOLING_IMPORT_GRAPH_GREP_PATHS = TOOLING_IMPORT_GRAPH_ROOTS.flatMap((root) =>
   TOOLING_IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
 );
+// Broad matches make one-rg-per-importer traversal more expensive than building
+// the in-memory graph once, especially for shared test support modules.
+const TARGETED_IMPORT_GRAPH_CANDIDATE_LIMIT = 256;
+// Bound subprocess fanout even when every individual search result is narrow.
+const TARGETED_IMPORT_GRAPH_SCAN_LIMIT = 2;
 const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
 const REEXPORT_SPECIFIER_PATTERN =
@@ -1470,8 +1478,7 @@ function resolveImportSpecifier(
   return candidates.find((candidate) => fileSet.has(candidate)) ?? null;
 }
 
-let cachedImportGraph: ImportGraph | null = null;
-let cachedImportGraphCwd: string | null = null;
+const cachedImportGraphs = new Map<string, ImportGraph>();
 const cachedImportGraphFiles = new Map<string, string[]>();
 const cachedImportGraphGrepMatches = new Map<string, string[] | null>();
 const cachedDirectImporters = new Map<string, string[] | null>();
@@ -1642,17 +1649,23 @@ function findDirectImportersWithGitGrep(
     return null;
   }
 
-  let skippedBroadTerm = false;
   const importers: string[] = [];
   for (const term of terms) {
+    if (options.targetedScans && options.targetedScans.remaining === 0) {
+      cachedDirectImporters.set(cacheKey, null);
+      return null;
+    }
+    if (options.targetedScans) {
+      options.targetedScans.remaining -= 1;
+    }
     const candidates = listImportGraphGrepMatches(cwd, term, { tooling });
     if (!candidates) {
       cachedDirectImporters.set(cacheKey, null);
       return null;
     }
-    if (candidates.length > 800) {
-      skippedBroadTerm = true;
-      continue;
+    if (candidates.length > TARGETED_IMPORT_GRAPH_CANDIDATE_LIMIT) {
+      cachedDirectImporters.set(cacheKey, null);
+      return null;
     }
     for (const file of candidates) {
       if (file === importedFile || !fileSet.has(file) || importers.includes(file)) {
@@ -1681,12 +1694,8 @@ function findDirectImportersWithGitGrep(
       break;
     }
   }
-  const result =
-    skippedBroadTerm && importers.length === 0 && !importedFile.startsWith("test/helpers/")
-      ? null
-      : importers;
-  cachedDirectImporters.set(cacheKey, result);
-  return result;
+  cachedDirectImporters.set(cacheKey, importers);
+  return importers;
 }
 
 function resolveAffectedTestsFromTargetedImportScan(
@@ -1708,9 +1717,13 @@ function resolveAffectedTestsFromTargetedImportScan(
   const queue = [normalized];
   const seen = new Set(queue);
   const targets = [];
+  const targetedScans = { remaining: TARGETED_IMPORT_GRAPH_SCAN_LIMIT };
 
   for (const current of queue) {
-    const importers = findDirectImportersWithGitGrep(cwd, current, fileSet, { tooling });
+    const importers = findDirectImportersWithGitGrep(cwd, current, fileSet, {
+      targetedScans,
+      tooling,
+    });
     if (importers === null) {
       return null;
     }
@@ -1732,12 +1745,16 @@ function resolveAffectedTestsFromTargetedImportScan(
   return [...new Set(targets)].toSorted((left, right) => left.localeCompare(right));
 }
 
-function getImportGraph(cwd: string) {
-  if (cachedImportGraph && cachedImportGraphCwd === cwd) {
-    return cachedImportGraph;
+function getImportGraph(cwd: string, options: ImportGraphOptions = {}) {
+  const tooling = options.tooling === true;
+  const cacheKey = `${cwd}\0${tooling ? "tooling" : "source"}`;
+  const cached = cachedImportGraphs.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  const files = listImportGraphFilesForCwd(cwd);
+  const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
+  const files = listImportGraphFilesForCwd(cwd, { tooling });
   const fileSet = new Set(files);
   const reverseImports = new Map<string, string[]>();
   const reverseReexports = new Map<string, string[]>();
@@ -1753,7 +1770,12 @@ function getImportGraph(cwd: string) {
       continue;
     }
     for (const match of source.matchAll(IMPORT_SPECIFIER_PATTERN)) {
-      const imported = resolveImportSpecifier(file, match[1] ?? match[2] ?? "", fileSet);
+      const imported = resolveImportSpecifier(
+        file,
+        match[1] ?? match[2] ?? "",
+        fileSet,
+        extensions,
+      );
       if (!imported) {
         continue;
       }
@@ -1762,7 +1784,7 @@ function getImportGraph(cwd: string) {
       reverseImports.set(imported, importers);
     }
     for (const match of source.matchAll(REEXPORT_SPECIFIER_PATTERN)) {
-      const imported = resolveImportSpecifier(file, match[1] ?? "", fileSet);
+      const imported = resolveImportSpecifier(file, match[1] ?? "", fileSet, extensions);
       if (!imported) {
         continue;
       }
@@ -1772,9 +1794,9 @@ function getImportGraph(cwd: string) {
     }
   }
 
-  cachedImportGraph = { reverseImports, reverseReexports, testFiles };
-  cachedImportGraphCwd = cwd;
-  return cachedImportGraph;
+  const graph = { reverseImports, reverseReexports, testFiles };
+  cachedImportGraphs.set(cacheKey, graph);
+  return graph;
 }
 
 /** Returns whether any changed path reaches one of the requested import-graph targets. */
@@ -1814,17 +1836,17 @@ export function hasImportGraphImpactOnTargets(
 function resolveAffectedTestsFromImportGraph(
   changedPath: string,
   cwd: string,
-  options: { forceFull?: boolean } = {},
+  options: ImportGraphOptions & { direct?: boolean; forceFull?: boolean } = {},
 ) {
   const normalized = normalizePathPattern(changedPath);
   if (options.forceFull !== true) {
-    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd);
+    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd, options);
     if (targetedTargets !== null) {
       return targetedTargets;
     }
   }
 
-  const { reverseImports, testFiles } = getImportGraph(cwd);
+  const { reverseImports, testFiles } = getImportGraph(cwd, options);
   const queue = [normalized];
   const seen = new Set(queue);
   const targets = [];
@@ -1838,7 +1860,9 @@ function resolveAffectedTestsFromImportGraph(
       if (testFiles.has(importer)) {
         targets.push(importer);
       }
-      queue.push(importer);
+      if (options.direct !== true) {
+        queue.push(importer);
+      }
     }
   }
 
@@ -2990,15 +3014,14 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
     semanticTargets.length ||
     conventionalTargets?.length,
   );
-  const importGraphResult =
+  const importGraphTargets =
     !hasDirectOwner &&
     TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext))
-      ? resolveAffectedTestsFromTargetedImportScan(implementationPath, cwd, {
+      ? resolveAffectedTestsFromImportGraph(implementationPath, cwd, {
           tooling: true,
           direct: true,
         })
       : [];
-  const importGraphTargets = importGraphResult ?? [];
   const referenceTargets =
     semanticTargets.length === 0 && (githubYamlGuardTargets || !hasDirectOwner)
       ? resolveDirectToolingReferenceTests(implementationPath, cwd)

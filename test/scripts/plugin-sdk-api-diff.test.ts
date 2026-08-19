@@ -23,11 +23,25 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
 }
 
 describe("Plugin SDK API diff CLI", () => {
-  it("interrupts a running child and removes its registered worktree", async () => {
-    const repo = git(process.cwd(), ["rev-parse", "--show-toplevel"]).trim();
+  it("interrupts a running child and removes its isolated clones", async () => {
+    const repo = tempDirs.make("plugin-sdk-api-diff-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
     const binDir = tempDirs.make("plugin-sdk-api-diff-bin-");
     const pnpmMarker = join(binDir, "pnpm-started");
+
+    git(repo, ["init", "--initial-branch=main"]);
+    writeFileSync(join(repo, "README.md"), "fixture\n");
+    git(repo, ["add", "README.md"]);
+    git(repo, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "-m",
+      "fixture",
+    ]);
+    const worktreeRegistry = git(repo, ["worktree", "list", "--porcelain"]);
 
     const fakePnpm = join(binDir, "pnpm");
     writeFileSync(
@@ -54,6 +68,7 @@ describe("Plugin SDK API diff CLI", () => {
           PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
           PNPM_MARKER: pnpmMarker,
           RUNNER_TEMP: runnerTemp,
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
         },
         stdio: ["ignore", "ignore", "pipe"],
       },
@@ -74,7 +89,8 @@ describe("Plugin SDK API diff CLI", () => {
     try {
       await waitFor(() => existsSync(pnpmMarker) || closed, 10_000);
       expect(closed, stderr).toBe(false);
-      expect(git(repo, ["worktree", "list"])).toContain(runnerTemp);
+      expect(readdirSync(runnerTemp)).not.toEqual([]);
+      expect(git(repo, ["worktree", "list", "--porcelain"])).toBe(worktreeRegistry);
       const interruptedAt = Date.now();
       child.kill("SIGTERM");
       const exitCode = await Promise.race([
@@ -86,7 +102,7 @@ describe("Plugin SDK API diff CLI", () => {
 
       expect(exitCode).toBe(143);
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);
-      expect(git(repo, ["worktree", "list"])).not.toContain(runnerTemp);
+      expect(git(repo, ["worktree", "list", "--porcelain"])).toBe(worktreeRegistry);
       expect(readdirSync(runnerTemp)).toEqual([]);
     } finally {
       if (!closed) {

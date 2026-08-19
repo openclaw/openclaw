@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
 
 const {
@@ -26,16 +26,58 @@ const VITEST_NODE_PREFIX = [
   resolveVitestCliEntry(),
 ];
 
+let routingFixtureRoot = "";
+
+function writeRoutingFixture(relative: string, source: string) {
+  const target = path.join(routingFixtureRoot, relative);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, source);
+}
+
 describe("test-projects args", () => {
   beforeAll(() => {
-    for (const target of [
-      "src/gateway/gateway-connection.test-mocks.ts",
-      "extensions/memory-core/src/memory/test-runtime-mocks.ts",
-      "test/helpers/temp-dir.ts",
-      "src/commands/onboard-non-interactive.test-helpers.ts",
+    routingFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-"));
+    writeRoutingFixture("src/gateway/gateway-connection.test-mocks.ts", "export {}\n");
+    writeRoutingFixture(
+      "src/gateway/call.test.ts",
+      'import "./gateway-connection.test-mocks.js";\n',
+    );
+    writeRoutingFixture(
+      "src/tui/gateway-chat.connection.test.ts",
+      'import "../gateway/gateway-connection.test-mocks.js";\n',
+    );
+    writeRoutingFixture("extensions/memory-core/src/memory/test-runtime-mocks.ts", "export {}\n");
+    writeRoutingFixture(
+      "extensions/memory-core/src/memory/test-runtime-consumer.ts",
+      'import "./test-runtime-mocks.js";\n',
+    );
+    for (const file of [
+      "manager.fts-only-reindex.test.ts",
+      "manager-session-update-race.test.ts",
     ]) {
-      buildVitestRunPlans([target]);
+      writeRoutingFixture(
+        `extensions/memory-core/src/memory/${file}`,
+        'import "./test-runtime-consumer.js";\n',
+      );
     }
+    writeRoutingFixture("test/helpers/temp-dir.ts", "export {}\n");
+    writeRoutingFixture("test/helpers/temp-dir.test.ts", 'import "./temp-dir.js";\n');
+    writeRoutingFixture(
+      "src/gateway/temp-dir-consumer.test.ts",
+      'import {} from "../../test/helpers/temp-dir.js";\n',
+    );
+    writeRoutingFixture(
+      "test/scripts/temp-dir-consumer.test.ts",
+      'import {} from "../helpers/temp-dir.js";\n',
+    );
+    spawnSync("git", ["init", "--quiet", "--initial-branch=main"], {
+      cwd: routingFixtureRoot,
+    });
+    spawnSync("git", ["add", "."], { cwd: routingFixtureRoot });
+  });
+
+  afterAll(() => {
+    fs.rmSync(routingFixtureRoot, { force: true, recursive: true });
   });
 
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
@@ -541,7 +583,9 @@ describe("test-projects args", () => {
   });
 
   it("routes non-test helper file targets to importing tests inside the routed suites", () => {
-    expect(buildVitestRunPlans(["src/gateway/gateway-connection.test-mocks.ts"])).toEqual([
+    expect(
+      buildVitestRunPlans(["src/gateway/gateway-connection.test-mocks.ts"], routingFixtureRoot),
+    ).toEqual([
       {
         config: "test/vitest/vitest.gateway.config.ts",
         forwardedArgs: [],
@@ -559,7 +603,7 @@ describe("test-projects args", () => {
 
   it("routes direct and transitive extension helper importers to the owning config", () => {
     const helper = "extensions/memory-core/src/memory/test-runtime-mocks.ts";
-    const plans = buildVitestRunPlans([helper]);
+    const plans = buildVitestRunPlans([helper], routingFixtureRoot);
 
     expect(plans).toEqual([
       {
@@ -579,7 +623,7 @@ describe("test-projects args", () => {
     // The importer inventory of test/helpers/temp-dir.ts churns with every new
     // test using the helper; frozen full lists broke main on unrelated test
     // additions. Assert the routing structure instead of the inventory.
-    const plans = buildVitestRunPlans(["test/helpers/temp-dir.ts"]);
+    const plans = buildVitestRunPlans(["test/helpers/temp-dir.ts"], routingFixtureRoot);
     const planFiles = plans.map((plan) => plan.includePatterns ?? plan.forwardedArgs);
     const expandedFiles = planFiles.flat();
 
@@ -589,14 +633,14 @@ describe("test-projects args", () => {
     expect(expandedFiles).not.toContain("test/helpers/temp-dir.ts");
     expect(expandedFiles.filter((file) => !file.endsWith(".test.ts"))).toEqual([]);
 
-    // Lower bound derived from the repo itself: every tracked test file that
+    // Lower bound derived from the fixture itself: every tracked test file that
     // directly imports the helper must be picked up by the expansion scan, so
     // dropped importers still fail without freezing the full inventory.
     const scanRoots = ["src", "test", "ui", "extensions", "packages"];
     const grep = spawnSync(
       "git",
       ["grep", "-l", "--fixed-strings", "helpers/temp-dir", "--", ...scanRoots],
-      { encoding: "utf8" },
+      { cwd: routingFixtureRoot, encoding: "utf8" },
     );
     expect(grep.status).toBe(0);
     const directImporterTests = grep.stdout
@@ -604,7 +648,7 @@ describe("test-projects args", () => {
       .map((line) => line.trim())
       .filter((file) => file.endsWith(".test.ts") && !file.endsWith(".live.test.ts"))
       .filter((file) => {
-        const source = fs.readFileSync(file, "utf8");
+        const source = fs.readFileSync(path.join(routingFixtureRoot, file), "utf8");
         return [...source.matchAll(/from\s+["'](\.[^"']+)["']/gu)].some((match) => {
           const importerDir = path.posix.dirname(file);
           const resolved = path.posix.normalize(
@@ -630,7 +674,7 @@ describe("test-projects args", () => {
     for (const plan of plans) {
       expect(plan.watchMode).toBe(false);
       for (const file of plan.includePatterns ?? plan.forwardedArgs) {
-        expect(buildVitestRunPlans([file])).toEqual([
+        expect(buildVitestRunPlans([file], routingFixtureRoot)).toEqual([
           {
             config: plan.config,
             forwardedArgs: plan.includePatterns ? [] : [file],
