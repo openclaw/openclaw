@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { createRestoreAdmittedRecoveryInterrupted } from "./main-session-recovery-store.js";
@@ -77,6 +78,7 @@ describe("main session recovery store interrupted trajectory transaction failure
       sessionId: () => "session-1",
       sessionKey,
       storePath,
+      trajectoryTarget: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }),
     });
 
     throwNextAppend = true;

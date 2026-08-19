@@ -10,6 +10,7 @@ import {
   resolveRestartRecoveryChannelAuthority,
 } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
@@ -686,27 +687,46 @@ export async function resumeMainSession(params: {
         log.warn(
           `failed to settle ambiguous restart recovery ${params.sessionKey}: ${String(settlementError)}`,
         );
-        const restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
-          agentId: params.agentId,
-          lifecycleGeneration,
-          logWarn: (message) => log.warn(message),
-          runId: recoveryRunId,
-          sessionId: () => params.entry.sessionId,
-          sessionKey: params.sessionKey,
-          shouldContinue: params.shouldContinue,
-          storePath: params.storePath,
-        });
-        const restored = await repairMainSessionRecoveryMutation({
-          mutation: restoreAdmittedRecovery,
-          onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
-          onError: (restoreError) => {
-            if (params.shouldContinue?.() !== false) {
-              log.warn(
-                `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
-              );
-            }
-          },
-        });
+        // Resolve the trajectory target inside this recovery path only: a
+        // resolver failure must not throw past the settlement catch and skip
+        // the reservation rollback below. Without a resolved target the
+        // admitted row keeps its normal startup-orphan recovery path.
+        let restoreAdmittedRecovery:
+          | ReturnType<typeof createRestoreAdmittedRecoveryInterrupted>
+          | undefined;
+        try {
+          restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
+            agentId: params.agentId,
+            lifecycleGeneration,
+            logWarn: (message) => log.warn(message),
+            runId: recoveryRunId,
+            sessionId: () => params.entry.sessionId,
+            sessionKey: params.sessionKey,
+            shouldContinue: params.shouldContinue,
+            storePath: params.storePath,
+            trajectoryTarget: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+              agentId: params.agentId,
+            }),
+          });
+        } catch (resolveError) {
+          log.warn(
+            `failed to resolve trajectory target for ambiguous restart recovery ${params.sessionKey}: ${String(resolveError)}`,
+          );
+          restoreAdmittedRecovery = undefined;
+        }
+        const restored = restoreAdmittedRecovery
+          ? await repairMainSessionRecoveryMutation({
+              mutation: restoreAdmittedRecovery,
+              onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+              onError: (restoreError) => {
+                if (params.shouldContinue?.() !== false) {
+                  log.warn(
+                    `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
+                  );
+                }
+              },
+            })
+          : undefined;
         if (params.shouldContinue?.() !== false) {
           scheduleMainSessionRecoveryPendingTarget(restored);
         }

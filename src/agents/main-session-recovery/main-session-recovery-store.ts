@@ -188,6 +188,10 @@ export async function commitMainSessionRecovery(params: {
  * The committed interruption clears the row's run id, so only this exact
  * applied transition mints the terminal trajectory event; a deferred repair
  * retry re-enters the closure and must not fabricate a duplicate.
+ *
+ * Callers resolve `trajectoryTarget` before durable recovery admission: a
+ * filesystem/registry failure while resolving must reject the run before the
+ * row is admitted, not after, otherwise the admitted row has no restore path.
  */
 export function createRestoreAdmittedRecoveryInterrupted(params: {
   agentId: string;
@@ -198,14 +202,9 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
   sessionKey: string;
   shouldContinue?: () => boolean;
   storePath: string;
+  trajectoryTarget: ReturnType<typeof resolveSqliteTargetFromSessionStorePath>;
 }): () => Promise<MainSessionRecoveryPendingTarget | undefined> {
   let restored = false;
-  // Resolve the trajectory database target before opening the session write
-  // transaction so filesystem/registry inspection does not run while the
-  // session lock is held.
-  const trajectoryTarget = resolveSqliteTargetFromSessionStorePath(params.storePath, {
-    agentId: params.agentId,
-  });
   return async () => {
     if (restored || params.shouldContinue?.() === false) {
       return undefined;
@@ -230,8 +229,8 @@ export function createRestoreAdmittedRecoveryInterrupted(params: {
           return;
         }
         appendInterruptedSessionTrajectoryEndSync({
-          agentDatabaseAgentId: trajectoryTarget.agentId ?? params.agentId,
-          agentDatabasePath: trajectoryTarget.path,
+          agentDatabaseAgentId: params.trajectoryTarget.agentId ?? params.agentId,
+          agentDatabasePath: params.trajectoryTarget.path,
           runId: params.runId,
           sessionKey: result.sessionKey,
           sessionId: result.entry.sessionId,
