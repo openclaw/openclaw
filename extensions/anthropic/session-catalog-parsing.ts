@@ -203,7 +203,23 @@ export function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
     return session;
   });
   const nextCursor = readNodePageCursor(value, "Claude node returned an invalid session page");
-  return { sessions, ...(nextCursor ? { nextCursor } : {}) };
+  let error: ClaudeSessionCatalogPage["error"];
+  if (value.error !== undefined) {
+    if (!isRecord(value.error)) {
+      throw new Error("Claude node returned an invalid session error");
+    }
+    const code = readBoundedString(value.error.code, 128);
+    const message = readBoundedString(value.error.message, 500);
+    if (!code || !message) {
+      throw new Error("Claude node returned an invalid session error");
+    }
+    error = { code, message };
+  }
+  return {
+    sessions,
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(error ? { error } : {}),
+  };
 }
 
 export function unwrapNodePayload(value: unknown): unknown {

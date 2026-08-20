@@ -238,6 +238,7 @@ async function writeDesktopMetadata(
   home: string,
   name: string,
   metadata: Record<string, unknown>,
+  options?: { pretty?: boolean },
 ): Promise<void> {
   const dir = path.join(
     home,
@@ -249,7 +250,10 @@ async function writeDesktopMetadata(
     "workspace",
   );
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, `local_${name}.json`), JSON.stringify(metadata));
+  await fs.writeFile(
+    path.join(dir, `local_${name}.json`),
+    JSON.stringify(metadata, null, options?.pretty ? 2 : undefined),
+  );
 }
 
 async function writeIndexedDesktopSession(
@@ -1931,14 +1935,35 @@ describe("Claude session catalog", () => {
       listLocalClaudeSessionPage({}, home),
     ]);
     expect(concurrent).toEqual(first);
+    const readdirSpy = spies[2]!;
     expect(
-      spies[2]?.mock.calls.filter(([target]) => target === path.join(home, ".claude", "projects")),
+      readdirSpy.mock.calls.filter(([target]) => target === path.join(home, ".claude", "projects")),
     ).toHaveLength(1);
     const homeCalls = (spy: (typeof spies)[number]) =>
       spy.mock.calls.filter(([target]) => typeof target === "string" && target.startsWith(home));
-
+    const realpathSpy = spies[3]!;
+    const openSpy = spies[4]!;
+    const readFileSpy = spies[5]!;
+    expect(
+      openSpy.mock.calls.filter(
+        ([filePath]) => typeof filePath === "string" && filePath.endsWith(".jsonl"),
+      ),
+    ).toHaveLength(2);
     // Polls re-read until the watch vouches for coverage; from then on an unchanged tree is free.
     await expectClaudeCatalogQuiescent(home, spies, homeCalls, first);
+    for (const spy of spies) {
+      spy.mockClear();
+    }
+    const second = await listLocalClaudeSessionPage({}, home);
+    expect(second).toEqual(first);
+    const isCatalogFile = (value: unknown) =>
+      typeof value === "string" &&
+      (value.endsWith(".jsonl") ||
+        value.endsWith("sessions-index.json") ||
+        path.basename(value).startsWith("local_"));
+    expect(realpathSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(readFileSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
     const records = await listClaudeSessions(home);
     for (const spy of spies) {
       spy.mockClear();
@@ -1985,7 +2010,7 @@ describe("Claude session catalog", () => {
         a.localeCompare(b),
       ),
     );
-    expect(open.mock.calls.map(([target]) => target)).toEqual([changedFile]);
+    expect(open.mock.calls.map(([target]) => target)).toEqual([await fs.realpath(changedFile)]);
   });
 
   it("keeps the CLI records when only the Desktop store changes", async () => {
@@ -2075,7 +2100,9 @@ describe("Claude session catalog", () => {
       return await realpath(...args);
     });
 
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [],
+    });
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: "recovered" })],
     });
@@ -2174,7 +2201,10 @@ describe("Claude session catalog", () => {
       return await open(...args);
     });
 
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [],
+      error: { code: "LOCAL_CATALOG_PARTIAL" },
+    });
     now += 15_001;
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: sessionId })],
@@ -2450,9 +2480,9 @@ describe("Claude session catalog", () => {
       cliSessionId: "desktop-session",
       title: "Desktop before",
     });
-    const readFileSpy = vi.spyOn(fs, "readFile");
+    const openSpy = vi.spyOn(fs, "open");
     const metadataReads = () =>
-      readFileSpy.mock.calls
+      openSpy.mock.calls
         .map(([filePath]) => filePath)
         .filter((filePath) => filePath === indexPath || filePath === desktopPath);
 
@@ -2460,7 +2490,7 @@ describe("Claude session catalog", () => {
     expect(metadataReads()).toEqual(expect.arrayContaining([indexPath, desktopPath]));
     watches.arm();
     const readdir = vi.spyOn(fs, "readdir");
-    readFileSpy.mockClear();
+    openSpy.mockClear();
 
     watches.change(indexPath);
     await listLocalClaudeSessionPage({}, home);
@@ -2487,7 +2517,7 @@ describe("Claude session catalog", () => {
       fs.utimes(desktopPath, secondRefreshTime, secondRefreshTime),
       fs.utimes(projectDir, secondRefreshTime, secondRefreshTime),
     ]);
-    readFileSpy.mockClear();
+    openSpy.mockClear();
 
     now += 60_001;
     watches.change(indexPath);
@@ -2518,22 +2548,29 @@ describe("Claude session catalog", () => {
       ],
       transcripts: { [sessionId]: [message(sessionId, "user", "Indexed only", 1)] },
     });
-    const readFile = fs.readFile.bind(fs);
-    let failIndexRead = true;
-    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-      if (failIndexRead && args[0] === indexPath) {
-        failIndexRead = false;
-        throw new Error("transient index read failure");
-      }
-      return await readFile(...args);
-    });
+    const open = fs.open.bind(fs);
+    let indexOpenAttempts = 0;
     let now = 1_000;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === indexPath) {
+        indexOpenAttempts += 1;
+        if (now === 1_000) {
+          throw new Error("transient index read failure");
+        }
+      }
+      return await open(...args);
+    });
     vi.spyOn(Date, "now").mockImplementation(() => now);
 
-    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([]);
+    const firstPage = await listLocalClaudeSessionPage({}, home);
+    const firstAttempts = indexOpenAttempts;
+    expect(firstAttempts).toBeGreaterThan(0);
+    expect(firstPage.error?.code).toBe("LOCAL_CATALOG_PARTIAL");
     now += 15_001;
 
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+    const recoveredPage = await listLocalClaudeSessionPage({}, home);
+    expect(indexOpenAttempts).toBeGreaterThan(firstAttempts);
+    expect(recoveredPage).toMatchObject({
       sessions: [{ threadId: sessionId, name: "Recovered index" }],
     });
   });
@@ -2572,6 +2609,28 @@ describe("Claude session catalog", () => {
       expect.objectContaining({ threadId: sessionId, name: "Bravo" }),
     ]);
     expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads newest-first transcript pages without overlapping older history", async () => {
+    const home = await createHome();
+    const sessionId = "transcript-session";
+    const oldUser = await writeLongPagedTranscript({ home, sessionId });
+
+    const latest = await readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home);
+    expect(latest.items.map((item) => item.text)).toEqual(["new assistant", "new user"]);
+    expect(latest.nextCursor).toEqual(expect.any(String));
+
+    const older = await readLocalClaudeTranscriptPage(
+      { threadId: sessionId, limit: 2, cursor: latest.nextCursor },
+      home,
+    );
+    expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
+    expect(older.nextCursor).toBeUndefined();
+    for (const cursor of [` ${latest.nextCursor} `, " ", null]) {
+      await expect(
+        readLocalClaudeTranscriptPage({ threadId: sessionId, cursor, limit: 1 }, home),
+      ).rejects.toThrow("transcript cursor is invalid");
+    }
   });
 
   it.each(["gateway:local", "node:paired"])(

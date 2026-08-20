@@ -7,7 +7,7 @@ import {
   adoptedSourceKey,
   CLAUDE_LOCAL_SESSION_HOST_ID,
 } from "./session-catalog-adoption.js";
-import { type CatalogRecord, listClaudeSessions } from "./session-catalog-discovery.js";
+import { listClaudeSessions } from "./session-catalog-discovery.js";
 import { importClaudeHistory } from "./session-catalog-history.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import {
@@ -29,7 +29,7 @@ import {
   isResumableClaudeSource,
 } from "./session-catalog-shared.js";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
-import type { ClaudeSessionCatalogSession } from "./session-catalog-types.js";
+import type { CatalogRecord, ClaudeSessionCatalogSession } from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
 
 const continueClaudeAdoption =

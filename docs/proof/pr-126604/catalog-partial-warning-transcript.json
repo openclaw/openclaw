@@ -1,0 +1,29 @@
+{
+  "entrypoint": "Control UI → Claude Code catalog → Load more",
+  "locale": "en",
+  "before": {
+    "sessions": [
+      "Newest"
+    ],
+    "warning": false,
+    "hasMore": true
+  },
+  "partialPage": {
+    "sessions": [
+      "Newest",
+      "Older"
+    ],
+    "warning": "One metadata file was skipped",
+    "hasMore": true
+  },
+  "cleanPage": {
+    "sessions": [
+      "Newest",
+      "Older",
+      "Oldest"
+    ],
+    "warning": "One metadata file was skipped",
+    "hasMore": false
+  },
+  "gateway": "isolated in-browser fixture"
+}
