@@ -2291,6 +2291,53 @@ body.update-dialog-open .sidebar-update-card__status {
   color: var(--text);
 }
 
+.sidebar-recent-session__name-content {
+  display: inline-block;
+  min-width: max-content;
+  transform: translateX(0);
+}
+
+/* The mask exists only when the measured title is clipped; short titles keep
+   their full opacity. Revealing transforms only the title content, so row
+   controls and badges retain their positions. */
+.sidebar-recent-session__name[data-overflow-fade] {
+  -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 10px), transparent 100%);
+  mask-image: linear-gradient(to right, black 0, black calc(100% - 10px), transparent 100%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  text-overflow: clip;
+}
+
+.sidebar-recent-session__name[data-overflow-fade]:dir(rtl) {
+  -webkit-mask-image: linear-gradient(to left, black 0, black calc(100% - 10px), transparent 100%);
+  mask-image: linear-gradient(to left, black 0, black calc(100% - 10px), transparent 100%);
+}
+
+.session-row-host:is(:hover, :focus-within) .sidebar-recent-session__name[data-overflow-reveal] {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 10px, black 100%);
+  mask-image: linear-gradient(to right, transparent 0, black 10px, black 100%);
+}
+
+.session-row-host:is(:hover, :focus-within)
+  .sidebar-recent-session__name[data-overflow-reveal]:dir(rtl) {
+  -webkit-mask-image: linear-gradient(to left, transparent 0, black 10px, black 100%);
+  mask-image: linear-gradient(to left, transparent 0, black 10px, black 100%);
+}
+
+.session-row-host:is(:hover, :focus-within)
+  .sidebar-recent-session__name[data-overflow-reveal]
+  .sidebar-recent-session__name-content {
+  transform: translateX(var(--overflow-reveal-translate, 0));
+  transition: transform var(--overflow-reveal-duration, 900ms) linear 180ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-recent-session__name-content {
+    transform: none !important;
+    transition: none !important;
+  }
+}
+
 .sidebar-recent-session--child {
   min-height: 30px;
 }
@@ -2375,9 +2422,9 @@ body.update-dialog-open .sidebar-update-card__status {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* Centered actions overlap both lines, so the full text column yields their width. */
-.sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within)
-  .sidebar-recent-session__text {
+/* Centered actions overlap both lines, so reserve their width in every state.
+   Hover and keyboard focus then reveal chrome without moving titles or badges. */
+.sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
   padding-right: 52px;
 }
 
@@ -2385,13 +2432,6 @@ body.update-dialog-open .sidebar-update-card__status {
   .sidebar-recent-session__details-endcap {
   opacity: 0;
   pointer-events: none;
-}
-
-/* Touch keeps the actions permanently visible beside the persistent endcap. */
-@media (hover: none), (pointer: coarse) {
-  .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
-    padding-right: 52px;
-  }
 }
 
 .nav-collapse-toggle {

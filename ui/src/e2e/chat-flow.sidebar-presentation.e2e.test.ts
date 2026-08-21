@@ -7,7 +7,6 @@ import {
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
-  pauseVirtualClock,
   requireRecord,
 } from "./chat-flow.test-support.ts";
 
@@ -226,14 +225,13 @@ suite.define(() => {
     }
   });
 
-  it("keeps long sidebar labels clipped after a session switch", async () => {
+  it("reveals only clipped sidebar titles without moving row chrome", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    await page.clock.install();
     const sessions = chatSessionListResponse();
     const firstSession = expectDefined(sessions.sessions[0], "first chat session fixture");
     const secondSession = expectDefined(sessions.sessions[1], "second chat session fixture");
@@ -242,6 +240,8 @@ suite.define(() => {
       "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
         4,
       );
+    secondSession.hasAutomation = true;
+    secondSession.pinned = true;
     await installMockGateway(page, {
       methodResponses: { "sessions.list": sessions },
       sessionKey: "agent:main:session-a",
@@ -252,51 +252,98 @@ suite.define(() => {
       const recentRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
       );
+      const shortRow = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-a"]',
+      );
       const recentLabel = recentRow.locator(".sidebar-recent-session__name");
+      const recentContent = recentLabel.locator(".sidebar-recent-session__name-content");
       await recentLabel.waitFor({ state: "visible", timeout: 10_000 });
-      const layout = await recentLabel.evaluate((label) => ({
-        clientWidth: label.clientWidth,
-        linkWidth: label.parentElement?.clientWidth ?? 0,
-        rowWidth: label.closest<HTMLElement>(".sidebar-recent-session")?.clientWidth ?? 0,
-        scrollWidth: label.scrollWidth,
-        text: label.textContent,
-      }));
-      expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
+      await shortRow.locator(".sidebar-recent-session__name").waitFor({ state: "visible" });
+      await expect
+        .poll(() => page.locator(".shell").evaluate((shell) => getComputedStyle(shell).transform))
+        .toBe("none");
 
-      // Freeze the clock so the 500ms hover-intent delay elapses only via
-      // runFor; a ticking clock let slow runners start the marquee before the
-      // "not yet scrolling" asserts below.
-      await pauseVirtualClock(page);
-      await recentRow.dispatchEvent("mouseenter");
-      await page.clock.runFor(250);
-      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
-        "hover-marquee--scrolling",
+      const shortTitle = shortRow.locator(".sidebar-recent-session__name");
+      const shortContent = shortTitle.locator(".sidebar-recent-session__name-content");
+      const shortTransform = await shortContent.evaluate(
+        (content) => getComputedStyle(content).transform,
       );
-      await recentRow.dispatchEvent("mouseleave");
-      // 250 + 300 exceeds the hover delay: only the leave-cancel keeps it off.
-      await page.clock.runFor(300);
-      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
-        "hover-marquee--scrolling",
+      expect(await shortTitle.getAttribute("data-overflow-fade")).toBeNull();
+      expect(await shortTitle.getAttribute("data-overflow-reveal")).toBeNull();
+      await shortRow.hover();
+      expect(await shortContent.evaluate((content) => getComputedStyle(content).transform)).toBe(
+        shortTransform,
       );
-      await recentRow.dispatchEvent("mouseenter");
-      await page.clock.runFor(500);
+
+      const readLongTitleState = () =>
+        recentRow.evaluate((row) => {
+          const rect = (selector: string) => {
+            const element = row.querySelector<HTMLElement>(selector);
+            if (!element) {
+              throw new Error(`Missing clipped-title fixture ${selector}`);
+            }
+            const box = element.getBoundingClientRect();
+            return { bottom: box.bottom, left: box.left, right: box.right, top: box.top };
+          };
+          const title = row.querySelector<HTMLElement>(".sidebar-recent-session__name");
+          const content = row.querySelector<HTMLElement>(".sidebar-recent-session__name-content");
+          if (!title || !content) {
+            throw new Error("Missing clipped-title content");
+          }
+          return {
+            badge: rect(".session-row-badges"),
+            contentTransform: getComputedStyle(content).transform,
+            fade: title.hasAttribute("data-overflow-fade"),
+            menu: rect("[data-session-menu]"),
+            pin: rect("[data-sidebar-session-pin]"),
+            reveal: title.hasAttribute("data-overflow-reveal"),
+            revealTranslate: title.style.getPropertyValue("--overflow-reveal-translate"),
+            title: rect(".sidebar-recent-session__name"),
+            titleClientWidth: title.clientWidth,
+            titleScrollWidth: content.scrollWidth,
+          };
+        });
+
+      const resting = await readLongTitleState();
+      expect(resting.titleScrollWidth).toBeGreaterThan(resting.titleClientWidth);
+      expect(resting.fade).toBe(true);
+      expect(resting.reveal).toBe(true);
+      expect(Number.parseFloat(resting.revealTranslate)).toBeLessThan(0);
+
+      await recentRow.hover();
       await expect
-        .poll(() => recentLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
-        .toContain("hover-marquee--scrolling");
-      // Resume real time: the snap-back below is a compositor-driven CSS
-      // transition, not a fake-timer callback.
-      await page.clock.resume();
-      await recentRow.dispatchEvent("mouseleave");
+        .poll(() => recentContent.evaluate((content) => getComputedStyle(content).transform))
+        .not.toBe(resting.contentTransform);
+      const hovered = await readLongTitleState();
+      expect({
+        badge: hovered.badge,
+        menu: hovered.menu,
+        pin: hovered.pin,
+        title: hovered.title,
+      }).toEqual({
+        badge: resting.badge,
+        menu: resting.menu,
+        pin: resting.pin,
+        title: resting.title,
+      });
+
+      await recentRow.locator("a.sidebar-recent-session__link").focus();
+      await page.mouse.move(1_000, 100);
       await expect
-        .poll(
-          () =>
-            recentLabel.evaluate((label) => ({
-              textIndent: getComputedStyle(label).textIndent,
-              textOverflow: getComputedStyle(label).textOverflow,
-            })),
-          { timeout: 1_500 },
-        )
-        .toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+        .poll(() => recentContent.evaluate((content) => getComputedStyle(content).transform))
+        .not.toBe(resting.contentTransform);
+      const focused = await readLongTitleState();
+      expect({
+        badge: focused.badge,
+        menu: focused.menu,
+        pin: focused.pin,
+        title: focused.title,
+      }).toEqual({
+        badge: resting.badge,
+        menu: resting.menu,
+        pin: resting.pin,
+        title: resting.title,
+      });
 
       await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
         button: 0,
@@ -308,12 +355,13 @@ suite.define(() => {
       const activeRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',
       );
-      expect(
-        await activeRow.locator(".sidebar-recent-session__name").evaluate((label) => ({
-          textIndent: getComputedStyle(label).textIndent,
-          textOverflow: getComputedStyle(label).textOverflow,
-        })),
-      ).toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+      await expect
+        .poll(() =>
+          activeRow
+            .locator(".sidebar-recent-session__name")
+            .evaluate((title) => title.hasAttribute("data-overflow-fade")),
+        )
+        .toBe(true);
     } finally {
       await suite.closeBrowserContext(context);
     }

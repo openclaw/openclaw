@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
@@ -9,8 +10,8 @@ import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
-import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
+import { createOverflowFadeRef } from "../lib/overflow-fade.ts";
 import { projectPresencePayload } from "../lib/presence-users.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
@@ -290,8 +291,6 @@ export function renderRecentSession(params: {
           }}
       @contextmenu=${openMenuFromEvent}
       @keydown=${openMenuFromEvent}
-      @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
-      @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
     >
       <a
         href=${session.href}
@@ -310,22 +309,24 @@ export function renderRecentSession(params: {
             : nothing}</span
         >
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee"
-            >${session.archived
-              ? html`<span
-                  class="sidebar-session__archive-glyph"
-                  aria-label=${t("sessionsView.archived")}
-                  title=${t("sessionsView.archived")}
-                  >${icons.archive}</span
-                >`
-              : nothing}${session.forkSource
-              ? html`<span
-                  class="sidebar-session-fork-indicator"
-                  role="img"
-                  aria-label=${t("sessionsView.forkedSession")}
-                  >${icons.gitFork}</span
-                >`
-              : nothing}${label}</span
+          <span class="sidebar-recent-session__name" ${ref(createOverflowFadeRef())}
+            ><span class="sidebar-recent-session__name-content"
+              >${session.archived
+                ? html`<span
+                    class="sidebar-session__archive-glyph"
+                    aria-label=${t("sessionsView.archived")}
+                    title=${t("sessionsView.archived")}
+                    >${icons.archive}</span
+                  >`
+                : nothing}${session.forkSource
+                ? html`<span
+                    class="sidebar-session-fork-indicator"
+                    role="img"
+                    aria-label=${t("sessionsView.forkedSession")}
+                    >${icons.gitFork}</span
+                  >`
+                : nothing}${label}</span
+            ></span
           >
           <span class="sidebar-recent-session__details">
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
@@ -450,7 +451,7 @@ export function renderRecentSession(params: {
       </span>
     </div>
   `;
-  // Marquee state mutates the row DOM; keying prevents cross-session reuse.
+  // The overflow ref owns per-title measurement state, so DOM cannot be reused across sessions.
   return keyed(session.key, row);
 }
 
