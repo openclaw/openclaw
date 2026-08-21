@@ -1471,6 +1471,7 @@
                   {
                     "group": "Self-hosted and local",
                     "pages": [
+                      "install/docker-sandboxes",
                       "install/docker-vm-runtime",
                       "install/kubernetes",
                       "install/macos-vm",

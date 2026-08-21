@@ -365,6 +365,7 @@
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
           - "docs/gateway/sandboxing/**"
+          - "docs/install/docker-sandboxes.md"
           - "docs/install/docker.md"
           - "docs/install/docker/**"
           - "docs/tools/multi-agent-sandbox-tools.md"
