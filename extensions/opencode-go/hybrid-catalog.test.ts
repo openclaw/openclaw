@@ -1,3 +1,4 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Hybrid OpenCode Go catalog unit tests (fixtures only; no network).
 import {
   buildHybridModelDefinitions,
@@ -9,16 +10,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyOpencodeGoPolicyOverlay,
   buildOpencodeGoHybridProviderConfig,
-  clearOpencodeGoHybridCatalogStateForTests,
-  resolveHybridDynamicModel,
   resolveOpencodeGoFamilyTransport,
 } from "./hybrid-catalog.js";
+import plugin from "./index.js";
 import {
   buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
   resolveOpencodeGoModel,
   type OpencodeGoModelDefinition,
 } from "./provider-catalog.js";
+
+// Credential resolution is mocked per profile id so scoped-resolution tests run
+// offline: profile "opencode-go:a" gets key-a, "opencode-go:b" gets key-b.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: vi.fn(async (params: { profileId?: string }) => ({
+    apiKey: params.profileId?.endsWith(":a")
+      ? "key-a"
+      : params.profileId?.endsWith(":b")
+        ? "key-b"
+        : undefined,
+    source: "test",
+    mode: "api-key",
+  })),
+}));
 
 function staticHybridModels(): OpencodeGoModelDefinition[] {
   return buildStaticOpencodeGoProviderConfig().models as OpencodeGoModelDefinition[];
@@ -116,7 +130,6 @@ function gatewayFetchGuard(ids: string[]): LiveModelCatalogFetchGuard {
 describe("opencode-go hybrid catalog", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
-    clearOpencodeGoHybridCatalogStateForTests();
   });
 
   it("routes Go model families to shipped transports without invented overlays", () => {
@@ -318,33 +331,47 @@ describe("opencode-go hybrid catalog", () => {
     expect(gatewayCalls).toBe(2);
   });
 
-  it("keeps resolveHybridDynamicModel on the last successful auth catalog", async () => {
-    const staticModels = staticHybridModels();
-    await buildOpencodeGoHybridProviderConfig({
-      apiKey: "a",
-      discoveryApiKey: "go-a",
-      fetchGuard: gatewayFetchGuard(["go-hybrid-only"]),
-      fetchModelsDev: async () => modelsDevFixture(),
-      staticModels,
-      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
-      gatewayTimeoutMs: 5_000,
-      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
-      anthropicBaseUrl: "https://opencode.ai/zen/go",
+  it("scopes prepared hybrid maps to the resolving profile", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("models.dev")) {
+        return new Response(JSON.stringify(modelsDevFixture()));
+      }
+      const headers = new Headers(init?.headers);
+      const key = (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+      const ids = key === "key-a" ? ["go-hybrid-only"] : ["minimax-m3"];
+      return new Response(JSON.stringify({ data: ids.map((id) => ({ id, object: "model" })) }));
     });
-    expect(resolveHybridDynamicModel("go-hybrid-only", staticModels)?.id).toBe("go-hybrid-only");
+    try {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const sharedRegistry = {};
+      const prepare = (modelId: string, authProfileId: string) =>
+        provider.prepareDynamicModel?.({
+          modelRegistry: sharedRegistry,
+          modelId,
+          authProfileId,
+          authProfileMode: "api-key",
+        } as never);
+      const resolve = (modelId: string, authProfileId: string) =>
+        provider.resolveDynamicModel?.({
+          modelRegistry: sharedRegistry,
+          modelId,
+          authProfileId,
+          authProfileMode: "api-key",
+        } as never);
 
-    await buildOpencodeGoHybridProviderConfig({
-      apiKey: "b",
-      discoveryApiKey: "go-b",
-      fetchGuard: gatewayFetchGuard(["minimax-m3"]),
-      fetchModelsDev: async () => modelsDevFixture(),
-      staticModels,
-      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
-      gatewayTimeoutMs: 5_000,
-      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
-      anthropicBaseUrl: "https://opencode.ai/zen/go",
-    });
-    expect(resolveHybridDynamicModel("minimax-m3", staticModels)?.id).toBe("minimax-m3");
-    expect(resolveHybridDynamicModel("go-hybrid-only", staticModels)).toBeUndefined();
+      await prepare("go-hybrid-only", "opencode-go:a");
+      // Profile B's catalog load on the SAME registry must not displace
+      // profile A's scoped map.
+      await prepare("minimax-m3", "opencode-go:b");
+
+      expect(resolve("go-hybrid-only", "opencode-go:a")).toMatchObject({
+        id: "go-hybrid-only",
+        provider: "opencode-go",
+      });
+      expect(resolve("go-hybrid-only", "opencode-go:b")).toBeUndefined();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });

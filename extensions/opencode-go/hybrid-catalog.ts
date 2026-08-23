@@ -1,8 +1,6 @@
 // Hybrid OpenCode Go catalog: gateway IDs + models.dev metadata + static policy.
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildHybridProviderConfig,
-  HybridDynamicModelStore,
   fetchModelsDevProviderSlice,
   type HybridModelDefinition,
   type HybridTransport,
@@ -12,14 +10,6 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 
 const PROVIDER_ID = "opencode-go";
 const MODELS_DEV_PROVIDER_KEY = "opencode-go";
-
-const hybridModelStore = new HybridDynamicModelStore();
-let lastCatalogAuthKey: string | undefined;
-
-export function clearOpencodeGoHybridCatalogStateForTests(): void {
-  hybridModelStore.clear();
-  lastCatalogAuthKey = undefined;
-}
 
 export function resolveOpencodeGoFamilyTransport(
   modelId: string,
@@ -105,19 +95,7 @@ export async function buildOpencodeGoHybridProviderConfig(params: {
     gatewayIdsTtlMs: params.gatewayIdsTtlMs,
     hybridSuccessTtlMs: params.hybridSuccessTtlMs,
     now: params.now,
-    onResolvedModels: (authKey, models) => {
-      lastCatalogAuthKey = authKey;
-      hybridModelStore.set(authKey, models);
-    },
   });
-}
-
-export function resolveHybridDynamicModel(
-  modelId: string,
-  staticModels: readonly HybridModelDefinition[],
-  authKey?: string,
-): ProviderRuntimeModel | undefined {
-  return hybridModelStore.resolve(modelId, staticModels, authKey ?? lastCatalogAuthKey);
 }
 
 export async function prewarmOpencodeGoHybridCatalog(): Promise<void> {

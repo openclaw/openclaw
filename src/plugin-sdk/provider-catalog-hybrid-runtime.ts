@@ -55,12 +55,6 @@ export type HybridTransport = {
   baseUrl: string;
 };
 
-export type HybridCatalogAuthScope = {
-  discoveryApiKey?: string;
-  apiKey?: string;
-  gatewayEndpoint: string;
-};
-
 function readPositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
@@ -400,10 +394,6 @@ export async function fetchGatewayModelIds(params: {
   return modelIds;
 }
 
-export function hybridCatalogAuthCacheKey(scope: HybridCatalogAuthScope): string {
-  return [scope.gatewayEndpoint, scope.discoveryApiKey ?? "", scope.apiKey ?? ""].join("\0");
-}
-
 /**
  * Loads hybrid models for one provider. Static fallback is never sticky-cached as a
  * successful hybrid so empty/transient gateway responses retry on the next need.
@@ -437,15 +427,8 @@ export async function buildHybridProviderConfig(params: {
   gatewayIdsTtlMs?: number;
   hybridSuccessTtlMs?: number;
   now?: () => number;
-  /** Called with the auth-scoped hybrid map after each successful resolution path. */
-  onResolvedModels?: (authKey: string, models: readonly HybridModelDefinition[]) => void;
 }): Promise<ModelProviderConfig> {
   const fallbackModels = params.staticModels;
-  const authKey = hybridCatalogAuthCacheKey({
-    gatewayEndpoint: params.gatewayEndpoint,
-    discoveryApiKey: params.discoveryApiKey,
-    apiKey: params.apiKey,
-  });
   const buildProvider = (models: readonly HybridModelDefinition[]): ModelProviderConfig => ({
     api: "openai-completions",
     baseUrl: params.openaiBaseUrl,
@@ -511,50 +494,133 @@ export async function buildHybridProviderConfig(params: {
       },
     });
     if (hybridModels.models.length > 0) {
-      params.onResolvedModels?.(authKey, hybridModels.models);
       return buildProvider(hybridModels.models);
     }
   } catch {
     // Hybrid discovery is advisory; keep the provider-owned static seed visible.
   }
-  params.onResolvedModels?.(authKey, fallbackModels);
   return buildProvider(fallbackModels);
 }
 
-/** Auth-scoped hybrid model maps for resolveDynamicModel. */
-export class HybridDynamicModelStore {
-  private readonly byAuthKey = new Map<string, Map<string, HybridModelDefinition>>();
-  private lastAuthKey: string | undefined;
+/** Minimal structural slice of the plugin dynamic-model context this cache needs. */
+export type HybridScopedModelContext = {
+  modelRegistry: object;
+  modelId: string;
+  authProfileId?: string;
+  authProfileMode?: string;
+};
 
-  clear(): void {
-    this.byAuthKey.clear();
-    this.lastAuthKey = undefined;
+/**
+ * Profile-scoped hybrid models for dynamic resolution. Keyed by the resolving
+ * registry plus `profile:<id>` / `direct:<mode>` / `unscoped` so one credential's
+ * catalog can never satisfy another profile's lookup; entries die with their
+ * registry instead of leaking into a process-global last-loaded pointer.
+ */
+export class ScopedHybridModelCache {
+  private readonly byRegistry = new WeakMap<
+    object,
+    Map<string, Map<string, HybridModelDefinition>>
+  >();
+
+  scopeKey(ctx: Pick<HybridScopedModelContext, "authProfileId" | "authProfileMode">): string {
+    const normalizedProfileId = ctx.authProfileId?.trim();
+    return normalizedProfileId
+      ? `profile:${normalizedProfileId}`
+      : ctx.authProfileMode
+        ? `direct:${ctx.authProfileMode}`
+        : "unscoped";
   }
 
-  set(authKey: string, models: readonly HybridModelDefinition[]): void {
-    this.byAuthKey.set(authKey, new Map(models.map((model) => [model.id, model])));
-    this.lastAuthKey = authKey;
-  }
-
-  get(authKey: string | undefined, modelId: string): HybridModelDefinition | undefined {
-    const normalizedModelId = modelId.trim().toLowerCase();
-    const key = authKey ?? this.lastAuthKey;
-    if (!key) {
-      return undefined;
+  put(
+    ctx: Pick<HybridScopedModelContext, "modelRegistry" | "authProfileId" | "authProfileMode">,
+    models: readonly HybridModelDefinition[],
+  ): void {
+    let byScope = this.byRegistry.get(ctx.modelRegistry);
+    if (!byScope) {
+      byScope = new Map();
+      this.byRegistry.set(ctx.modelRegistry, byScope);
     }
-    return this.byAuthKey.get(key)?.get(normalizedModelId);
+    byScope.set(
+      this.scopeKey(ctx),
+      new Map(
+        models.map((model) => [model.id.trim().toLowerCase(), model]),
+      ),
+    );
   }
 
-  resolve(
-    modelId: string,
-    staticModels: readonly HybridModelDefinition[],
-    authKey?: string,
-  ): HybridModelDefinition | undefined {
-    const hybrid = this.get(authKey, modelId);
-    if (hybrid) {
-      return hybrid;
-    }
-    const normalizedModelId = modelId.trim().toLowerCase();
-    return staticModels.find((model) => model.id === normalizedModelId);
+  get(ctx: HybridScopedModelContext): HybridModelDefinition | undefined {
+    return this.byRegistry
+      .get(ctx.modelRegistry)
+      ?.get(this.scopeKey(ctx))
+      ?.get(ctx.modelId.trim().toLowerCase());
   }
+}
+
+/**
+ * Shared prepare/resolve hooks for provider plugins whose live hybrid catalogs
+ * are credential-specific. `prepareDynamicModel` resolves the requesting
+ * profile's own (then sibling) OpenCode-style shared key, warms that profile's
+ * scoped map, and returns the model; `resolveDynamicModel` is the sync
+ * profile-scoped lookup with no cross-profile fallback. Any failure degrades to
+ * `undefined` so the plugin's static seed stays visible.
+ */
+export function createScopedHybridDynamicModelHooks(params: {
+  /** Credential lookup order: the plugin's own provider id first, then sibling. */
+  providerIds: readonly string[];
+  buildLiveProviderConfig(apiKey: string): Promise<ModelProviderConfig>;
+}): {
+  prepareDynamicModel(
+    ctx: HybridScopedModelContext & {
+      config?: import("../config/types.openclaw.js").OpenClawConfig;
+      agentDir?: string;
+    },
+  ): Promise<HybridModelDefinition | undefined>;
+  resolveDynamicModel(ctx: HybridScopedModelContext): HybridModelDefinition | undefined;
+} {
+  const scopedModels = new ScopedHybridModelCache();
+
+  async function resolveCredential(ctx: {
+    config?: import("../config/types.openclaw.js").OpenClawConfig;
+    agentDir?: string;
+    authProfileId?: string;
+  }): Promise<string | undefined> {
+    const { resolveApiKeyForProvider } = await import("openclaw/plugin-sdk/provider-auth-runtime");
+    for (const providerId of params.providerIds) {
+      try {
+        const auth = await resolveApiKeyForProvider({
+          provider: providerId,
+          ...(ctx.config ? { cfg: ctx.config } : {}),
+          ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+          ...(ctx.authProfileId ? { profileId: ctx.authProfileId, lockedProfile: true } : {}),
+        });
+        if (auth?.apiKey) {
+          return auth.apiKey;
+        }
+      } catch {
+        // Try the next provider in the shared-key order; unauthenticated stays static.
+      }
+    }
+    return undefined;
+  }
+
+  return {
+    async prepareDynamicModel(ctx) {
+      try {
+        const apiKey = await resolveCredential(ctx);
+        if (!apiKey) {
+          return undefined;
+        }
+        const providerConfig = await params.buildLiveProviderConfig(apiKey);
+        // Live builder rows and its static fallback both carry full runtime fields.
+        scopedModels.put(ctx, providerConfig.models as HybridModelDefinition[]);
+        return scopedModels.get(ctx);
+      } catch {
+        // Advisory discovery only: never fail resolution, let static serve.
+        return undefined;
+      }
+    },
+    resolveDynamicModel(ctx) {
+      return scopedModels.get(ctx);
+    },
+  };
 }

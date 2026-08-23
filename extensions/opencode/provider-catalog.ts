@@ -1,7 +1,10 @@
 // Opencode Zen provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import type { HybridModelDefinition } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
+import {
+  createScopedHybridDynamicModelHooks,
+  type HybridModelDefinition,
+} from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
 import {
   fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
@@ -14,7 +17,6 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOpencodeZenHybridProviderConfig,
-  resolveHybridDynamicModel,
   resolveOpencodeZenFamilyTransport,
 } from "./hybrid-catalog.js";
 
@@ -442,6 +444,9 @@ function buildOpencodeZenModel(modelId: ZenModelId): OpencodeZenModelDefinition 
 const OPENCODE_ZEN_RESOLVABLE_MODELS = MODEL_CAPABILITY_ROWS.map(([modelId]) =>
   buildOpencodeZenModel(modelId),
 );
+const OPENCODE_ZEN_RESOLVABLE_MODEL_BY_ID = new Map(
+  OPENCODE_ZEN_RESOLVABLE_MODELS.map((model) => [model.id, model]),
+);
 const OPENCODE_ZEN_MODELS = OPENCODE_ZEN_RESOLVABLE_MODELS.filter(
   (model) => MODEL_CAPABILITIES[model.id]?.status !== "deprecated",
 );
@@ -524,8 +529,22 @@ export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
 }
 
 export function resolveOpencodeZenModel(modelId: string): ProviderRuntimeModel | undefined {
-  return resolveHybridDynamicModel(modelId, OPENCODE_ZEN_RESOLVABLE_MODELS);
+  const normalizedModelId = modelId.trim().toLowerCase();
+  return OPENCODE_ZEN_RESOLVABLE_MODEL_BY_ID.get(normalizedModelId);
 }
+
+// Profile-scoped dynamic resolution: a hybrid catalog built for one OpenCode
+// credential is never visible to another profile's lookups.
+const opencodeZenDynamicModels = createScopedHybridDynamicModelHooks({
+  providerIds: ["opencode", "opencode-go"],
+  buildLiveProviderConfig: async (apiKey) =>
+    await buildOpencodeZenLiveProviderConfig({ apiKey, discoveryApiKey: apiKey }),
+});
+export const prepareOpencodeZenDynamicModel: typeof opencodeZenDynamicModels.prepareDynamicModel = (
+  ctx,
+) => opencodeZenDynamicModels.prepareDynamicModel(ctx);
+export const resolveOpencodeZenScopedDynamicModel: typeof opencodeZenDynamicModels.resolveDynamicModel =
+  (ctx) => opencodeZenDynamicModels.resolveDynamicModel(ctx);
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {
   return (baseUrl ?? "").trim().replace(/\/+$/, "");

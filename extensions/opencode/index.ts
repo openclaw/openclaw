@@ -15,7 +15,9 @@ import {
   buildStaticOpencodeZenProviderConfig,
   listOpencodeZenModelCatalogEntries,
   normalizeOpencodeZenBaseUrl,
+  prepareOpencodeZenDynamicModel,
   resolveOpencodeZenModel,
+  resolveOpencodeZenScopedDynamicModel,
   resolveOpencodeZenStarterModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile as resolveOpencodeThinkingProfile } from "./provider-policy-api.js";
@@ -102,7 +104,12 @@ export default defineSingleProviderPluginEntry({
           }
         : undefined;
     },
-    resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
+    resolveDynamicModel: (ctx) =>
+      resolveOpencodeZenScopedDynamicModel(ctx) ?? resolveOpencodeZenModel(ctx.modelId),
+    prepareDynamicModel: prepareOpencodeZenDynamicModel,
+    // Default-on: exact-profile re-materialization keeps hybrid metadata aligned
+    // with the credential actually used on the wire; no-credential lookups are local.
+    preferRuntimeResolvedModel: () => true,
     catalog: {
       order: "simple",
       run: async (ctx) => {

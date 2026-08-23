@@ -11,7 +11,9 @@ import {
   listOpencodeGoModelCatalogEntries,
   normalizeOpencodeGoBaseUrl,
   normalizeOpencodeGoResolvedModel,
+  prepareOpencodeGoDynamicModel,
   resolveOpencodeGoModel,
+  resolveOpencodeGoScopedDynamicModel,
   resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
@@ -92,7 +94,12 @@ export default defineSingleProviderPluginEntry({
           }
         : undefined;
     },
-    resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
+    resolveDynamicModel: (ctx) =>
+      resolveOpencodeGoScopedDynamicModel(ctx) ?? resolveOpencodeGoModel(ctx.modelId),
+    prepareDynamicModel: prepareOpencodeGoDynamicModel,
+    // Default-on: exact-profile re-materialization keeps hybrid metadata aligned
+    // with the credential actually used on the wire; no-credential lookups are local.
+    preferRuntimeResolvedModel: () => true,
     catalog: {
       order: "simple",
       run: async (ctx) => {

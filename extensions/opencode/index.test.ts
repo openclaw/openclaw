@@ -11,7 +11,6 @@ import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test
 // Opencode tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearOpencodeHybridCatalogStateForTests } from "./hybrid-catalog.js";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -125,7 +124,6 @@ const REPLACED_BY = new Map([
 describe("opencode provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
-    clearOpencodeHybridCatalogStateForTests();
   });
 
   it("registers only the Zen auth choice from its own provider manifest", async () => {
@@ -756,7 +754,6 @@ describe("opencode provider plugin", () => {
     expect(liveOnlyModel).toBeUndefined();
 
     clearLiveCatalogCacheForTests();
-    clearOpencodeHybridCatalogStateForTests();
     gatewayIds = ["gpt-6-experimental"];
     const unknownOnly = await buildOpencodeZenLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
@@ -766,7 +763,6 @@ describe("opencode provider plugin", () => {
     expect(unknownOnly.models.map((model) => model.id)).toEqual(ACTIVE_MODEL_IDS);
 
     clearLiveCatalogCacheForTests();
-    clearOpencodeHybridCatalogStateForTests();
     failGateway = true;
     const fallback = await buildOpencodeZenLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",

@@ -1,3 +1,4 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Hybrid OpenCode Zen catalog unit tests (fixtures only; no network).
 import {
   buildHybridModelDefinitions,
@@ -9,16 +10,29 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpencodeZenHybridProviderConfig,
-  clearOpencodeHybridCatalogStateForTests,
-  resolveHybridDynamicModel,
   resolveOpencodeZenFamilyTransport,
 } from "./hybrid-catalog.js";
+import plugin from "./index.js";
 import {
   buildOpencodeZenLiveProviderConfig,
   buildStaticOpencodeZenProviderConfig,
   resolveOpencodeZenModel,
   type OpencodeZenModelDefinition,
 } from "./provider-catalog.js";
+
+// Credential resolution is mocked per profile id so scoped-resolution tests run
+// offline: profile "opencode:a" gets key-a, "opencode:b" gets key-b.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: vi.fn(async (params: { profileId?: string }) => ({
+    apiKey: params.profileId?.endsWith(":a")
+      ? "key-a"
+      : params.profileId?.endsWith(":b")
+        ? "key-b"
+        : undefined,
+    source: "test",
+    mode: "api-key",
+  })),
+}));
 
 function staticHybridModels(): OpencodeZenModelDefinition[] {
   return buildStaticOpencodeZenProviderConfig().models as OpencodeZenModelDefinition[];
@@ -114,7 +128,6 @@ function gatewayFetchGuard(ids: string[]): LiveModelCatalogFetchGuard {
 describe("opencode hybrid catalog", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
-    clearOpencodeHybridCatalogStateForTests();
   });
 
   it("maps models.dev cost tiers into OpenClaw tieredPricing", () => {
@@ -251,7 +264,6 @@ describe("opencode hybrid catalog", () => {
     });
 
     clearLiveCatalogCacheForTests();
-    clearOpencodeHybridCatalogStateForTests();
     failGateway = true;
     const offline = await buildOpencodeZenLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
@@ -285,10 +297,9 @@ describe("opencode hybrid catalog", () => {
     expect(first.models.map((model) => model.id)).toEqual(second.models.map((model) => model.id));
   });
 
-  it("resolveHybridDynamicModel falls back to static before hybrid warm", () => {
-    const staticModels = staticHybridModels();
-    expect(resolveHybridDynamicModel("claude-opus-4-7", staticModels)?.id).toBe("claude-opus-4-7");
-    expect(resolveHybridDynamicModel("gpt-6-experimental", staticModels)).toBeUndefined();
+  it("resolveDynamicModel falls back to the static seed before any hybrid warm", () => {
+    expect(resolveOpencodeZenModel("claude-opus-4-7")?.id).toBe("claude-opus-4-7");
+    expect(resolveOpencodeZenModel("gpt-6-experimental")).toBeUndefined();
   });
 
   it("does not sticky-cache static seed when gateway IDs are empty and retries fetch", async () => {
@@ -387,37 +398,48 @@ describe("opencode hybrid catalog", () => {
     expect(fetchModelsDev).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps resolveHybridDynamicModel scoped to the last successful auth catalog", async () => {
-    const staticModels = staticHybridModels();
-    const fetchGuardA = gatewayFetchGuard(["zen-hybrid-only"]);
-    await buildOpencodeZenHybridProviderConfig({
-      apiKey: "runtime-a",
-      discoveryApiKey: "discovery-a",
-      fetchGuard: fetchGuardA,
-      fetchModelsDev: async () => modelsDevFixture(),
-      staticModels,
-      gatewayEndpoint: "https://opencode.ai/zen/v1/models",
-      gatewayTimeoutMs: 5_000,
-      openaiBaseUrl: "https://opencode.ai/zen/v1",
-      anthropicBaseUrl: "https://opencode.ai/zen",
+  it("scopes prepared hybrid maps to the resolving profile", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("models.dev")) {
+        return new Response(JSON.stringify(modelsDevFixture()));
+      }
+      const headers = new Headers(init?.headers);
+      const key = (headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");
+      const ids = key === "key-a" ? ["zen-hybrid-only"] : ["claude-opus-5"];
+      return new Response(JSON.stringify({ data: ids.map((id) => ({ id, object: "model" })) }));
     });
-    expect(resolveHybridDynamicModel("zen-hybrid-only", staticModels)?.id).toBe("zen-hybrid-only");
+    try {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const sharedRegistry = {};
+      const prepare = (modelId: string, authProfileId: string) =>
+        provider.prepareDynamicModel?.({
+          modelRegistry: sharedRegistry,
+          modelId,
+          authProfileId,
+          authProfileMode: "api-key",
+        } as never);
+      const resolve = (modelId: string, authProfileId: string) =>
+        provider.resolveDynamicModel?.({
+          modelRegistry: sharedRegistry,
+          modelId,
+          authProfileId,
+          authProfileMode: "api-key",
+        } as never);
 
-    const fetchGuardB = gatewayFetchGuard(["claude-opus-5"]);
-    await buildOpencodeZenHybridProviderConfig({
-      apiKey: "runtime-b",
-      discoveryApiKey: "discovery-b",
-      fetchGuard: fetchGuardB,
-      fetchModelsDev: async () => modelsDevFixture(),
-      staticModels,
-      gatewayEndpoint: "https://opencode.ai/zen/v1/models",
-      gatewayTimeoutMs: 5_000,
-      openaiBaseUrl: "https://opencode.ai/zen/v1",
-      anthropicBaseUrl: "https://opencode.ai/zen",
-    });
-    expect(resolveHybridDynamicModel("claude-opus-5", staticModels)?.id).toBe("claude-opus-5");
-    // Last successful catalog wins for unscoped resolve (catalog path sets last auth key).
-    expect(resolveHybridDynamicModel("zen-hybrid-only", staticModels)).toBeUndefined();
+      await prepare("zen-hybrid-only", "opencode:a");
+      // Profile B's catalog load on the SAME registry must not displace
+      // profile A's scoped map.
+      await prepare("claude-opus-5", "opencode:b");
+
+      expect(resolve("zen-hybrid-only", "opencode:a")).toMatchObject({
+        id: "zen-hybrid-only",
+        provider: "opencode",
+      });
+      expect(resolve("zen-hybrid-only", "opencode:b")).toBeUndefined();
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("single-flights parallel hybrid loads for the same discovery key", async () => {

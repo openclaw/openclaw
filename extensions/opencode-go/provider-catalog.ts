@@ -1,6 +1,7 @@
 // Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import { createScopedHybridDynamicModelHooks } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
 import {
   fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
@@ -10,10 +11,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  buildOpencodeGoHybridProviderConfig,
-  resolveHybridDynamicModel,
-} from "./hybrid-catalog.js";
+import { buildOpencodeGoHybridProviderConfig } from "./hybrid-catalog.js";
 
 const PROVIDER_ID = "opencode-go";
 
@@ -192,6 +190,10 @@ function buildOpencodeGoModel(row: OpencodeGoModelRow): OpencodeGoModelDefinitio
 
 const OPENCODE_GO_RESOLVABLE_MODELS = OPENCODE_GO_MODEL_ROWS.map(buildOpencodeGoModel);
 
+const OPENCODE_GO_RESOLVABLE_MODEL_BY_ID = new Map(
+  OPENCODE_GO_RESOLVABLE_MODELS.map((model) => [model.id, model]),
+);
+
 const OPENCODE_GO_MODELS = OPENCODE_GO_RESOLVABLE_MODELS.filter(
   (model) => !OPENCODE_GO_MODEL_STATUS.has(model.id),
 );
@@ -277,8 +279,23 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 }
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
-  return resolveHybridDynamicModel(modelId, OPENCODE_GO_RESOLVABLE_MODELS);
+  const normalizedModelId = modelId.trim().toLowerCase();
+  return OPENCODE_GO_RESOLVABLE_MODEL_BY_ID.get(normalizedModelId);
 }
+
+// Profile-scoped dynamic resolution: a hybrid catalog built for one OpenCode
+// credential is never visible to another profile's lookups.
+const opencodeGoDynamicModels = createScopedHybridDynamicModelHooks({
+  providerIds: ["opencode-go", "opencode"],
+  buildLiveProviderConfig: async (apiKey) =>
+    await buildOpencodeGoLiveProviderConfig({ apiKey, discoveryApiKey: apiKey }),
+});
+
+export const prepareOpencodeGoDynamicModel: typeof opencodeGoDynamicModels.prepareDynamicModel = (
+  ctx,
+) => opencodeGoDynamicModels.prepareDynamicModel(ctx);
+export const resolveOpencodeGoScopedDynamicModel: typeof opencodeGoDynamicModels.resolveDynamicModel =
+  (ctx) => opencodeGoDynamicModels.resolveDynamicModel(ctx);
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {
   return (

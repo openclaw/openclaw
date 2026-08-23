@@ -1,8 +1,6 @@
 // Hybrid OpenCode Zen catalog: gateway IDs + models.dev metadata + static policy.
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildHybridProviderConfig,
-  HybridDynamicModelStore,
   fetchModelsDevProviderSlice,
   type HybridModelDefinition,
   type HybridTransport,
@@ -13,14 +11,6 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 const MODELS_DEV_PROVIDER_KEY = "opencode";
 const GPT_56_MODEL_IDS = new Set(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]);
 const GPT_56_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
-
-const hybridModelStore = new HybridDynamicModelStore();
-let lastCatalogAuthKey: string | undefined;
-
-export function clearOpencodeHybridCatalogStateForTests(): void {
-  hybridModelStore.clear();
-  lastCatalogAuthKey = undefined;
-}
 
 export function resolveOpencodeZenFamilyTransport(
   modelId: string,
@@ -102,19 +92,7 @@ export async function buildOpencodeZenHybridProviderConfig(params: {
     gatewayIdsTtlMs: params.gatewayIdsTtlMs,
     hybridSuccessTtlMs: params.hybridSuccessTtlMs,
     now: params.now,
-    onResolvedModels: (authKey, models) => {
-      lastCatalogAuthKey = authKey;
-      hybridModelStore.set(authKey, models);
-    },
   });
-}
-
-export function resolveHybridDynamicModel(
-  modelId: string,
-  staticModels: readonly HybridModelDefinition[],
-  authKey?: string,
-): ProviderRuntimeModel | undefined {
-  return hybridModelStore.resolve(modelId, staticModels, authKey ?? lastCatalogAuthKey);
 }
 
 /**
