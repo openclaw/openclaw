@@ -5,12 +5,9 @@ import {
   HybridDynamicModelStore,
   MODELS_DEV_PROCESS_STICKY_TTL_MS,
   GATEWAY_MODEL_IDS_TTL_MS,
-  buildHybridModelDefinitions,
   fetchModelsDevProviderSlice,
-  parseModelsDevProviderSlice,
   type HybridModelDefinition,
   type HybridTransport,
-  type ModelsDevProviderSlice,
 } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
 import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -55,10 +52,7 @@ export function resolveOpencodeGoFamilyTransport(
   anthropicBaseUrl: string,
 ): HybridTransport {
   const lower = modelId.toLowerCase();
-  if (lower.startsWith("minimax-")) {
-    return { api: "anthropic-messages", baseUrl: anthropicBaseUrl };
-  }
-  if (lower.startsWith("qwen") && lower !== "qwen3.5-plus") {
+  if (lower.startsWith("minimax-") || lower.startsWith("qwen")) {
     return { api: "anthropic-messages", baseUrl: anthropicBaseUrl };
   }
   return { api: "openai-completions", baseUrl: openaiBaseUrl };
@@ -74,16 +68,18 @@ export function applyOpencodeGoPolicyOverlay(
     ...(staticBase?.thinkingLevelMap ? { thinkingLevelMap: staticBase.thinkingLevelMap } : {}),
     compat: {
       supportsUsageInStreaming: true,
-      supportsReasoningEffort: model.reasoning !== false,
+      supportsReasoningEffort: model.reasoning,
       maxTokensField: "max_tokens",
-      ...(staticBase?.compat ?? {}),
-      ...(model.compat ?? {}),
+      ...staticBase?.compat,
+      ...model.compat,
     },
   };
   if (lower.startsWith("deepseek-v4") && !next.thinkingLevelMap) {
     next = { ...next, thinkingLevelMap: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP };
   }
-  if (lower.startsWith("qwen")) {
+  // Shipped Go policy: qwen rows without explicit efforts speak the qwen
+  // thinking format; rows carrying effort enums never get thinkingFormat.
+  if (lower.startsWith("qwen") && !next.compat?.supportedReasoningEfforts) {
     next = {
       ...next,
       compat: {

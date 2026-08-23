@@ -311,7 +311,7 @@ export function mapModelsDevRowToModel(params: {
       supportsUsageInStreaming: true,
       supportsReasoningEffort: reasoning,
       maxTokensField: "max_tokens",
-      ...(params.staticBase?.compat ?? {}),
+      ...params.staticBase?.compat,
     },
     ...(params.staticBase?.thinkingLevelMap
       ? { thinkingLevelMap: params.staticBase.thinkingLevelMap }

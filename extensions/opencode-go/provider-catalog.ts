@@ -27,7 +27,7 @@ const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 
-type OpencodeGoModelDefinition = ModelDefinitionConfig & {
+export type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
   api: NonNullable<ModelDefinitionConfig["api"]>;
   baseUrl: string;
@@ -272,7 +272,7 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 }
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
-  return resolveHybridDynamicModel(modelId, OPENCODE_GO_MODELS);
+  return resolveHybridDynamicModel(modelId, OPENCODE_GO_RESOLVABLE_MODELS);
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {

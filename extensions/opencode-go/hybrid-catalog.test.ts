@@ -1,4 +1,5 @@
 // Hybrid OpenCode Go catalog unit tests (fixtures only; no network).
+import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,7 +15,12 @@ import {
   buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
   resolveOpencodeGoModel,
+  type OpencodeGoModelDefinition,
 } from "./provider-catalog.js";
+
+function staticHybridModels(): OpencodeGoModelDefinition[] {
+  return buildStaticOpencodeGoProviderConfig().models as OpencodeGoModelDefinition[];
+}
 
 function modelsDevFixture() {
   return {
@@ -57,13 +63,21 @@ function modelsDevFixture() {
           limit: { context: 1_000_000, output: 384_000 },
           cost: { input: 0.435, output: 0.87, cache_read: 0.0435 },
         },
+        "go-hybrid-only": {
+          id: "go-hybrid-only",
+          name: "Go Hybrid Only",
+          reasoning: true,
+          modalities: { input: ["text"] },
+          limit: { context: 262_144, output: 32_768 },
+          cost: { input: 1, output: 2, cache_read: 0.1 },
+        },
       },
     },
   };
 }
 
-function gatewayFetchGuard(ids: string[]) {
-  return vi.fn(async (req: { url: string }) => {
+function gatewayFetchGuard(ids: string[]): LiveModelCatalogFetchGuard {
+  return vi.fn(async (req) => {
     if (req.url.includes("models.dev")) {
       return {
         response: new Response(JSON.stringify(modelsDevFixture())),
@@ -131,7 +145,7 @@ describe("opencode-go hybrid catalog", () => {
   });
 
   it("skips deprecated MiMo aliases and includes models.dev-only gateway ids", () => {
-    const staticModels = buildStaticOpencodeGoProviderConfig().models;
+    const staticModels = staticHybridModels();
     const modelsDev = parseModelsDevProviderSlice(modelsDevFixture(), "opencode-go");
     const hybrid = buildHybridModelDefinitions({
       gatewayIds: ["mimo-v2-omni", "mimo-v2-pro", "kimi-k3", "minimax-m3"],
@@ -203,7 +217,7 @@ describe("opencode-go hybrid catalog", () => {
 
   it("does not sticky-cache static seed when gateway IDs are empty and retries fetch", async () => {
     let gatewayIds: string[] = [];
-    const fetchGuard = vi.fn(async (req: { url: string }) => {
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => {
       if (req.url.includes("models.dev")) {
         return {
           response: new Response(JSON.stringify(modelsDevFixture())),
@@ -224,12 +238,12 @@ describe("opencode-go hybrid catalog", () => {
       discoveryApiKey: "go-empty",
       fetchGuard,
       fetchModelsDev: async () => modelsDevFixture(),
-      staticModels: buildStaticOpencodeGoProviderConfig().models,
+      staticModels: staticHybridModels(),
       gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
       gatewayTimeoutMs: 5_000,
       openaiBaseUrl: "https://opencode.ai/zen/go/v1",
       anthropicBaseUrl: "https://opencode.ai/zen/go",
-    } as const;
+    };
 
     const empty = await buildOpencodeGoHybridProviderConfig(args);
     expect(empty.models.map((model) => model.id)).toContain("deepseek-v4-pro");
@@ -238,17 +252,17 @@ describe("opencode-go hybrid catalog", () => {
     const recovered = await buildOpencodeGoHybridProviderConfig(args);
     expect(recovered.models.map((model) => model.id)).toEqual(["kimi-k3"]);
     const gatewayCalls = fetchGuard.mock.calls.filter(
-      (call) => !String(call[0]?.url ?? "").includes("models.dev"),
+      (call) => !call[0].url.includes("models.dev"),
     ).length;
     expect(gatewayCalls).toBe(2);
   });
 
   it("keeps resolveHybridDynamicModel on the last successful auth catalog", async () => {
-    const staticModels = buildStaticOpencodeGoProviderConfig().models;
+    const staticModels = staticHybridModels();
     await buildOpencodeGoHybridProviderConfig({
       apiKey: "a",
       discoveryApiKey: "go-a",
-      fetchGuard: gatewayFetchGuard(["kimi-k3"]),
+      fetchGuard: gatewayFetchGuard(["go-hybrid-only"]),
       fetchModelsDev: async () => modelsDevFixture(),
       staticModels,
       gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
@@ -256,7 +270,7 @@ describe("opencode-go hybrid catalog", () => {
       openaiBaseUrl: "https://opencode.ai/zen/go/v1",
       anthropicBaseUrl: "https://opencode.ai/zen/go",
     });
-    expect(resolveHybridDynamicModel("kimi-k3", staticModels)?.id).toBe("kimi-k3");
+    expect(resolveHybridDynamicModel("go-hybrid-only", staticModels)?.id).toBe("go-hybrid-only");
 
     await buildOpencodeGoHybridProviderConfig({
       apiKey: "b",
@@ -270,6 +284,6 @@ describe("opencode-go hybrid catalog", () => {
       anthropicBaseUrl: "https://opencode.ai/zen/go",
     });
     expect(resolveHybridDynamicModel("minimax-m3", staticModels)?.id).toBe("minimax-m3");
-    expect(resolveHybridDynamicModel("kimi-k3", staticModels)).toBeUndefined();
+    expect(resolveHybridDynamicModel("go-hybrid-only", staticModels)).toBeUndefined();
   });
 });

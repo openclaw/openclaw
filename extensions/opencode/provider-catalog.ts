@@ -382,7 +382,7 @@ const MODEL_NAMES: Record<ZenModelId, string> = {
   "qwen3.6-plus": "Qwen3.6 Plus",
 };
 
-type OpencodeZenModelDefinition = HybridModelDefinition & {
+export type OpencodeZenModelDefinition = HybridModelDefinition & {
   provider: typeof PROVIDER_ID;
 };
 
@@ -400,7 +400,6 @@ function resolveOpencodeZenTransport(modelId: string): { api: ModelApi; baseUrl:
     OPENCODE_ZEN_OPENAI_BASE_URL,
     OPENCODE_ZEN_ANTHROPIC_BASE_URL,
   );
-}
 }
 
 function buildOpencodeZenModel(modelId: ZenModelId): OpencodeZenModelDefinition {
@@ -518,7 +517,7 @@ export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
 }
 
 export function resolveOpencodeZenModel(modelId: string): ProviderRuntimeModel | undefined {
-  return resolveHybridDynamicModel(modelId, OPENCODE_ZEN_MODELS);
+  return resolveHybridDynamicModel(modelId, OPENCODE_ZEN_RESOLVABLE_MODELS);
 }
 
 function normalizeBaseUrl(baseUrl: string | undefined): string {

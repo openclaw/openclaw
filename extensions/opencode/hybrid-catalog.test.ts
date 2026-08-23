@@ -1,4 +1,5 @@
 // Hybrid OpenCode Zen catalog unit tests (fixtures only; no network).
+import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,7 +15,12 @@ import {
   buildOpencodeZenLiveProviderConfig,
   buildStaticOpencodeZenProviderConfig,
   resolveOpencodeZenModel,
+  type OpencodeZenModelDefinition,
 } from "./provider-catalog.js";
+
+function staticHybridModels(): OpencodeZenModelDefinition[] {
+  return buildStaticOpencodeZenProviderConfig().models as OpencodeZenModelDefinition[];
+}
 
 function modelsDevFixture() {
   return {
@@ -61,13 +67,21 @@ function modelsDevFixture() {
             ],
           },
         },
+        "zen-hybrid-only": {
+          id: "zen-hybrid-only",
+          name: "Zen Hybrid Only",
+          reasoning: true,
+          modalities: { input: ["text"] },
+          limit: { context: 200_000, output: 32_768 },
+          cost: { input: 1, output: 2, cache_read: 0.1 },
+        },
       },
     },
   };
 }
 
-function gatewayFetchGuard(ids: string[]) {
-  return vi.fn(async (req: { url: string }) => {
+function gatewayFetchGuard(ids: string[]): LiveModelCatalogFetchGuard {
+  return vi.fn(async (req) => {
     if (req.url.includes("models.dev")) {
       return {
         response: new Response(JSON.stringify(modelsDevFixture())),
@@ -125,7 +139,7 @@ describe("opencode hybrid catalog", () => {
   });
 
   it("builds hybrid rows from gateway ids + models.dev + static fallback", () => {
-    const staticModels = buildStaticOpencodeZenProviderConfig().models;
+    const staticModels = staticHybridModels();
     const modelsDev = parseModelsDevProviderSlice(modelsDevFixture(), "opencode");
     const hybrid = buildHybridModelDefinitions({
       gatewayIds: ["claude-opus-5", "claude-opus-4-8", "unknown-skip", "gpt-5.6-sol"],
@@ -156,11 +170,31 @@ describe("opencode hybrid catalog", () => {
   });
 
   it("merges live gateway + models.dev and falls back offline to static", async () => {
-    const fetchGuard = gatewayFetchGuard([
-      "claude-opus-5",
-      "claude-opus-4-8",
-      "gpt-6-experimental",
-    ]);
+    let failGateway = false;
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify(modelsDevFixture())),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      if (failGateway) {
+        throw new Error("network unavailable");
+      }
+      return {
+        response: new Response(
+          JSON.stringify({
+            data: ["claude-opus-5", "claude-opus-4-8", "gpt-6-experimental"].map((id) => ({
+              id,
+              object: "model",
+            })),
+          }),
+        ),
+        finalUrl: req.url,
+        release: vi.fn(async () => undefined),
+      };
+    });
     const live = await buildOpencodeZenLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
       discoveryApiKey: "resolved-key",
@@ -175,7 +209,7 @@ describe("opencode hybrid catalog", () => {
 
     clearLiveCatalogCacheForTests();
     clearOpencodeHybridCatalogStateForTests();
-    fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
+    failGateway = true;
     const offline = await buildOpencodeZenLiveProviderConfig({
       apiKey: "OPENCODE_API_KEY",
       discoveryApiKey: "resolved-key",
@@ -184,7 +218,7 @@ describe("opencode hybrid catalog", () => {
         throw new Error("models.dev offline");
       },
     });
-    expect(offline.models.map((model) => model.id)).toContain("claude-opus-4-8");
+    expect(offline.models.map((model) => model.id)).toContain("claude-opus-4-7");
   });
 
   it("single-flights hybrid catalog loads for the same discovery key", async () => {
@@ -195,12 +229,12 @@ describe("opencode hybrid catalog", () => {
       discoveryApiKey: "d",
       fetchGuard,
       fetchModelsDev,
-      staticModels: buildStaticOpencodeZenProviderConfig().models,
+      staticModels: staticHybridModels(),
       gatewayEndpoint: "https://opencode.ai/zen/v1/models",
       gatewayTimeoutMs: 5_000,
       openaiBaseUrl: "https://opencode.ai/zen/v1",
       anthropicBaseUrl: "https://opencode.ai/zen",
-    } as const;
+    };
     const first = await buildOpencodeZenHybridProviderConfig(args);
     const second = await buildOpencodeZenHybridProviderConfig(args);
     expect(fetchGuard).toHaveBeenCalledTimes(1);
@@ -209,14 +243,14 @@ describe("opencode hybrid catalog", () => {
   });
 
   it("resolveHybridDynamicModel falls back to static before hybrid warm", () => {
-    const staticModels = buildStaticOpencodeZenProviderConfig().models;
-    expect(resolveHybridDynamicModel("claude-opus-4-8", staticModels)?.id).toBe("claude-opus-4-8");
-    expect(resolveHybridDynamicModel("claude-opus-5", staticModels)).toBeUndefined();
+    const staticModels = staticHybridModels();
+    expect(resolveHybridDynamicModel("claude-opus-4-7", staticModels)?.id).toBe("claude-opus-4-7");
+    expect(resolveHybridDynamicModel("gpt-6-experimental", staticModels)).toBeUndefined();
   });
 
   it("does not sticky-cache static seed when gateway IDs are empty and retries fetch", async () => {
     let gatewayIds: string[] = [];
-    const fetchGuard = vi.fn(async (req: { url: string }) => {
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => {
       if (req.url.includes("models.dev")) {
         return {
           response: new Response(JSON.stringify(modelsDevFixture())),
@@ -237,24 +271,24 @@ describe("opencode hybrid catalog", () => {
       discoveryApiKey: "d",
       fetchGuard,
       fetchModelsDev: async () => modelsDevFixture(),
-      staticModels: buildStaticOpencodeZenProviderConfig().models,
+      staticModels: staticHybridModels(),
       gatewayEndpoint: "https://opencode.ai/zen/v1/models",
       gatewayTimeoutMs: 5_000,
       openaiBaseUrl: "https://opencode.ai/zen/v1",
       anthropicBaseUrl: "https://opencode.ai/zen",
-    } as const;
+    };
 
     const empty = await buildOpencodeZenHybridProviderConfig(args);
-    expect(empty.models.map((model) => model.id)).toContain("claude-opus-4-8");
+    expect(empty.models.map((model) => model.id)).toContain("claude-opus-4-7");
     const gatewayCallsAfterEmpty = fetchGuard.mock.calls.filter(
-      (call) => !String(call[0]?.url ?? "").includes("models.dev"),
+      (call) => !call[0].url.includes("models.dev"),
     ).length;
     expect(gatewayCallsAfterEmpty).toBe(1);
 
     gatewayIds = ["claude-opus-5"];
     const recovered = await buildOpencodeZenHybridProviderConfig(args);
     const gatewayCallsAfterRecover = fetchGuard.mock.calls.filter(
-      (call) => !String(call[0]?.url ?? "").includes("models.dev"),
+      (call) => !call[0].url.includes("models.dev"),
     ).length;
     expect(gatewayCallsAfterRecover).toBe(2);
     expect(recovered.models.map((model) => model.id)).toEqual(["claude-opus-5"]);
@@ -264,7 +298,7 @@ describe("opencode hybrid catalog", () => {
     let now = 1_000;
     let gatewayIds = ["claude-opus-4-8"];
     const fetchModelsDev = vi.fn(async () => modelsDevFixture());
-    const fetchGuard = vi.fn(async (req: { url: string }) => {
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => {
       if (req.url.includes("models.dev")) {
         return {
           response: new Response(JSON.stringify(modelsDevFixture())),
@@ -285,7 +319,7 @@ describe("opencode hybrid catalog", () => {
       discoveryApiKey: "ttl-key",
       fetchGuard,
       fetchModelsDev,
-      staticModels: buildStaticOpencodeZenProviderConfig().models,
+      staticModels: staticHybridModels(),
       gatewayEndpoint: "https://opencode.ai/zen/v1/models",
       gatewayTimeoutMs: 5_000,
       openaiBaseUrl: "https://opencode.ai/zen/v1",
@@ -311,8 +345,8 @@ describe("opencode hybrid catalog", () => {
   });
 
   it("keeps resolveHybridDynamicModel scoped to the last successful auth catalog", async () => {
-    const staticModels = buildStaticOpencodeZenProviderConfig().models;
-    const fetchGuardA = gatewayFetchGuard(["claude-opus-5"]);
+    const staticModels = staticHybridModels();
+    const fetchGuardA = gatewayFetchGuard(["zen-hybrid-only"]);
     await buildOpencodeZenHybridProviderConfig({
       apiKey: "runtime-a",
       discoveryApiKey: "discovery-a",
@@ -324,9 +358,9 @@ describe("opencode hybrid catalog", () => {
       openaiBaseUrl: "https://opencode.ai/zen/v1",
       anthropicBaseUrl: "https://opencode.ai/zen",
     });
-    expect(resolveHybridDynamicModel("claude-opus-5", staticModels)?.id).toBe("claude-opus-5");
+    expect(resolveHybridDynamicModel("zen-hybrid-only", staticModels)?.id).toBe("zen-hybrid-only");
 
-    const fetchGuardB = gatewayFetchGuard(["gpt-5.6-sol"]);
+    const fetchGuardB = gatewayFetchGuard(["claude-opus-5"]);
     await buildOpencodeZenHybridProviderConfig({
       apiKey: "runtime-b",
       discoveryApiKey: "discovery-b",
@@ -338,15 +372,17 @@ describe("opencode hybrid catalog", () => {
       openaiBaseUrl: "https://opencode.ai/zen/v1",
       anthropicBaseUrl: "https://opencode.ai/zen",
     });
-    expect(resolveHybridDynamicModel("gpt-5.6-sol", staticModels)?.id).toBe("gpt-5.6-sol");
+    expect(resolveHybridDynamicModel("claude-opus-5", staticModels)?.id).toBe("claude-opus-5");
     // Last successful catalog wins for unscoped resolve (catalog path sets last auth key).
-    expect(resolveHybridDynamicModel("claude-opus-5", staticModels)).toBeUndefined();
+    expect(resolveHybridDynamicModel("zen-hybrid-only", staticModels)).toBeUndefined();
   });
 
   it("single-flights parallel hybrid loads for the same discovery key", async () => {
     const fetchGuard = gatewayFetchGuard(["claude-opus-4-8"]);
     const fetchModelsDev = vi.fn(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
       return modelsDevFixture();
     });
     const args = {
@@ -354,12 +390,12 @@ describe("opencode hybrid catalog", () => {
       discoveryApiKey: "parallel",
       fetchGuard,
       fetchModelsDev,
-      staticModels: buildStaticOpencodeZenProviderConfig().models,
+      staticModels: staticHybridModels(),
       gatewayEndpoint: "https://opencode.ai/zen/v1/models",
       gatewayTimeoutMs: 5_000,
       openaiBaseUrl: "https://opencode.ai/zen/v1",
       anthropicBaseUrl: "https://opencode.ai/zen",
-    } as const;
+    };
     const [a, b] = await Promise.all([
       buildOpencodeZenHybridProviderConfig(args),
       buildOpencodeZenHybridProviderConfig(args),

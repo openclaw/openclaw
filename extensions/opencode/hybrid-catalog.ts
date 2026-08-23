@@ -46,7 +46,7 @@ export function resolveOpencodeZenFamilyTransport(
   anthropicBaseUrl: string,
 ): HybridTransport {
   const lower = modelId.toLowerCase();
-  if (lower.startsWith("gpt-")) {
+  if (lower.startsWith("gpt-") || lower.startsWith("grok-")) {
     return { api: "openai-responses", baseUrl: openaiBaseUrl };
   }
   if (lower.startsWith("claude-") || lower.startsWith("qwen")) {
@@ -64,10 +64,10 @@ export function applyOpencodeZenPolicyOverlay(
 ): HybridModelDefinition {
   const compat = {
     supportsUsageInStreaming: true,
-    supportsReasoningEffort: model.reasoning !== false,
+    supportsReasoningEffort: model.reasoning,
     maxTokensField: "max_tokens" as const,
-    ...(staticBase?.compat ?? {}),
-    ...(model.compat ?? {}),
+    ...staticBase?.compat,
+    ...model.compat,
   };
   if (GPT_56_MODEL_IDS.has(model.id)) {
     compat.supportedReasoningEfforts = GPT_56_REASONING_EFFORTS;
