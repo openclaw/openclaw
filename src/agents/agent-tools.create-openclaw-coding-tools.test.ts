@@ -44,6 +44,7 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
+import * as currentTurnDelivery from "./current-turn-delivery.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -300,6 +301,37 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("tool_search")).toBe(false);
     expect(names.has("tool_describe")).toBe(false);
     expect(names.has("tool_call")).toBe(false);
+  });
+
+  it("constructs current-turn delivery only for the internal Code Mode flag and keeps policy", () => {
+    const createDelivery = vi
+      .spyOn(currentTurnDelivery, "createCurrentTurnDelivery")
+      .mockReturnValue({
+        route: { channel: "telegram", to: "chat-1" },
+        send: vi.fn(),
+      });
+    try {
+      const direct = createOpenClawCodingTools({
+        includeToolSearchControls: true,
+        config: { tools: { toolSearch: true } },
+      });
+      expect(direct.some((tool) => tool.name === "send_current_reply")).toBe(false);
+      expect(createDelivery).not.toHaveBeenCalled();
+
+      const engaged = createOpenClawCodingTools({
+        includeCurrentTurnDeliveryTool: true,
+        config: {},
+      });
+      expect(engaged.some((tool) => tool.name === "send_current_reply")).toBe(true);
+
+      const denied = createOpenClawCodingTools({
+        includeCurrentTurnDeliveryTool: true,
+        config: { tools: { deny: ["send_current_reply"] } },
+      });
+      expect(denied.some((tool) => tool.name === "send_current_reply")).toBe(false);
+    } finally {
+      createDelivery.mockRestore();
+    }
   });
 
   it("passes explicit channel and requester facts to wrapped tool hooks", async () => {

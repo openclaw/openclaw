@@ -16,6 +16,7 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import { createCurrentTurnDeliveryTool } from "./current-turn-delivery.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 
 describe("Code Mode guest execution", () => {
@@ -59,6 +60,57 @@ describe("Code Mode guest execution", () => {
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
     expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("composes current-turn delivery in one cell and rejects a second attempt", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const send = vi.fn(async () => ({
+      status: "sent" as const,
+      channel: "telegram",
+      to: "chat-1",
+    }));
+    const deliveryTool = createCurrentTurnDeliveryTool({
+      route: { channel: "telegram", to: "chat-1" },
+      send,
+    });
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, deliveryTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain("- send_current_reply { text: string; mediaUrl?: string } -> {");
+    expect(description).toContain('status: "sent" | "suppressed" | "partial_failed" | "failed"');
+    expect(description).not.toContain(
+      "- send_current_reply { text: string; mediaUrl?: string } -> ?",
+    );
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const first = await send_current_reply({ text: "hello" });
+        let second;
+        try {
+          await send_current_reply({ text: "again" });
+        } catch (error) {
+          second = String(error);
+        }
+        return { delivered: first.status === "sent", second };
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: { delivered: true },
+    });
+    expect(String((details.value as { second?: unknown }).second)).toContain(
+      "already been consumed",
+    );
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it.each([

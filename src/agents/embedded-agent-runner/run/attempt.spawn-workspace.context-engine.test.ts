@@ -197,6 +197,64 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("enables Tool Search controls for embedded OpenClaw runs when configured", async () => {
     expect(toolSearchControlsCase.includeToolSearchControls).toBe(true);
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
+    expect(toolSearchControlsCase.includeCurrentTurnDeliveryTool).toBeUndefined();
+  });
+
+  it("mints current-turn delivery only for engaged Code Mode and removes it for restart-safe runs", async () => {
+    hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([
+      {
+        name: "send_current_reply",
+        label: "Send current reply",
+        description: "Send the current reply.",
+        parameters: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: "object",
+          properties: {
+            status: { type: "string", enum: ["sent"] },
+            channel: { type: "string" },
+            to: { type: "string" },
+          },
+          required: ["status", "channel", "to"],
+          additionalProperties: false,
+        },
+        execute: async () => ({ text: "sent" }),
+      },
+    ]);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        forceRestartSafeTools: true,
+        config: {
+          tools: {
+            codeMode: { enabled: true },
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    const construction = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(construction.includeCurrentTurnDeliveryTool).toBe(true);
+    const sessionOptions = mockParams(
+      hoisted.createAgentSessionMock,
+      0,
+      "createAgentSession options",
+    );
+    const customTools = requireRecords(sessionOptions.customTools, "customTools");
+    const exec = findRecord(customTools, (tool) => tool.name === "exec", "Code Mode exec");
+    expect(String(exec.description)).not.toContain("send_current_reply");
   });
 
   it("carries the resolved context budget into OpenClaw tool construction", async () => {

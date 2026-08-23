@@ -222,7 +222,7 @@ function createCodeModeExecDescription(
     : undefined;
   const catalogIndex = projection ? formatCodeModeCatalogIndex(projection.bindings) : "";
   return (
-    `Run JavaScript or TypeScript in OpenClaw code mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Nested results, output, and final value share ${maxOutputBytes} bytes; truncation reports omitted bytes and asks you to rerun with narrower args. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
+    `Run JavaScript or TypeScript in OpenClaw Code Mode. Enabled tools are async global functions listed in the quick index. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; do not spend another \`exec\` merely inspecting them. Return the final value; otherwise the result is \`null\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return the raw value first, observe it, then use a later \`exec\` for dependent composition. If a tool is omitted from the bounded index, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Handles expose \`describe()\` when a schema is needed. \`setTimeout\` and \`clearTimeout\` work. Nested calls enforce normal tool policy and approvals. Nested results, output, and final value share ${maxOutputBytes} bytes; truncation reports omitted bytes and asks you to rerun with narrower args. Node.js modules and \`require\`/\`import\` are NOT available; use enabled globals for shell, file, network, or external actions.` +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +
@@ -303,7 +303,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_WAIT_TOOL_NAME,
     label: "wait",
     hideFromChannelProgress: true,
-    description: "Resume a suspended OpenClaw code mode run returned by exec.",
+    description: "Resume a suspended OpenClaw Code Mode run returned by exec.",
     parameters: Type.Object({
       runId: Type.String({ description: "Code mode run id returned by exec." }),
     }),

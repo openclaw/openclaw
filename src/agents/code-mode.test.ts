@@ -255,6 +255,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     };
 
     expect(execTool.description).toContain("Node.js modules");
+    expect(execTool.description).toContain("OpenClaw Code Mode");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
     expect(execTool.description).toContain("Enabled tools are async global functions");
     expect(execTool.description).toContain("Await dependent calls in order");

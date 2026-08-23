@@ -60,6 +60,10 @@ import {
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
+import {
+  createCurrentTurnDelivery,
+  createCurrentTurnDeliveryTool,
+} from "./current-turn-delivery.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
@@ -339,6 +343,7 @@ type OpenClawCodingToolsOptions = {
   includeCoreTools?: boolean;
   /** Include Tool Search control tools when enabled for this run. */
   includeToolSearchControls?: boolean;
+  includeCurrentTurnDeliveryTool?: boolean;
   /** Executes cataloged tools through the active agent run lifecycle. */
   toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
   /** Runtime-local Tool Search catalog ref shared with attempt compaction. */
@@ -758,8 +763,27 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           executeTool: options?.toolSearchCatalogExecutor,
         })
       : [];
+  const currentTurnDelivery =
+    options?.includeCurrentTurnDeliveryTool === true
+      ? createCurrentTurnDelivery({
+          ...options,
+          deliveryContext: {
+            channel: resolveGatewayMessageChannel(
+              options.messageChannel ?? options.messageProvider,
+            ),
+            to: options.messageTo ?? options.currentMessagingTarget ?? options.currentChannelId,
+            accountId: options.agentAccountId,
+            threadId: options.messageThreadId,
+          },
+          agentId,
+          workspaceDir: workspaceRoot,
+          runtimeConfig: options.config,
+          getRuntimeConfig: () => options.config,
+        })
+      : undefined;
   const tools: AnyAgentTool[] = [
     ...coreTools,
+    ...(currentTurnDelivery ? [createCurrentTurnDeliveryTool(currentTurnDelivery)] : []),
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
     ...(includeOpenClawTools

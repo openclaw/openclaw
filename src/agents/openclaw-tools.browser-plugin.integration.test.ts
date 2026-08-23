@@ -166,14 +166,19 @@ describe("createOpenClawTools browser plugin integration", () => {
     const mediaUrl = path.join(workspaceDir, "photo.png");
     const outsideMediaUrl = `${workspaceDir}-outside.png`;
     await fs.copyFile(
-      path.join(
-        process.cwd(),
-        "apps/ios/WatchApp/Assets.xcassets/OpenClawIcon.imageset/openclaw-icon.png",
-      ),
+      path.join(process.cwd(), "extensions/browser/chrome-extension/icons/icon32.png"),
       mediaUrl,
     );
     await fs.copyFile(mediaUrl, outsideMediaUrl);
-    const platformSendMedia = vi.fn(async () => ({ channel: "telegram", messageId: "sent-1" }));
+    let revokeAfterPlatformSend: string | undefined;
+    const platformSendMedia = vi.fn(async () => {
+      const capability = revokeAfterPlatformSend;
+      revokeAfterPlatformSend = undefined;
+      if (capability) {
+        revokeMessageActionTurnCapability(capability);
+      }
+      return { channel: "telegram", messageId: "sent-1" };
+    });
     const transportDispatchStarted = createDeferred();
     const resumeTransportDispatch = createDeferred();
     let deferTransportDispatch = false;
@@ -325,20 +330,20 @@ describe("createOpenClawTools browser plugin integration", () => {
       ).rejects.toThrow(/not under an allowed directory/i);
       expect(platformSendMedia).toHaveBeenCalledOnce();
 
-      deferTransportDispatch = true;
-      const pending = withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
-        activeDelivery.send({ text: "closing", mediaUrl }),
-      );
-      await transportDispatchStarted.promise;
-      revokeMessageActionTurnCapability(turnCapability);
-      resumeTransportDispatch.resolve();
-      await expect(pending).rejects.toThrow("plugin delivery capability is no longer active");
-      expect(platformSendMedia).toHaveBeenCalledTimes(1);
-      expect(providerNativeSend).not.toHaveBeenCalled();
+      revokeAfterPlatformSend = turnCapability;
+      await expect(
+        withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+          activeDelivery.send({ text: "sent before close", mediaUrl }),
+        ),
+      ).rejects.toMatchObject({
+        message: "current-turn delivery capability is no longer active",
+        sentBeforeError: true,
+      });
+      expect(platformSendMedia).toHaveBeenCalledTimes(2);
       await expect(activeDelivery.send({ text: "too late" })).rejects.toThrow(
-        "plugin delivery capability is no longer active",
+        "current-turn delivery capability is no longer active",
       );
-      expect(platformSendMedia).toHaveBeenCalledTimes(1);
+      expect(providerNativeSend).not.toHaveBeenCalled();
 
       nextTurnCapability = mintMessageActionTurnCapability({
         agentId: "main",
@@ -363,13 +368,46 @@ describe("createOpenClawTools browser plugin integration", () => {
         throw new Error("expected replacement plugin delivery capability");
       }
       const replacementDelivery = delivery;
+      deferTransportDispatch = true;
+      const pending = withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+        replacementDelivery.send({ text: "closing", mediaUrl }),
+      );
+      await transportDispatchStarted.promise;
+      revokeMessageActionTurnCapability(nextTurnCapability);
+      resumeTransportDispatch.resolve();
+      await expect(pending).rejects.toThrow("current-turn delivery capability is no longer active");
+      expect(platformSendMedia).toHaveBeenCalledTimes(2);
+
+      nextTurnCapability = mintMessageActionTurnCapability({
+        agentId: "main",
+        runId: "run-3",
+        sessionKey: "agent:main:telegram:group:123",
+        sessionId: "session-3",
+      });
+      createOpenClawTools({
+        config,
+        agentSessionKey: "agent:main:telegram:group:123",
+        runId: "run-3",
+        sessionId: "session-3",
+        agentChannel: "telegram",
+        agentAccountId: "work",
+        agentTo: "123",
+        workspaceDir,
+        requesterAgentIdOverride: "main",
+        messageActionTurnCapability: nextTurnCapability,
+        disableMessageTool: true,
+      });
+      if (!delivery) {
+        throw new Error("expected registry-bound plugin delivery capability");
+      }
+      const registryDelivery = delivery;
       setActivePluginRegistry(createEmptyPluginRegistry());
-      await expect(replacementDelivery.send({ text: "stale registry" })).rejects.toThrow(
-        "plugin delivery capability is no longer active",
+      await expect(registryDelivery.send({ text: "stale registry" })).rejects.toThrow(
+        "current-turn delivery capability is no longer active",
       );
       setActivePluginRegistry(activeRegistry);
-      await expect(replacementDelivery.send({ text: "reactivated registry" })).rejects.toThrow(
-        "plugin delivery capability is no longer active",
+      await expect(registryDelivery.send({ text: "reactivated registry" })).rejects.toThrow(
+        "current-turn delivery capability is no longer active",
       );
     } finally {
       revokeMessageActionTurnCapability(turnCapability);

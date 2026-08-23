@@ -328,6 +328,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
             : {}),
           includeCoreTools: toolConstructionPlan.includeCoreTools,
           includeToolSearchControls: toolSearchControlsEnabledForRun,
+          ...(codeModeControlsEnabledForRun ? { includeCurrentTurnDeliveryTool: true } : {}),
           toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
           toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
           replyToMode: attempt.replyToMode,
