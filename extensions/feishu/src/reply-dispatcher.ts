@@ -23,7 +23,7 @@ import {
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
-import { createFeishuClient } from "./client.js";
+import { createFeishuClient, invalidateFeishuTenantAccessToken } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
 import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from "./markdown.js";
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
@@ -457,8 +457,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         return;
       }
 
-      const session = new FeishuStreamingSession(createFeishuClient(account), creds, (message) =>
-        params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+      const session = new FeishuStreamingSession(
+        createFeishuClient(account),
+        creds,
+        (message) => params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
+        { invalidateTenantToken: () => invalidateFeishuTenantAccessToken(account) },
       );
       const generation = ++streamingGeneration;
       streaming = session;

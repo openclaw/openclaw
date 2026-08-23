@@ -88,8 +88,18 @@ function createFeishuApiError(
   return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
 }
 
+const FEISHU_INVALID_TENANT_TOKEN_CODE = 99991663;
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
+
+function isFeishuInvalidTenantToken(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const response = isRecord(value.response) ? value.response : undefined;
+  const data = isRecord(response?.data) ? response.data : value;
+  return data.code === FEISHU_INVALID_TENANT_TOKEN_CODE;
+}
 
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
@@ -99,36 +109,51 @@ export async function requestFeishuApi<T>(
     includeNestedErrorLogId?: boolean;
     /** Base retry delay in ms; doubles on the second retry. @internal */
     retryDelayMs?: number;
+    invalidateTenantToken?: () => Promise<void>;
   } = {},
 ): Promise<T> {
-  try {
-    return await retryAsync(
-      async () => {
-        const result = await request();
-        // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
-        // instead of throwing. Rethrow it in the AxiosError response shape so
-        // getFeishuSendRateLimitCode classifies it retryable and exhaustion
-        // wraps it exactly like an SDK throw.
-        const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
-        if (fulfilledRateLimit !== undefined) {
-          throw Object.assign(
-            new Error(`Request fulfilled with rate-limit code ${fulfilledRateLimit}`),
-            { response: { status: 200, data: result } },
+  let authRecoveryAttempted = false;
+  while (true) {
+    try {
+      return await retryAsync(
+        async () => {
+          const result = await request();
+          const fulfilledCode =
+            getFeishuSendRateLimitCodeFromResponse(result) ??
+            (isFeishuInvalidTenantToken(result) ? FEISHU_INVALID_TENANT_TOKEN_CODE : undefined);
+          if (fulfilledCode !== undefined) {
+            throw Object.assign(new Error(`Request fulfilled with code ${fulfilledCode}`), {
+              response: { status: 200, data: result },
+            });
+          }
+          return result;
+        },
+        {
+          attempts: FEISHU_SEND_MAX_RETRIES + 1,
+          minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
+          shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
+        },
+      );
+    } catch (error) {
+      if (
+        !authRecoveryAttempted &&
+        options.invalidateTenantToken &&
+        isFeishuInvalidTenantToken(error)
+      ) {
+        authRecoveryAttempted = true;
+        try {
+          await options.invalidateTenantToken();
+        } catch (invalidationError) {
+          const original = createFeishuApiError(error, errorPrefix, options);
+          throw new AggregateError(
+            [original, invalidationError],
+            `${original.message}; tenant token invalidation failed: ${String(invalidationError)}`,
           );
         }
-        return result;
-      },
-      {
-        attempts: FEISHU_SEND_MAX_RETRIES + 1,
-        // With a 2-retry budget the core exponential schedule (1x, 2x base)
-        // matches the previous linear attempt*base backoff exactly; revisit
-        // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
-        minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
-        shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
-      },
-    );
-  } catch (error) {
-    throw createFeishuApiError(error, errorPrefix, options);
+        continue;
+      }
+      throw createFeishuApiError(error, errorPrefix, options);
+    }
   }
 }
 

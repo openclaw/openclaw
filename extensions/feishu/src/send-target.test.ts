@@ -4,6 +4,7 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const invalidateFeishuTenantAccessTokenMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
@@ -12,6 +13,7 @@ vi.mock("./accounts.js", () => ({
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
+  invalidateFeishuTenantAccessToken: invalidateFeishuTenantAccessTokenMock,
 }));
 
 let resolveFeishuSendTarget: typeof import("./send-target.js").resolveFeishuSendTarget;
@@ -39,7 +41,7 @@ describe("resolveFeishuSendTarget", () => {
     createFeishuClientMock.mockReset().mockReturnValue(client);
   });
 
-  it("keeps explicit group targets as chat_id even when ID shape is ambiguous", () => {
+  it("keeps explicit group targets as chat_id and propagates account invalidation", async () => {
     const result = resolveFeishuSendTarget({
       cfg,
       to: "feishu:group:group_room_alpha",
@@ -48,6 +50,10 @@ describe("resolveFeishuSendTarget", () => {
     expect(result.receiveId).toBe("group_room_alpha");
     expect(result.receiveIdType).toBe("chat_id");
     expect(result.client).toBe(client);
+    await result.invalidateTenantToken();
+    expect(invalidateFeishuTenantAccessTokenMock).toHaveBeenCalledWith(
+      resolveFeishuAccountMock.mock.results[0]?.value,
+    );
   });
 
   it("maps dm-prefixed open IDs to open_id", () => {

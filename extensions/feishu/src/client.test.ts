@@ -10,6 +10,8 @@ const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 type CreateFeishuClient = typeof import("./client.js").createFeishuClient;
 type CreateFeishuWSClient = typeof import("./client.js").createFeishuWSClient;
 type GetFeishuUserAgent = typeof import("./client.js").getFeishuUserAgent;
+type InvalidateFeishuTenantAccessToken =
+  typeof import("./client.js").invalidateFeishuTenantAccessToken;
 type ResetFeishuProxyAgentForTest = typeof import("./client.js").resetFeishuProxyAgentForTest;
 
 const requestInterceptorState = vi.hoisted(() => {
@@ -26,6 +28,15 @@ const requestInterceptorState = vi.hoisted(() => {
 const clientCtorMock = vi.hoisted(() =>
   vi.fn(function clientCtor() {
     return { connected: true };
+  }),
+);
+const tenantAccessTokenSymbol = Symbol("tenant-access-token");
+const cacheInstances = vi.hoisted(() => [] as Array<{ set: ReturnType<typeof vi.fn> }>);
+const defaultCacheCtorMock = vi.hoisted(() =>
+  vi.fn(function defaultCacheCtor() {
+    const cache = { get: vi.fn(), set: vi.fn().mockResolvedValue(true) };
+    cacheInstances.push(cache);
+    return cache;
   }),
 );
 const wsClientCtorMock = vi.hoisted(() =>
@@ -81,6 +92,7 @@ const registerFeishuSubagentHooksMock = vi.hoisted(() => vi.fn());
 let createFeishuClient: CreateFeishuClient;
 let createFeishuWSClient: CreateFeishuWSClient;
 let getFeishuUserAgent: GetFeishuUserAgent;
+let invalidateFeishuTenantAccessToken: InvalidateFeishuTenantAccessToken;
 let resetFeishuProxyAgentForTest: ResetFeishuProxyAgentForTest;
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
@@ -203,6 +215,8 @@ beforeAll(async () => {
     Domain: { Feishu: 0, Lark: 1 },
     LoggerLevel: { info: "info" },
     Client: clientCtorMock,
+    CTenantAccessToken: tenantAccessTokenSymbol,
+    DefaultCache: defaultCacheCtorMock,
     WSClient: wsClientCtorMock,
     EventDispatcher: vi.fn(),
     defaultHttpInstance: mockBaseHttpInstance,
@@ -219,8 +233,13 @@ beforeAll(async () => {
     ),
   }));
 
-  ({ createFeishuClient, createFeishuWSClient, getFeishuUserAgent, resetFeishuProxyAgentForTest } =
-    await import("./client.js"));
+  ({
+    createFeishuClient,
+    createFeishuWSClient,
+    getFeishuUserAgent,
+    invalidateFeishuTenantAccessToken,
+    resetFeishuProxyAgentForTest,
+  } = await import("./client.js"));
 });
 
 beforeEach(() => {
@@ -256,6 +275,67 @@ afterAll(() => {
   vi.doUnmock("@larksuiteoapi/node-sdk");
   vi.doUnmock("@openclaw/proxyline");
   vi.resetModules();
+});
+
+describe("tenant token cache ownership", () => {
+  it("shares one account cache across timeout-specific clients and isolates accounts", () => {
+    createFeishuClient({
+      accountId: "cache-a",
+      appId: "app-a",
+      appSecret: "secret-a", // pragma: allowlist secret
+      httpTimeoutMs: 1_000,
+    });
+    createFeishuClient({
+      accountId: "cache-a",
+      appId: "app-a",
+      appSecret: "secret-a", // pragma: allowlist secret
+      httpTimeoutMs: 2_000,
+    });
+    createFeishuClient({
+      accountId: "cache-b",
+      appId: "app-a",
+      appSecret: "secret-a", // pragma: allowlist secret
+    });
+
+    const first = readCallOptions(clientCtorMock, -3).cache;
+    expect(readCallOptions(clientCtorMock, -2).cache).toBe(first);
+    expect(readCallOptions(clientCtorMock, -1).cache).not.toBe(first);
+  });
+
+  it("invalidates only the current account identity and SDK namespace", async () => {
+    const oldCreds = {
+      accountId: "rotating",
+      appId: "app-old",
+      appSecret: "secret-old", // pragma: allowlist secret
+      domain: "feishu" as const,
+    };
+    createFeishuClient(oldCreds);
+    const oldCache = readCallOptions(clientCtorMock).cache as {
+      set: ReturnType<typeof vi.fn>;
+    };
+    const newCreds = {
+      ...oldCreds,
+      appId: "app-new",
+      appSecret: "secret-new", // pragma: allowlist secret
+      domain: "lark" as const,
+    };
+    createFeishuClient(newCreds);
+    const newCache = readCallOptions(clientCtorMock).cache as {
+      set: ReturnType<typeof vi.fn>;
+    };
+
+    await invalidateFeishuTenantAccessToken(oldCreds);
+    expect(oldCache.set).not.toHaveBeenCalled();
+
+    const before = Date.now();
+    await invalidateFeishuTenantAccessToken(newCreds);
+    expect(newCache.set).toHaveBeenCalledWith(tenantAccessTokenSymbol, "", expect.any(Number), {
+      namespace: "app-new",
+    });
+    const expiry = newCache.set.mock.calls[0]?.[2] as number;
+    expect(expiry).toBeGreaterThan(0);
+    expect(expiry).toBeLessThan(before);
+  });
 });
 
 describe("Feishu default User-Agent interceptor", () => {

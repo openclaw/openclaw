@@ -24,7 +24,7 @@ import {
 } from "openclaw/plugin-sdk/temp-path";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+import { createFeishuClient, invalidateFeishuTenantAccessToken } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
@@ -101,6 +101,7 @@ type SaveMessageResourceResult = {
 function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accountId?: string }): {
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   client: ReturnType<typeof createFeishuClient>;
+  invalidateTenantToken: () => Promise<void>;
 } {
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
@@ -113,6 +114,7 @@ function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accoun
       ...account,
       httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
     }),
+    invalidateTenantToken: () => invalidateFeishuTenantAccessToken(account),
   };
 }
 
@@ -454,7 +456,7 @@ async function uploadImageFeishu(params: {
   accountId?: string;
 }): Promise<UploadImageResult> {
   const { cfg, image, imageType = "message", accountId } = params;
-  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
+  const { client, invalidateTenantToken } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   // SDK accepts Buffer directly. Keep string path support on this helper, but
   // verify the path as a regular local file before uploading it.
@@ -471,7 +473,7 @@ async function uploadImageFeishu(params: {
         },
       }),
     "Feishu image upload failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, invalidateTenantToken },
   );
 
   return {
@@ -509,7 +511,7 @@ async function uploadFileFeishu(params: {
   accountId?: string;
 }): Promise<UploadFileResult> {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
-  const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
+  const { client, invalidateTenantToken } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
   // SDK accepts Buffer directly. Keep string path support on this helper, but
   // verify the path as a regular local file before uploading it.
@@ -530,7 +532,7 @@ async function uploadFileFeishu(params: {
         },
       }),
     "Feishu file upload failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, invalidateTenantToken },
   );
 
   return {
@@ -562,7 +564,7 @@ async function sendImageFeishu(params: {
     allowTopLevelReplyFallback,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+  const { client, receiveId, receiveIdType, invalidateTenantToken } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
@@ -584,6 +586,7 @@ async function sendImageFeishu(params: {
       },
       directErrorPrefix: "Feishu image send failed",
       replyErrorPrefix: "Feishu image reply failed",
+      invalidateTenantToken,
     });
   }
 
@@ -598,7 +601,7 @@ async function sendImageFeishu(params: {
         },
       }),
     "Feishu image send failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, invalidateTenantToken },
   );
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
   return toFeishuSendResult(response, receiveId, "media", "Feishu image send failed");
@@ -628,7 +631,7 @@ async function sendFileFeishu(params: {
     accountId,
   } = params;
   const msgType = params.msgType ?? "file";
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+  const { client, receiveId, receiveIdType, invalidateTenantToken } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
@@ -650,6 +653,7 @@ async function sendFileFeishu(params: {
       },
       directErrorPrefix: "Feishu file send failed",
       replyErrorPrefix: "Feishu file reply failed",
+      invalidateTenantToken,
     });
   }
 
@@ -664,7 +668,7 @@ async function sendFileFeishu(params: {
         },
       }),
     "Feishu file send failed",
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, invalidateTenantToken },
   );
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
   return toFeishuSendResult(

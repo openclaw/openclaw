@@ -286,6 +286,155 @@ describe("FeishuStreamingSession", () => {
     return { authTokens, client, deps };
   }
 
+  type CardKitRequest = (params: {
+    path: string;
+    method: "POST" | "PUT" | "PATCH";
+    body: string;
+    auditContext: string;
+    action: string;
+  }) => Promise<{ code?: number }>;
+
+  function requestCardKit(session: FeishuStreamingSession): CardKitRequest {
+    return (session as unknown as { requestCardKit: CardKitRequest }).requestCardKit.bind(session);
+  }
+
+  it.each([
+    ["create", "/cardkit/v1/cards", "POST"],
+    ["update", "/cardkit/v1/cards/card/elements/content/content", "PUT"],
+    ["replace", "/cardkit/v1/cards/card/elements/content", "PUT"],
+    ["note", "/cardkit/v1/cards/card/elements/note/content", "PUT"],
+    ["close", "/cardkit/v1/cards/card/settings", "PATCH"],
+  ] as const)(
+    "recovers exact 99991663 once for CardKit %s and releases every request",
+    async (action, path, method) => {
+      let authCalls = 0;
+      let cardCalls = 0;
+      const releases: Array<ReturnType<typeof vi.fn>> = [];
+      const guardedFetch = vi.fn(async (params: { url: string }) => {
+        const release = vi.fn().mockResolvedValue(undefined);
+        releases.push(release);
+        if (params.url.includes("/auth/")) {
+          authCalls += 1;
+          return {
+            response: jsonResponse({
+              code: 0,
+              msg: "ok",
+              tenant_access_token: `token-${authCalls}`,
+              expire: 7200,
+            }),
+            release,
+          };
+        }
+        cardCalls += 1;
+        return {
+          response: jsonResponse(
+            cardCalls === 1 ? { code: 99991663, msg: "invalid token" } : { code: 0, msg: "ok" },
+          ),
+          release,
+        };
+      });
+      const session = new FeishuStreamingSession(
+        {} as never,
+        { appId: `app-${action}`, appSecret: "secret" },
+        undefined,
+        { guardedFetch: guardedFetch as never },
+      );
+
+      await expect(
+        requestCardKit(session)({
+          path,
+          method,
+          body: "{}",
+          auditContext: `test.${action}`,
+          action,
+        }),
+      ).resolves.toMatchObject({ code: 0 });
+      expect({ authCalls, cardCalls }).toEqual({ authCalls: 2, cardCalls: 2 });
+      expect(releases).toHaveLength(4);
+      expect(releases.every((release) => release.mock.calls.length === 1)).toBe(true);
+    },
+  );
+
+  it.each([99991663, 99991664])(
+    "keeps persistent or unrelated CardKit auth code %s terminal after the allowed recovery",
+    async (code) => {
+      let authCalls = 0;
+      let cardCalls = 0;
+      const guardedFetch = vi.fn(async (params: { url: string }) => {
+        if (params.url.includes("/auth/")) {
+          authCalls += 1;
+          return {
+            response: jsonResponse({
+              code: 0,
+              msg: "ok",
+              tenant_access_token: `token-${authCalls}`,
+              expire: 7200,
+            }),
+            release: vi.fn(),
+          };
+        }
+        cardCalls += 1;
+        return { response: jsonResponse({ code, msg: "auth error" }), release: vi.fn() };
+      });
+      const session = new FeishuStreamingSession(
+        {} as never,
+        { appId: `app-terminal-${code}`, appSecret: "secret" },
+        undefined,
+        { guardedFetch: guardedFetch as never },
+      );
+
+      await expect(
+        requestCardKit(session)({
+          path: "/cardkit/v1/cards",
+          method: "POST",
+          body: "{}",
+          auditContext: "test.terminal",
+          action: "create",
+        }),
+      ).rejects.toThrow(String(code));
+      expect(cardCalls).toBe(code === 99991663 ? 2 : 1);
+      expect(authCalls).toBe(code === 99991663 ? 2 : 1);
+    },
+  );
+
+  it("isolates raw CardKit tokens by domain and app id", async () => {
+    const authCalls = [0, 0];
+    const sessions = ["feishu", "lark"].map((domain, index) => {
+      const guardedFetch = vi.fn(async (params: { url: string }) => {
+        if (params.url.includes("/auth/")) {
+          authCalls[index] = (authCalls[index] ?? 0) + 1;
+          return {
+            response: jsonResponse({
+              code: 0,
+              msg: "ok",
+              tenant_access_token: `token-${domain}`,
+              expire: 7200,
+            }),
+            release: vi.fn(),
+          };
+        }
+        return { response: jsonResponse({ code: 0 }), release: vi.fn() };
+      });
+      return new FeishuStreamingSession(
+        {} as never,
+        { appId: "same-app", appSecret: "secret", domain: domain as "feishu" | "lark" },
+        undefined,
+        { guardedFetch: guardedFetch as never },
+      );
+    });
+
+    for (const session of sessions) {
+      await requestCardKit(session)({
+        path: "/cardkit/v1/cards",
+        method: "POST",
+        body: "{}",
+        auditContext: "test.isolation",
+        action: "create",
+      });
+    }
+    expect(authCalls).toEqual([1, 1]);
+  });
+
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
     let streamState:
       | {

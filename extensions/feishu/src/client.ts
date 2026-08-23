@@ -29,7 +29,9 @@ type FeishuClientSdk = Pick<
   typeof Lark,
   | "AppType"
   | "Client"
+  | "CTenantAccessToken"
   | "defaultHttpInstance"
+  | "DefaultCache"
   | "Domain"
   | "EventDispatcher"
   | "LoggerLevel"
@@ -39,7 +41,9 @@ type FeishuClientSdk = Pick<
 const feishuClientSdk: FeishuClientSdk = {
   AppType: Lark.AppType,
   Client: Lark.Client,
+  CTenantAccessToken: Lark.CTenantAccessToken,
   defaultHttpInstance: Lark.defaultHttpInstance,
+  DefaultCache: Lark.DefaultCache,
   Domain: Lark.Domain,
   EventDispatcher: Lark.EventDispatcher,
   LoggerLevel: Lark.LoggerLevel,
@@ -260,6 +264,34 @@ const clientCache = new Map<
     config: { appId: string; appSecret: string; domain?: FeishuDomain; httpTimeoutMs: number };
   }
 >();
+const tenantTokenCaches = new Map<
+  string,
+  {
+    cache: Lark.DefaultCache;
+    config: { appId: string; appSecret: string; domain?: FeishuDomain };
+  }
+>();
+
+function resolveTenantTokenCache(
+  creds: Required<Pick<FeishuClientCredentials, "appId" | "appSecret">> &
+    Pick<FeishuClientCredentials, "accountId" | "domain">,
+): Lark.DefaultCache {
+  const accountId = creds.accountId ?? "default";
+  const cached = tenantTokenCaches.get(accountId);
+  if (
+    cached?.config.appId === creds.appId &&
+    cached.config.appSecret === creds.appSecret &&
+    cached.config.domain === creds.domain
+  ) {
+    return cached.cache;
+  }
+  const cache = new feishuClientSdk.DefaultCache();
+  tenantTokenCaches.set(accountId, {
+    cache,
+    config: { appId: creds.appId, appSecret: creds.appSecret, domain: creds.domain },
+  });
+  return cache;
+}
 
 function resolveSdkDomain(domain: FeishuDomain | undefined): Lark.Domain {
   // The SDK parses :port in its domain as an API route parameter; custom origins
@@ -380,6 +412,7 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     appSecret,
     appType: feishuClientSdk.AppType.SelfBuild,
     domain: resolveSdkDomain(domain),
+    cache: resolveTenantTokenCache({ accountId, appId, appSecret, domain }),
     httpInstance: createFeishuHttpInstance(defaultHttpTimeoutMs, domain),
   });
 
@@ -390,6 +423,26 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   });
 
   return client;
+}
+
+export async function invalidateFeishuTenantAccessToken(
+  creds: FeishuClientCredentials,
+): Promise<void> {
+  const { accountId = "default", appId, appSecret, domain } = creds;
+  if (!appId || !appSecret) {
+    return;
+  }
+  const cached = tenantTokenCaches.get(accountId);
+  if (
+    cached?.config.appId !== appId ||
+    cached.config.appSecret !== appSecret ||
+    cached.config.domain !== domain
+  ) {
+    return;
+  }
+  await cached.cache.set(feishuClientSdk.CTenantAccessToken, "", Date.now() - 1, {
+    namespace: appId,
+  });
 }
 
 type FeishuWsClientCallbacks = Pick<

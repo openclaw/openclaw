@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const invalidateFeishuTenantAccessTokenMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
@@ -27,7 +28,10 @@ const validPngImage = Buffer.from(
   "hex",
 );
 
-vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
+vi.mock("./client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
+  invalidateFeishuTenantAccessToken: invalidateFeishuTenantAccessTokenMock,
+}));
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,

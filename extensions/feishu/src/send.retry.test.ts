@@ -321,3 +321,81 @@ describe("requestFeishuApi — retry on fulfilled rate-limit body (no throw)", (
     expect(request).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("requestFeishuApi — invalid tenant token recovery", () => {
+  it("invalidates and retries once for thrown 99991663", async () => {
+    const invalidateTenantToken = vi.fn().mockResolvedValue(undefined);
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(99991663))
+      .mockResolvedValueOnce({ code: 0 });
+
+    await expect(
+      requestFeishuApi(request, "prefix", { ...NO_DELAY, invalidateTenantToken }),
+    ).resolves.toEqual({ code: 0 });
+    expect(invalidateTenantToken).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates and retries once for fulfilled 99991663", async () => {
+    const invalidateTenantToken = vi.fn().mockResolvedValue(undefined);
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 99991663, msg: "invalid tenant token" })
+      .mockResolvedValueOnce({ code: 0 });
+
+    await requestFeishuApi(request, "prefix", { ...NO_DELAY, invalidateTenantToken });
+    expect(invalidateTenantToken).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces persistent 99991663 after one recovery", async () => {
+    const invalidateTenantToken = vi.fn().mockResolvedValue(undefined);
+    const request = vi.fn().mockRejectedValue(axiosError(99991663));
+
+    await expect(
+      requestFeishuApi(request, "prefix", { ...NO_DELAY, invalidateTenantToken }),
+    ).rejects.toThrow(/99991663/);
+    expect(invalidateTenantToken).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([99991664, 401])("does not recover unrelated auth signal %s", async (signal) => {
+    const invalidateTenantToken = vi.fn().mockResolvedValue(undefined);
+    const error =
+      signal === 401
+        ? Object.assign(new Error("unauthorized"), { response: { status: 401, data: {} } })
+        : axiosError(signal);
+    const request = vi.fn().mockRejectedValue(error);
+
+    await expect(
+      requestFeishuApi(request, "prefix", { ...NO_DELAY, invalidateTenantToken }),
+    ).rejects.toThrow();
+    expect(invalidateTenantToken).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the Feishu diagnostic when invalidation fails", async () => {
+    const invalidateTenantToken = vi.fn().mockRejectedValue(new Error("cache unavailable"));
+
+    await expect(
+      requestFeishuApi(vi.fn().mockRejectedValue(axiosError(99991663)), "send failed", {
+        ...NO_DELAY,
+        invalidateTenantToken,
+      }),
+    ).rejects.toThrow(/99991663.*cache unavailable/);
+  });
+
+  it("restarts the complete rate-limit loop after invalidation", async () => {
+    const invalidateTenantToken = vi.fn().mockResolvedValue(undefined);
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(230020))
+      .mockRejectedValueOnce(axiosError(99991663))
+      .mockResolvedValueOnce({ code: 0 });
+
+    await requestFeishuApi(request, "prefix", { ...NO_DELAY, invalidateTenantToken });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(invalidateTenantToken).toHaveBeenCalledTimes(1);
+  });
+});

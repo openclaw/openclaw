@@ -19,6 +19,141 @@ type RecordedFeishuRequest = {
 };
 
 describe("Feishu DM delivery over the real Lark SDK", () => {
+  it("reacquires one stale primary token without touching the secondary account", async () => {
+    const tokenCalls = new Map<string, number>();
+    const messageCalls = new Map<string, number>();
+    const visibleSends = new Map<string, number>();
+    const server = createServer((request, response) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) {
+          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        }
+        const url = new URL(request.url ?? "/", "http://127.0.0.1");
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") as Record<
+          string,
+          unknown
+        >;
+        const sendJson = (status: number, payload: unknown) => {
+          response.writeHead(status, { "content-type": "application/json" });
+          response.end(JSON.stringify(payload));
+        };
+
+        if (url.pathname === "/open-apis/auth/v3/tenant_access_token/internal") {
+          const appId = String(body.app_id);
+          const count = (tokenCalls.get(appId) ?? 0) + 1;
+          tokenCalls.set(appId, count);
+          sendJson(200, {
+            code: 0,
+            msg: "ok",
+            tenant_access_token:
+              appId === "cli_stale_primary" && count === 1
+                ? "tat-primary-stale"
+                : appId === "cli_stale_primary"
+                  ? "tat-primary-fresh"
+                  : "tat-secondary-valid",
+            expire: 7200,
+          });
+          return;
+        }
+
+        const authorization = String(request.headers.authorization);
+        messageCalls.set(authorization, (messageCalls.get(authorization) ?? 0) + 1);
+        if (authorization === "Bearer tat-primary-stale") {
+          sendJson(401, { code: 99991663, msg: "invalid tenant access token" });
+          return;
+        }
+        const receiveId = String(body.receive_id);
+        visibleSends.set(receiveId, (visibleSends.get(receiveId) ?? 0) + 1);
+        sendJson(200, {
+          code: 0,
+          msg: "success",
+          data: { message_id: `om_${receiveId}` },
+        });
+      })().catch((error: unknown) => {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: String(error) }));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address() as AddressInfo;
+    const loopbackOrigin = `http://127.0.0.1:${address.port}`;
+    const interceptor = Lark.defaultHttpInstance.interceptors.request.use(
+      (options) => {
+        const upstream = new URL(options.url ?? "");
+        if (upstream.hostname === "open.feishu.cn") {
+          options.url = new URL(
+            `${upstream.pathname}${upstream.search}`,
+            loopbackOrigin,
+          ).toString();
+        }
+        return options;
+      },
+      undefined,
+      { synchronous: true },
+    );
+
+    try {
+      const cfg = {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_stale_primary",
+            appSecret: "loopback-placeholder", // pragma: allowlist secret
+            domain: "feishu",
+            accounts: {
+              secondary: {
+                appId: "cli_valid_secondary",
+                appSecret: "loopback-placeholder", // pragma: allowlist secret
+                domain: "feishu",
+              },
+            },
+          },
+        },
+      } as ClawdbotConfig;
+
+      await expect(
+        sendMessageFeishu({ cfg, to: "chat:oc_primary", text: "primary" }),
+      ).resolves.toMatchObject({ messageId: "om_oc_primary" });
+      await expect(
+        sendMessageFeishu({
+          cfg,
+          to: "chat:oc_secondary",
+          text: "secondary",
+          accountId: "secondary",
+        }),
+      ).resolves.toMatchObject({ messageId: "om_oc_secondary" });
+
+      expect(tokenCalls).toEqual(
+        new Map([
+          ["cli_stale_primary", 2],
+          ["cli_valid_secondary", 1],
+        ]),
+      );
+      expect(messageCalls).toEqual(
+        new Map([
+          ["Bearer tat-primary-stale", 1],
+          ["Bearer tat-primary-fresh", 1],
+          ["Bearer tat-secondary-valid", 1],
+        ]),
+      );
+      expect(visibleSends).toEqual(
+        new Map([
+          ["oc_primary", 1],
+          ["oc_secondary", 1],
+        ]),
+      );
+    } finally {
+      Lark.defaultHttpInstance.interceptors.request.eject(interceptor);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("authenticates conversation replies and preserves account, group, thread, and error boundaries", async () => {
     const requests: RecordedFeishuRequest[] = [];
     const server = createServer((request, response) => {

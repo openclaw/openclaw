@@ -114,6 +114,7 @@ async function sendFallbackDirect(
     msgType: string;
   },
   errorPrefix: string,
+  invalidateTenantToken?: () => Promise<void>,
 ): Promise<FeishuSendResult> {
   const response = await requestFeishuApi(
     () =>
@@ -126,7 +127,7 @@ async function sendFallbackDirect(
         },
       }),
     errorPrefix,
-    { includeNestedErrorLogId: true },
+    { includeNestedErrorLogId: true, invalidateTenantToken },
   );
   assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(
@@ -153,10 +154,16 @@ export async function sendReplyOrFallbackDirect(
     };
     directErrorPrefix: string;
     replyErrorPrefix: string;
+    invalidateTenantToken?: () => Promise<void>;
   },
 ): Promise<FeishuSendResult> {
   if (!params.replyToMessageId) {
-    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+    return sendFallbackDirect(
+      client,
+      params.directParams,
+      params.directErrorPrefix,
+      params.invalidateTenantToken,
+    );
   }
 
   const replyTargetFallbackError =
@@ -179,7 +186,7 @@ export async function sendReplyOrFallbackDirect(
           },
         }),
       params.replyErrorPrefix,
-      { includeNestedErrorLogId: true },
+      { includeNestedErrorLogId: true, invalidateTenantToken: params.invalidateTenantToken },
     );
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
@@ -188,13 +195,23 @@ export async function sendReplyOrFallbackDirect(
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;
     }
-    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+    return sendFallbackDirect(
+      client,
+      params.directParams,
+      params.directErrorPrefix,
+      params.invalidateTenantToken,
+    );
   }
   if (shouldFallbackFromReplyTarget(response)) {
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;
     }
-    return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
+    return sendFallbackDirect(
+      client,
+      params.directParams,
+      params.directErrorPrefix,
+      params.invalidateTenantToken,
+    );
   }
   assertFeishuMessageApiSuccess(response, params.replyErrorPrefix);
   return toFeishuSendResult(
@@ -466,7 +483,11 @@ export async function sendMessageFeishu(
     mentions,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, receiveId, receiveIdType, invalidateTenantToken } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
@@ -490,6 +511,7 @@ export async function sendMessageFeishu(
     directParams,
     directErrorPrefix: "Feishu send failed",
     replyErrorPrefix: "Feishu reply failed",
+    invalidateTenantToken,
   });
 }
 
@@ -507,7 +529,11 @@ type SendFeishuCardParams = {
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
     params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, receiveId, receiveIdType, invalidateTenantToken } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const content = JSON.stringify(card);
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
@@ -520,6 +546,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     directParams,
     directErrorPrefix: "Feishu card send failed",
     replyErrorPrefix: "Feishu card reply failed",
+    invalidateTenantToken,
   });
 }
 

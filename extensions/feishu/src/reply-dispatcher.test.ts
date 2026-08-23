@@ -11,6 +11,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 type StreamingSessionStub = {
   active: boolean;
   credentials: unknown;
+  deps: { invalidateTenantToken?: () => Promise<void> } | undefined;
   start: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
@@ -27,6 +28,7 @@ const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const invalidateFeishuTenantAccessTokenMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -107,7 +109,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
   };
 });
-vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
+vi.mock("./client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
+  invalidateFeishuTenantAccessToken: invalidateFeishuTenantAccessTokenMock,
+}));
 vi.mock("./targets.js", () => ({ resolveReceiveIdType: resolveReceiveIdTypeMock }));
 vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
@@ -131,6 +136,7 @@ vi.mock("./streaming-card.js", () => {
     FeishuStreamingSession: class {
       active = false;
       credentials: unknown;
+      deps: { invalidateTenantToken?: () => Promise<void> } | undefined;
       start = vi.fn(async () => {
         this.active = true;
       });
@@ -149,8 +155,14 @@ vi.mock("./streaming-card.js", () => {
       });
       isActive = vi.fn(() => this.active);
 
-      constructor(_client: unknown, credentials: unknown) {
+      constructor(
+        _client: unknown,
+        credentials: unknown,
+        _log?: (message: string) => void,
+        deps?: { invalidateTenantToken?: () => Promise<void> },
+      ) {
         this.credentials = credentials;
+        this.deps = deps;
         streamingInstances.push(this);
       }
     },
@@ -409,6 +421,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       typeof call[0] === "string" ? call[0] : "",
     );
   }
+
+  it("propagates the account token invalidator into streaming sessions", async () => {
+    const { options } = createDispatcherHarness();
+    await options.onReplyStart?.();
+    await options.deliver({ text: "hello" }, { kind: "final" });
+
+    const invalidate = requireStreamingInstance(0).deps?.invalidateTenantToken;
+    await invalidate?.();
+    expect(invalidateFeishuTenantAccessTokenMock).toHaveBeenCalledWith(
+      resolveFeishuAccountMock.mock.results[0]?.value,
+    );
+  });
 
   it("skips typing indicator when account typingIndicator is disabled", async () => {
     resolveFeishuAccountMock.mockReturnValue({
