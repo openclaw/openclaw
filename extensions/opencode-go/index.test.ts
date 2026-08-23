@@ -10,8 +10,8 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 // Opencode Go tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
 import { clearOpencodeGoHybridCatalogStateForTests } from "./hybrid-catalog.js";
+import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeGoLiveProviderConfig,
@@ -81,6 +81,7 @@ const DEPRECATED_MODEL_IDS = [
 describe("opencode-go provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
+    clearOpencodeGoHybridCatalogStateForTests();
   });
 
   it("registers only the Go auth choice from its own provider manifest", async () => {

@@ -22,6 +22,7 @@ export type ModelsDevModelRow = {
   id?: unknown;
   name?: unknown;
   reasoning?: unknown;
+  status?: unknown;
   modalities?: { input?: unknown };
   limit?: { context?: unknown; output?: unknown };
   cost?: {
@@ -157,22 +158,6 @@ function mapModelsDevInput(modalities: ModelsDevModelRow["modalities"]): Array<"
   return raw.includes("image") ? ["text", "image"] : ["text"];
 }
 
-function mapNpmToApi(npm: string | undefined): ModelApi | undefined {
-  if (!npm) {
-    return undefined;
-  }
-  if (npm.includes("anthropic")) {
-    return "anthropic-messages";
-  }
-  if (npm.includes("google")) {
-    return "google-generative-ai";
-  }
-  if (npm.includes("openai")) {
-    return "openai-completions";
-  }
-  return undefined;
-}
-
 export function parseModelsDevProviderSlice(
   document: unknown,
   providerKey: string,
@@ -239,6 +224,7 @@ export async function fetchModelsDevProviderSlice(params: {
       cacheKeyParts: ["models.dev", "api.json"],
       readRows: (body) => [body],
       shouldCacheRows: (modelRows) => modelRows.length > 0,
+      now: params.now,
     });
     return parseModelsDevProviderSlice(rows[0], params.providerKey);
   } catch {
@@ -273,8 +259,7 @@ export function mapModelsDevRowToModel(params: {
   ) => HybridModelDefinition;
 }): HybridModelDefinition {
   const transport = params.resolveTransport(params.modelId);
-  const npmApi = mapNpmToApi(readString(params.row.provider?.npm));
-  const api = transport.api !== "openai-completions" || !npmApi ? transport.api : npmApi;
+  const api = transport.api;
   const cost = mapModelsDevCost(params.row.cost) ??
     params.staticBase?.cost ?? {
       input: 0,
@@ -343,6 +328,11 @@ export function buildHybridModelDefinitions(params: {
     }
     const md = params.modelsDev.get(modelId);
     const base = staticById.get(modelId);
+    // Metadata-only lifecycle signal: a models.dev-deprecated id with no static
+    // base must not enter live catalogs; static seeds own their own rows.
+    if (!base && readString(md?.status) === "deprecated") {
+      continue;
+    }
     if (md) {
       models.push(
         mapModelsDevRowToModel({

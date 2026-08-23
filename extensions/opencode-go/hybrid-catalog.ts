@@ -3,8 +3,6 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildHybridProviderConfig,
   HybridDynamicModelStore,
-  MODELS_DEV_PROCESS_STICKY_TTL_MS,
-  GATEWAY_MODEL_IDS_TTL_MS,
   fetchModelsDevProviderSlice,
   type HybridModelDefinition,
   type HybridTransport,
@@ -12,31 +10,8 @@ import {
 import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
-export {
-  MODELS_DEV_API_URL,
-  MODELS_DEV_TIMEOUT_MS,
-  parseModelsDevProviderSlice,
-  buildHybridModelDefinitions,
-  type HybridModelDefinition,
-  type HybridTransport,
-  type ModelsDevProviderSlice,
-} from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
-
-/** @deprecated Use MODELS_DEV_PROCESS_STICKY_TTL_MS for metadata; gateway uses GATEWAY_MODEL_IDS_TTL_MS. */
-export const PROCESS_STICKY_TTL_MS = MODELS_DEV_PROCESS_STICKY_TTL_MS;
-export { MODELS_DEV_PROCESS_STICKY_TTL_MS, GATEWAY_MODEL_IDS_TTL_MS };
-
 const PROVIDER_ID = "opencode-go";
 const MODELS_DEV_PROVIDER_KEY = "opencode-go";
-const OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP = {
-  minimal: "high",
-  low: "high",
-  medium: "high",
-  high: "high",
-  xhigh: "max",
-  max: "max",
-} as const;
-const DEPRECATED_GATEWAY_IDS = new Set(["mimo-v2-omni", "mimo-v2-pro"]);
 
 const hybridModelStore = new HybridDynamicModelStore();
 let lastCatalogAuthKey: string | undefined;
@@ -52,6 +27,9 @@ export function resolveOpencodeGoFamilyTransport(
   anthropicBaseUrl: string,
 ): HybridTransport {
   const lower = modelId.toLowerCase();
+  if (lower.startsWith("gpt-")) {
+    return { api: "openai-responses", baseUrl: openaiBaseUrl };
+  }
   if (lower.startsWith("minimax-") || lower.startsWith("qwen")) {
     return { api: "anthropic-messages", baseUrl: anthropicBaseUrl };
   }
@@ -74,9 +52,6 @@ export function applyOpencodeGoPolicyOverlay(
       ...model.compat,
     },
   };
-  if (lower.startsWith("deepseek-v4") && !next.thinkingLevelMap) {
-    next = { ...next, thinkingLevelMap: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP };
-  }
   // Shipped Go policy: qwen rows without explicit efforts speak the qwen
   // thinking format; rows carrying effort enums never get thinkingFormat.
   if (lower.startsWith("qwen") && !next.compat?.supportedReasoningEfforts) {
@@ -102,6 +77,7 @@ export async function buildOpencodeGoHybridProviderConfig(params: {
   gatewayTimeoutMs: number;
   openaiBaseUrl: string;
   anthropicBaseUrl: string;
+  skipGatewayIds?: ReadonlySet<string>;
   now?: () => number;
   gatewayIdsTtlMs?: number;
   hybridSuccessTtlMs?: number;
@@ -125,7 +101,7 @@ export async function buildOpencodeGoHybridProviderConfig(params: {
     openaiBaseUrl: params.openaiBaseUrl,
     resolveTransport,
     applyPolicyOverlay: applyOpencodeGoPolicyOverlay,
-    skipGatewayIds: DEPRECATED_GATEWAY_IDS,
+    skipGatewayIds: params.skipGatewayIds,
     gatewayIdsTtlMs: params.gatewayIdsTtlMs,
     hybridSuccessTtlMs: params.hybridSuccessTtlMs,
     now: params.now,

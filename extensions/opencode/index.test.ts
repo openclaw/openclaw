@@ -11,8 +11,8 @@ import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test
 // Opencode tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
 import { clearOpencodeHybridCatalogStateForTests } from "./hybrid-catalog.js";
+import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeZenLiveProviderConfig,
@@ -125,6 +125,7 @@ const REPLACED_BY = new Map([
 describe("opencode provider plugin", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
+    clearOpencodeHybridCatalogStateForTests();
   });
 
   it("registers only the Zen auth choice from its own provider manifest", async () => {
@@ -695,7 +696,16 @@ describe("opencode provider plugin", () => {
     const fetchGuard = vi.fn(async (req: { url: string }) => {
       if (req.url.includes("models.dev")) {
         return {
-          response: new Response(JSON.stringify({ opencode: { models: {} } })),
+          response: new Response(
+            JSON.stringify({
+              opencode: {
+                models: {
+                  // Gateway still lists this retired id; metadata must not revive it.
+                  "claude-opus-4-8": { id: "claude-opus-4-8", status: "deprecated" },
+                },
+              },
+            }),
+          ),
           finalUrl: req.url,
           release: vi.fn(async () => undefined),
         };

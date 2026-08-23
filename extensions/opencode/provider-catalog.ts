@@ -1,6 +1,7 @@
 // Opencode Zen provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import type { HybridModelDefinition } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
 import {
   fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
@@ -15,7 +16,6 @@ import {
   buildOpencodeZenHybridProviderConfig,
   resolveHybridDynamicModel,
   resolveOpencodeZenFamilyTransport,
-  type HybridModelDefinition,
 } from "./hybrid-catalog.js";
 
 const PROVIDER_ID = "opencode";
@@ -445,6 +445,12 @@ const OPENCODE_ZEN_RESOLVABLE_MODELS = MODEL_CAPABILITY_ROWS.map(([modelId]) =>
 const OPENCODE_ZEN_MODELS = OPENCODE_ZEN_RESOLVABLE_MODELS.filter(
   (model) => MODEL_CAPABILITIES[model.id]?.status !== "deprecated",
 );
+// Gateway ids for deprecated rows must never enter hybrid live catalogs.
+const OPENCODE_ZEN_DEPRECATED_MODEL_IDS: ReadonlySet<string> = new Set(
+  MODEL_CAPABILITY_ROWS.flatMap(([modelId]) =>
+    MODEL_CAPABILITIES[modelId]?.status === "deprecated" ? [modelId] : [],
+  ),
+);
 
 export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProviderConfig {
   return {
@@ -488,6 +494,7 @@ export async function buildOpencodeZenLiveProviderConfig(
     gatewayTimeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
     openaiBaseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
     anthropicBaseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
+    skipGatewayIds: OPENCODE_ZEN_DEPRECATED_MODEL_IDS,
   });
 }
 

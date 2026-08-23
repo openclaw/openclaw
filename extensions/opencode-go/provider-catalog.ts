@@ -195,6 +195,10 @@ const OPENCODE_GO_RESOLVABLE_MODELS = OPENCODE_GO_MODEL_ROWS.map(buildOpencodeGo
 const OPENCODE_GO_MODELS = OPENCODE_GO_RESOLVABLE_MODELS.filter(
   (model) => !OPENCODE_GO_MODEL_STATUS.has(model.id),
 );
+// Gateway ids for deprecated/preview rows must never enter hybrid live catalogs.
+const OPENCODE_GO_HIDDEN_GATEWAY_IDS: ReadonlySet<string> = new Set(
+  OPENCODE_GO_MODEL_STATUS.keys(),
+);
 
 type FetchOpencodeGoLiveModelIdsParams = {
   apiKey?: string;
@@ -246,6 +250,7 @@ export async function buildOpencodeGoLiveProviderConfig(
     gatewayTimeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
     openaiBaseUrl: OPENCODE_GO_OPENAI_BASE_URL,
     anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+    skipGatewayIds: OPENCODE_GO_HIDDEN_GATEWAY_IDS,
   });
 }
 

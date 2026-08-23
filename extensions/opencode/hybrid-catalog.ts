@@ -3,30 +3,12 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildHybridProviderConfig,
   HybridDynamicModelStore,
-  MODELS_DEV_PROCESS_STICKY_TTL_MS,
-  GATEWAY_MODEL_IDS_TTL_MS,
   fetchModelsDevProviderSlice,
   type HybridModelDefinition,
   type HybridTransport,
 } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
 import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-
-export {
-  MODELS_DEV_API_URL,
-  MODELS_DEV_TIMEOUT_MS,
-  mapModelsDevCost,
-  parseModelsDevProviderSlice,
-  buildHybridModelDefinitions,
-  type HybridModelDefinition,
-  type HybridTransport,
-  type ModelsDevModelRow,
-  type ModelsDevProviderSlice,
-} from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
-
-/** @deprecated Prefer MODELS_DEV_PROCESS_STICKY_TTL_MS; gateway uses GATEWAY_MODEL_IDS_TTL_MS. */
-export const PROCESS_STICKY_TTL_MS = MODELS_DEV_PROCESS_STICKY_TTL_MS;
-export { MODELS_DEV_PROCESS_STICKY_TTL_MS, GATEWAY_MODEL_IDS_TTL_MS };
 
 const MODELS_DEV_PROVIDER_KEY = "opencode";
 const GPT_56_MODEL_IDS = new Set(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]);
@@ -91,6 +73,7 @@ export async function buildOpencodeZenHybridProviderConfig(params: {
   gatewayTimeoutMs: number;
   openaiBaseUrl: string;
   anthropicBaseUrl: string;
+  skipGatewayIds?: ReadonlySet<string>;
   providerId?: string;
   now?: () => number;
   gatewayIdsTtlMs?: number;
@@ -115,6 +98,7 @@ export async function buildOpencodeZenHybridProviderConfig(params: {
     openaiBaseUrl: params.openaiBaseUrl,
     resolveTransport,
     applyPolicyOverlay: applyOpencodeZenPolicyOverlay,
+    skipGatewayIds: params.skipGatewayIds,
     gatewayIdsTtlMs: params.gatewayIdsTtlMs,
     hybridSuccessTtlMs: params.hybridSuccessTtlMs,
     now: params.now,

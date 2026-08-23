@@ -1,13 +1,15 @@
 // Hybrid OpenCode Zen catalog unit tests (fixtures only; no network).
+import {
+  buildHybridModelDefinitions,
+  mapModelsDevCost,
+  parseModelsDevProviderSlice,
+} from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
 import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildHybridModelDefinitions,
   buildOpencodeZenHybridProviderConfig,
   clearOpencodeHybridCatalogStateForTests,
-  mapModelsDevCost,
-  parseModelsDevProviderSlice,
   resolveHybridDynamicModel,
   resolveOpencodeZenFamilyTransport,
 } from "./hybrid-catalog.js";
@@ -39,6 +41,8 @@ function modelsDevFixture() {
           id: "claude-opus-4-8",
           name: "Claude Opus 4.8",
           reasoning: true,
+          // models.dev marks retired ids deprecated; hybrid must exclude them.
+          status: "deprecated",
           modalities: { input: ["text", "image"] },
           limit: { context: 200_000, output: 65_536 },
           provider: { npm: "@ai-sdk/anthropic" },
@@ -74,6 +78,16 @@ function modelsDevFixture() {
           modalities: { input: ["text"] },
           limit: { context: 200_000, output: 32_768 },
           cost: { input: 1, output: 2, cache_read: 0.1 },
+        },
+        // Stale upstream deprecation must not drop a static-seeded active model.
+        "claude-opus-4-7": {
+          id: "claude-opus-4-7",
+          name: "Claude Opus 4.7",
+          status: "deprecated",
+          reasoning: true,
+          modalities: { input: ["text", "image"] },
+          limit: { context: 200_000, output: 65_536 },
+          cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
         },
       },
     },
@@ -142,7 +156,13 @@ describe("opencode hybrid catalog", () => {
     const staticModels = staticHybridModels();
     const modelsDev = parseModelsDevProviderSlice(modelsDevFixture(), "opencode");
     const hybrid = buildHybridModelDefinitions({
-      gatewayIds: ["claude-opus-5", "claude-opus-4-8", "unknown-skip", "gpt-5.6-sol"],
+      gatewayIds: [
+        "claude-opus-4-7",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "unknown-skip",
+        "gpt-5.6-sol",
+      ],
       modelsDev,
       staticModels,
       providerId: "opencode",
@@ -154,9 +174,11 @@ describe("opencode hybrid catalog", () => {
         ),
       applyPolicyOverlay: (model) => model,
     });
+    // models.dev-deprecated claude-opus-4-8 is excluded; unknown-skip has no
+    // metadata and no static row.
     expect(hybrid.map((model) => model.id)).toEqual([
+      "claude-opus-4-7",
       "claude-opus-5",
-      "claude-opus-4-8",
       "gpt-5.6-sol",
     ]);
     expect(hybrid.find((model) => model.id === "claude-opus-5")).toMatchObject({
@@ -167,6 +189,25 @@ describe("opencode hybrid catalog", () => {
       maxTokens: 128_000,
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     });
+    // Hybrid transport routing matches the shipped Zen family rules.
+    expect(hybrid.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://opencode.ai/zen/v1",
+    });
+    expect(
+      resolveOpencodeZenFamilyTransport(
+        "grok-4.5",
+        "https://opencode.ai/zen/v1",
+        "https://opencode.ai/zen",
+      ),
+    ).toEqual({ api: "openai-responses", baseUrl: "https://opencode.ai/zen/v1" });
+    expect(
+      resolveOpencodeZenFamilyTransport(
+        "gemini-3-pro",
+        "https://opencode.ai/zen/v1",
+        "https://opencode.ai/zen",
+      ),
+    ).toEqual({ api: "google-generative-ai", baseUrl: "https://opencode.ai/zen/v1" });
   });
 
   it("merges live gateway + models.dev and falls back offline to static", async () => {
@@ -201,7 +242,9 @@ describe("opencode hybrid catalog", () => {
       fetchGuard,
       fetchModelsDev: async () => modelsDevFixture(),
     });
-    expect(live.models.map((model) => model.id)).toEqual(["claude-opus-5", "claude-opus-4-8"]);
+    // models.dev marks claude-opus-4-8 deprecated even though the gateway still
+    // lists it; only non-deprecated metadata rows may enter the live catalog.
+    expect(live.models.map((model) => model.id)).toEqual(["claude-opus-5"]);
     expect(resolveOpencodeZenModel("claude-opus-5")).toMatchObject({
       id: "claude-opus-5",
       provider: "opencode",
@@ -222,7 +265,7 @@ describe("opencode hybrid catalog", () => {
   });
 
   it("single-flights hybrid catalog loads for the same discovery key", async () => {
-    const fetchGuard = gatewayFetchGuard(["claude-opus-4-8"]);
+    const fetchGuard = gatewayFetchGuard(["claude-opus-5"]);
     const fetchModelsDev = vi.fn(async () => modelsDevFixture());
     const args = {
       apiKey: "k",
@@ -296,7 +339,7 @@ describe("opencode hybrid catalog", () => {
 
   it("refreshes hybrid merge after short hybrid success TTL while models.dev stays sticky", async () => {
     let now = 1_000;
-    let gatewayIds = ["claude-opus-4-8"];
+    let gatewayIds = ["claude-opus-4-7"];
     const fetchModelsDev = vi.fn(async () => modelsDevFixture());
     const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => {
       if (req.url.includes("models.dev")) {
@@ -330,13 +373,13 @@ describe("opencode hybrid catalog", () => {
     };
 
     const first = await buildOpencodeZenHybridProviderConfig(args);
-    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
+    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-7"]);
     expect(fetchModelsDev).toHaveBeenCalledTimes(1);
 
     gatewayIds = ["claude-opus-5"];
     now = 1_020;
     const stillCached = await buildOpencodeZenHybridProviderConfig(args);
-    expect(stillCached.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
+    expect(stillCached.models.map((model) => model.id)).toEqual(["claude-opus-4-7"]);
 
     now = 1_060;
     const refreshed = await buildOpencodeZenHybridProviderConfig(args);
@@ -378,7 +421,7 @@ describe("opencode hybrid catalog", () => {
   });
 
   it("single-flights parallel hybrid loads for the same discovery key", async () => {
-    const fetchGuard = gatewayFetchGuard(["claude-opus-4-8"]);
+    const fetchGuard = gatewayFetchGuard(["claude-opus-5"]);
     const fetchModelsDev = vi.fn(async () => {
       await new Promise((resolve) => {
         setTimeout(resolve, 20);
