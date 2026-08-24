@@ -3,6 +3,7 @@ import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
+import type { SkillBinsProvider } from "./invoke.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
@@ -87,16 +88,24 @@ beforeEach(() => {
   mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
 });
 
-async function startRuntime() {
+function createNodeHostClient(request: () => Promise<unknown>): NodeHostClient {
+  return {
+    async request<T>() {
+      return (await request()) as T;
+    },
+  };
+}
+
+async function startRuntime(
+  client: NodeHostClient = createNodeHostClient(async () => ({ bins: [] })),
+) {
   const prepared = await prepareNodeHostRuntime({
     config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
     env: { PATH: "/usr/bin" },
     enableAgentRuns: true,
     enableWorkerRuns: true,
   });
-  return prepared.start({
-    client: { request: vi.fn(async () => ({ bins: [] })) } as unknown as NodeHostClient,
-  });
+  return prepared.start({ client });
 }
 
 function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
@@ -150,6 +159,64 @@ describe("node-host worker manifest", () => {
 
     expect(prepared.workerHostingEnabled).toBe(true);
     expect(prepared.manifest).not.toHaveProperty("workerRuns");
+  });
+});
+
+describe("node-host skill-bin cache", () => {
+  it("shares one cold refresh across a concurrent invoke burst", async () => {
+    let resolveRefresh!: (value: { bins: string[] }) => void;
+    const request = vi.fn(
+      async () =>
+        await new Promise<{ bins: string[] }>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
+    const observed: unknown[] = [];
+    mocks.handleInvoke.mockImplementation(async (...args: unknown[]) => {
+      const skillBins = args[2] as SkillBinsProvider;
+      observed.push(await skillBins.current());
+    });
+    const runtime = await startRuntime(createNodeHostClient(request));
+
+    const invokes = Array.from({ length: 100 }, (_, index) =>
+      runtime.invoke({ ...frame, id: `invoke-${index}`, command: "system.run" }),
+    );
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    resolveRefresh({ bins: [] });
+    await Promise.all(invokes);
+
+    expect(observed).toHaveLength(100);
+    await runtime.close();
+  });
+
+  it("retries after a shared refresh fails", async () => {
+    const refreshes: Array<{
+      resolve: (value: { bins: string[] }) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const request = vi.fn(
+      async () =>
+        await new Promise<{ bins: string[] }>((resolve, reject) => {
+          refreshes.push({ resolve, reject });
+        }),
+    );
+    mocks.handleInvoke.mockImplementation(async (...args: unknown[]) => {
+      const skillBins = args[2] as SkillBinsProvider;
+      await skillBins.current();
+    });
+    const runtime = await startRuntime(createNodeHostClient(request));
+
+    const first = runtime.invoke({ ...frame, id: "invoke-first", command: "system.run" });
+    const second = runtime.invoke({ ...frame, id: "invoke-second", command: "system.run" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    refreshes[0]?.reject(new Error("refresh failed"));
+    await Promise.all([first, second]);
+
+    const retry = runtime.invoke({ ...frame, id: "invoke-retry", command: "system.run" });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    refreshes[1]?.resolve({ bins: [] });
+    await retry;
+    await runtime.close();
   });
 });
 
