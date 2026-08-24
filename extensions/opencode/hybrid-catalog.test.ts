@@ -103,6 +103,15 @@ function modelsDevFixture() {
           limit: { context: 200_000, output: 65_536 },
           cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
         },
+        // Corrupted upstream limits must fall back to the static seed's real values.
+        "claude-opus-4-6": {
+          id: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+          reasoning: true,
+          modalities: { input: ["text", "image"] },
+          limit: { context: 9_000_000_000_000, output: 900_000_000 },
+          cost: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+        },
       },
     },
   };
@@ -274,6 +283,26 @@ describe("opencode hybrid catalog", () => {
       },
     });
     expect(offline.models.map((model) => model.id)).toContain("claude-opus-4-7");
+  });
+
+  it("falls back to static-seed limits when models.dev publishes corrupted values", async () => {
+    const live = await buildOpencodeZenHybridProviderConfig({
+      apiKey: "k",
+      discoveryApiKey: "zen-corrupt",
+      fetchGuard: gatewayFetchGuard(["claude-opus-4-6", "claude-opus-5"]),
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels: staticHybridModels(),
+      gatewayEndpoint: "https://opencode.ai/zen/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen",
+    });
+    // The row stays available; only its oversized metadata limits fall back.
+    expect(live.models.map((model) => model.id)).toEqual(["claude-opus-4-6", "claude-opus-5"]);
+    expect(live.models.find((model) => model.id === "claude-opus-4-6")).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
   });
 
   it("single-flights hybrid catalog loads for the same discovery key", async () => {

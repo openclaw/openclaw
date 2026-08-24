@@ -1,5 +1,9 @@
 // Shared models.dev + gateway hybrid catalog: sticky metadata, short-lived gateway IDs.
 import {
+  normalizeBoundedOptionalString,
+  normalizeOptionalString,
+} from "../../packages/normalization-core/src/string-coerce.js";
+import {
   getCachedLiveProviderModelRows,
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
@@ -24,6 +28,15 @@ export const MODELS_DEV_BODY_MAX_BYTES = 16 * 1024 * 1024;
 export const MODELS_DEV_PROCESS_STICKY_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 /** Short TTL for gateway model-id lists so availability can refresh. */
 export const GATEWAY_MODEL_IDS_TTL_MS = 60_000;
+
+// Sanity ceilings for third-party models.dev limits: values above these are
+// corruption, not capability (mirrors extensions/nvidia FEATURED_MODEL_MAX_*).
+// Oversized remote context/output values defer runtime compaction past the
+// provider's real limit, so they fall back instead of publishing.
+const MODELS_DEV_MAX_CONTEXT_TOKENS = 10_000_000;
+const MODELS_DEV_MAX_OUTPUT_TOKENS = 1_000_000;
+// Same corruption bound for display names reaching prompt/UI surfaces.
+const MODELS_DEV_MAX_NAME_LENGTH = 200;
 
 export type ModelsDevModelRow = {
   id?: unknown;
@@ -66,12 +79,13 @@ function readPositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function readNonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+function readBoundedPositiveNumber(value: unknown, max: number): number | undefined {
+  const parsed = readPositiveNumber(value);
+  return parsed !== undefined && parsed <= max ? parsed : undefined;
 }
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+function readNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function formatModelName(modelId: string): string {
@@ -101,6 +115,7 @@ export function mapModelsDevCost(
     if (!tier || typeof tier !== "object" || Array.isArray(tier)) {
       continue;
     }
+    // SAFETY: tier passed the non-null object check above; field readers revalidate every value.
     const tierRecord = tier as {
       input?: unknown;
       output?: unknown;
@@ -166,24 +181,29 @@ export function parseModelsDevProviderSlice(
   if (!document || typeof document !== "object" || Array.isArray(document)) {
     return new Map();
   }
+  // SAFETY: document passed the plain-object admission check above.
   const provider = (document as Record<string, unknown>)[providerKey];
   if (!provider || typeof provider !== "object" || Array.isArray(provider)) {
     return new Map();
   }
+  // SAFETY: provider passed the plain-object check above.
   const models = (provider as { models?: unknown }).models;
   if (!models || typeof models !== "object" || Array.isArray(models)) {
     return new Map();
   }
   const slice = new Map<string, ModelsDevModelRow>();
+  // SAFETY: models passed the plain-object check above.
   for (const [rawId, row] of Object.entries(models as Record<string, unknown>)) {
     if (!row || typeof row !== "object" || Array.isArray(row)) {
       continue;
     }
-    const id = readString((row as ModelsDevModelRow).id) ?? rawId;
+    // SAFETY: row passed the plain-object check; ModelsDevModelRow fields stay unknown-typed.
+    const id = normalizeOptionalString((row as ModelsDevModelRow).id) ?? rawId;
     const normalizedId = id.trim().toLowerCase();
     if (!normalizedId) {
       continue;
     }
+    // SAFETY: same validated row shape as the id read above.
     slice.set(normalizedId, row as ModelsDevModelRow);
   }
   return slice;
@@ -250,10 +270,12 @@ export async function fetchModelsDevProviderSlice(params: {
         if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
           return false;
         }
+        // SAFETY: doc passed the plain-object check above.
         return Object.values(doc as Record<string, unknown>).some((slice) => {
           if (!slice || typeof slice !== "object" || Array.isArray(slice)) {
             return false;
           }
+          // SAFETY: slice passed the plain-object check above.
           const models = (slice as { models?: unknown }).models;
           return Boolean(models) && typeof models === "object";
         });
@@ -270,6 +292,7 @@ function readLiveModelId(row: unknown): string | undefined {
   if (!row || typeof row !== "object" || Array.isArray(row)) {
     return undefined;
   }
+  // SAFETY: row passed the plain-object check above; fields stay unknown-typed.
   const candidate = row as { id?: unknown; object?: unknown };
   if (candidate.object !== undefined && candidate.object !== "model") {
     return undefined;
@@ -302,11 +325,21 @@ export function mapModelsDevRowToModel(params: {
       cacheWrite: 0,
     };
   const contextWindow =
-    readPositiveNumber(params.row.limit?.context) ?? params.staticBase?.contextWindow ?? 128_000;
-  const maxTokens =
-    readPositiveNumber(params.row.limit?.output) ?? params.staticBase?.maxTokens ?? 8_192;
+    readBoundedPositiveNumber(params.row.limit?.context, MODELS_DEV_MAX_CONTEXT_TOKENS) ??
+    params.staticBase?.contextWindow ??
+    128_000;
+  // Published output limit can never exceed the window it draws from (mirrors
+  // packages/ai clampMaxTokensToModel); real models.dev rows satisfy this.
+  const maxTokens = Math.min(
+    readBoundedPositiveNumber(params.row.limit?.output, MODELS_DEV_MAX_OUTPUT_TOKENS) ??
+      params.staticBase?.maxTokens ??
+      8_192,
+    contextWindow,
+  );
   const name =
-    readString(params.row.name) ?? params.staticBase?.name ?? formatModelName(params.modelId);
+    normalizeBoundedOptionalString(params.row.name, MODELS_DEV_MAX_NAME_LENGTH) ??
+    params.staticBase?.name ??
+    formatModelName(params.modelId);
   const reasoning =
     typeof params.row.reasoning === "boolean"
       ? params.row.reasoning
@@ -335,6 +368,7 @@ export function mapModelsDevRowToModel(params: {
     ...(params.staticBase?.thinkingLevelMap
       ? { thinkingLevelMap: params.staticBase.thinkingLevelMap }
       : {}),
+    // SAFETY: the literal above supplies every HybridModelDefinition-required runtime field.
   }) as HybridModelDefinition;
   return params.applyPolicyOverlay(mapped, params.staticBase);
 }
@@ -364,7 +398,7 @@ export function buildHybridModelDefinitions(params: {
     const base = staticById.get(modelId);
     // Metadata-only lifecycle signal: a models.dev-deprecated id with no static
     // base must not enter live catalogs; static seeds own their own rows.
-    if (!base && readString(md?.status) === "deprecated") {
+    if (!base && normalizeOptionalString(md?.status) === "deprecated") {
       continue;
     }
     if (md) {
@@ -621,7 +655,9 @@ export function createScopedHybridDynamicModelHooks(params: {
     agentDir?: string;
     authProfileId?: string;
   }): Promise<string | undefined> {
-    const { resolveApiKeyForProvider } = await import("openclaw/plugin-sdk/provider-auth-runtime");
+    // Core files must reach private-local SDK runtimes via relative imports;
+    // the public subpath specifier is plugin-facing only.
+    const { resolveApiKeyForProvider } = await import("./provider-auth-runtime.js");
     for (const providerId of params.providerIds) {
       try {
         const auth = await resolveApiKeyForProvider({
@@ -648,7 +684,7 @@ export function createScopedHybridDynamicModelHooks(params: {
           return undefined;
         }
         const providerConfig = await params.buildLiveProviderConfig(apiKey);
-        // Live builder rows and its static fallback both carry full runtime fields.
+        // SAFETY: live builder rows and its static fallback both carry full runtime fields.
         scopedModels.put(ctx, providerConfig.models as HybridModelDefinition[]);
         return scopedModels.get(ctx);
       } catch {

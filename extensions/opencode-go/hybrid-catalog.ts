@@ -10,7 +10,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 const PROVIDER_ID = "opencode-go";
 const MODELS_DEV_PROVIDER_KEY = "opencode-go";
 
-export function resolveOpencodeGoFamilyTransport(
+function resolveOpencodeGoFamilyTransport(
   modelId: string,
   openaiBaseUrl: string,
   anthropicBaseUrl: string,
@@ -25,7 +25,7 @@ export function resolveOpencodeGoFamilyTransport(
   return { api: "openai-completions", baseUrl: openaiBaseUrl };
 }
 
-export function applyOpencodeGoPolicyOverlay(
+function applyOpencodeGoPolicyOverlay(
   model: HybridModelDefinition,
   staticBase: HybridModelDefinition | undefined,
 ): HybridModelDefinition {

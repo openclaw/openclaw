@@ -3489,6 +3489,7 @@ src/plugin-sdk/provider-auth-login-flow-runtime.ts	6
 src/plugin-sdk/provider-auth-result.ts	4
 src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-auth.ts	1
+src/plugin-sdk/provider-catalog-hybrid-runtime.ts	1
 src/plugin-sdk/provider-catalog-live-runtime.ts	3
 src/plugin-sdk/provider-catalog-shared.ts	4
 src/plugin-sdk/provider-enable-config.ts	2

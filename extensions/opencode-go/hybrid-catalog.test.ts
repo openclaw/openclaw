@@ -1,23 +1,15 @@
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { HybridModelDefinition } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
 // Hybrid OpenCode Go catalog unit tests (fixtures only; no network).
-import {
-  buildHybridModelDefinitions,
-  parseModelsDevProviderSlice,
-} from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
-import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  applyOpencodeGoPolicyOverlay,
-  buildOpencodeGoHybridProviderConfig,
-  resolveOpencodeGoFamilyTransport,
-} from "./hybrid-catalog.js";
+import { buildOpencodeGoHybridProviderConfig } from "./hybrid-catalog.js";
 import plugin from "./index.js";
 import {
   buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
   resolveOpencodeGoModel,
-  type OpencodeGoModelDefinition,
 } from "./provider-catalog.js";
 
 // Credential resolution is mocked per profile id so scoped-resolution tests run
@@ -34,8 +26,8 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   })),
 }));
 
-function staticHybridModels(): OpencodeGoModelDefinition[] {
-  return buildStaticOpencodeGoProviderConfig().models as OpencodeGoModelDefinition[];
+function staticHybridModels(): HybridModelDefinition[] {
+  return buildStaticOpencodeGoProviderConfig().models as HybridModelDefinition[];
 }
 
 function modelsDevFixture() {
@@ -89,6 +81,14 @@ function modelsDevFixture() {
           limit: { context: 202_752, output: 32_768 },
           cost: { input: 1, output: 3.2, cache_read: 0.2 },
         },
+        "qwen3.5-plus": {
+          id: "qwen3.5-plus",
+          name: "Qwen3.5 Plus",
+          reasoning: true,
+          modalities: { input: ["text", "image"] },
+          limit: { context: 262_144, output: 65_536 },
+          cost: { input: 0.5, output: 2, cache_read: 0.05 },
+        },
         "gpt-6-go": {
           id: "gpt-6-go",
           name: "GPT-6 Go",
@@ -132,84 +132,52 @@ describe("opencode-go hybrid catalog", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("routes Go model families to shipped transports without invented overlays", () => {
-    const go = (modelId: string) =>
-      resolveOpencodeGoFamilyTransport(
-        modelId,
-        "https://opencode.ai/zen/go/v1",
-        "https://opencode.ai/zen/go",
-      );
-    expect(go("minimax-m3")).toEqual({
+  it("routes Go model families to shipped transports without invented overlays", async () => {
+    const config = await buildOpencodeGoHybridProviderConfig({
+      apiKey: "k",
+      discoveryApiKey: "go-routing",
+      fetchGuard: gatewayFetchGuard(["minimax-m3", "qwen3.5-plus", "gpt-6-go", "deepseek-v4-pro"]),
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels: staticHybridModels(),
+      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+    });
+    const byId = (id: string) => config.models.find((model) => model.id === id);
+    expect(byId("minimax-m3")).toMatchObject({
       api: "anthropic-messages",
       baseUrl: "https://opencode.ai/zen/go",
     });
-    expect(go("qwen3.5-plus")).toEqual({
-      api: "anthropic-messages",
-      baseUrl: "https://opencode.ai/zen/go",
-    });
-    expect(go("gpt-6-go")).toEqual({
+    expect(byId("gpt-6-go")).toMatchObject({
       api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/go/v1",
     });
-    expect(go("deepseek-v4-pro")).toEqual({
+    expect(byId("deepseek-v4-pro")).toMatchObject({
       api: "openai-completions",
       baseUrl: "https://opencode.ai/zen/go/v1",
     });
     // DeepSeek rows keep the static seed's shape: efforts, no thinkingLevelMap.
-    const deepseek = applyOpencodeGoPolicyOverlay(
-      {
-        id: "deepseek-v4-pro",
-        name: "DeepSeek",
-        api: "openai-completions",
-        provider: "opencode-go",
-        baseUrl: "https://opencode.ai/zen/go/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1,
-        maxTokens: 1,
-      },
-      undefined,
-    );
-    expect(deepseek.thinkingLevelMap).toBeUndefined();
+    expect(byId("deepseek-v4-pro")?.thinkingLevelMap).toBeUndefined();
     // Shipped qwen policy: rows without effort enums speak the qwen format.
-    const qwen = applyOpencodeGoPolicyOverlay(
-      {
-        id: "qwen3.5-plus",
-        name: "Qwen",
-        api: "anthropic-messages",
-        provider: "opencode-go",
-        baseUrl: "https://opencode.ai/zen/go",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1,
-        maxTokens: 1,
-      },
-      undefined,
-    );
-    expect(qwen.compat?.thinkingFormat).toBe("qwen");
+    expect(byId("qwen3.5-plus")?.compat?.thinkingFormat).toBe("qwen");
   });
 
-  it("skips deprecated MiMo aliases and includes models.dev-only gateway ids", () => {
-    const staticModels = staticHybridModels();
-    const modelsDev = parseModelsDevProviderSlice(modelsDevFixture(), "opencode-go");
-    const hybrid = buildHybridModelDefinitions({
-      gatewayIds: ["mimo-v2-omni", "mimo-v2-pro", "kimi-k3", "minimax-m3"],
-      modelsDev,
-      staticModels,
-      providerId: "opencode-go",
-      resolveTransport: (modelId) =>
-        resolveOpencodeGoFamilyTransport(
-          modelId,
-          "https://opencode.ai/zen/go/v1",
-          "https://opencode.ai/zen/go",
-        ),
-      applyPolicyOverlay: applyOpencodeGoPolicyOverlay,
+  it("skips deprecated MiMo aliases and includes models.dev-only gateway ids", async () => {
+    const config = await buildOpencodeGoHybridProviderConfig({
+      apiKey: "k",
+      discoveryApiKey: "go-skip",
+      fetchGuard: gatewayFetchGuard(["mimo-v2-omni", "mimo-v2-pro", "kimi-k3", "minimax-m3"]),
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels: staticHybridModels(),
+      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
       skipGatewayIds: new Set(["mimo-v2-omni", "mimo-v2-pro"]),
     });
-    expect(hybrid.map((model) => model.id)).toEqual(["kimi-k3", "minimax-m3"]);
-    expect(hybrid.find((model) => model.id === "kimi-k3")).toMatchObject({
+    expect(config.models.map((model) => model.id)).toEqual(["kimi-k3", "minimax-m3"]);
+    expect(config.models.find((model) => model.id === "kimi-k3")).toMatchObject({
       provider: "opencode-go",
       contextWindow: 1_048_576,
       maxTokens: 131_072,
@@ -217,21 +185,19 @@ describe("opencode-go hybrid catalog", () => {
     });
   });
 
-  it("excludes models.dev-deprecated gateway ids even with metadata present", () => {
-    const hybrid = buildHybridModelDefinitions({
-      gatewayIds: ["glm-5", "kimi-k3"],
-      modelsDev: parseModelsDevProviderSlice(modelsDevFixture(), "opencode-go"),
+  it("excludes models.dev-deprecated gateway ids even with metadata present", async () => {
+    const config = await buildOpencodeGoHybridProviderConfig({
+      apiKey: "k",
+      discoveryApiKey: "go-deprecated",
+      fetchGuard: gatewayFetchGuard(["glm-5", "kimi-k3"]),
+      fetchModelsDev: async () => modelsDevFixture(),
       staticModels: staticHybridModels(),
-      providerId: "opencode-go",
-      resolveTransport: (modelId) =>
-        resolveOpencodeGoFamilyTransport(
-          modelId,
-          "https://opencode.ai/zen/go/v1",
-          "https://opencode.ai/zen/go",
-        ),
-      applyPolicyOverlay: applyOpencodeGoPolicyOverlay,
+      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
     });
-    expect(hybrid.map((model) => model.id)).toEqual(["kimi-k3"]);
+    expect(config.models.map((model) => model.id)).toEqual(["kimi-k3"]);
   });
 
   it("builds live hybrid catalog and resolves dynamic models from hybrid map", async () => {

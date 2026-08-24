@@ -25,7 +25,7 @@ const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 
-export type OpencodeGoModelDefinition = ModelDefinitionConfig & {
+type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
   api: NonNullable<ModelDefinitionConfig["api"]>;
   baseUrl: string;

@@ -31,7 +31,7 @@ export function resolveOpencodeZenFamilyTransport(
   return { api: "openai-completions", baseUrl: openaiBaseUrl };
 }
 
-export function applyOpencodeZenPolicyOverlay(
+function applyOpencodeZenPolicyOverlay(
   model: HybridModelDefinition,
   staticBase: HybridModelDefinition | undefined,
 ): HybridModelDefinition {
