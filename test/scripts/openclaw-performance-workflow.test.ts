@@ -77,11 +77,13 @@ function kovaMatrixEntries(): Array<Record<string, string>> {
 function runCandidateTrustClassification({
   candidateSha,
   eventName,
+  kovaSha = "0f9e678e239b45db46d2bd930b7983203580df78",
   ref,
   workflowSha,
 }: {
   candidateSha: string;
   eventName: "schedule" | "workflow_dispatch";
+  kovaSha?: string;
   ref: string;
   workflowSha: string;
 }) {
@@ -97,6 +99,8 @@ function runCandidateTrustClassification({
       GITHUB_EVENT_NAME: eventName,
       GITHUB_OUTPUT: output,
       GITHUB_REF: ref,
+      KOVA_CANONICAL_CONFIG_REF: "0f9e678e239b45db46d2bd930b7983203580df78",
+      KOVA_SHA: kovaSha,
       WORKFLOW_SHA: workflowSha,
     },
   });
@@ -112,6 +116,59 @@ function runCandidateTrustClassification({
       : [],
   );
   return { outputs, result };
+}
+
+function runTargetResolution(contractStatus: "ahead" | "behind") {
+  const step = findStep("Resolve OpenClaw target ref", "resolve_target");
+  const root = tempDirs.make("openclaw-performance-resolve-");
+  const bin = join(root, "bin");
+  const output = join(root, "output");
+  const gh = join(bin, "gh");
+  const canonicalRef = "a".repeat(40);
+  const legacyRef = "b".repeat(40);
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(
+    gh,
+    `#!/bin/sh
+case "$2" in
+  repos/openclaw/openclaw/compare/*) printf '%s\\n' "$CONTRACT_STATUS" ;;
+  repos/openclaw/openclaw/commits/*) printf '%s\\n' "$TARGET_SHA" ;;
+  repos/openclaw/Kova/commits/*) printf '%s\\n' "\${2##*/}" ;;
+  *) exit 64 ;;
+esac
+`,
+  );
+  chmodSync(gh, 0o755);
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      CONTRACT_STATUS: contractStatus,
+      GH_TOKEN: "test",
+      GITHUB_OUTPUT: output,
+      GITHUB_REF_NAME: "main",
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      KOVA_CANONICAL_CONFIG_REF: canonicalRef,
+      KOVA_CONFIG_CONTRACT_INPUT: "",
+      KOVA_LEGACY_LIST_CONFIG_REF: legacyRef,
+      KOVA_REF_INPUT: "",
+      KOVA_REPOSITORY: "openclaw/Kova",
+      OPENCLAW_CANONICAL_CONFIG_SINCE: "d".repeat(40),
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+      TARGET_REF_INPUT: "candidate",
+      TARGET_SHA: "c".repeat(40),
+      WORKFLOW_SHA: "e".repeat(40),
+    },
+  });
+  const outputs = Object.fromEntries(
+    existsSync(output)
+      ? readFileSync(output, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=", 2))
+      : [],
+  );
+  return { canonicalRef, legacyRef, outputs, result };
 }
 
 describe("OpenClaw performance workflow", () => {
@@ -131,7 +188,6 @@ describe("OpenClaw performance workflow", () => {
     const legacyKovaRef = "0f9e678e239b45db46d2bd930b7983203580df78";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
-    const targetCheckout = findStep("Checkout target metadata", "resolve_target");
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
 
     expect(workflow).toContain(`KOVA_CANONICAL_CONFIG_REF: ${canonicalKovaRef}`);
@@ -151,34 +207,19 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.env?.KOVA_CONFIG_CONTRACT_INPUT).toBe(
       "${{ inputs.kova_config_contract }}",
     );
-    expect(targetCheckout.with?.["sparse-checkout"]).toBe(
-      "src/config/zod-schema.agent-defaults.ts",
-    );
-    expect(resolveTarget.run).toContain(
-      'schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"',
-    );
     expect(resolveTarget.run).toContain("KOVA_CANONICAL_CONFIG_REF");
-    expect(resolveTarget.run).toContain("KOVA_LEGACY_LIST_CONFIG_REF");
-    expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
-    expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
-    expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
+    expect(resolveTarget.run).toContain("OPENCLAW_CANONICAL_CONFIG_SINCE");
+    expect(resolveTarget.run).toContain("detected_contract=canonical");
+    expect(resolveTarget.run).toContain("detected_contract=legacy-list");
     expect(resolveTarget.run).toContain(
-      'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
+      'kova_sha="$(gh api "repos/${KOVA_REPOSITORY}/commits/${encoded_kova_ref}" --jq .sha)"',
     );
-    expect(resolveTarget.run).toContain('if [[ -f "$schema_path" ]]; then');
-    expect(resolveTarget.run).toContain('schema_content="$(cat "$schema_path")"');
-    expect(resolveTarget.run).toContain('elif [[ -z "$kova_ref" ]]; then');
-    expect(resolveTarget.run).toContain('schema_content=""');
-    expect(resolveTarget.run).toContain("Supply kova_ref explicitly");
-    expect(
-      resolveTarget.run?.indexOf('if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then'),
-    ).toBeLessThan(resolveTarget.run?.indexOf('schema_path="${TARGET_CHECKOUT_DIR}') ?? -1);
     expect(resolveTarget.run).toContain(
       'echo "kova_config_contract=$kova_config_contract" >> "$GITHUB_OUTPUT"',
     );
     expect(resolveTarget.run).toContain(
-      'if [[ "$kova_ref" == "$KOVA_CANONICAL_CONFIG_REF" || "$kova_ref" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then',
+      'if [[ "$kova_sha" == "$KOVA_CANONICAL_CONFIG_REF" || "$kova_sha" == "$KOVA_LEGACY_LIST_CONFIG_REF" ]]; then',
     );
     expect(resolveTarget.run).toContain(
       'echo "kova_ref_trusted_for_live=true" >> "$GITHUB_OUTPUT"',
@@ -212,6 +253,20 @@ describe("OpenClaw performance workflow", () => {
       "KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}",
     );
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
+  });
+
+  it("selects canonical Kova metadata for targets containing the config transition", () => {
+    const { canonicalRef, outputs, result } = runTargetResolution("ahead");
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs.kova_ref).toBe(canonicalRef);
+    expect(outputs.kova_config_contract).toBe("canonical");
+  });
+
+  it("selects legacy-list Kova metadata for targets before the config transition", () => {
+    const { legacyRef, outputs, result } = runTargetResolution("behind");
+    expect(result.status, result.stderr).toBe(0);
+    expect(outputs.kova_ref).toBe(legacyRef);
+    expect(outputs.kova_config_contract).toBe("legacy-list");
   });
 
   it("keeps live credentials away from custom Kova refs", () => {
@@ -292,18 +347,22 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow.jobs?.resolve_target?.outputs).toMatchObject({
       secret_eligible: "${{ steps.candidate_trust.outputs.secret_eligible }}",
       cache_write_allowed: "${{ steps.candidate_trust.outputs.cache_write_allowed }}",
+      external_required: "${{ steps.candidate_trust.outputs.external_required }}",
     });
     expect(trust.env).toMatchObject({
       CANDIDATE_SHA: "${{ steps.resolve.outputs.tested_sha }}",
       DEFAULT_BRANCH: "${{ github.event.repository.default_branch }}",
+      KOVA_SHA: "${{ steps.resolve.outputs.kova_ref }}",
       WORKFLOW_SHA: "${{ github.workflow_sha }}",
     });
     expect(trust.run).toContain("secret_eligible=false");
     expect(trust.run).toContain("cache_write_allowed=false");
+    expect(trust.run).toContain("external_required=true");
     expect(trust.run).toContain('"$GITHUB_REF" == "refs/heads/${DEFAULT_BRANCH}"');
     expect(trust.run).toContain('"$CANDIDATE_SHA" == "$WORKFLOW_SHA"');
     expect(trust.run).toContain("secret_eligible=true");
     expect(trust.run).toContain("cache_write_allowed=true");
+    expect(trust.run).toContain("external_required=false");
 
     for (const harness of [kovaHarness, sourceHarness, publisherHarness]) {
       expect(harness.with?.ref).toBe("${{ github.workflow_sha }}");
@@ -356,6 +415,7 @@ describe("OpenClaw performance workflow", () => {
       expect(trusted.outputs).toEqual({
         secret_eligible: "true",
         cache_write_allowed: "true",
+        external_required: "false",
       });
     }
 
@@ -378,6 +438,7 @@ describe("OpenClaw performance workflow", () => {
       expect(untrusted.outputs).toEqual({
         secret_eligible: "false",
         cache_write_allowed: "false",
+        external_required: "true",
       });
     }
   });
@@ -448,7 +509,6 @@ describe("OpenClaw performance workflow", () => {
 
   it("resolves each target once before benchmark and publication fan out", () => {
     const workflow = readWorkflow();
-    const targetCheckout = findStep("Checkout target metadata", "resolve_target");
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
     const checkout = findStep("Checkout OpenClaw");
     const record = findStep("Record tested revision");
@@ -457,19 +517,18 @@ describe("OpenClaw performance workflow", () => {
 
     expect(workflow.jobs?.kova?.needs).toBe("resolve_target");
     expect(workflow.jobs?.source_performance?.needs).toBe("resolve_target");
-    expect(targetCheckout.uses).toBe("actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10");
-    expect(targetCheckout.with?.ref).toBe("${{ inputs.target_ref || github.sha }}");
-    expect(targetCheckout.with?.path).toBe(".artifacts/performance-target");
-    expect(targetCheckout.with?.["sparse-checkout-cone-mode"]).toBe(false);
-    expect(targetCheckout.with?.["persist-credentials"]).toBe(false);
     expect(resolveTarget.id).toBe("resolve");
-    expect(resolveTarget.env?.GH_TOKEN).toBeUndefined();
+    expect(resolveTarget.env?.GH_TOKEN).toBe("${{ github.token }}");
     expect(resolveTarget.env?.TARGET_REF_INPUT).toBe("${{ inputs.target_ref }}");
-    expect(resolveTarget.env?.TARGET_CHECKOUT_DIR).toBe(
-      "${{ github.workspace }}/.artifacts/performance-target",
+    expect(resolveTarget.run).toContain(
+      'resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"',
     );
-    expect(resolveTarget.run).toContain('git -C "$TARGET_CHECKOUT_DIR" rev-parse HEAD');
-    expect(resolveTarget.run).not.toContain("gh api");
+    expect(resolveTarget.run).toContain(
+      '"repos/${GITHUB_REPOSITORY}/compare/${OPENCLAW_CANONICAL_CONFIG_SINCE}...${resolved_sha}"',
+    );
+    expect(resolveTarget.run).not.toContain("git clone");
+    expect(resolveTarget.run).not.toContain("actions/checkout");
+    expect(resolveTarget.run).not.toContain("/contents/");
     expect(resolveTarget.run).toContain("checkout_ref=$resolved_sha");
     expect(resolveTarget.run).toContain("tested_sha=$resolved_sha");
     expect(checkout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
