@@ -425,6 +425,24 @@ describe("buildReplyPayloads media filter integration", () => {
     await expectSameTargetRepliesDelivered({ provider: "message", to: "ou_abc123" });
   });
 
+  it("delivers distinct same-target replies when target provider is a channel alias", async () => {
+    await expectSameTargetRepliesDelivered({ provider: "lark", to: "ou_abc123" });
+  });
+
+  it("dedupes same-target final text already sent by a message tool", async () => {
+    const { replyPayloads } = await buildTestReplyPayloads({
+      payloads: [{ text: "hello world!" }],
+      messageProvider: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", text: "hello world!" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it.each<ReplyRouteDedupeCase>([
     {
       name: "dedupes against final routes when first-reply state is shared",
