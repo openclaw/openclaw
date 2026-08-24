@@ -1,7 +1,10 @@
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createScopedHybridDynamicModelHooks,
+  fetchModelsDevProviderSlice,
   ScopedHybridModelCache,
   type HybridModelDefinition,
 } from "./provider-catalog-hybrid-runtime.js";
@@ -9,6 +12,22 @@ import {
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: vi.fn(),
 }));
+
+function modelsDevDocument() {
+  return {
+    opencode: {
+      models: {
+        "claude-opus-5": {
+          id: "claude-opus-5",
+          reasoning: true,
+          modalities: { input: ["text"] },
+          limit: { context: 200_000, output: 32_768 },
+          cost: { input: 1, output: 2 },
+        },
+      },
+    },
+  };
+}
 
 function model(id: string): HybridModelDefinition {
   return {
@@ -128,5 +147,65 @@ describe("createScopedHybridDynamicModelHooks", () => {
       hooks.prepareDynamicModel({ modelRegistry: {}, modelId: "m" }),
     ).resolves.toBeUndefined();
     expect(hooks.resolveDynamicModel({ modelRegistry: {}, modelId: "m" })).toBeUndefined();
+  });
+});
+
+describe("fetchModelsDevProviderSlice privacy and cache-admission gates", () => {
+  beforeEach(() => {
+    clearLiveCatalogCacheForTests();
+  });
+
+  it("performs no third-party fetch without an authenticated catalog", async () => {
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>();
+    const slice = await fetchModelsDevProviderSlice({
+      providerKey: "opencode",
+      fetchGuard,
+    });
+    expect(slice.size).toBe(0);
+    expect(fetchGuard).not.toHaveBeenCalled();
+  });
+
+  it("does not sticky-cache garbage 200 documents; a later good fetch replaces them", async () => {
+    let stage: "empty" | "envelope" | "good" = "empty";
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => ({
+      response: new Response(
+        JSON.stringify(
+          stage === "good"
+            ? modelsDevDocument()
+            : stage === "envelope"
+              ? { error: "quota exceeded", code: 1000 }
+              : {},
+        ),
+      ),
+      finalUrl: req.url,
+      release: vi.fn(async () => undefined),
+    }));
+    const params = {
+      providerKey: "opencode",
+      apiKey: "k",
+      discoveryApiKey: "k",
+      fetchGuard,
+    };
+    expect((await fetchModelsDevProviderSlice(params)).size).toBe(0);
+    stage = "envelope";
+    expect((await fetchModelsDevProviderSlice(params)).size).toBe(0);
+    stage = "good";
+    const recovered = await fetchModelsDevProviderSlice(params);
+    expect(recovered.has("claude-opus-5")).toBe(true);
+  });
+
+  it("still fetches when authenticated even without an injected loader", async () => {
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => ({
+      response: new Response(JSON.stringify(modelsDevDocument())),
+      finalUrl: req.url,
+      release: vi.fn(async () => undefined),
+    }));
+    const slice = await fetchModelsDevProviderSlice({
+      providerKey: "opencode",
+      apiKey: "k",
+      discoveryApiKey: "k",
+      fetchGuard,
+    });
+    expect(slice.has("claude-opus-5")).toBe(true);
   });
 });

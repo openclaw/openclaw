@@ -13,7 +13,14 @@ import type {
 
 export const MODELS_DEV_API_URL = "https://models.dev/api.json";
 export const MODELS_DEV_TIMEOUT_MS = 15_000;
-/** Process-sticky TTL for models.dev metadata after a successful fetch. */
+// The full models.dev document measured ~4.3MB in Aug 2026 and grows with new
+// providers; it overflows the default live-catalog ceiling, so this endpoint
+// carries its own bounded read (still capped, just with headroom).
+export const MODELS_DEV_BODY_MAX_BYTES = 16 * 1024 * 1024;
+// Metadata changes slowly and the document is large, so a successful fetch is
+// process-sticky: fresh catalogs keep working without repeated third-party
+// egress. Best-effort only — the shared bounded live-catalog cache may evict
+// the entry under heavy key churn, degrading to refetch-on-next-use.
 export const MODELS_DEV_PROCESS_STICKY_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 /** Short TTL for gateway model-id lists so availability can refresh. */
 export const GATEWAY_MODEL_IDS_TTL_MS = 60_000;
@@ -184,6 +191,9 @@ export function parseModelsDevProviderSlice(
 
 export async function fetchModelsDevProviderSlice(params: {
   providerKey: string;
+  /** Auth context of the owning catalog; presence gates the third-party fetch. */
+  apiKey?: string;
+  discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
   fetchModelsDev?: () => Promise<unknown>;
@@ -192,6 +202,9 @@ export async function fetchModelsDevProviderSlice(params: {
   now?: () => number;
 }): Promise<ModelsDevProviderSlice> {
   try {
+    // Test-injection seam: deliberately runs before the credential gate so
+    // fixture-driven tests can exercise parsing offline. Production callers
+    // never supply this loader; the network branch below stays gated.
     if (params.fetchModelsDev) {
       const document = await getCachedLiveCatalogValue({
         keyParts: [
@@ -207,17 +220,40 @@ export async function fetchModelsDevProviderSlice(params: {
       });
       return parseModelsDevProviderSlice(document, params.providerKey);
     }
+    if (!params.apiKey && !params.discoveryApiKey) {
+      // Privacy boundary: third-party metadata is fetched only for authenticated
+      // provider catalogs; never as unsolicited process-wide egress.
+      return new Map();
+    }
     const rows = await getCachedLiveProviderModelRows({
       providerId: "models-dev",
       endpoint: MODELS_DEV_API_URL,
       fetchGuard: params.fetchGuard,
       signal: params.signal,
       timeoutMs: MODELS_DEV_TIMEOUT_MS,
+      bodyMaxBytes: MODELS_DEV_BODY_MAX_BYTES,
       ttlMs: MODELS_DEV_PROCESS_STICKY_TTL_MS,
       auditContext: "models-dev-catalog",
       cacheKeyParts: ["models.dev", "api.json"],
       readRows: (body) => [body],
-      shouldCacheRows: (modelRows) => modelRows.length > 0,
+      // The whole document is one "row", so row-count is vacuous. Admit only
+      // documents that look like a models.dev catalog — at least one top-level
+      // provider slice carrying a models record — so a garbage 200 (CDN error
+      // envelope, captive portal) cannot poison the year-sticky cache with
+      // silent static degradation.
+      shouldCacheRows: (modelRows) => {
+        const doc = modelRows[0];
+        if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+          return false;
+        }
+        return Object.values(doc as Record<string, unknown>).some((slice) => {
+          if (!slice || typeof slice !== "object" || Array.isArray(slice)) {
+            return false;
+          }
+          const models = (slice as { models?: unknown }).models;
+          return Boolean(models) && typeof models === "object";
+        });
+      },
       now: params.now,
     });
     return parseModelsDevProviderSlice(rows[0], params.providerKey);
@@ -397,12 +433,9 @@ export async function fetchGatewayModelIds(params: {
 /**
  * Loads hybrid models for one provider. Static fallback is never sticky-cached as a
  * successful hybrid so empty/transient gateway responses retry on the next need.
- * Successful hybrid merges are sticky only for the gateway-id list's short TTL window
- * by re-merging when gateway IDs refresh (via short gateway TTL + hybrid key including
- * gateway ids snapshot when sticky is not desired).
  *
- * Hybrid success cache uses gateway short TTL so availability can refresh; models.dev
- * metadata stays process-sticky separately.
+ * Hybrid success is sticky only for the short gateway TTL window so availability
+ * refreshes; models.dev metadata stays process-sticky separately.
  */
 export async function buildHybridProviderConfig(params: {
   providerId: string;
@@ -468,6 +501,8 @@ export async function buildHybridProviderConfig(params: {
           }),
           fetchModelsDevProviderSlice({
             providerKey: params.modelsDevProviderKey,
+            apiKey: params.apiKey,
+            discoveryApiKey: params.discoveryApiKey,
             fetchGuard: params.fetchGuard,
             signal: params.signal,
             fetchModelsDev: params.fetchModelsDev,
@@ -542,9 +577,7 @@ export class ScopedHybridModelCache {
     }
     byScope.set(
       this.scopeKey(ctx),
-      new Map(
-        models.map((model) => [model.id.trim().toLowerCase(), model]),
-      ),
+      new Map(models.map((model) => [model.id.trim().toLowerCase(), model])),
     );
   }
 

@@ -1,7 +1,6 @@
 // Hybrid OpenCode Zen catalog: gateway IDs + models.dev metadata + static policy.
 import {
   buildHybridProviderConfig,
-  fetchModelsDevProviderSlice,
   type HybridModelDefinition,
   type HybridTransport,
 } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
@@ -9,6 +8,8 @@ import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-ca
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 const MODELS_DEV_PROVIDER_KEY = "opencode";
+/** Suffix keeps injected test fixtures from colliding across plugins. */
+const MODELS_DEV_INJECTED_CACHE_KEY_SUFFIX = "opencode";
 const GPT_56_MODEL_IDS = new Set(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"]);
 const GPT_56_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"];
 
@@ -81,6 +82,7 @@ export async function buildOpencodeZenHybridProviderConfig(params: {
     signal: params.signal,
     fetchModelsDev: params.fetchModelsDev,
     modelsDevProviderKey: MODELS_DEV_PROVIDER_KEY,
+    modelsDevInjectedCacheKeySuffix: MODELS_DEV_INJECTED_CACHE_KEY_SUFFIX,
     staticModels: params.staticModels,
     gatewayEndpoint: params.gatewayEndpoint,
     gatewayTimeoutMs: params.gatewayTimeoutMs,
@@ -93,16 +95,4 @@ export async function buildOpencodeZenHybridProviderConfig(params: {
     hybridSuccessTtlMs: params.hybridSuccessTtlMs,
     now: params.now,
   });
-}
-
-/**
- * Best-effort models.dev prewarm at gateway start.
- * Full hybrid still lazy single-flights on first catalog need when auth is available.
- */
-export async function prewarmOpencodeZenHybridCatalog(): Promise<void> {
-  try {
-    await fetchModelsDevProviderSlice({ providerKey: MODELS_DEV_PROVIDER_KEY });
-  } catch {
-    // Prewarm is best-effort.
-  }
 }

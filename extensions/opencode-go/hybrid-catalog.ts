@@ -1,7 +1,6 @@
 // Hybrid OpenCode Go catalog: gateway IDs + models.dev metadata + static policy.
 import {
   buildHybridProviderConfig,
-  fetchModelsDevProviderSlice,
   type HybridModelDefinition,
   type HybridTransport,
 } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
@@ -96,15 +95,4 @@ export async function buildOpencodeGoHybridProviderConfig(params: {
     hybridSuccessTtlMs: params.hybridSuccessTtlMs,
     now: params.now,
   });
-}
-
-export async function prewarmOpencodeGoHybridCatalog(): Promise<void> {
-  try {
-    await fetchModelsDevProviderSlice({
-      providerKey: MODELS_DEV_PROVIDER_KEY,
-      injectedCacheKeySuffix: PROVIDER_ID,
-    });
-  } catch {
-    // Prewarm is best-effort.
-  }
 }

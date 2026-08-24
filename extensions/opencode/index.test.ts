@@ -126,6 +126,16 @@ describe("opencode provider plugin", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  it("registers without any outbound catalog request", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    try {
+      await registerSingleProviderPlugin(plugin);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("registers only the Zen auth choice from its own provider manifest", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

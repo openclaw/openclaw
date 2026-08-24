@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { createOpenAICompatibleCompletionsThinkingOffWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { prewarmOpencodeZenHybridCatalog } from "./hybrid-catalog.js";
 import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -154,8 +153,5 @@ export default defineSingleProviderPluginEntry({
   register(api) {
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);
     registerOpenCodeSessionCatalog(api);
-    api.on("gateway_start", () => {
-      void prewarmOpencodeZenHybridCatalog();
-    });
   },
 });

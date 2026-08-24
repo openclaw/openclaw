@@ -442,6 +442,51 @@ describe("opencode hybrid catalog", () => {
     }
   });
 
+  it("reads models.dev documents larger than the default live-catalog ceiling", async () => {
+    const base = modelsDevFixture();
+    const oversized = {
+      ...base,
+      opencode: {
+        models: {
+          ...base.opencode.models,
+          // Serialized size must exceed the shared 4MiB live-catalog ceiling.
+          "zen-oversize-probe": {
+            id: "zen-oversize-probe",
+            name: "Oversize Probe",
+            reasoning: true,
+            description: "x".repeat(5 * 1024 * 1024),
+            modalities: { input: ["text"] },
+            limit: { context: 200_000, output: 32_768 },
+            cost: { input: 1, output: 2, cache_read: 0.1 },
+          },
+        },
+      },
+    };
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => {
+      if (req.url.includes("models.dev")) {
+        return {
+          response: new Response(JSON.stringify(oversized)),
+          finalUrl: req.url,
+          release: vi.fn(async () => undefined),
+        };
+      }
+      return {
+        response: new Response(
+          JSON.stringify({ data: [{ id: "zen-oversize-probe", object: "model" }] }),
+        ),
+        finalUrl: req.url,
+        release: vi.fn(async () => undefined),
+      };
+    });
+
+    const live = await buildOpencodeZenLiveProviderConfig({
+      apiKey: "OPENCODE_API_KEY",
+      discoveryApiKey: "resolved-key",
+      fetchGuard,
+    });
+    expect(live.models.map((model) => model.id)).toEqual(["zen-oversize-probe"]);
+  });
+
   it("single-flights parallel hybrid loads for the same discovery key", async () => {
     const fetchGuard = gatewayFetchGuard(["claude-opus-5"]);
     const fetchModelsDev = vi.fn(async () => {
