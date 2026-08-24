@@ -471,6 +471,10 @@ export function hasLoadedBoardSnapshot(provider: BoardProvider): boolean {
   return true;
 }
 
+export function boardProviderOwnsGatewaySnapshot(provider: BoardProvider): boolean {
+  return provider instanceof GatewayBoardProvider || provider instanceof ScopedGatewayBoardProvider;
+}
+
 export function recordSessionBoardAvailability(sessionKey: string, available: boolean): boolean {
   const key = boardProviderCacheKey(sessionKey);
   const previous = boardAvailability.get(key);

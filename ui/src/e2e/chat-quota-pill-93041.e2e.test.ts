@@ -243,12 +243,12 @@ suite.define(() => {
   });
 
   it("does not expose session routing metadata while plan usage is loading", async () => {
-    // Sidebar attention and the chat pane each request auth status at startup.
-    // Hold both so the popover is observed before any quota snapshot arrives.
+    // Sidebar attention and chat share the startup auth-status request. Hold it
+    // so the popover is observed before either projection receives the snapshot.
     const fixture = await openChat(
       authStatusWithUsage,
       { "sessions.list": gatewayInjectedSessions },
-      ["models.authStatus", "models.authStatus"],
+      ["models.authStatus"],
     );
     const { page } = fixture;
     try {

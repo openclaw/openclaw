@@ -5,7 +5,6 @@ import type {
   SessionTypingEvent,
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 import {
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -559,7 +558,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         if (state) {
           if (event.event === "config.changed") {
             invalidateChatAvatarCache(state);
-            invalidateAssistantIdentityCache(state.client);
             state.assistantIdentityRequestVersion += 1;
             retireChatMetadataRequests(state);
             void refreshChatAvatar(state).finally(() => state.requestUpdate?.());

@@ -401,7 +401,7 @@ describe("Gateway-client question outcome ownership", () => {
     });
   });
 
-  it("expires remounted pane and sidebar questions while their Gateway hydration remains stalled", async () => {
+  it("coalesces stalled pane and sidebar hydration without delaying local expiry", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"));
     const stalledList = new Promise<never>(() => {});
@@ -414,7 +414,7 @@ describe("Gateway-client question outcome ownership", () => {
       setQuestionPromptClient(projection, client);
       refreshPendingQuestionsWithRetry(projection, client);
     }
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(client.request).toHaveBeenCalledOnce();
 
     await vi.advanceTimersByTimeAsync(1_000);
 
@@ -427,7 +427,7 @@ describe("Gateway-client question outcome ownership", () => {
     }
   });
 
-  it("rejects a stale same-client hydration result after the sidebar remounts", async () => {
+  it("shares same-client hydration with a remounted sidebar generation", async () => {
     const pendingLists: Array<(value: unknown) => void> = [];
     const client: QuestionClient = {
       request: vi.fn(
@@ -444,21 +444,51 @@ describe("Gateway-client question outcome ownership", () => {
     disposeQuestionPromptState(remounted);
     setQuestionPromptClient(remounted, client);
     refreshPendingQuestionsWithRetry(remounted, client);
-    expect(pendingLists).toHaveLength(2);
+    expect(pendingLists).toHaveLength(1);
 
     pendingLists[0]?.({
       questions: [
         {
           ...remounted.prompts.get("question-1"),
-          id: "stale-before-remount",
+          id: "recovered-after-remount",
           status: "pending",
         },
       ],
     });
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(remounted.prompts.has("recovered-after-remount")).toBe(true));
+  });
 
-    expect(remounted.prompts.has("stale-before-remount")).toBe(false);
+  it("retries a failed shared hydration with one fresh request", async () => {
+    vi.useFakeTimers();
+    let finishRetry: ((result: unknown) => void) | undefined;
+    const client: QuestionClient = {
+      request: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("gateway unavailable"))
+        .mockImplementationOnce(
+          () =>
+            new Promise<unknown>((resolve) => {
+              finishRetry = resolve;
+            }),
+        ),
+    };
+    const pane = createQuestionPromptState(vi.fn());
+    const sidebar = createQuestionPromptState(vi.fn());
+    states.push(pane, sidebar);
+    for (const projection of [pane, sidebar]) {
+      setQuestionPromptClient(projection, client);
+      refreshPendingQuestionsWithRetry(projection, client);
+    }
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.request).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(client.request).toHaveBeenCalledTimes(2);
+
+    finishRetry?.({ questions: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pane.refreshRetryTimer).toBeNull();
+    expect(sidebar.refreshRetryTimer).toBeNull();
   });
 
   it("does not publish an old request rejected when its Gateway reconnects", async () => {

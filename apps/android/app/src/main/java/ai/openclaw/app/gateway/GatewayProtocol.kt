@@ -762,6 +762,7 @@ enum class GatewayMethod(
   ToolsGithubAuthorizeCancel("tools.github.authorize.cancel"),
   SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
+  BoardMetadata("board.metadata"),
 }
 
 enum class GatewayEvent(

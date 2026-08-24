@@ -58,10 +58,14 @@ describe("loadModelProvidersData", () => {
 
     await loadModelProvidersData(client, { refresh: true, agentId: "writer" });
 
-    expect(request).toHaveBeenCalledWith("models.authStatus", {
-      refresh: true,
-      agentId: "writer",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "models.authStatus",
+      {
+        refresh: true,
+        agentId: "writer",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "all",
       agentId: "writer",

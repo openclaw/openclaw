@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
@@ -2330,15 +2331,20 @@ describe("resolveChatAvatarUrl", () => {
 });
 
 describe("loadPageAssistantIdentity", () => {
-  it("memoizes identity by agent while fetching a cross-agent switch", async () => {
+  it("reuses the application identity owner across chat session switches", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
       name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
       agentId: params?.agentId ?? "main",
     }));
     const client = { request } as unknown as GatewayBrowserClient;
+    const agentIdentity = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+    });
     const context = {
       agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agentIdentity,
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
       config: {
@@ -2364,6 +2370,8 @@ describe("loadPageAssistantIdentity", () => {
     state.assistantName = "Initial";
     state.sessionKey = "agent:main:first";
 
+    // The sidebar and chat share this application-lifetime identity owner.
+    await agentIdentity.ensure(["main"]);
     await state.loadAssistantIdentity();
     state.sessionKey = "agent:main:second";
     await state.loadAssistantIdentity();
@@ -2679,7 +2687,11 @@ describe("refreshChatModelAuthStatus", () => {
 
     await refreshChatModelAuthStatus(state);
 
-    expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "work" });
+    expect(request).toHaveBeenCalledWith(
+      "models.authStatus",
+      { agentId: "work" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it.each(["success", "failure"] as const)(

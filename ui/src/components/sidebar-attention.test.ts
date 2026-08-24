@@ -72,6 +72,81 @@ type SidebarAttentionElement = HTMLElement & {
   loadedAtMs: number;
 };
 
+function mountCronEventAttention(
+  cronResponses: Array<CronJobsListResult | Promise<CronJobsListResult>>,
+  modelAuthResponse: ModelAuthStatusResult | Promise<ModelAuthStatusResult> = {
+    ts: 1,
+    providers: [],
+  },
+) {
+  const responses = [...cronResponses];
+  const request = vi.fn((method: string) => {
+    if (method === "cron.list") {
+      const response = responses.shift();
+      return response
+        ? Promise.resolve(response)
+        : Promise.reject(new Error(`Unexpected request: ${method}`));
+    }
+    if (method === "models.authStatus") {
+      return Promise.resolve(modelAuthResponse);
+    }
+    return Promise.reject(new Error(`Unexpected request: ${method}`));
+  });
+  const client = { request } as unknown as GatewayBrowserClient;
+  const snapshot = {
+    client,
+    phase: "connected",
+    hello: null,
+    assistantAgentId: "main",
+    sessionKey: "agent:main:main",
+    lastError: null,
+    lastErrorCode: null,
+  };
+  let eventListener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+  const gateway = {
+    snapshot,
+    connection: {
+      gatewayUrl: "ws://gateway.test",
+      token: "",
+      bootstrapToken: "",
+      password: "",
+    },
+    subscribe: () => () => undefined,
+    subscribeEvents: (listener: NonNullable<typeof eventListener>) => {
+      eventListener = listener;
+      return () => {
+        if (eventListener === listener) {
+          eventListener = undefined;
+        }
+      };
+    },
+  } as unknown as ApplicationGateway;
+  const overlays = {
+    snapshot: { approvalQueue: [] },
+    subscribe: () => () => undefined,
+  } as unknown as ApplicationContext["overlays"];
+  const agentSelection = {
+    state: { selectedId: "main" },
+    subscribe: () => () => undefined,
+  } as unknown as ApplicationContext["agentSelection"];
+  vi.stubGlobal("localStorage", createTestStorageMock());
+
+  const provider = createApplicationContextProvider({
+    gateway,
+    overlays,
+    agentSelection,
+  } as ApplicationContext);
+  const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+  provider.append(element);
+  document.body.append(provider);
+  return {
+    element,
+    request,
+    emitCron: (payload: unknown) => {
+      eventListener?.({ type: "event", event: "cron", payload });
+    },
+  };
+}
 function cronItems(cronJobs: readonly CronJob[], now = 0) {
   return buildSidebarAttentionItems({
     cronJobs,
@@ -348,11 +423,7 @@ describe("sidebar attention refresh ownership", () => {
         switchedCron.promise,
         Promise.resolve(cronListResponse([])),
       ],
-      "models.authStatus": [
-        Promise.resolve({ ts: 1, providers: [] }),
-        switchedAuth.promise,
-        Promise.resolve(writerAuth),
-      ],
+      "models.authStatus": [Promise.resolve({ ts: 1, providers: [] }), switchedAuth.promise],
     };
     const request = vi.fn((method: keyof typeof responses) => {
       const response = responses[method].shift();
@@ -414,10 +485,12 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
     eventListener?.({ type: "event", event: "cron", payload: {} });
 
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
-    await waitForFast(() => expect(element.modelAuthStatus).toBe(writerAuth));
     switchedCron.resolve(cronListResponse([]));
-    switchedAuth.resolve({ ts: 3, providers: [] });
+    switchedAuth.resolve(writerAuth);
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(5));
+    await waitForFast(() => expect(element.modelAuthStatus).toBe(writerAuth));
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(3);
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
   });
 
   it("opens top-mounted attention downward and clears stale live automation alerts", async () => {
@@ -503,6 +576,72 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector('[data-attention-kind="cronFailed"]')).toBeNull(),
     );
+  });
+
+  it("projects a lifecycle event burst without another cron.list", async () => {
+    const initialCron = deferred<CronJobsListResult>();
+    const { element, request, emitCron } = mountCronEventAttention([initialCron.promise]);
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+    const recovered = cronJob("failed");
+    recovered.state = { lastRunStatus: "ok" };
+    const added = cronJob("burst");
+    const started = cronJob("burst");
+    started.state = { runningAtMs: 1 };
+    const finished = cronJob("burst");
+    emitCron({ action: "finished", jobId: recovered.id, job: recovered });
+    emitCron({ action: "added", jobId: added.id, job: added });
+    emitCron({ action: "updated", jobId: added.id, job: added });
+    emitCron({ action: "started", jobId: started.id, job: started });
+    emitCron({ action: "finished", jobId: finished.id, job: finished });
+    emitCron({ action: "scheduled", jobId: finished.id, job: finished });
+    emitCron({ action: "removed", jobId: finished.id, job: finished });
+    const unrelated = cronJob("unrelated");
+    unrelated.state = { lastRunStatus: "ok" };
+    initialCron.resolve(cronListResponse([unrelated, cronJob("burst")]));
+    await initialCron.promise;
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
+    await element.updateComplete;
+
+    expect(element.cronJobs.map((job) => job.id)).toEqual(["unrelated", "failed"]);
+    expect(element.cronJobs.every((job) => job.state.lastRunStatus === "ok")).toBe(true);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
+  });
+
+  it("coalesces a missing-snapshot event burst into one fallback cron.list", async () => {
+    const modelAuth = deferred<ModelAuthStatusResult>();
+    const { element, request, emitCron } = mountCronEventAttention(
+      [cronListResponse([cronJob("failed")]), cronListResponse([])],
+      modelAuth.promise,
+    );
+    await waitForFast(() => expect(element.cronJobs.map((job) => job.id)).toEqual(["failed"]));
+
+    for (let index = 0; index < 6; index += 1) {
+      emitCron({ action: "finished", jobId: "failed" });
+    }
+    emitCron({ action: "updated", jobId: "failed", job: { id: "failed" } });
+    emitCron({ action: "unknown", jobId: "failed", job: cronJob("failed") });
+
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 75);
+    });
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+
+    const authStatus = { ts: 2, providers: [] } as ModelAuthStatusResult;
+    modelAuth.resolve(authStatus);
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2),
+    );
+    await waitForFast(() => expect(element.cronJobs).toEqual([]));
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 100);
+    });
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
+    expect(element.modelAuthStatus).toBe(authStatus);
   });
 });
 

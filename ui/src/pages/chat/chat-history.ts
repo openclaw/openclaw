@@ -102,6 +102,7 @@ type ChatHistoryPaneRequests = {
   branchVersion: number;
   subscriptionGeneration: number;
   pendingSubscriptionReleases: Set<SessionMessageSubscription>;
+  inFlightBranches?: InFlightChatBranchesRequest;
   inFlightHistory?: InFlightChatHistoryRequest;
 };
 
@@ -790,6 +791,13 @@ type InFlightChatHistoryRequest = {
   promise: Promise<ChatHistoryResult | undefined>;
 };
 
+type InFlightChatBranchesRequest = {
+  client: NonNullable<ChatState["client"]>;
+  connectionEpoch: number;
+  key: string;
+  promise: Promise<void>;
+};
+
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
   startup?: boolean;
@@ -1322,33 +1330,57 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
   if (!sessions?.listBranches || !client || !state.connected) {
     return;
   }
+  const listBranches = sessions.listBranches;
   const requests = getChatHistoryPaneRequests(state);
-  const version = ++requests.branchVersion;
   const connectionEpoch = state.connectionEpoch;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  try {
-    const branches = await sessions.listBranches(sessionKey, agentParams);
-    if (
-      requests.branchVersion !== version ||
-      state.client !== client ||
-      !state.connected ||
-      state.connectionEpoch !== connectionEpoch ||
-      !visibleSessionMatches(state, sessionKey, agentParams.agentId)
-    ) {
-      return;
-    }
-    state.chatBranches = branches;
-    state.chatBranchesSessionKey = sessionKey;
-    state.chatBranchesConnectionEpoch = connectionEpoch;
-  } catch {
-    // Leave chatBranchesSessionKey unset so the next history load retries;
-    // recording success here latched transient failures into a permanently
-    // hidden branch dropdown with no visible outcome.
-  } finally {
-    if (requests.branchVersion === version) {
-      state.requestUpdate?.();
-    }
+  const requestKey = `${connectionEpoch}\u0000${sessionKey}\u0000${agentParams.agentId ?? ""}`;
+  const inFlight = requests.inFlightBranches;
+  if (
+    inFlight?.key === requestKey &&
+    inFlight.client === client &&
+    inFlight.connectionEpoch === connectionEpoch
+  ) {
+    return inFlight.promise;
   }
+  const version = ++requests.branchVersion;
+  state.chatBranchesLoading = true;
+  const promise = (async () => {
+    try {
+      const branches = await listBranches(sessionKey, agentParams);
+      if (
+        requests.branchVersion !== version ||
+        state.client !== client ||
+        !state.connected ||
+        state.connectionEpoch !== connectionEpoch ||
+        !visibleSessionMatches(state, sessionKey, agentParams.agentId)
+      ) {
+        return;
+      }
+      state.chatBranches = branches;
+      state.chatBranchesSessionKey = sessionKey;
+      state.chatBranchesConnectionEpoch = connectionEpoch;
+    } catch {
+      // Leave chatBranchesSessionKey unset so the next history load retries;
+      // recording success here latches transient failures into a hidden dropdown.
+    } finally {
+      if (requests.branchVersion === version) {
+        state.chatBranchesLoading = false;
+        state.requestUpdate?.();
+      }
+    }
+  })().finally(() => {
+    if (requests.inFlightBranches?.promise === promise) {
+      requests.inFlightBranches = undefined;
+    }
+  });
+  requests.inFlightBranches = {
+    client,
+    connectionEpoch,
+    key: requestKey,
+    promise,
+  };
+  return promise;
 }
 
 export async function loadChatHistory(

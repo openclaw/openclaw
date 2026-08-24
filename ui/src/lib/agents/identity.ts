@@ -12,6 +12,10 @@ type AgentIdentityGateway = {
   subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
 };
 
+// One app-lifetime owner coalesces consumers while retaining the prior
+// session-switch freshness window for identities edited outside this tab.
+const AGENT_IDENTITY_CACHE_TTL_MS = 60_000;
+
 export type AgentIdentityCapability = {
   get: (agentId: string | null | undefined) => AgentIdentityResult | null;
   entries: () => AgentIdentityResult[];
@@ -27,6 +31,7 @@ export function createAgentIdentityCapability(
   let cachedConnected = gateway.snapshot.phase === "connected";
   let connectionGeneration = 0;
   const identities = new Map<string, AgentIdentityResult>();
+  const identityLoadedAt = new Map<string, number>();
   const inFlight = new Map<string, Promise<AgentIdentityResult | null>>();
   const invalidationEpochs = new Map<string, number>();
   const listeners = new Set<() => void>();
@@ -47,6 +52,7 @@ export function createAgentIdentityCapability(
     cachedConnected = connected;
     connectionGeneration += 1;
     identities.clear();
+    identityLoadedAt.clear();
     inFlight.clear();
     invalidationEpochs.clear();
     if (hadIdentities) {
@@ -100,7 +106,15 @@ export function createAgentIdentityCapability(
         return;
       }
       const generation = connectionGeneration;
-      const missing = normalizeIds(agentIds).filter((agentId) => !identities.has(agentId));
+      const now = Date.now();
+      const missing = normalizeIds(agentIds).filter((agentId) => {
+        const loadedAt = identityLoadedAt.get(agentId);
+        return (
+          !identities.has(agentId) ||
+          loadedAt === undefined ||
+          now - loadedAt >= AGENT_IDENTITY_CACHE_TTL_MS
+        );
+      });
       if (missing.length === 0) {
         return;
       }
@@ -121,6 +135,7 @@ export function createAgentIdentityCapability(
       for (const [agentId, invalidationEpoch, identity] of results) {
         if (identity && invalidationEpoch === (invalidationEpochs.get(agentId) ?? 0)) {
           identities.set(agentId, identity);
+          identityLoadedAt.set(agentId, Date.now());
           changed = true;
         }
       }
@@ -135,6 +150,7 @@ export function createAgentIdentityCapability(
         if (identities.delete(agentId)) {
           changed = true;
         }
+        identityLoadedAt.delete(agentId);
         inFlight.delete(agentId);
       }
       if (changed) {

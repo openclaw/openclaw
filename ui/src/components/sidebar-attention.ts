@@ -7,7 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
-import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
+import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import {
   hasNativeUpdateBridge,
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
@@ -24,6 +24,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/sidebar-footer-update.css";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { SidebarAttentionCronEvents } from "./sidebar-attention-cron.ts";
 import {
   addDismissal,
   dismissUpdateAttention,
@@ -39,6 +40,7 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import {
   buildSidebarAttentionItems,
+  sortSidebarAttentionItems,
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.ts";
@@ -52,11 +54,6 @@ type SidebarAttentionPanelRenderer =
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // Always-visible native windows need a slow lifecycle-owned refresh too.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
-const ITEM_PRIORITY: Record<SidebarAttentionItem["kind"], number> = {
-  modelAuthExpired: 0,
-  cronFailed: 1,
-  cronOverdue: 2,
-};
 // Display is stylesheet-owned (layout.css `display: contents` in the footer,
 // flex when floating): the LightDomContents base's inline display would defeat
 // the floating override, re-piling the collapsed-nav cluster at the origin.
@@ -96,6 +93,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   private panelRenderer: SidebarAttentionPanelRenderer | null = null;
   private panelLoad: Promise<SidebarAttentionPanelRenderer> | null = null;
   private nativeUpdateDeclined = false;
+  private readonly cronEvents = new SidebarAttentionCronEvents();
 
   private readonly loadTask = new Task(this, {
     autoRun: false,
@@ -108,15 +106,17 @@ class SidebarAttention extends OpenClawLightDomElement {
         true as boolean,
       ] as const,
     task: async ([gateway, client, agentId, refreshModelAuth], { signal }) => {
+      this.cronEvents.beginInventoryLoad();
       if (!gateway || !client) {
         return initialState;
       }
       const cron = createInitialCronState({ client, connected: true });
       const loads: Promise<unknown>[] = [
         loadCronJobsPage(cron).then(() => {
-          if (!signal.aborted) {
-            this.cronJobs = cron.cronJobs;
+          if (signal.aborted) {
+            return;
           }
+          this.cronJobs = this.cronEvents.mergeInventory(cron.cronJobs);
         }),
       ];
       if (refreshModelAuth && agentId) {
@@ -141,6 +141,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       return true;
     },
     onComplete: () => {
+      this.cronEvents.finishInventoryLoad();
       this.loadedAtMs = Date.now();
       this.pruneAfterRefresh();
     },
@@ -171,10 +172,20 @@ class SidebarAttention extends OpenClawLightDomElement {
           if (this.context?.gateway !== gateway || event.event !== "cron") {
             return;
           }
-          // The Automations page refreshes from the same event. Refresh this
-          // independent snapshot too so its ambient alert cannot contradict it.
-          this.loadedClient = null;
-          this.synchronize(gateway, { refreshModelAuth: false });
+          const projected = this.cronEvents.projectEvent(event.payload, this.cronJobs);
+          if (projected) {
+            this.cronJobs = projected;
+            this.pruneAfterRefresh();
+          } else {
+            this.cronEvents.queueFallbackRefresh({
+              isCurrent: () => this.context?.gateway === gateway,
+              refresh: () => {
+                this.loadedClient = null;
+                this.synchronize(gateway, { refreshModelAuth: false });
+              },
+              waitForInventory: () => this.loadTask.taskComplete,
+            });
+          }
         }),
     )
     .watch(
@@ -242,6 +253,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       globalThis.clearInterval(this.idleRefreshTimer);
       this.idleRefreshTimer = null;
     }
+    this.cronEvents.clearFallbackRefresh();
     this.subscriptions.clear();
     void this.loadTask.run([null, null, null, false]);
     this.loadedClient = null;
@@ -304,6 +316,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       this.dismissed = loadDismissals(gatewayUrl);
     }
     if (snapshot.phase !== "connected" || !snapshot.client) {
+      this.cronEvents.clearFallbackRefresh();
       void this.loadTask.run([null, null, null, false]);
       this.loadedClient = null;
       this.loadedGateway = null;
@@ -324,6 +337,7 @@ class SidebarAttention extends OpenClawLightDomElement {
     this.loadedGateway = gateway;
     this.loadedClient = snapshot.client;
     this.loadedAgentId = agentId;
+    this.cronEvents.clearFallbackRefresh();
     void this.loadTask.run([
       gateway,
       snapshot.client,
@@ -332,8 +346,13 @@ class SidebarAttention extends OpenClawLightDomElement {
     ]);
   }
 
-  // Only fresh data can re-arm snoozes. Use the persisted map so a stale tab
-  // cannot clobber another tab's dismissal; failed fetches fail safe by re-nagging.
+  // Re-arm stale snoozes only from an authoritative refresh or lifecycle job
+  // snapshot. Render/update hooks would let a hidden tab with stale data
+  // clobber a dismissal another tab just wrote (its storage event triggers an
+  // update here). Against the persisted map, not the in-memory snapshot, for the
+  // same lost-update reason as addDismissal. A failed fetch (empty cron list,
+  // null auth status) prunes those kinds, which fails safe — re-nag, never
+  // stay hidden.
   private pruneAfterRefresh() {
     if (!this.dismissedScope) {
       return;
@@ -361,10 +380,6 @@ class SidebarAttention extends OpenClawLightDomElement {
       modelAuthAgentId: this.modelAuthAgentId,
       now: Date.now(),
     });
-  }
-
-  private approvalQueue(): readonly ExecApprovalRequest[] {
-    return this.context?.overlays.snapshot.approvalQueue ?? [];
   }
 
   private currentItems(): SidebarAttentionItem[] {
@@ -635,10 +650,8 @@ class SidebarAttention extends OpenClawLightDomElement {
       "update.run",
       "operator.admin",
     );
-    const approvalQueue = this.approvalQueue();
-    const items = this.currentItems().toSorted(
-      (left, right) => ITEM_PRIORITY[left.kind] - ITEM_PRIORITY[right.kind],
-    );
+    const approvalQueue = this.context.overlays.snapshot.approvalQueue;
+    const items = sortSidebarAttentionItems(this.currentItems());
     const count = approvalQueue.length + items.length + (updateSurface ? 1 : 0);
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),

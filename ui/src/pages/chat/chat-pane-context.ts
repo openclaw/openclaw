@@ -1,5 +1,4 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
@@ -264,7 +263,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.connectionGeneration += 1;
       this.retireHeaderSessionMutations();
       invalidateChatAvatarCache(state);
-      invalidateAssistantIdentityCache(state.client);
       state.assistantIdentityRequestVersion += 1;
       retireChatMetadataRequests(state);
       this.swarmHydrator?.dispose();

@@ -12,6 +12,63 @@ export function canonicalModelAuthProviderId(provider: string): string {
   return resolveUsageProviderId(normalized) ?? normalized;
 }
 
+type PendingModelAuthStatus = {
+  controller: AbortController;
+  promise: Promise<ModelAuthStatusResult>;
+  settled: boolean;
+  subscribers: number;
+};
+
+const pendingModelAuthStatusByClient = new WeakMap<
+  GatewayBrowserClient,
+  Map<string, PendingModelAuthStatus>
+>();
+
+function modelAuthStatusAbortError(): Error {
+  const error = new Error("gateway request aborted for models.authStatus");
+  error.name = "AbortError";
+  return error;
+}
+
+function subscribeModelAuthStatus(
+  pending: PendingModelAuthStatus,
+  signal?: AbortSignal,
+): Promise<ModelAuthStatusResult> {
+  // Each projection owns cancellation; only the final subscriber may stop the
+  // shared producer, or one unmounting pane would fail its live peers.
+  pending.subscribers += 1;
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    pending.subscribers -= 1;
+    if (!pending.settled && pending.subscribers === 0) {
+      pending.controller.abort();
+    }
+  };
+  if (!signal) {
+    return pending.promise.finally(release);
+  }
+  let rejectAbort: (error: Error) => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => {
+    release();
+    rejectAbort(modelAuthStatusAbortError());
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) {
+    onAbort();
+  }
+  return Promise.race([pending.promise, aborted]).finally(() => {
+    signal.removeEventListener("abort", onAbort);
+    release();
+  });
+}
+
 /**
  * True when a provider's auth should be actively monitored on the dashboard.
  *
@@ -67,14 +124,41 @@ export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelAuthStatusResult> {
+  if (opts?.signal?.aborted) {
+    throw modelAuthStatusAbortError();
+  }
+  const refresh = opts?.refresh === true;
+  const agentId = opts?.agentId || undefined;
   const params = {
     ...(opts?.refresh ? { refresh: true } : {}),
     agentId: opts.agentId,
   };
-  const result = opts?.signal
-    ? await client.request<ModelAuthStatusResult>("models.authStatus", params, {
-        signal: opts.signal,
-      })
-    : await client.request<ModelAuthStatusResult>("models.authStatus", params);
-  return result ?? EMPTY_AUTH_STATUS;
+  const requestKey = JSON.stringify([refresh, agentId ?? null]);
+  let requests = pendingModelAuthStatusByClient.get(client);
+  if (!requests) {
+    requests = new Map();
+    pendingModelAuthStatusByClient.set(client, requests);
+  }
+  let pending = requests.get(requestKey);
+  if (!pending || pending.controller.signal.aborted) {
+    const controller = new AbortController();
+    pending = {
+      controller,
+      promise: client
+        .request<ModelAuthStatusResult>("models.authStatus", params, { signal: controller.signal })
+        .then((result) => result ?? EMPTY_AUTH_STATUS),
+      settled: false,
+      subscribers: 0,
+    };
+    requests.set(requestKey, pending);
+    const shared = pending;
+    const finish = () => {
+      shared.settled = true;
+      if (requests.get(requestKey) === shared) {
+        requests.delete(requestKey);
+      }
+    };
+    void shared.promise.then(finish, finish);
+  }
+  return subscribeModelAuthStatus(pending, opts?.signal);
 }

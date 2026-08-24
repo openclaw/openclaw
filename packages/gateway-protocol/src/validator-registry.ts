@@ -121,6 +121,7 @@ export const validateProjectsSearchRemoteParams = compile(S.ProjectsSearchRemote
 export const validateProjectsRemoveParams = compile(S.ProjectsRemoveParamsSchema);
 export const validateWorktreesListParams = compile(S.WorktreesListParamsSchema);
 export const validateBoardGetParams = compile(S.BoardGetParamsSchema);
+export const validateBoardMetadataParams = compile(S.BoardMetadataParamsSchema);
 export const validateBoardUpdateParams = compile(S.BoardUpdateParamsSchema);
 export const validateBoardWidgetContent = compile(S.BoardWidgetContentSchema);
 export const validateBoardWidgetAppViewParams = compile(S.BoardWidgetAppViewParamsSchema);

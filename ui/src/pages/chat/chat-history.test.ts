@@ -3,6 +3,7 @@ import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
+  loadChatBranches,
   loadChatHistory,
   rewindChatHistory,
   syncSelectedSessionMessageSubscription,
@@ -342,6 +343,29 @@ describe("rewindChatHistory", () => {
 });
 
 describe("switchChatHistoryBranch", () => {
+  it("coalesces concurrent branch refreshes for the same session", async () => {
+    let resolveBranches!: (result: []) => void;
+    const branches = new Promise<[]>((resolve) => {
+      resolveBranches = resolve;
+    });
+    const state = createState({ messages: [] }) as TestState & {
+      sessions: { listBranches: ReturnType<typeof vi.fn> };
+    };
+    state.sessionKey = "agent:main:branches";
+    state.sessions = {
+      listBranches: vi.fn().mockReturnValue(branches),
+      setModelOverride: vi.fn(),
+    };
+
+    const first = loadChatBranches(state);
+    const second = loadChatBranches(state);
+
+    expect(state.sessions.listBranches).toHaveBeenCalledOnce();
+    resolveBranches([]);
+    await Promise.all([first, second]);
+    expect(state.chatBranches).toEqual([]);
+  });
+
   it("clears the cached snapshot and refetches history plus branches", async () => {
     const state = createState({
       messages: [{ role: "assistant", content: "restored branch" }],

@@ -12,6 +12,11 @@ import type { SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
 // past; mirrors the threshold the Overview attention list used.
 const CRON_OVERDUE_GRACE_MS = 300_000;
 const ALERT_QUESTION_MAX_LENGTH = 1_000;
+const ITEM_PRIORITY: Record<SidebarAttentionItem["kind"], number> = {
+  modelAuthExpired: 0,
+  cronFailed: 1,
+  cronOverdue: 2,
+};
 
 type SidebarAttentionAction =
   | { kind: "navigate"; routeId: NavigationRouteId }
@@ -37,6 +42,10 @@ export type SidebarAttentionItem = {
   // pruneAfterRefresh re-arms as soon as any tab sees the cleared state.
   signature: string;
 };
+
+export function sortSidebarAttentionItems(items: SidebarAttentionItem[]): SidebarAttentionItem[] {
+  return items.toSorted((left, right) => ITEM_PRIORITY[left.kind] - ITEM_PRIORITY[right.kind]);
+}
 
 export function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];

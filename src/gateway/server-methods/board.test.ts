@@ -20,6 +20,7 @@ describe("board gateway methods", () => {
       Object.fromEntries(
         [
           "board.get",
+          "board.metadata",
           "board.update",
           "board.widget.put",
           "board.widget.grant",
@@ -32,6 +33,7 @@ describe("board gateway methods", () => {
       ),
     ).toEqual({
       "board.get": "operator.read",
+      "board.metadata": "operator.read",
       "board.update": "operator.write",
       "board.widget.put": "operator.write",
       "board.widget.grant": "operator.approvals",
@@ -88,6 +90,43 @@ describe("board gateway methods", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
+  });
+
+  it("canonicalizes every board.metadata target through board.get ownership rules", async () => {
+    const { invoke, store } = createHarness(undefined, undefined, undefined, {
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] },
+      }),
+    });
+    await invoke("board.widget.put", {
+      sessionKey: "global",
+      agentId: "work",
+      name: "owner",
+      content: { kind: "html", html: "work" },
+    });
+    expect(store.listSessionsWithBoards()).toContain("agent:work:global");
+
+    const respond = await invoke("board.metadata", {
+      targets: [
+        // Explicit per-target agent identity resolves like board.get.
+        { sessionKey: "global", agentId: "work" },
+        { sessionKey: "global", agentId: "main" },
+        // Ambiguous ownerless key becomes an isolated per-target error — it
+        // must not read (or reveal the presence of) another agent's board.
+        { sessionKey: "global" },
+      ],
+    });
+    expect(respond).toHaveBeenCalledWith(true, {
+      outcomes: [
+        expect.objectContaining({ ok: true, sessionKey: "global", hasBoard: true }),
+        expect.objectContaining({ ok: true, sessionKey: "global", hasBoard: false }),
+        expect.objectContaining({
+          ok: false,
+          sessionKey: "global",
+          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
+        }),
+      ],
+    });
   });
 
   it("adds fresh frame URLs only to admitted HTML widgets on board.get", async () => {
