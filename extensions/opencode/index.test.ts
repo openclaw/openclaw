@@ -701,7 +701,7 @@ describe("opencode provider plugin", () => {
       "gpt-6-experimental",
     ];
     let failGateway = false;
-    const fetchGuard = vi.fn(async (req: { url: string }) => {
+    const fetchGuard = vi.fn(async (req: { url: string; init?: { headers?: HeadersInit } }) => {
       if (req.url.includes("models.dev")) {
         return {
           response: new Response(
@@ -745,6 +745,15 @@ describe("opencode provider plugin", () => {
 
     // Hybrid catalog fetches gateway IDs plus models.dev; both are process-cached.
     expect(fetchGuard).toHaveBeenCalledTimes(2);
+    // Credential routing in one authenticated build: the gateway request keeps
+    // its discovery Bearer token, while third-party models.dev stays key-free.
+    const modelsDevCall = fetchGuard.mock.calls.find((call) => call[0].url.includes("models.dev"));
+    const gatewayCall = fetchGuard.mock.calls.find((call) => !call[0].url.includes("models.dev"));
+    expect(modelsDevCall).toBeDefined();
+    expect(new Headers(modelsDevCall?.[0].init?.headers).get("authorization")).toBeNull();
+    expect(new Headers(gatewayCall?.[0].init?.headers).get("authorization")).toBe(
+      "Bearer resolved-opencode-key",
+    );
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
     expect(first.models.map((model) => model.id)).toEqual(["kimi-k3", "claude-opus-4-7"]);
     expect(second.models.map((model) => model.id)).toEqual(["kimi-k3", "claude-opus-4-7"]);

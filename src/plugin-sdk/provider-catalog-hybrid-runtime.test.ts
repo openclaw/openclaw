@@ -194,7 +194,7 @@ describe("fetchModelsDevProviderSlice privacy and cache-admission gates", () => 
     expect(recovered.has("claude-opus-5")).toBe(true);
   });
 
-  it("still fetches when authenticated even without an injected loader", async () => {
+  it("keeps authenticated metadata fetches credential-free on the wire", async () => {
     const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => ({
       response: new Response(JSON.stringify(modelsDevDocument())),
       finalUrl: req.url,
@@ -207,5 +207,13 @@ describe("fetchModelsDevProviderSlice privacy and cache-admission gates", () => 
       fetchGuard,
     });
     expect(slice.has("claude-opus-5")).toBe(true);
+    // The auth fields gate the third-party fetch but must never reach it: the
+    // default live-catalog header builder would emit them as a Bearer token.
+    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    const headers = fetchGuard.mock.calls[0]?.[0].init?.headers;
+    expect(headers).toBeInstanceOf(Headers);
+    expect((headers as Headers).get("authorization")).toBeNull();
+    expect((headers as Headers).get("x-api-key")).toBeNull();
+    expect((headers as Headers).get("accept")).toBe("application/json");
   });
 });

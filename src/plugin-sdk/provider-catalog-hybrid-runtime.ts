@@ -228,6 +228,10 @@ export async function fetchModelsDevProviderSlice(params: {
     const rows = await getCachedLiveProviderModelRows({
       providerId: "models-dev",
       endpoint: MODELS_DEV_API_URL,
+      // models.dev serves public metadata: catalog credentials must never
+      // reach this third-party boundary even if key fields start flowing into
+      // this call, since the default builder emits `Authorization: Bearer <key>`.
+      buildRequestHeaders: () => ({ Accept: "application/json" }),
       fetchGuard: params.fetchGuard,
       signal: params.signal,
       timeoutMs: MODELS_DEV_TIMEOUT_MS,
