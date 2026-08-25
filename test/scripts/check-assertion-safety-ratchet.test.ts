@@ -79,6 +79,37 @@ describe("check-assertion-safety-ratchet", () => {
     expect(isGovernedAssertionSourcePath("scripts/example.ts")).toBe(false);
   });
 
+  it("keeps SAFETY comments visible after substituted template literals", () => {
+    const covered = [
+      "const label = `scope:${profileId}`;",
+      "// SAFETY: the registry validated this row shape.",
+      "export const scoped = row as HybridRow;",
+    ].join("\n");
+    expect(countUnsafeAssertions(covered, "src/example.ts")).toBe(0);
+
+    const nestedCovered = [
+      "const label = `outer:${`inner:${profileId}`}`;",
+      "// SAFETY: the registry validated this row shape.",
+      "export const scoped = row as HybridRow;",
+    ].join("\n");
+    expect(countUnsafeAssertions(nestedCovered, "src/example.ts")).toBe(0);
+
+    const continuingSubstitutionCovered = [
+      "const label = `a${profileId}${otherId}t`;",
+      "// SAFETY: the registry validated this row shape.",
+      "export const scoped = row as HybridRow;",
+    ].join("\n");
+    expect(countUnsafeAssertions(continuingSubstitutionCovered, "src/example.ts")).toBe(0);
+
+    const coveredAndUncoveredAfterTemplate = [
+      "const label = `scope:${profileId}`;",
+      "// SAFETY: the registry validated this row shape.",
+      "export const scoped = row as HybridRow;",
+      "export const unsafe = row as HybridRow;",
+    ].join("\n");
+    expect(countUnsafeAssertions(coveredAndUncoveredAfterTemplate, "src/example.ts")).toBe(1);
+  });
+
   it("blocks new debt, accepts SAFETY comments, and prunes reduced counts", () => {
     const root = tempDirs.make("openclaw-assertion-safety-");
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
