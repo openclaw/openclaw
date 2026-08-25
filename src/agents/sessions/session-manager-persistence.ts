@@ -5,6 +5,7 @@ import {
   ensureSessionEntrySync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import type { SqliteTranscriptSnapshotRow } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import type { AppendPersistenceOptions, SessionEntry } from "./session-manager-types.js";
@@ -143,6 +144,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
 
   protected persistRecord(entry: unknown, options?: AppendPersistenceOptions): PersistRecordResult {
     if (this.persistenceTarget) {
+      // persistSqliteRecord records the tracked snapshot itself, via
+      // recordCommittedTranscriptSnapshot, from inside each append's own write
+      // transaction (see onCommittedSnapshot below). Rereading it here instead,
+      // after persistSqliteRecord has already returned, would leave a window in
+      // which a foreign process's commit lands between "our append transaction
+      // commits" and "we reread the snapshot" and gets silently absorbed into the
+      // snapshot replacePersistedTranscript later validates against.
       return this.persistSqliteRecord(entry, options);
     }
     return undefined;
@@ -174,7 +182,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
         throw new Error("Session transcript header was not persisted");
       }
       requireTranscriptEventAppend(
-        appendTranscriptEventSync(scope, header),
+        appendTranscriptEventSync(scope, header, {
+          expectedSnapshot: this.getExpectedTranscriptSnapshot(),
+          onCommittedSnapshot: (rows) => this.recordCommittedTranscriptSnapshot(rows),
+        }),
         "Session transcript header was not persisted",
       );
       this.persistenceHeaderPending = false;
@@ -182,7 +193,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
       requireTranscriptEventAppend(
-        appendTranscriptEventSync(scope, entry),
+        appendTranscriptEventSync(scope, entry, {
+          expectedSnapshot: this.getExpectedTranscriptSnapshot(),
+          onCommittedSnapshot: (rows) => this.recordCommittedTranscriptSnapshot(rows),
+        }),
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
       );
       return undefined;
@@ -192,13 +206,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     if (entry.type !== "message") {
       requireTranscriptEventAppend(
-        appendTranscriptEventSync(
-          scope,
-          entry,
-          options?.appendIntent === "active-branch"
+        appendTranscriptEventSync(scope, entry, {
+          ...(options?.appendIntent === "active-branch"
             ? { appendIntent: options.appendIntent }
-            : undefined,
-        ),
+            : {}),
+          expectedSnapshot: this.getExpectedTranscriptSnapshot(),
+          onCommittedSnapshot: (rows) => this.recordCommittedTranscriptSnapshot(rows),
+        }),
         `Session transcript entry was not persisted: ${entry.id}`,
       );
       return undefined;
@@ -212,6 +226,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
+      expectedSnapshot: this.getExpectedTranscriptSnapshot(),
+      onCommittedSnapshot: (rows: SqliteTranscriptSnapshotRow[]) =>
+        this.recordCommittedTranscriptSnapshot(rows),
     } satisfies Parameters<typeof appendTranscriptMessageSync>[1];
     const result = appendTranscriptMessageSync(scope, appendOptions);
     if (!result) {

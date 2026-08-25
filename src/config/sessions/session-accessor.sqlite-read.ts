@@ -17,6 +17,7 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptEventRow,
   SessionTranscriptStats,
+  SqliteTranscriptSnapshotRow,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
@@ -29,10 +30,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
-export type SqliteTranscriptSnapshotRow = {
-  eventJson: string;
-  seq: number;
-};
+export type { SqliteTranscriptSnapshotRow } from "./session-accessor.sqlite-contract.js";
 
 export type SqliteTranscriptStorageRow = SqliteTranscriptSnapshotRow & {
   createdAt: number;
@@ -58,6 +56,33 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
     {
       databaseLabel: database.path,
       operationLabel: "session transcript fenced read",
+    },
+  );
+}
+
+/**
+ * Loads transcript events and their raw row snapshot together from one SQLite read
+ * transaction, so a caller installing both as its "last known good" state can never
+ * observe a foreign commit that landed between two otherwise-separate reads.
+ */
+export function loadTranscriptEventsWithSnapshotSync(scope: SessionTranscriptReadScope): {
+  events: TranscriptEvent[];
+  snapshot: SqliteTranscriptSnapshotRow[];
+} {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => {
+      const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
+      return {
+        events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, fence?.beforeRawSeq),
+        snapshot: readTranscriptEventRows(database, resolved.sessionId),
+      };
+    },
+    {
+      databaseLabel: database.path,
+      operationLabel: "session transcript fenced read with snapshot",
     },
   );
 }

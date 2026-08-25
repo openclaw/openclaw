@@ -1,8 +1,11 @@
 import {
-  loadTranscriptEventsSync,
+  loadTranscriptEventsWithSnapshotSync,
+  readTranscriptSnapshotSync,
   replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import type { SqliteTranscriptSnapshotRow } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -42,27 +45,44 @@ export class SessionManagerCore {
   protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
+  // The transcript row snapshot last known to be durable, taken right after our own
+  // last commit (load or append). replacePersistedTranscript revalidates against this
+  // immediately before rewriting, so a foreign process's append landing in the gap
+  // between our last commit and the rewrite is detected instead of silently deleted.
+  private transcriptSnapshot: SqliteTranscriptSnapshotRow[] | undefined;
+
+  /** The transcript row snapshot subclasses should pass as `expectedSnapshot` to a new append. */
+  protected getExpectedTranscriptSnapshot(): SqliteTranscriptSnapshotRow[] | undefined {
+    return this.transcriptSnapshot;
+  }
 
   constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    loadedSnapshot?: SqliteTranscriptSnapshotRow[],
   ) {
     this.cwd = cwd;
     this.persistenceTarget = persistenceTarget;
     if (persistenceTarget || loadedEntries) {
-      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
+      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? [], loadedSnapshot);
     } else {
       this.newSession();
     }
   }
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    // Entries and the row snapshot must come from the same SQLite read transaction:
+    // reading them separately would leave a gap in which a foreign process's commit
+    // lands after the entries read but before the snapshot read, so it is absent from
+    // `entries` yet present in the "expected" snapshot -- and a later rewrite would
+    // validate against that snapshot and silently delete the foreign row.
+    const { events, snapshot } = loadTranscriptEventsWithSnapshotSync(target);
+    const entries = events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    this.setLoadedSessionTarget(target, entries);
+    this.setLoadedSessionTarget(target, entries, snapshot);
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
@@ -71,6 +91,7 @@ export class SessionManagerCore {
   protected setLoadedSessionTarget(
     target: SessionManagerPersistenceTarget | undefined,
     entries: FileEntry[],
+    loadedSnapshot?: SqliteTranscriptSnapshotRow[],
   ): void {
     const partitioned = partitionSessionFileEntries(entries);
     // Only a physically empty transcript may initialize lazily. Opaque persisted rows still need
@@ -79,6 +100,7 @@ export class SessionManagerCore {
       this.persistenceTarget = target ? { ...target } : undefined;
       this.initializeSession({ id: target?.sessionId });
       this.persistenceHeaderPending = target !== undefined;
+      this.installTranscriptSnapshot(loadedSnapshot);
       return;
     }
     const header = partitioned.fileEntries.find((entry) => entry.type === "session");
@@ -97,6 +119,40 @@ export class SessionManagerCore {
       partitioned.fileEntriesByOriginalIndex,
     );
     this.buildIndex();
+    this.installTranscriptSnapshot(loadedSnapshot);
+  }
+
+  /**
+   * Installs a transcript row snapshot already captured atomically alongside `entries`
+   * (by {@link setSessionTarget}). Only falls back to a fresh, separately-read snapshot
+   * for the legacy constructor path where `entries` were supplied by the caller rather
+   * than just loaded here, so there was never a shared transaction to draw both from.
+   */
+  private installTranscriptSnapshot(loadedSnapshot?: SqliteTranscriptSnapshotRow[]): void {
+    if (loadedSnapshot !== undefined) {
+      this.transcriptSnapshot = loadedSnapshot;
+      return;
+    }
+    this.refreshTranscriptSnapshot();
+  }
+
+  /** Refreshes the last-known-durable transcript row snapshot from storage. */
+  protected refreshTranscriptSnapshot(): void {
+    this.transcriptSnapshot = this.persistenceTarget
+      ? readTranscriptSnapshotSync(this.persistenceTarget)
+      : undefined;
+  }
+
+  /**
+   * Records a transcript row snapshot captured atomically inside a just-committed
+   * append transaction (via `onCommittedSnapshot`). This must be preferred over
+   * {@link refreshTranscriptSnapshot} after a synchronous append: rereading from
+   * storage after the transaction has already committed and returned leaves a gap
+   * in which a foreign process's commit would be absorbed into the "expected"
+   * snapshot without ever having been observed in memory.
+   */
+  protected recordCommittedTranscriptSnapshot(rows: SqliteTranscriptSnapshotRow[]): void {
+    this.transcriptSnapshot = rows;
   }
 
   reloadPersistedTranscript(): void {
@@ -520,10 +576,33 @@ export class SessionManagerCore {
     }
     const leafAppendParentId =
       options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
-    replaceTranscriptEventsSync(
-      this.persistenceTarget,
-      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
-    );
+    try {
+      replaceTranscriptEventsSync(
+        this.persistenceTarget,
+        this.getPersistedFileEntries(
+          leafAppendParentId,
+          options?.leafAppendMode ?? this.appendMode,
+        ),
+        {
+          expectedSnapshot: this.transcriptSnapshot,
+          // Capture the post-rewrite snapshot from inside the same write transaction
+          // as the rewrite itself, rather than rereading it afterward: a post-commit
+          // reread would leave a window in which a foreign process's append lands
+          // between this commit and the reread and gets silently absorbed as if this
+          // manager had already observed it.
+          onCommittedSnapshot: (rows) => this.recordCommittedTranscriptSnapshot(rows),
+        },
+      );
+    } catch (error) {
+      if (error instanceof SqliteTranscriptMutationConflictError) {
+        // A foreign process committed a transcript row after our last known-good
+        // state and before this rewrite. The write was refused, so reload durable
+        // state to resync in-memory entries with the foreign row instead of
+        // silently discarding it, then surface the failure to the caller.
+        this.reloadPersistedTranscript();
+      }
+      throw error;
+    }
     this.persistenceHeaderPending = false;
   }
 
