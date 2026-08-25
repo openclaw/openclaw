@@ -20,6 +20,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
@@ -35,6 +36,7 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   deriveSessionTitle,
+  deriveSessionUnread,
   isFinitePositiveTimestamp,
   isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
@@ -45,7 +47,11 @@ import {
   buildSessionListRowMetadataContext,
   buildSingleRowStoreChildSessionsByKey,
 } from "./session-utils-projection.js";
-import { buildGatewaySessionRow, projectAssignableSessionOwner } from "./session-utils-row.js";
+import {
+  buildGatewaySessionRow,
+  projectAssignableSessionOwner,
+  resolveSessionListEntryStatus,
+} from "./session-utils-row.js";
 import {
   appendStoredSessionModelSearchFields,
   matchesSessionListSearch,
@@ -54,7 +60,11 @@ import {
   resolveSessionListSearchModelFields,
   shouldResolveDerivedSessionModelSearchFields,
 } from "./session-utils-search.js";
-import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
+import type {
+  GatewaySessionRow,
+  SessionRunListProjection,
+  SessionsListResult,
+} from "./session-utils.types.js";
 
 /**
  * Number of session rows to build per batch before yielding to the event loop.
@@ -77,6 +87,12 @@ type ListSessionsFromStoreParams = {
   lightweightListRows?: boolean;
   opts: SessionsListParams;
   involvingActorId?: string;
+  projectRun?: (
+    key: string,
+    entry: SessionEntry,
+    status: GatewaySessionRow["status"],
+    agentId?: string,
+  ) => SessionRunListProjection;
 };
 
 type SessionEntrySelection = {
@@ -87,6 +103,7 @@ type SessionEntrySelection = {
   offset: number;
   nextOffset: number | null;
   hasMore: boolean;
+  runProjectionByKey: Map<string, SessionRunListProjection>;
 };
 
 function addSessionOwnerFacetIdentity(
@@ -174,12 +191,15 @@ function filterSessionEntries(params: {
   getRowContext?: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   involvingActorId?: string;
-}): Pick<SessionEntrySelection, "ownerFacet" | "entries"> {
+  projectRun?: ListSessionsFromStoreParams["projectRun"];
+}): Pick<SessionEntrySelection, "ownerFacet" | "entries" | "runProjectionByKey"> {
   const { cfg, store, opts, now } = params;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
+  const category = opts.category === null ? null : normalizeOptionalString(opts.category);
+  const categorySpecified = Object.hasOwn(opts, "category");
   const boardFace = opts.boardFace;
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const search = normalizeLowercaseStringOrEmpty(opts.search);
@@ -189,10 +209,12 @@ function filterSessionEntries(params: {
       : undefined;
   const creatorId = normalizeOptionalString(opts.creatorId);
   const ownerId = normalizeOptionalString(opts.ownerId);
+  const projectId = normalizeOptionalString(opts.projectId);
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
   const activeCutoff = activeMinutes === undefined ? undefined : now - activeMinutes * 60_000;
   const entries: SessionEntryPair[] = [];
   const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
+  const runProjectionByKey = new Map<string, SessionRunListProjection>();
   let configuredAgentIds = params.configuredAgentIds;
   let filterOwnerIdentityById: Map<string, SessionActorProfileIdentity | undefined> | undefined;
 
@@ -206,6 +228,42 @@ function filterSessionEntries(params: {
       (!includeUnknown && key === "unknown")
     ) {
       continue;
+    }
+    if (categorySpecified) {
+      const entryCategory = normalizeOptionalString(entry.category);
+      if (category === null ? entryCategory !== undefined : entryCategory !== category) {
+        continue;
+      }
+    }
+    if (opts.unread !== undefined && deriveSessionUnread(entry) !== opts.unread) {
+      continue;
+    }
+    if (projectId && normalizeOptionalString(entry.projectId) !== projectId) {
+      continue;
+    }
+    if (opts.hasWorktree !== undefined && Boolean(entry.worktree) !== opts.hasWorktree) {
+      continue;
+    }
+    if (
+      opts.needsAttention !== undefined &&
+      Boolean(resolveActiveSessionAgentStatus(entry.agentStatus, now)?.attention) !==
+        opts.needsAttention
+    ) {
+      continue;
+    }
+    if (opts.status !== undefined) {
+      const storedStatus = resolveSessionListEntryStatus({
+        entry,
+        key,
+        rowContext: resolveSessionListRowContext(params),
+      });
+      const projection = params.projectRun?.(key, entry, storedStatus, agentId) ?? {
+        status: storedStatus,
+      };
+      runProjectionByKey.set(key, projection);
+      if (projection.status !== opts.status) {
+        continue;
+      }
     }
     if (agentId) {
       if (key === "global") {
@@ -272,6 +330,7 @@ function filterSessionEntries(params: {
       const cheapFields = [
         resolveSessionListSearchDisplayName(key, entry),
         entry.label,
+        entry.category,
         entry.subject,
         entry.sessionId,
         key,
@@ -343,7 +402,7 @@ function filterSessionEntries(params: {
     entries.push([key, entry]);
   }
 
-  return { entries, ownerFacet: sortSessionOwnerFacet(ownerFacet) };
+  return { entries, ownerFacet: sortSessionOwnerFacet(ownerFacet), runProjectionByKey };
 }
 
 function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefined): boolean {
@@ -366,14 +425,35 @@ function selectSessionEntries(params: {
   configuredAgentIds?: ReadonlySet<string>;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   involvingActorId?: string;
+  projectRun?: ListSessionsFromStoreParams["projectRun"];
 }): SessionEntrySelection {
-  const { ownerFacet, entries: filtered } = filterSessionEntries(params);
+  const { ownerFacet, entries: filtered, runProjectionByKey } = filterSessionEntries(params);
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
   const sortedWindow = sortAndLimitSessionEntries(filtered, windowLimit, params.opts.sortBy);
   const entries =
     limit === undefined ? sortedWindow.slice(offset) : sortedWindow.slice(offset, offset + limit);
+  const selectedRunProjectionByKey = new Map<string, SessionRunListProjection>();
+  for (const [key, entry] of entries) {
+    const projection = runProjectionByKey.get(key);
+    if (projection) {
+      selectedRunProjectionByKey.set(key, projection);
+      continue;
+    }
+    if (!params.projectRun) {
+      continue;
+    }
+    const storedStatus = resolveSessionListEntryStatus({
+      entry,
+      key,
+      rowContext: resolveSessionListRowContext(params),
+    });
+    selectedRunProjectionByKey.set(
+      key,
+      params.projectRun(key, entry, storedStatus, params.opts.agentId),
+    );
+  }
   const nextOffset = offset + entries.length;
   const hasMore = nextOffset < filtered.length;
   return {
@@ -384,6 +464,7 @@ function selectSessionEntries(params: {
     offset,
     nextOffset: hasMore ? nextOffset : null,
     hasMore,
+    runProjectionByKey: selectedRunProjectionByKey,
   };
 }
 
@@ -422,6 +503,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     userProfileIdentityById,
     configuredAgentIds,
     involvingActorId: params.involvingActorId,
+    projectRun: params.projectRun,
   });
   const fullRowContext =
     rowContext ||
@@ -494,6 +576,7 @@ export function filterAndSortSessionEntries(params: {
   opts: SessionsListParams;
   now: number;
   involvingActorId?: string;
+  projectRun?: ListSessionsFromStoreParams["projectRun"];
 }): [string, SessionEntry][] {
   return selectSessionEntries(params).entries;
 }
@@ -515,7 +598,7 @@ export function listSessionsFromStore(params: ListSessionsFromStoreParams): Sess
         key,
         now: list.now,
       });
-    return buildGatewaySessionRow({
+    const row = buildGatewaySessionRow({
       cfg,
       storePath: list.storePath,
       store,
@@ -533,6 +616,8 @@ export function listSessionsFromStore(params: ListSessionsFromStoreParams): Sess
       skipTranscriptUsageFallback: params.lightweightListRows === true,
       lightweightListRow: params.lightweightListRows === true,
     });
+    Object.assign(row, list.runProjectionByKey.get(key));
+    return row;
   });
   return buildSessionsListResult({
     cfg,
@@ -619,6 +704,7 @@ export async function listSessionsFromStoreAsync(
         skipTranscriptUsageFallback: true,
         lightweightListRow: true,
       });
+      Object.assign(row, list.runProjectionByKey.get(key));
       if (
         entry?.sessionId &&
         includeTranscriptFields &&

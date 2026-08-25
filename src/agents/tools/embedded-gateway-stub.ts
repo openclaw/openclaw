@@ -8,14 +8,20 @@ import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/s
 import type {
   SessionsListParams,
   SessionsResolveParams,
+  ValidationError,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type {
   ReadSessionMessagesAsyncOptions,
   SessionTranscriptReadScope,
 } from "../../gateway/session-transcript-readers.js";
-import type { SessionsListResult } from "../../gateway/session-utils.types.js";
+import type {
+  GatewaySessionRow,
+  SessionRunListProjection,
+  SessionsListResult,
+} from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "./common.js";
@@ -32,6 +38,19 @@ interface EmbeddedGatewayRuntime {
   }) => string;
   getRuntimeConfig: () => OpenClawConfig;
   resolveDefaultAgentId: (config: OpenClawConfig) => string;
+  formatValidationErrors: (errors: ValidationError[] | null | undefined) => string;
+  validateSessionsSearchParams: ((params: unknown) => boolean) & {
+    errors?: ValidationError[] | null;
+  };
+  createSessionRunListProjector: (params: {
+    cfg: OpenClawConfig;
+    context: Record<string, never>;
+  }) => (
+    key: string,
+    entry: SessionEntry,
+    status: GatewaySessionRow["status"],
+    agentId?: string,
+  ) => SessionRunListProjection;
   resolveSessionStoreKey: (params: { cfg: OpenClawConfig; sessionKey: string }) => string;
   resolveStoredSessionKeyForAgentStore: (params: {
     cfg: OpenClawConfig;
@@ -42,6 +61,7 @@ interface EmbeddedGatewayRuntime {
     agentId: string;
     limit?: number;
     query: string;
+    resultMode?: "messages" | "sessions";
     sessionKeys?: string[];
   }) => {
     hits: unknown[];
@@ -76,6 +96,12 @@ interface EmbeddedGatewayRuntime {
     storePath: string;
     store: unknown;
     opts: SessionsListParams;
+    projectRun?: (
+      key: string,
+      entry: SessionEntry,
+      status: GatewaySessionRow["status"],
+      agentId?: string,
+    ) => SessionRunListProjection;
   }) => Promise<SessionsListResult>;
   loadCombinedSessionStoreForGatewayCore: (
     cfg: OpenClawConfig,
@@ -206,6 +232,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
     storePath,
     store,
     opts,
+    projectRun: rt.createSessionRunListProjector({ cfg, context: {} }),
   });
 }
 
@@ -231,6 +258,13 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
 
 async function handleSessionsSearch(params: Record<string, unknown>) {
   const rt = await getRuntime();
+  const validParams = rt.validateSessionsSearchParams(params);
+  if (!validParams && Object.hasOwn(params, "resultMode")) {
+    const resultMode = params.resultMode;
+    if (resultMode !== "messages" && resultMode !== "sessions") {
+      throw new Error('resultMode must be "messages" or "sessions"');
+    }
+  }
   const cfg = rt.getRuntimeConfig();
   const query = typeof params.query === "string" ? params.query.trim() : "";
   if (!query) {
@@ -276,10 +310,21 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   }
   const agentId =
     requestedAgentId ?? agentIds.values().next().value ?? rt.resolveDefaultAgentId(cfg);
+  const resultMode = params.resultMode === "sessions" ? "sessions" : "messages";
+  const limit = readPositiveIntegerParam(params, "limit");
+  if (resultMode === "messages" && (limit ?? 10) > 25) {
+    throw new Error("message search limit must not exceed 25");
+  }
+  if (!validParams) {
+    throw new Error(
+      `invalid sessions.search params: ${rt.formatValidationErrors(rt.validateSessionsSearchParams.errors)}`,
+    );
+  }
   const result = rt.searchSessionTranscripts({
     agentId,
     query,
-    limit: readPositiveIntegerParam(params, "limit"),
+    limit,
+    resultMode,
     ...(sessionKeys ? { sessionKeys } : {}),
   });
   return {

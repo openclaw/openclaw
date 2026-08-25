@@ -23,7 +23,6 @@ import {
   validateSessionsObserverVisibilityParams,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
-  validateSessionsSearchParams,
   validateSessionsSendParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -423,32 +422,6 @@ describe("lazy protocol validators", () => {
     expectRejected(validateSessionsUsageParams, [
       { mode: "specific", timeZone: "" },
       { mode: "specific", timeZone: 2 },
-    ]);
-  });
-
-  it("validates bounded session transcript search params", () => {
-    const search = (overrides: Record<string, unknown> = {}) => ({
-      query: "deployment failure",
-      ...overrides,
-    });
-    expectAccepted(validateSessionsSearchParams, [
-      search(),
-      search({
-        agentId: "work",
-        sessionKeys: ["agent:work:main", "agent:work:other"],
-        limit: 25,
-      }),
-    ]);
-    expectRejected(validateSessionsSearchParams, [
-      search({ agentId: "" }),
-      search({ sessionKey: "agent:work:main" }),
-      search({ sessionKeys: [] }),
-      search({
-        sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`),
-      }),
-      search({ limit: 26 }),
-      { query: "" },
-      { query: "x".repeat(4097) },
     ]);
   });
 

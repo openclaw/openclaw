@@ -1096,7 +1096,7 @@
       },
       {
         "deferLoading": true,
-        "description": "List visible sessions with category, unread, icon, owner, project/worktree, and active attention/status; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
+        "description": "List visible sessions with category, unread, icon, owner, project/worktree, and active attention/status; filter those fields before title/preview hydration. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
         "inputSchema": {
           "properties": {
             "activeMinutes": {
@@ -1109,6 +1109,20 @@
               "type": "string"
             },
             "archived": {
+              "type": "boolean"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hasWorktree": {
               "type": "boolean"
             },
             "includeDerivedTitles": {
@@ -1135,9 +1149,27 @@
               "minimum": 0,
               "type": "integer"
             },
+            "needsAttention": {
+              "type": "boolean"
+            },
+            "ownerId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "projectId": {
+              "minLength": 1,
+              "type": "string"
+            },
             "search": {
               "minLength": 1,
               "type": "string"
+            },
+            "status": {
+              "enum": ["queued", "running", "done", "failed", "killed", "timeout"],
+              "type": "string"
+            },
+            "unread": {
+              "type": "boolean"
             }
           },
           "type": "object"
@@ -1151,12 +1183,17 @@
         "inputSchema": {
           "properties": {
             "limit": {
-              "maximum": 25,
+              "maximum": 100,
               "minimum": 1,
               "type": "integer"
             },
             "query": {
               "maxLength": 4096,
+              "type": "string"
+            },
+            "resultMode": {
+              "description": "One hit per message or session.",
+              "enum": ["messages", "sessions"],
               "type": "string"
             },
             "sessionKey": {
