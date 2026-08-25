@@ -162,6 +162,10 @@ const repositoryScriptEntries = [
   "scripts/mcp-code-mode-gateway-e2e.ts!",
   // Existing explicit Linux proof driver imports the inactive capsule adapter.
   // Reachability for auditing is not registration or permission to execute it.
+  // Invoked directly by the documented PR real-channel dedupe proof command.
+  "scripts/proof-real-channel-dedupe.ts!",
+  // Mantis invokes the trusted proof collector through its workflow shell step.
+  "scripts/mantis/telegram-visible-proof.mjs!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Protected preparation/button workflows invoke this coordinator by path.
