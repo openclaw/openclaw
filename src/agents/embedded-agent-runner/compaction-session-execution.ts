@@ -33,6 +33,7 @@ import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compa
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
+import { resolveLoopGuardRuntimeConfig } from "../tool-loop-detection-config.js";
 import { resolveCompactionFailureReason } from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
@@ -242,7 +243,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               settingsManager,
               resourceLoader,
             },
-            {},
+            {
+              // Compaction is a native-owner session: honor the same
+              // `tools.loopDetection` resolution as the main run so the kill
+              // switch and per-key overrides apply to compaction turns too.
+              loopGuardConfig: resolveLoopGuardRuntimeConfig({
+                cfg: params.config,
+                agentId: sessionAgentId,
+              }),
+            },
           );
           session = createdSession.session;
           session.setActiveToolsByName(sessionToolAllowlist);

@@ -24,6 +24,15 @@ export type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { stat
 
 export class WorkerTurnExecutionError extends Error {}
 
+/**
+ * Thrown when an attached worker bundle lacks a launch capability the current
+ * gateway build requires (execution-context carrier or loop-guard wire
+ * contract). The bundle cannot serve this or any later turn, so the placement
+ * must be failed (drained → reconciled → failed) rather than left active:
+ * leaving it active keeps re-selecting the unusable worker on every turn.
+ */
+export class WorkerCapabilityFenceError extends Error {}
+
 function workerTurnRecoveryError(error: unknown): string {
   const message = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
     .replace(/\s+/gu, " ")

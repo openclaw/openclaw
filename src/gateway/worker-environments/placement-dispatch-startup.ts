@@ -52,6 +52,12 @@ function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
   expectedEnvironmentId: string,
 ): { environmentId: string; ownerEpoch: number; bundleHash: string } {
+  // Node vs SSH transport is decided later from the environment itself; both
+  // arms of the old discriminated return carried identical fields, so this
+  // only validates dispatchability and hands back the prepared facts.
+  // The loop-guard capability is not required here: a guard-off turn
+  // (configless or enabled:false) can still dispatch on a legacy bundle, and
+  // the launcher fences guard-enabled turns per turn.
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
     environment.environmentId !== expectedEnvironmentId ||

@@ -29,6 +29,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import type { LoopGuardRuntimeConfig } from "../agents/tool-loop-detection-config.js";
 import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
@@ -72,6 +73,23 @@ type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
   };
   toolAuthority: WorkerToolAuthority;
   browser?: WorkerBrowserLaunchDescriptor;
+  /**
+   * Operator-resolved runLoop guard state for the worker session, serialized
+   * by the gateway after resolving `tools.loopDetection` (global + per-agent
+   * overrides, `enabled: false` kill switch). The worker sandbox runs with a
+   * fixed minimal config, so this carries the effective guards across the
+   * process boundary.
+   *
+   * Wire semantics after JSON serialization:
+   * - Omitted: guards off (pre-guard behavior). The guards are opt-in: the
+   *   gateway only emits the field when the operator configured a
+   *   `tools.loopDetection` block, and only toward bundles that advertise the
+   *   `worker-loop-guard-v1` protocol feature; older bundles reject unknown
+   *   launch fields and keep their pre-guard loop until reprovisioned.
+   * - `{}` (empty object): all guards explicitly disabled (`enabled: false`).
+   * - Partial objects: missing keys mean that specific guard is disabled.
+   */
+  loopGuardConfig?: LoopGuardRuntimeConfig;
 };
 
 type WorkerLaunchAdmission = Omit<WorkerConnectParams["admission"], "runId"> & {
@@ -167,6 +185,42 @@ function parseBrowserLaunchDescriptor(value: unknown): WorkerBrowserLaunchDescri
   };
 }
 
+function parseLoopGuardConfig(value: unknown): LoopGuardRuntimeConfig | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const keys = ["maxTurns", "maxConsecutiveErrorBatches", "maxIdleRepeatCalls"] as const;
+  // Accept any subset of the guard keys: JSON serialization drops `undefined`
+  // values, so a fully-disabled state arrives as `{}` and a partially
+  // overridden state arrives with only its set keys. Missing/null keys mean
+  // that specific guard is disabled. Unknown keys are still rejected. The
+  // wire contract rejects zero and negative values, matching the public
+  // config schema (`z.number().int().positive()`): a `maxTurns: 0` would
+  // otherwise silently terminate the loop before the first provider request.
+  if (!hasExactKeys(value, [], [...keys])) {
+    return undefined;
+  }
+  const parsed: LoopGuardRuntimeConfig = {
+    maxTurns: undefined,
+    maxConsecutiveErrorBatches: undefined,
+    maxIdleRepeatCalls: undefined,
+  };
+  for (const key of keys) {
+    const entry = value[key];
+    if (entry === undefined || entry === null) {
+      continue;
+    }
+    if (!(Number.isSafeInteger(entry) && typeof entry === "number" && entry >= 1)) {
+      return undefined;
+    }
+    parsed[key] = entry;
+  }
+  return parsed;
+}
+
 function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (
     !isRecord(value) ||
@@ -188,7 +242,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt", "browser", "permissionMode", "workerContainmentRoot"],
+      ["systemPrompt", "browser", "permissionMode", "workerContainmentRoot", "loopGuardConfig"],
     )
   ) {
     return undefined;
@@ -235,6 +289,10 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
   if (value.browser !== undefined && !browser) {
     return undefined;
   }
+  const loopGuardConfig = parseLoopGuardConfig(value.loopGuardConfig);
+  if (value.loopGuardConfig !== undefined && loopGuardConfig === undefined) {
+    return undefined;
+  }
   if (
     !Value.Check(WorkerInferenceModelRefSchema, value.modelRef) ||
     !isInferenceOptions(value.inferenceOptions)
@@ -266,6 +324,7 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
     }),
     toolAuthority,
     ...(browser ? { browser } : {}),
+    ...(loopGuardConfig === undefined ? {} : { loopGuardConfig }),
   } as WorkerLaunchAssignment;
 }
 

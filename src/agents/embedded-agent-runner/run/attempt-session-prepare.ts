@@ -31,6 +31,7 @@ import {
 } from "../../sessions/index.js";
 import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { resolveLoopGuardRuntimeConfig } from "../../tool-loop-detection-config.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
@@ -206,6 +207,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
       ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
       : undefined,
+    // RunLoop guards: per-agent config over global, explicit guard keys
+    // activate each guard, and `tools.loopDetection.enabled: false` as the
+    // kill switch.
+    loopGuardConfig: resolveLoopGuardRuntimeConfig({
+      cfg: attempt.config,
+      agentId: input.sessionAgentId,
+    }),
   });
   const activeSession = createdSession.session;
   if (!activeSession) {

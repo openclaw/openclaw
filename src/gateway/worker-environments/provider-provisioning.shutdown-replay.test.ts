@@ -1,6 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_LOOP_GUARD_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -50,7 +53,10 @@ describe("worker node provisioning shutdown replay", () => {
     });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_LOOP_GUARD_PROTOCOL_FEATURE,
+      ],
     }));
     let placements = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
@@ -88,7 +94,10 @@ describe("worker node provisioning shutdown replay", () => {
     });
     const receipt = {
       ...support.BOOTSTRAP_RECEIPT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_LOOP_GUARD_PROTOCOL_FEATURE,
+      ],
     };
     const first = support.createService(provider, {
       prepareNodeEnrollment: firstEnrollment.begin,

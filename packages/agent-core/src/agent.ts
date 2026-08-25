@@ -160,6 +160,12 @@ export interface AgentOptions {
   maxRetryDelayMs?: number;
   /** Default strategy for executing multiple tool calls in one assistant message. */
   toolExecution?: ToolExecutionMode;
+  /** Maximum assistant turns per loop run; undefined disables (default). */
+  maxTurns?: number;
+  /** Maximum consecutive all-error tool batches before graceful termination; undefined disables. */
+  maxConsecutiveErrorBatches?: number;
+  /** Maximum consecutive identical tool calls (same name + args) before graceful termination; undefined disables. */
+  maxIdleRepeatCalls?: number;
 }
 
 class PendingMessageQueue {
@@ -172,6 +178,11 @@ class PendingMessageQueue {
 
   enqueue(message: AgentMessage): void {
     this.messages.push(message);
+  }
+
+  /** Insert messages at the head, preserving their given order. */
+  prepend(messages: AgentMessage[]): void {
+    this.messages = [...messages, ...this.messages];
   }
 
   hasItems(): boolean {
@@ -261,6 +272,12 @@ export class Agent {
   public maxRetryDelayMs?: number;
   /** Tool execution strategy for assistant messages that contain multiple tool calls. */
   public toolExecution: ToolExecutionMode;
+  /** Maximum assistant turns per loop run; undefined disables (default). */
+  public maxTurns?: number;
+  /** Maximum consecutive all-error tool batches before graceful termination; undefined disables. */
+  public maxConsecutiveErrorBatches?: number;
+  /** Maximum consecutive identical tool calls (same name + args) before graceful termination; undefined disables. */
+  public maxIdleRepeatCalls?: number;
 
   constructor(options: AgentOptions = {}) {
     this.mutableState = createMutableAgentState(options.initialState);
@@ -284,6 +301,9 @@ export class Agent {
     this.transport = options.transport ?? "auto";
     this.maxRetryDelayMs = options.maxRetryDelayMs;
     this.toolExecution = options.toolExecution ?? "parallel";
+    this.maxTurns = options.maxTurns;
+    this.maxConsecutiveErrorBatches = options.maxConsecutiveErrorBatches;
+    this.maxIdleRepeatCalls = options.maxIdleRepeatCalls;
   }
 
   /**
@@ -526,6 +546,9 @@ export class Agent {
       thinkingBudgets: this.thinkingBudgets,
       maxRetryDelayMs: this.maxRetryDelayMs,
       toolExecution: this.toolExecution,
+      maxTurns: this.maxTurns,
+      maxConsecutiveErrorBatches: this.maxConsecutiveErrorBatches,
+      maxIdleRepeatCalls: this.maxIdleRepeatCalls,
       beforeToolCall: this.beforeToolCall,
       beforeToolBatch: getInternalBeforeToolBatch(this),
       toolLoopRecoveryState: this.toolLoopRecoveryState,
@@ -546,6 +569,13 @@ export class Agent {
       getApiKey: this.getApiKey,
       getSteeringMessages,
       getFollowUpMessages: async () => this.followUpQueue.drain(),
+      // Guard termination can fire while drained-but-unconsumed steering is
+      // still in flight; put it back so the next run processes it. Prepend
+      // (not append) so already-drained messages keep their original FIFO
+      // position ahead of messages still waiting in the queue.
+      requeueSteeringMessages: (messages) => {
+        this.steeringQueue.prepend(messages);
+      },
     };
   }
 

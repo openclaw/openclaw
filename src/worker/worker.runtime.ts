@@ -174,6 +174,9 @@ export async function runWorkerDescriptor(
         allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
+        ...(descriptor.assignment.loopGuardConfig === undefined
+          ? {}
+          : { loopGuardConfig: descriptor.assignment.loopGuardConfig }),
         inference: { stream },
         transcript: {
           commit: async (messages) => {

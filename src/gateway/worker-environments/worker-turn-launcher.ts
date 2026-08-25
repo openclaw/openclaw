@@ -10,6 +10,10 @@ import {
 } from "../../agents/session-placement-admission.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  type LoopGuardRuntimeConfig,
+  resolveLoopGuardRuntimeConfig,
+} from "../../agents/tool-loop-detection-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -20,6 +24,7 @@ import {
   STALE_WORKER_BUILD_REASON,
   StaleWorkerBuildError,
   supportsWorkerExecutionContextLaunch,
+  supportsWorkerLoopGuardLaunch,
 } from "./admission.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
@@ -39,6 +44,7 @@ import {
   waitForTurnOperation,
 } from "./worker-turn-admission.js";
 import {
+  WorkerCapabilityFenceError,
   failHandedOffTurn,
   WorkerTurnExecutionError,
   type ActiveWorkerPlacement,
@@ -64,6 +70,23 @@ import {
 } from "./workspace-result-finalize.js";
 
 type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+
+/**
+ * True when at least one runLoop guard is actually enabled by the resolved
+ * config. The guards are opt-in: configless sessions and `enabled: false`
+ * blocks resolve to all-`undefined` values, which means no guard is active.
+ * Callers use this to (a) require the loop-guard capability only for turns
+ * whose guards are actually engaged and (b) serialize the guard state on the
+ * wire only when it carries an effective value — a legacy bundle without the
+ * capability must keep serving configless / explicitly-disabled sessions.
+ */
+function isLoopGuardRuntimeConfigEnabled(config: LoopGuardRuntimeConfig): boolean {
+  return (
+    config.maxTurns !== undefined ||
+    config.maxConsecutiveErrorBatches !== undefined ||
+    config.maxIdleRepeatCalls !== undefined
+  );
+}
 
 type WorkerTurnLauncherOptions = {
   environments: WorkerTurnEnvironmentService;
@@ -132,8 +155,30 @@ async function executeWorkerTurn(params: {
     throw new Error("Active worker placement does not match its attached environment");
   }
   if (!supportsWorkerExecutionContextLaunch(bootstrapReceipt)) {
-    throw new Error(
+    throw new WorkerCapabilityFenceError(
       "Active worker bundle lacks the current execution-context capability; reprovision the worker before launch",
+    );
+  }
+  // Resolve the operator's guard state against the admitted placement agent:
+  // `turn.agentId` is optional, so a per-agent `tools.loopDetection` override
+  // (including the `enabled: false` kill switch) would be silently dropped when
+  // the turn omits it. The placement is the authoritative identity for the launch.
+  const loopGuardConfig = resolveLoopGuardRuntimeConfig({
+    cfg: turn.config,
+    agentId: placement.agentId,
+  });
+  // The runLoop guards are opt-in: they engage only when an explicit
+  // `tools.loopDetection` block (global or per-agent) leaves at least one guard
+  // enabled. Configless and `enabled: false` sessions never use the guards, so
+  // a bundle that predates the loop-guard launch contract can still serve them
+  // (pre-guard execution) — the capability fence fires only for turns whose
+  // resolved guard state is actually enabled.
+  if (
+    isLoopGuardRuntimeConfigEnabled(loopGuardConfig) &&
+    !supportsWorkerLoopGuardLaunch(bootstrapReceipt)
+  ) {
+    throw new WorkerCapabilityFenceError(
+      "Active worker bundle lacks the loop-guard capability; reprovision the worker before launch",
     );
   }
   await recoverWorkspaceBeforeTurn(params);
@@ -268,6 +313,11 @@ async function executeWorkerTurn(params: {
           },
           toolAuthority,
           ...(browser ? { browser } : {}),
+          // Serialize the resolved guard state only when a guard is actually
+          // enabled: configless and `enabled: false` sessions carry no field,
+          // so legacy bundles parse "missing = disabled" and no all-undefined
+          // object ever goes on the wire.
+          ...(isLoopGuardRuntimeConfigEnabled(loopGuardConfig) ? { loopGuardConfig } : {}),
         },
       }),
   });
@@ -663,6 +713,21 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             // The outer fallback cycle owns run-terminal normalization.
             throw error;
           }
+        }
+        if (error instanceof WorkerCapabilityFenceError) {
+          // A capability-fenced bundle cannot serve this or any later turn:
+          // releasing the claim would leave the placement active and dispatch
+          // would keep re-selecting the unusable worker. Fail the placement so
+          // the reclaim barrier reprovisions with a bundle that carries the
+          // required launch capability.
+          await failHandedOffTurn({
+            environments: options.environments,
+            placements: options.placements,
+            placement,
+            turnClaim,
+            error,
+          });
+          throw error;
         }
         if (handedOff) {
           await failHandedOffTurn({
