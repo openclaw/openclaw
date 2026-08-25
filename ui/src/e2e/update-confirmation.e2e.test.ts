@@ -49,7 +49,7 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
   await updateIssue.locator("summary").click();
-  const updateButton = updateIssue.locator(".sidebar-update-card__action");
+  const updateButton = updateIssue.locator(".sidebar-update-card__cta");
   await updateButton.waitFor({ timeout: 10_000 });
   return { compact, gateway, updateButton };
 }

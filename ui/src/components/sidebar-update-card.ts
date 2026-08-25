@@ -141,16 +141,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     this.holdingCampaignId = null;
   };
 
-  private hasAvailableUpdate() {
-    const update = this.updateAvailable;
-    const gitTarget = this.updateSchedule?.target;
-    return (
-      (update !== null && update.latestVersion !== update.currentVersion) ||
-      (update?.commitsBehind !== undefined && update.commitsBehind > 0) ||
-      (gitTarget?.kind === "git" && gitTarget.commitsBehind > 0)
-    );
-  }
-
   private compactSummary() {
     if (this.refreshRequired) {
       return {
@@ -163,7 +153,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const campaign = this.updateSchedule?.campaign;
     const busy = this.updateBusy || campaign?.state === "applying";
     const statusBanner = this.statusBanner;
-    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
+    const actionable = isUpdateActionable(this.updateAvailable, this.updateSchedule, busy);
+    if (!actionable && !statusBanner) {
       return null;
     }
     const targetLabel = formatUpdateTargetLabel(this.updateSchedule, this.updateAvailable);
@@ -307,7 +298,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     // metadata while it restarts, and the card must not vanish or fall back to
     // the stale "update available" call to action mid-install.
     const statusBanner = this.statusBanner;
-    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
+    const actionable = isUpdateActionable(update, this.updateSchedule, busy);
+    if (!actionable && !statusBanner) {
       return nothing;
     }
     const title = this.nativeUpdateAvailable
@@ -316,15 +308,18 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const betaChannelSuffix = update?.channel === "beta" ? " (beta)" : "";
     const campaignLabel = formatUpdateCampaignLabel(this.updateSchedule);
     const targetLabel = formatUpdateTargetLabel(this.updateSchedule, update);
+    const availabilityOnly = !campaign && !busy && !statusBanner;
     const text = campaignLabel
       ? targetLabel
         ? t("updates.sidebar.campaignTarget", { status: campaignLabel, target: targetLabel })
         : campaignLabel
       : busy
         ? t("updates.sidebar.updating")
-        : targetLabel
-          ? `${title} · ${targetLabel}${betaChannelSuffix}`
-          : title;
+        : availabilityOnly
+          ? t("updates.sidebar.availableSummary")
+          : targetLabel
+            ? `${title} · ${targetLabel}${betaChannelSuffix}`
+            : title;
     const countdownActive =
       campaign?.state === "countdown" || campaign?.state === "waiting-for-idle";
     const holdActive = campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now();
@@ -339,7 +334,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     );
     // An outcome with nothing left to act on is the whole card: re-offering an
     // update the operator just ran would bury the reason it failed.
-    const actionable = isUpdateActionable(update, this.updateSchedule, this.updateBusy);
     const updateAction = html`<button
       class="sidebar-update-card__action ${busy ? "sidebar-update-card__action--busy" : ""}"
       type="button"
@@ -357,6 +351,14 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         >${text}</span
       >
     </button>`;
+    const availabilityAction = html`<button
+      class="sidebar-update-card__cta"
+      type="button"
+      aria-disabled=${this.canUpdate ? nothing : "true"}
+      @click=${this.startUpdate}
+    >
+      ${t("updates.sidebar.action")}
+    </button>`;
     return html`
       <div
         class="sidebar-update-card"
@@ -366,11 +368,23 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         ${this.renderStatus()}
         ${actionable
           ? html`<div class="sidebar-update-card__actions">
-              ${this.canUpdate
-                ? updateAction
-                : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
-                    ${updateAction}
-                  </openclaw-tooltip>`}
+              ${availabilityOnly
+                ? html`<div class="sidebar-update-card__availability">
+                    <span class="sidebar-update-card__icon" aria-hidden="true"
+                      >${icons.download}</span
+                    >
+                    <span class="sidebar-update-card__text">${text}</span>
+                    ${this.canUpdate
+                      ? availabilityAction
+                      : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
+                          ${availabilityAction}
+                        </openclaw-tooltip>`}
+                  </div>`
+                : this.canUpdate
+                  ? updateAction
+                  : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
+                      ${updateAction}
+                    </openclaw-tooltip>`}
               ${showHold && campaign
                 ? html`
                     <button

@@ -55,7 +55,7 @@ async function openUpdateConfirmation(page: Page): Promise<void> {
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
   );
   await updateIssue.locator("summary").click();
-  await updateIssue.locator(".sidebar-update-card__action").click();
+  await updateIssue.locator(".sidebar-update-card__cta").click();
 }
 
 suite.define(() => {

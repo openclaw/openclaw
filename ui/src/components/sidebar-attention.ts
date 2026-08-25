@@ -418,6 +418,9 @@ class SidebarAttention extends OpenClawLightDomElement {
   }
 
   private updateSurfaceVisible(): boolean {
+    if (this.context?.overlays.snapshot.controlUiRefreshRequired) {
+      return false;
+    }
     return (
       this.hasUpdateSurface() &&
       (this.updateSurfaceForced() ||
@@ -450,6 +453,7 @@ class SidebarAttention extends OpenClawLightDomElement {
       !context ||
       !snapshot ||
       busy ||
+      snapshot.controlUiRefreshRequired ||
       !isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy) ||
       !canCallGatewayMethod(context.gateway.snapshot, "update.run", "operator.admin")
     ) {

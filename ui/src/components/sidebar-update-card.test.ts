@@ -101,6 +101,29 @@ describe("SidebarUpdateCard", () => {
     expect(onUpdate).not.toHaveBeenCalled();
   });
 
+  it("renders availability as static copy with one explicit update action", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+
+    const availability = element.querySelector<HTMLElement>(".sidebar-update-card__availability");
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__cta");
+    expect(availability?.tagName).toBe("DIV");
+    expect(availability?.hasAttribute("tabindex")).toBe(false);
+    expect(availability?.textContent).toContain("A newer revision is ready.");
+    expect(action?.textContent?.trim()).toBe("Update");
+    expect(availability?.querySelectorAll("button")).toHaveLength(1);
+
+    availability?.click();
+    expect(onUpdate).not.toHaveBeenCalled();
+    action?.click();
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it("routes a recorded failure to update settings when availability is gone", async () => {
     const element = await mount(null);
     const onReviewUpdate = vi.fn();
@@ -139,22 +162,15 @@ describe("SidebarUpdateCard", () => {
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 
-  it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
-    const element = await mount(
-      { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
-      {
-        channel: "dev",
-        autoEnabled: false,
-        target: {
-          kind: "git",
-          upstreamRef: "origin/main",
-          upstreamSha: "abc1234def",
-          commitsBehind: 246,
-        },
-      },
-    );
-    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
-      "246 commits behind",
+  it("renders a git-only update and narrates it after the Gateway drops its metadata", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "1.0.0",
+      channel: "dev",
+      commitsBehind: 246,
+    });
+    expect(element.querySelector(".sidebar-update-card__availability")?.textContent).toContain(
+      "A newer revision is ready.",
     );
 
     element.updateBusy = true;
@@ -181,9 +197,7 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
       "Update available",
     );
-    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
-      "Update Gateway",
-    );
+    expect(element.querySelector(".sidebar-update-card__cta")?.textContent).toContain("Update");
   });
 
   it("keeps an unauthorized update discoverable without allowing activation", async () => {
@@ -199,7 +213,7 @@ describe("SidebarUpdateCard", () => {
     const onUpdate = vi.fn();
     element.onUpdate = onUpdate;
 
-    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__cta");
     const tooltip = action?.closest("openclaw-tooltip") as
       | (HTMLElement & { content?: string; updateComplete: Promise<boolean> })
       | null;

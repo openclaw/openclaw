@@ -513,6 +513,42 @@ describe("sidebar attention refresh ownership", () => {
 });
 
 describe("update attention", () => {
+  it("suppresses update attention while the client requires a refresh", () => {
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    const runUpdate = vi.fn();
+    const overlaySnapshot = {
+      controlUiRefreshRequired: true,
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "stable",
+      },
+      updateSchedule: null,
+      updateCampaignStatusHydrated: true,
+      updateReconciliationPending: false,
+      updateRunning: false,
+      updateStatusBanner: null,
+    };
+    element.context = {
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.run"] },
+          },
+        },
+      },
+      overlays: { runUpdate, snapshot: overlaySnapshot },
+    } as unknown as ApplicationContext;
+
+    expect(element.updateSurfaceVisible()).toBe(false);
+    element.startUpdate();
+    expect(runUpdate).not.toHaveBeenCalled();
+    overlaySnapshot.controlUiRefreshRequired = false;
+    expect(element.updateSurfaceVisible()).toBe(true);
+  });
+
   it("hides an unhydrated campaign only while update status can be polled", () => {
     const overlaySnapshot = {
       updateAvailable: {
