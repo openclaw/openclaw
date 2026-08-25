@@ -229,13 +229,16 @@ export {
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,
+  appendTranscriptEventWithSnapshotSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  appendTranscriptMessageWithSnapshotSync,
   findTranscriptEvent,
   inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
   loadTranscriptTailEventsSync,
   preflightSessionTranscriptForManualCompact,
@@ -246,13 +249,17 @@ export {
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
+  replaceTranscriptEventsWithSnapshotSync,
   rewriteTranscriptEventRowsExact,
   rewriteTranscriptMessageAtAnchor,
   resolveTranscriptSessionKeyBySessionId,
+  SqliteTranscriptMutationConflictError,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
+export type { PendingTranscriptHeader } from "./session-accessor.transcript.js";
+export type { SqliteTranscriptSnapshotRow } from "./session-accessor.transcript.js";
 export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,

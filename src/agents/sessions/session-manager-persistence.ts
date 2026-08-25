@@ -1,8 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   appendTranscriptEventSync,
-  appendTranscriptMessageSync,
+  appendTranscriptEventWithSnapshotSync,
+  appendTranscriptMessageWithSnapshotSync,
   ensureSessionEntrySync,
+  type PendingTranscriptHeader,
+  SqliteTranscriptMutationConflictError,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -17,6 +20,7 @@ type PersistRecordResult =
       anchor?: TranscriptEntryAnchor;
       adoptedMessageId?: string;
       effectiveParentId: string | null;
+      foreignRowDetected?: boolean;
     };
 
 function requireTranscriptEventAppend(
@@ -152,6 +156,68 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return this.persistRecord(entry, options);
   }
 
+  /**
+   * Ensures the deferred session_entries row exists (separate table from transcript_events, so
+   * outside the folded snapshot guard) before the append cores, which no-op when it is missing,
+   * then returns the still-pending header transcript row to fold into the first record's
+   * transaction. Returns undefined once a header is already persisted.
+   */
+  private resolveDeferredSessionHeader(
+    scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
+  ): PendingTranscriptHeader["event"] {
+    if (!this.persistenceHeaderPending) {
+      return undefined;
+    }
+    if (!ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() })) {
+      throw new Error("Session transcript header was not persisted");
+    }
+    const header = this.fileEntries[0];
+    if (!header || header.type !== "session") {
+      throw new Error("Session transcript header was not persisted");
+    }
+    return header;
+  }
+
+  /**
+   * Snapshot guard for one record append, folding a still-deferred header when pending. Once a
+   * header exists, active-branch appends (the tail-rebase path in the append core) reconcile a
+   * concurrent *identity-tracked* foreign row via `effectiveParentId` -- appendEntry detects the
+   * mismatch and reloads. But that rebase reads transcript_event_identities, so it cannot see a
+   * foreign row with no non-blank `id` (e.g. an msteams FeedbackEvent never gets an identities
+   * row) -- such a row never moves the tail, so no mismatch is ever detected and a later rewrite
+   * built from this manager's contaminated snapshot would delete it. Guard active-branch appends
+   * too, but non-throwing (see PendingTranscriptHeader.nonThrowing): the caller folds a detected
+   * mismatch into a reload instead of a hard rejection, preserving the graceful-rebase intent for
+   * every concurrent active-branch writer. Side-mode, deliberate-branch (post-branch/resetLeaf),
+   * and leaf-control appends keep their exact declared parent and never rebase, so a throwing
+   * guard is their only foreign-row signal.
+   */
+  private resolveAppendGuard(
+    scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
+    isActiveBranchAppend: boolean,
+  ): PendingTranscriptHeader {
+    const event = this.resolveDeferredSessionHeader(scope);
+    if (event) {
+      return { event, expectedSnapshot: this.persistedRowSnapshot ?? [] };
+    }
+    return {
+      expectedSnapshot: this.persistedRowSnapshot ?? [],
+      ...(isActiveBranchAppend ? { nonThrowing: true } : {}),
+    };
+  }
+
+  // A guard folding a still-deferred header commits it in the same transaction as this
+  // append, so once that append succeeds the header is no longer pending -- every other
+  // header-persisting path (replacePersistedTranscript, branch()) clears this the same way.
+  // Skipping this leaves persistenceHeaderPending stuck true, so every later append keeps
+  // taking the guarded "deferred header" branch above instead of an active-branch append's
+  // intended unguarded tail-rebase path, turning a graceful rebase into a hard rejection.
+  private clearHeaderPendingAfterFold(guard: PendingTranscriptHeader): void {
+    if (guard.event) {
+      this.persistenceHeaderPending = false;
+    }
+  }
+
   private persistSqliteRecord(
     entry: unknown,
     options?: AppendPersistenceOptions,
@@ -160,48 +226,74 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
     const scope = this.persistenceTarget;
-    if (this.persistenceHeaderPending) {
-      if (
-        !ensureSessionEntrySync(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: Date.now(),
-        })
-      ) {
-        throw new Error("Session transcript header was not persisted");
+    try {
+      return this.persistSqliteRecordWithGuard(scope, entry, options);
+    } catch (err) {
+      if (err instanceof SqliteTranscriptMutationConflictError) {
+        // Durable state has moved past what this manager observed. Resync in-memory state from
+        // the authoritative DB before the failure surfaces, so the caller's next read (and any
+        // retry) reflects reality instead of a rejected, now-stale append.
+        this.reloadPersistedTranscript();
       }
-      const header = this.fileEntries[0];
-      if (!header || header.type !== "session") {
-        throw new Error("Session transcript header was not persisted");
-      }
-      requireTranscriptEventAppend(
-        appendTranscriptEventSync(scope, header),
-        "Session transcript header was not persisted",
-      );
-      this.persistenceHeaderPending = false;
+      throw err;
     }
+  }
+
+  private persistSqliteRecordWithGuard(
+    scope: NonNullable<SessionManagerPersistence["persistenceTarget"]>,
+    entry: unknown,
+    options: AppendPersistenceOptions | undefined,
+  ): PersistRecordResult {
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
+      const guard = this.resolveAppendGuard(scope, false);
+      const { result, snapshot } = appendTranscriptEventWithSnapshotSync(
+        scope,
+        entry,
+        undefined,
+        guard,
+      );
       requireTranscriptEventAppend(
-        appendTranscriptEventSync(scope, entry),
+        result,
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
       );
+      this.applyPersistedRowSnapshot(snapshot);
+      this.clearHeaderPendingAfterFold(guard);
       return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
       return undefined;
     }
     if (entry.type !== "message") {
-      requireTranscriptEventAppend(
-        appendTranscriptEventSync(
+      const isActiveBranchAppend = options?.appendIntent === "active-branch";
+      const guard = this.resolveAppendGuard(scope, isActiveBranchAppend);
+      const { result, snapshot, effectiveParentId, foreignRowDetected } =
+        appendTranscriptEventWithSnapshotSync(
           scope,
           entry,
-          options?.appendIntent === "active-branch"
-            ? { appendIntent: options.appendIntent }
-            : undefined,
-        ),
+          isActiveBranchAppend ? { appendIntent: options.appendIntent } : undefined,
+          guard,
+        );
+      requireTranscriptEventAppend(
+        result,
         `Session transcript entry was not persisted: ${entry.id}`,
       );
-      return undefined;
+      this.applyPersistedRowSnapshot(snapshot);
+      this.clearHeaderPendingAfterFold(guard);
+      // Raw appends rebase the same way message appends do (active-branch tail rebase),
+      // but only messages returned that rebase to the caller until now. Surfacing it here
+      // lets appendEntry's existing effectiveParentId check reload when a concurrent
+      // foreign row moved the tail out from under this entry's declared parentId, instead
+      // of trusting a stale in-memory parent a later rewrite could silently drop.
+      // foreignRowDetected additionally covers the id-less row class that rebase alone
+      // cannot see -- see resolveAppendGuard.
+      if (effectiveParentId === undefined && !foreignRowDetected) {
+        return undefined;
+      }
+      return {
+        effectiveParentId: effectiveParentId ?? entry.parentId,
+        ...(foreignRowDetected ? { foreignRowDetected } : {}),
+      };
     }
     const appendOptions = {
       cwd: this.cwd,
@@ -212,11 +304,18 @@ export class SessionManagerPersistence extends SessionManagerCore {
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
-    } satisfies Parameters<typeof appendTranscriptMessageSync>[1];
-    const result = appendTranscriptMessageSync(scope, appendOptions);
+    } satisfies Parameters<typeof appendTranscriptMessageWithSnapshotSync>[1];
+    const messageGuard = this.resolveAppendGuard(scope, options?.appendIntent === "active-branch");
+    const { result, snapshot, foreignRowDetected } = appendTranscriptMessageWithSnapshotSync(
+      scope,
+      appendOptions,
+      messageGuard,
+    );
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
+    this.applyPersistedRowSnapshot(snapshot);
+    this.clearHeaderPendingAfterFold(messageGuard);
     if (result.messageId !== entry.id) {
       const idempotencyKey =
         entry.message.role === "user" &&
@@ -251,6 +350,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
       effectiveParentId: result.effectiveParentId,
+      ...(foreignRowDetected ? { foreignRowDetected } : {}),
     };
   }
 }

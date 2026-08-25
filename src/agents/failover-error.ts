@@ -500,6 +500,10 @@ function hasWorkerRunnerCoordinationFailure(err: unknown): boolean {
   ].some((name) => errorGraphHasName(err, name));
 }
 
+function hasSqliteTranscriptMutationConflict(err: unknown): boolean {
+  return errorGraphHasName(err, "SqliteTranscriptMutationConflictError");
+}
+
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
   if (isFailoverError(err)) {
     return true;
@@ -908,6 +912,13 @@ export function resolveModelFallbackError(
   // The in-transaction transcript fence owns writer supersession. A rebound is
   // local coordination failure even when provider-looking wrappers contain it.
   if (hasSessionTranscriptWriterClaimRebound(err)) {
+    return { kind: "coordination", error: err };
+  }
+  // A foreign process committing a transcript row mid-rewrite is a local
+  // storage race, not a provider failure. Fallback must not blame the model
+  // or retry against a different provider for a conflict the session layer
+  // already resynced from disk.
+  if (hasSqliteTranscriptMutationConflict(err)) {
     return { kind: "coordination", error: err };
   }
   const failoverError = coerceToFailoverError(err, context);

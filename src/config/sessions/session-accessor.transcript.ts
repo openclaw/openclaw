@@ -9,20 +9,29 @@ import {
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
   loadTranscriptTailEventsSync,
   readTranscriptStatsSync,
   readTranscriptEventAtSeqSync,
+  type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
-import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import {
   appendTranscriptEvent,
   appendTranscriptEventSync,
+  appendTranscriptEventWithSnapshotSync,
+} from "./session-accessor.sqlite-transcript-event-write.js";
+import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
+import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  appendTranscriptMessageWithSnapshotSync,
+  type PendingTranscriptHeader,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
+  replaceTranscriptEventsWithSnapshotSync,
   rewriteTranscriptEventRowsExact,
+  SqliteTranscriptMutationConflictError,
   trimTranscriptForManualCompact,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
@@ -41,13 +50,16 @@ import {
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,
+  appendTranscriptEventWithSnapshotSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
+  appendTranscriptMessageWithSnapshotSync,
   findTranscriptEvent,
   inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptEventsWithRowSnapshotSync,
   loadTranscriptHeaderSync,
   loadTranscriptTailEventsSync,
   publishTranscriptUpdate,
@@ -57,12 +69,16 @@ export {
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
+  replaceTranscriptEventsWithSnapshotSync,
   rewriteTranscriptEventRowsExact,
   rewriteTranscriptMessageAtAnchor,
   resolveTranscriptSessionKeyBySessionId,
+  SqliteTranscriptMutationConflictError,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 };
+export type { PendingTranscriptHeader };
+export type { SqliteTranscriptSnapshotRow };
 export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 /**

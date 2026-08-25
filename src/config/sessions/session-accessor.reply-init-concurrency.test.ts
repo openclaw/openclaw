@@ -2,11 +2,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import process from "node:process";
-import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -14,6 +13,15 @@ import {
   upsertSessionEntryCore,
   withTranscriptWriteLock,
 } from "./session-accessor.js";
+import {
+  AGENT_ID,
+  getConcurrencyWorker,
+  runConcurrencyScenario,
+  SESSION_KEY,
+  shutdownConcurrencyWorker,
+  waitForChild,
+  WORKER_BOOT_TIMEOUT_MS,
+} from "./session-accessor.reply-init-concurrency.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
 vi.mock("../config.js", async () => ({
@@ -21,413 +29,7 @@ vi.mock("../config.js", async () => ({
   getRuntimeConfig: vi.fn().mockReturnValue({}),
 }));
 
-type ChildResult =
-  | {
-      ok: true;
-      sessionEntry: {
-        sessionFile?: string;
-        sessionId?: string;
-        updatedAt?: number;
-      };
-    }
-  | {
-      currentEntry?: {
-        sessionId?: string;
-        updatedAt?: number;
-      };
-      ok: false;
-      reason: string;
-      revision: string;
-    };
-
-type TranscriptRewriteChildResult =
-  | { ok: true }
-  | {
-      message: string;
-      name: string;
-      ok: false;
-    };
-
-type ConcurrencyWorkerRequest =
-  | {
-      kind: "reply-init";
-      preparedUpdatedAt: number;
-      storePath: string;
-    }
-  | {
-      kind: "transcript-rewrite";
-      rewriteMode: "read-then-replace" | "replace-twice";
-      sessionId: string;
-      storePath: string;
-    };
-
-type ConcurrencyWorkerReady<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
-  kind: "reply-init";
-}
-  ? { currentEntry?: unknown; revision: string }
-  : { eventCount: number };
-
-type ConcurrencyWorkerResult<TRequest extends ConcurrencyWorkerRequest> = TRequest extends {
-  kind: "reply-init";
-}
-  ? ChildResult
-  : TranscriptRewriteChildResult;
-
-type ConcurrencyWorkerMessage =
-  | { phase: "booted" }
-  | { error: { message: string; name: string }; phase: "error"; requestId: number }
-  | { phase: "ready"; requestId: number; value: unknown }
-  | { phase: "result"; requestId: number; value: unknown };
-
-// Cold tsx/module loading competes with other CI shards. Pay that cost once
-// with a process-start budget, while keeping each concurrency handshake tight.
-const WORKER_BOOT_TIMEOUT_MS = 30_000;
-const SCENARIO_TIMEOUT_MS = 10_000;
-const SESSION_KEY = "agent:main:main";
-const AGENT_ID = "main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// Preserve the OS-process boundary while paying tsx/module startup once per file.
-// Every request still uses an isolated store path.
-let concurrencyWorker: ReturnType<typeof spawn> | undefined;
-let nextRequestId = 0;
-
-function createConcurrencyWorkerScript(sessionAccessorUrl: string): string {
-  return `
-const {
-  commitReplySessionInitialization,
-  loadReplySessionInitializationSnapshot,
-  withTranscriptWriteLock,
-} = await import(${JSON.stringify(sessionAccessorUrl)});
-
-const SESSION_KEY = ${JSON.stringify(SESSION_KEY)};
-const AGENT_ID = ${JSON.stringify(AGENT_ID)};
-const proceedResolvers = new Map();
-
-function send(message) {
-  process.send?.(message);
-}
-
-function waitForProceed(requestId) {
-  return new Promise((resolve) => {
-    proceedResolvers.set(requestId, resolve);
-  });
-}
-
-async function runReplyInit(request) {
-  const snapshot = loadReplySessionInitializationSnapshot({
-    agentId: AGENT_ID,
-    sessionKey: SESSION_KEY,
-    storePath: request.storePath,
-  });
-  const proceed = waitForProceed(request.requestId);
-  send({
-    phase: "ready",
-    requestId: request.requestId,
-    value: {
-      currentEntry: snapshot.currentEntry,
-      revision: snapshot.revision,
-    },
-  });
-  await proceed;
-  return commitReplySessionInitialization({
-    activeSessionKey: SESSION_KEY,
-    agentId: AGENT_ID,
-    expectedRevision: snapshot.revision,
-    sessionEntry: {
-      sessionId: "existing-session",
-      updatedAt: request.preparedUpdatedAt,
-    },
-    sessionKey: SESSION_KEY,
-    snapshotEntry: snapshot.currentEntry,
-    storePath: request.storePath,
-  });
-}
-
-async function runTranscriptRewrite(request) {
-  let result;
-  try {
-    await withTranscriptWriteLock(
-      {
-        agentId: AGENT_ID,
-        sessionId: request.sessionId,
-        sessionKey: SESSION_KEY,
-        storePath: request.storePath,
-      },
-      async (transcript) => {
-        if (request.rewriteMode === "replace-twice") {
-          const firstReplacement = [
-            { type: "session", version: 3, id: request.sessionId },
-            {
-              type: "message",
-              id: "first-replacement",
-              parentId: null,
-              message: { role: "assistant", content: "first replacement" },
-            },
-          ];
-          await transcript.replaceEvents(firstReplacement);
-          const proceed = waitForProceed(request.requestId);
-          send({
-            phase: "ready",
-            requestId: request.requestId,
-            value: { eventCount: firstReplacement.length },
-          });
-          await proceed;
-          await transcript.replaceEvents([
-            firstReplacement[0],
-            {
-              type: "message",
-              id: "first-replacement",
-              parentId: null,
-              message: { role: "assistant", content: "second replacement" },
-            },
-          ]);
-          return;
-        }
-        const events = await transcript.readEvents();
-        const proceed = waitForProceed(request.requestId);
-        send({
-          phase: "ready",
-          requestId: request.requestId,
-          value: { eventCount: events.length },
-        });
-        await proceed;
-        const rewrittenEvents = events.map((event) => {
-          if (
-            typeof event !== "object" ||
-            event === null ||
-            Array.isArray(event) ||
-            event.id !== "rewrite-target"
-          ) {
-            return event;
-          }
-          return {
-            ...event,
-            message: {
-              ...event.message,
-              content: "rewritten content",
-            },
-          };
-        });
-        await transcript.replaceEvents(rewrittenEvents);
-      },
-    );
-    result = { ok: true };
-  } catch (error) {
-    result = {
-      ok: false,
-      name: error instanceof Error ? error.name : typeof error,
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-  return result;
-}
-
-process.on("message", (request) => {
-  if (!request || typeof request !== "object") {
-    return;
-  }
-  if (request.kind === "shutdown") {
-    process.exit(0);
-  }
-  if (request.kind === "proceed") {
-    const resolve = proceedResolvers.get(request.requestId);
-    proceedResolvers.delete(request.requestId);
-    resolve?.();
-    return;
-  }
-  if (!Number.isInteger(request.requestId)) {
-    return;
-  }
-  void (async () => {
-    const value =
-      request.kind === "reply-init"
-        ? await runReplyInit(request)
-        : await runTranscriptRewrite(request);
-    send({ phase: "result", requestId: request.requestId, value });
-  })().catch((error) => {
-    send({
-      error: {
-        message: error instanceof Error ? error.message : String(error),
-        name: error instanceof Error ? error.name : typeof error,
-      },
-      phase: "error",
-      requestId: request.requestId,
-    });
-  });
-});
-
-process.on("disconnect", () => process.exit(0));
-send({ phase: "booted" });
-`;
-}
-
-function isWorkerMessage(message: unknown): message is ConcurrencyWorkerMessage {
-  return typeof message === "object" && message !== null && "phase" in message;
-}
-
-async function waitForWorkerBoot(child: ReturnType<typeof spawn>): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("timeout waiting for concurrency worker startup"));
-    }, WORKER_BOOT_TIMEOUT_MS);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("error", onError);
-      child.off("exit", onExit);
-      child.off("message", onMessage);
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `concurrency worker exited during startup code=${String(code)} signal=${String(signal)}`,
-        ),
-      );
-    };
-    const onMessage = (message: unknown) => {
-      if (!isWorkerMessage(message) || message.phase !== "booted") {
-        return;
-      }
-      cleanup();
-      resolve();
-    };
-    child.once("error", onError);
-    child.once("exit", onExit);
-    child.on("message", onMessage);
-  });
-}
-
-async function getConcurrencyWorker(): Promise<ReturnType<typeof spawn>> {
-  if (concurrencyWorker) {
-    return concurrencyWorker;
-  }
-  const sessionAccessorUrl = pathToFileURL(
-    path.resolve("src/config/sessions/session-accessor.ts"),
-  ).href;
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "--eval",
-      createConcurrencyWorkerScript(sessionAccessorUrl),
-    ],
-    { stdio: ["ignore", "pipe", "pipe", "ipc"] },
-  );
-  try {
-    await waitForWorkerBoot(child);
-  } catch (error) {
-    child.kill();
-    throw error;
-  }
-  concurrencyWorker = child;
-  return child;
-}
-
-async function runConcurrencyScenario<TRequest extends ConcurrencyWorkerRequest>(
-  request: TRequest,
-  onReady: (value: ConcurrencyWorkerReady<TRequest>) => Promise<void> | void,
-): Promise<ConcurrencyWorkerResult<TRequest>> {
-  const child = await getConcurrencyWorker();
-  const requestId = ++nextRequestId;
-  return await new Promise<ConcurrencyWorkerResult<TRequest>>((resolve, reject) => {
-    let readyHandled = false;
-    const timeout = setTimeout(() => {
-      fail(new Error(`timeout waiting for concurrency worker ${request.kind}`));
-    }, SCENARIO_TIMEOUT_MS);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.off("error", onError);
-      child.off("exit", onExit);
-      child.off("message", onMessage);
-    };
-    const fail = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onError = (error: Error) => fail(error);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      fail(new Error(`concurrency worker exited code=${String(code)} signal=${String(signal)}`));
-    };
-    const onMessage = (message: unknown) => {
-      if (
-        !isWorkerMessage(message) ||
-        !("requestId" in message) ||
-        message.requestId !== requestId
-      ) {
-        return;
-      }
-      if (message.phase === "error") {
-        const error = new Error(message.error.message);
-        error.name = message.error.name;
-        fail(error);
-        return;
-      }
-      if (message.phase === "ready" && !readyHandled) {
-        readyHandled = true;
-        void Promise.resolve(onReady(message.value as ConcurrencyWorkerReady<TRequest>)).then(
-          () => {
-            child.send({ kind: "proceed", requestId }, (error) => {
-              if (error) {
-                fail(error);
-              }
-            });
-          },
-          fail,
-        );
-        return;
-      }
-      if (message.phase === "result") {
-        cleanup();
-        resolve(message.value as ConcurrencyWorkerResult<TRequest>);
-      }
-    };
-    child.once("error", onError);
-    child.once("exit", onExit);
-    child.on("message", onMessage);
-    child.send({ ...request, requestId }, (error) => {
-      if (error) {
-        fail(error);
-      }
-    });
-  });
-}
-
-async function waitForChild(child: ReturnType<typeof spawn>, label: string): Promise<void> {
-  let childStdout = "";
-  let childStderr = "";
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk) => {
-    childStdout += String(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    childStderr += String(chunk);
-  });
-
-  // The child can exit immediately before this waiter attaches. Honor an
-  // already-observed exit or the test will wait forever for a spent event.
-  const childExit =
-    child.exitCode !== null || child.signalCode !== null
-      ? { code: child.exitCode, signal: child.signalCode }
-      : await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-          (resolve, reject) => {
-            child.once("error", reject);
-            child.once("exit", (code, signal) => resolve({ code, signal }));
-          },
-        );
-  if (childExit.code !== 0) {
-    throw new Error(
-      `${label} child failed code=${String(childExit.code)} signal=${String(childExit.signal)}\nstdout:\n${childStdout}\nstderr:\n${childStderr}`,
-    );
-  }
-}
 
 describe("session accessor cross-process concurrency", () => {
   beforeAll(async () => {
@@ -435,15 +37,7 @@ describe("session accessor cross-process concurrency", () => {
   }, WORKER_BOOT_TIMEOUT_MS + 5_000);
 
   afterAll(async () => {
-    const child = concurrencyWorker;
-    concurrencyWorker = undefined;
-    if (!child) {
-      return;
-    }
-    if (child.exitCode === null && child.signalCode === null) {
-      child.send({ kind: "shutdown" });
-    }
-    await waitForChild(child, "concurrency worker shutdown");
+    await shutdownConcurrencyWorker();
   });
 
   it("observes a child that exited before the waiter attached", async () => {
@@ -742,4 +336,717 @@ describe("session accessor cross-process concurrency", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects a sync transcript rewrite after another process commits an append", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-transcript-rewrite-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-cross-process-transcript";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      const userMessageId = (
+        await appendTranscriptMessage(scope, {
+          cwd: tempDir,
+          eventId: "user-message",
+          message: { role: "user", content: "question" },
+        })
+      ).messageId;
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-transcript-rewrite",
+          sessionId,
+          storePath,
+          targetEntryId: userMessageId,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 1 });
+          // Foreign append lands after the worker's SessionManager.open() read
+          // but before its synchronous removeTrailingEntries() rewrite -- the
+          // exact window a fresh in-function read would already include,
+          // silently discarding this row. The worker's caller-tracked snapshot
+          // must still catch it.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "committed concurrent reply",
+              timestamp: Date.now(),
+            },
+            parentId: userMessageId,
+          });
+        },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        name: "SqliteTranscriptMutationConflictError",
+        message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
+      });
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "user-message",
+          message: expect.objectContaining({ role: "user", content: "question" }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          parentId: "user-message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "committed concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("silently drops a foreign append when the rewrite snapshot is a stale post-handshake refresh", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-append-race-bug-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-append-race-bug";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-append-race",
+          sessionId,
+          storePath,
+          useAtomicSnapshot: false,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 2 });
+          // Foreign append lands after the worker captured its stale nextEntries
+          // but before its separate post-handshake refresh -- the exact
+          // refreshPersistedRowSnapshot()-style gap ClawSweeper flagged.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, rewriteRejected: false });
+      // Bug reproduced: the stale refresh trivially matches the now-current DB
+      // (it already includes the foreign row), so the rewrite proceeds and
+      // silently deletes the foreign row since nextEntries never saw it.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "local-append",
+          message: expect.objectContaining({ role: "user", content: "local append" }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("rejects the rewrite and preserves a foreign append when the snapshot is captured atomically", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-append-race-fix-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-append-race-fix";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-append-race",
+          sessionId,
+          storePath,
+          useAtomicSnapshot: true,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 2 });
+          // Same foreign-append timing as the bug case above, but the worker
+          // now reuses the snapshot captured inside its own append transaction
+          // (before this gap ever ran) instead of re-reading afterward.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, rewriteRejected: true });
+      // Fix verified: the pre-gap snapshot correctly lacks the foreign row, so
+      // the rewrite is rejected and the foreign row survives untouched.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "local-append",
+          message: expect.objectContaining({ role: "user", content: "local append" }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("silently drops a foreign append when a second rewrite's snapshot is a stale post-commit refresh", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-rewrite-race-bug-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-rewrite-race-bug";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-rewrite-race",
+          sessionId,
+          storePath,
+          useAtomicSnapshot: false,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 2 });
+          // Foreign append lands after the worker's first rewrite committed but
+          // before its second rewrite -- the exact refreshPersistedRowSnapshot()
+          // gap ClawSweeper flagged at the rewrite call sites in
+          // session-manager-core.ts / session-manager-branching.ts.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, rewriteRejected: false });
+      // Bug reproduced: the stale post-commit refresh trivially matches the
+      // now-current DB (it already includes the foreign row), so the second
+      // rewrite proceeds and silently deletes the foreign row since its
+      // in-memory nextEvents never saw it.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "rewrite-a-target",
+          message: expect.objectContaining({ role: "assistant", content: "rewrite a" }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("rejects a second rewrite and preserves a foreign append when its snapshot is captured atomically", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-rewrite-race-fix-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-rewrite-race-fix";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-rewrite-race",
+          sessionId,
+          storePath,
+          useAtomicSnapshot: true,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 2 });
+          // Same foreign-append timing as the bug case above, but the worker's
+          // second rewrite now reuses the snapshot captured inside the first
+          // rewrite's own write transaction (before this gap ever ran)
+          // instead of a separate out-of-transaction refresh.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, rewriteRejected: true });
+      // Fix verified: the pre-gap snapshot correctly lacks the foreign row, so
+      // the second rewrite is rejected and the foreign row survives untouched.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "rewrite-a-target",
+          message: expect.objectContaining({ role: "assistant", content: "rewrite a" }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("rejects the first record and preserves a foreign append when the deferred header folds atomically", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-initial-header-race-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-initial-header-race";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-initial-header-race",
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          // SessionManager.open on an empty transcript defers the header, so it
+          // starts with zero entries and its tracked snapshot is empty.
+          expect(ready).toEqual({ eventCount: 0 });
+          // Foreign row lands in the gap between open() and the manager's first
+          // appendMessage; appendTranscriptMessage auto-creates the canonical
+          // header for the still-empty transcript. Pre-fix, the manager's first
+          // record ran the header append in a separate prior transaction that
+          // collided with that foreign-created header and threw an unclean
+          // transcript-event-not-appended error. The fold now revalidates the
+          // tracked empty snapshot inside the first record's own transaction,
+          // sees the foreign row, and rejects closed with the conflict error.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, appendRejected: true });
+      // Fix verified: the manager's deferred header never commits because its
+      // first record fails closed atomically instead of racing the header into
+      // a separate transaction, so the foreign append's row (and the header it
+      // auto-created) survive untouched.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("rebases and reloads a manager raw append when a foreign row lands before it", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-raw-append-race-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-raw-append-race";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      // Populate the transcript so the manager opens with a non-deferred header
+      // and a non-empty tracked snapshot -- the raw (non-message) append path,
+      // not the header-fold path.
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "seed-message",
+          parentId: null,
+          message: { role: "user", content: "seed" },
+        },
+      ]);
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-raw-append-race",
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          // Header filtered out of getEntries(); one seed message remains.
+          expect(ready).toEqual({ eventCount: 1 });
+          // Foreign row lands after the manager's open() read but before its raw
+          // appendModelChange, still declaring "seed-message" as its parent. The
+          // append core rebases that stale parentId onto the new tail (the same
+          // active-branch rebase message appends already get) instead of folding
+          // the foreign row into an unreconciled snapshot, and surfaces the rebase
+          // as effectiveParentId so the manager reloads rather than trusting a
+          // fileEntries view a later rewrite could otherwise drop the row from.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+            parentId: "seed-message",
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, entryCount: 3 });
+      // Fix verified: the raw append rebases onto the foreign row's id (surviving
+      // untouched) instead of the stale declared parent, and the manager's reload
+      // picks up all three post-rebase entries -- nothing is silently dropped.
+      const events = await loadTranscriptEvents(scope);
+      expect(events).toHaveLength(4);
+      expect(events[0]).toEqual(expect.objectContaining({ type: "session", id: sessionId }));
+      expect(events[1]).toEqual(
+        expect.objectContaining({
+          type: "message",
+          id: "seed-message",
+          message: expect.objectContaining({ role: "user", content: "seed" }),
+        }),
+      );
+      expect(events[2]).toEqual(
+        expect.objectContaining({
+          type: "message",
+          parentId: "seed-message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      );
+      const foreignMessageId = (events[2] as { id: string }).id;
+      expect(events[3]).toEqual(
+        expect.objectContaining({
+          type: "model_change",
+          parentId: foreignMessageId,
+          provider: "openclaw",
+          modelId: "sonnet-4.6",
+        }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("keeps an id-less foreign row alive after a manager active-branch append races it", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-foreign-id-less-race-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-foreign-id-less-race";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      // Same starting point as the raw-append-race test above: a non-deferred
+      // header and a non-empty tracked snapshot, so the manager's append below
+      // takes the active-branch tail-rebase path rather than the header-fold path.
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "seed-message",
+          parentId: null,
+          message: { role: "user", content: "seed" },
+        },
+      ]);
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-foreign-id-less-race",
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 1 });
+          // An id-less foreign row lands during the handshake gap, matching the
+          // real extensions/msteams FeedbackEvent shape exactly: no `id`, no
+          // `parentId`, appended via appendTranscriptEvent with no options --
+          // the same call recordChannelFeedbackEvent makes. It has no non-blank
+          // id, so it never gets a transcript_event_identities row and the
+          // tail-rebase parentId check the raw-append-race test above relies on
+          // cannot see it -- foreignRowDetected is the only signal available.
+          await appendTranscriptEvent(scope, {
+            type: "custom",
+            event: "feedback",
+            ts: Date.now(),
+            messageId: "seed-message",
+            value: "positive",
+            sessionKey: SESSION_KEY,
+            agentId: AGENT_ID,
+            conversationId: "conv-1",
+          });
+        },
+      );
+      // The worker's own model_change append is removed again by its
+      // removeTrailingEntries((entry) => entry.type === "model_change") call
+      // (see the worker script), which forces the real production rewrite
+      // path (replacePersistedTranscript) to run from this manager's
+      // in-memory fileEntries/opaqueFileEntries. getEntries() only counts
+      // indexed (id-bearing) fileEntries left after that removal -- just
+      // seed-message; the id-less feedback row is tracked separately as an
+      // opaque entry (see isIndexedSessionEntry) and is not reflected here
+      // either way, so entryCount alone cannot distinguish pre-fix from
+      // post-fix -- the persisted DB rows asserted below are the real proof.
+      expect(result).toEqual({ ok: true, entryCount: 1 });
+      // Fix verified: foreignRowDetected forced a reload right after the
+      // append, so this manager's opaqueFileEntries picked up the id-less
+      // feedback row before the rewrite ran, and the rewrite below preserves
+      // it. Pre-fix, the manager never observes the row-count mismatch (no
+      // parentId ever moved), so its in-memory opaqueFileEntries never
+      // learns about the foreign row, and the rewrite -- built purely from
+      // that stale in-memory state -- silently omits it: only 2 rows
+      // (header + seed-message) would remain, permanently dropping feedback.
+      const events = await loadTranscriptEvents(scope);
+      expect(events).toHaveLength(3);
+      expect(events[0]).toEqual(expect.objectContaining({ type: "session", id: sessionId }));
+      expect(events[1]).toEqual(
+        expect.objectContaining({
+          type: "message",
+          id: "seed-message",
+          message: expect.objectContaining({ role: "user", content: "seed" }),
+        }),
+      );
+      expect(events[2]).toEqual(
+        expect.objectContaining({
+          type: "custom",
+          event: "feedback",
+          messageId: "seed-message",
+          value: "positive",
+        }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("reloads the manager after a deferred-header conflict so a retry succeeds", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-initial-header-retry-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-initial-header-retry";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-initial-header-race",
+          retryAfterConflict: true,
+          sessionId,
+          storePath,
+        },
+        async (ready) => {
+          expect(ready).toEqual({ eventCount: 0 });
+          // Foreign row lands in the gap between open() and the manager's first
+          // appendMessage, so the deferred-header fold fails closed. The manager
+          // must reload durable state from that conflict; a retry on the SAME
+          // instance then observes the foreign header/row and commits instead of
+          // repeating the stale-snapshot conflict forever.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, appendRejected: true, retrySucceeded: true });
+      // Fix verified: the first record rejected closed and reloaded the manager,
+      // so the retry appended a fresh row after the foreign header + reply rather
+      // than repeating the conflict.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ role: "user", content: "manager retry" }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("rejects a side-mode append and preserves a foreign append when a foreign row lands before it", async () => {
+    const tempDir = tempDirs.make("openclaw-sync-side-mode-append-race-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionId = "sync-side-mode-append-race";
+    const scope = {
+      agentId: AGENT_ID,
+      sessionId,
+      sessionKey: SESSION_KEY,
+      storePath,
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: Date.now(),
+      });
+      // Populate the transcript so the manager opens with a non-deferred header
+      // and a non-empty tracked snapshot -- same starting point as the raw-append
+      // race above, but this worker then enters side-append mode (a leaf control
+      // with appendMode: "side", the same path compaction/custom_message side
+      // writes use) before the handshake gap.
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "message",
+          id: "seed-message",
+          parentId: null,
+          message: { role: "user", content: "seed" },
+        },
+      ]);
+
+      const result = await runConcurrencyScenario(
+        {
+          kind: "sync-side-mode-append-race",
+          sessionId,
+          storePath,
+          targetEntryId: "seed-message",
+        },
+        async (ready) => {
+          // Header and leaf control filtered out of getEntries(); one seed
+          // message remains.
+          expect(ready).toEqual({ eventCount: 1 });
+          // Foreign row lands after the manager entered side mode but before its
+          // side-mode append. A side-mode append declares its exact parentId and
+          // never rebases, so it carries no active-branch signal for appendEntry
+          // to detect the foreign row through -- the manager's snapshot guard is
+          // the only thing that can reject this instead of silently adopting the
+          // contaminated snapshot a later rewrite could then validate and delete
+          // the foreign row from.
+          await appendTranscriptMessage(scope, {
+            cwd: tempDir,
+            message: {
+              role: "assistant",
+              content: "foreign concurrent reply",
+              timestamp: Date.now(),
+            },
+            parentId: "seed-message",
+          });
+        },
+      );
+      expect(result).toEqual({ ok: true, appendRejected: true });
+      // Fix verified: the side-mode append is rejected closed instead of
+      // silently folding the foreign row into the snapshot it would otherwise
+      // adopt, so the foreign row survives untouched and no side note lands.
+      // The leaf-control row that entered side mode is itself a legitimate,
+      // already-committed append from before the handshake gap.
+      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+        expect.objectContaining({ type: "session", id: sessionId }),
+        expect.objectContaining({
+          type: "message",
+          id: "seed-message",
+          message: expect.objectContaining({ role: "user", content: "seed" }),
+        }),
+        expect.objectContaining({ type: "leaf", targetId: "seed-message" }),
+        expect.objectContaining({
+          type: "message",
+          parentId: "seed-message",
+          message: expect.objectContaining({
+            role: "assistant",
+            content: "foreign concurrent reply",
+          }),
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });
