@@ -64,7 +64,12 @@ describe("prepareCliBundleMcpConfig gemini", () => {
       tools?: { exclude?: string[] };
       mcpServers?: Record<
         string,
-        { url?: string; headers?: Record<string, string>; excludeTools?: string[] }
+        {
+          url?: string;
+          headers?: Record<string, string>;
+          excludeTools?: string[];
+          timeout?: number;
+        }
       >;
     };
     expect(raw.mcp?.allowed).toEqual(["openclaw"]);
@@ -74,6 +79,7 @@ describe("prepareCliBundleMcpConfig gemini", () => {
       "tool-events,inline-widgets",
     );
     expect(raw.mcpServers?.openclaw?.excludeTools).toEqual(["delete_docs", "global_delete"]);
+    expect(raw.mcpServers?.openclaw?.timeout).toBeUndefined();
     expect(raw.tools?.exclude).toEqual(["google_web_search"]);
 
     await prepared.cleanup?.();

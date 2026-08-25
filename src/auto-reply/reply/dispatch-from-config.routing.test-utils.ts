@@ -5,7 +5,6 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  askUserMocks,
   createDispatcher,
   emptyConfig,
   hookMocks,
@@ -28,7 +27,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
-import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
+import { ReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -757,8 +756,8 @@ describe("dispatchReplyFromConfig", () => {
 
       if (expectedOutcome) {
         const error = await dispatch.catch((caught: unknown) => caught);
-        expect(isReplyDispatchDeliveryError(error)).toBe(true);
-        if (isReplyDispatchDeliveryError(error)) {
+        expect(error).toBeInstanceOf(ReplyDispatchDeliveryError);
+        if (error instanceof ReplyDispatchDeliveryError) {
           expect(error.outcome).toBe(expectedOutcome);
         }
       } else if (rejects) {
@@ -844,32 +843,6 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("drops ask_user prompts that terminalize before dispatcher delivery", async () => {
-    setNoAbort();
-    askUserMocks.isAskUserPromptPending.mockResolvedValue(false);
-    const payload = {
-      text: "Question for you: Where should this deploy?",
-      channelData: { askUser: { questionId: "question-terminal-before-delivery" } },
-    } satisfies ReplyPayload;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await requireToolResultHandler(opts?.onToolResult)(payload);
-      return undefined;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-
-    expect(askUserMocks.isAskUserPromptPending).toHaveBeenCalledWith(
-      "question-terminal-before-delivery",
-    );
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 
   it("does not synthesize hidden text-only tool summaries into TTS media", async () => {

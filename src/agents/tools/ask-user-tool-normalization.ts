@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
 import { ToolInputError } from "./common.js";
 
-export const DEFAULT_ASK_USER_TIMEOUT_SECONDS = 900;
+const DEFAULT_ASK_USER_TIMEOUT_SECONDS = 900;
 const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
 const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]*$/;

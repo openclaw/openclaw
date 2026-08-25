@@ -436,12 +436,17 @@ describe("prepareCliBundleMcpConfig", () => {
 
     const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
     const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+      mcpServers?: Record<
+        string,
+        { url?: string; headers?: Record<string, string>; timeout?: number }
+      >;
     };
     expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer lb-tk-123");
     expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("");
+    expect(raw.mcpServers?.openclaw?.timeout).toBe(3_610_000);
+    expect(raw.mcpServers?.bundleProbe?.timeout).toBeUndefined();
     await prepareCliBundleMcpCaptureAttempt({
       mode: "claude-config-file",
       backend: prepared.backend,

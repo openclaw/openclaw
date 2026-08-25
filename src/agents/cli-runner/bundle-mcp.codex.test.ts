@@ -80,6 +80,7 @@ describe("prepareCliBundleMcpConfig codex", () => {
       "-c",
       'mcp_servers={ openclaw = { url = "http://127.0.0.1:23119/mcp", default_tools_approval_mode = "approve", bearer_token_env_var = "OPENCLAW_MCP_TOKEN", env_http_headers = { x-session-key = "OPENCLAW_MCP_SESSION_KEY", x-openclaw-cli-capture-key = "OPENCLAW_MCP_CLI_CAPTURE_KEY" } } }',
     ]);
+    expect(prepared.backend.args?.join(" ")).not.toContain("3610000");
     expect(prepared.cleanup).toBeUndefined();
   });
 });

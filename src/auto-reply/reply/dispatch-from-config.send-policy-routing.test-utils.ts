@@ -2,7 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import {
-  buildAgentHarnessQuestionPromptPayload,
+  deliverAgentHarnessQuestionPrompt,
   deliverAgentHarnessUserInputPrompt,
 } from "../../agents/harness/user-input-bridge.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -171,19 +171,14 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     {
       name: "gateway-backed choice",
       deliver: async (onBlockReply: NonNullable<GetReplyOptions["onBlockReply"]>) => {
-        await onBlockReply(
-          buildAgentHarnessQuestionPromptPayload({
-            questionId: "question-owned-by-harness",
-            questions: [
-              {
-                id: "color",
-                header: "Color",
-                question: "Choose a color",
-                options: [{ label: "Red" }, { label: "Blue" }],
-              },
-            ],
-          }),
-        );
+        await deliverAgentHarnessQuestionPrompt({ onBlockReply }, "question-owned-by-harness", [
+          {
+            id: "color",
+            header: "Color",
+            question: "Choose a color",
+            options: [{ label: "Red" }, { label: "Blue" }],
+          },
+        ]);
       },
     },
     {

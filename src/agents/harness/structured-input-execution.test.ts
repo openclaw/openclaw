@@ -3,7 +3,10 @@ import {
   claimPendingAgentQuestionAnswer,
   type AgentHarnessQuestionGatewayCall,
 } from "./gateway-question.js";
-import { runStructuredInput } from "./structured-input-execution.js";
+import {
+  createStructuredInputCapability,
+  runStructuredInput,
+} from "./structured-input-execution.js";
 import {
   compileStructuredInputForm,
   compileStructuredInputUrl,
@@ -76,6 +79,120 @@ async function claimEventually(sessionKey: string, text: string): Promise<boolea
 }
 
 describe("structured input execution", () => {
+  it("binds exact call ids, tracks only live deadlines, and supports a warm second turn", async () => {
+    const waits = new Map<string, (value: unknown) => void>();
+    const requested: string[] = [];
+    const gatewayCall: AgentHarnessQuestionGatewayCall = vi.fn(async (method, _opts, rawParams) => {
+      const params = rawParams as { id: string };
+      if (method === "question.request") {
+        requested.push(params.id);
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => waits.set(params.id, resolve));
+      }
+      return { status: "cancelled" };
+    });
+    const onBlockReply = vi.fn(async () => undefined);
+    const capability = createStructuredInputCapability({
+      sessionKey: "agent:main:capability",
+      runId: "run-capability",
+      gatewayCall,
+      delivery: { onBlockReply },
+    });
+    const input = compileForm({ answer: { type: "string" } });
+
+    const first = capability.request({ toolCallId: "mcp-first", input, timeoutMs: 3_600_000 });
+    await vi.waitFor(() => expect(waits.has("mcp-first")).toBe(true));
+    expect(capability.blockingDeadlineMs()).toBeGreaterThan(Date.now() + 3_590_000);
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    waits.get("mcp-first")?.({
+      status: "answered",
+      answers: { answers: { answer: ["one"] } },
+    });
+    await expect(first).resolves.toMatchObject({ status: "answered" });
+    expect(capability.blockingDeadlineMs()).toBeUndefined();
+
+    const second = capability.request({ toolCallId: "mcp-second", input, timeoutMs: 60_000 });
+    await vi.waitFor(() => expect(waits.has("mcp-second")).toBe(true));
+    waits.get("mcp-second")?.({
+      status: "answered",
+      answers: { answers: { answer: ["two"] } },
+    });
+    await expect(second).resolves.toMatchObject({ status: "answered" });
+    expect(requested).toEqual(["mcp-first", "mcp-second"]);
+  });
+
+  it("rejects concurrent requests before registering a second question", async () => {
+    let settle!: (value: unknown) => void;
+    const gatewayCall: AgentHarnessQuestionGatewayCall = vi.fn(async (method, _opts, rawParams) => {
+      const params = rawParams as { id: string };
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          settle = resolve;
+        });
+      }
+      return { status: "cancelled" };
+    });
+    const capability = createStructuredInputCapability({
+      sessionKey: "agent:main:concurrent",
+      gatewayCall,
+      delivery: { onBlockReply: vi.fn() },
+    });
+    const input = compileForm({ answer: { type: "string" } });
+    const first = capability.request({ toolCallId: "call-one", input, timeoutMs: 60_000 });
+    await vi.waitFor(() =>
+      expect(
+        vi.mocked(gatewayCall).mock.calls.some(([method]) => method === "question.waitAnswer"),
+      ).toBe(true),
+    );
+
+    await expect(
+      capability.request({ toolCallId: "call-two", input, timeoutMs: 60_000 }),
+    ).rejects.toThrow("session already has a pending agent input request");
+    expect(
+      vi.mocked(gatewayCall).mock.calls.filter(([method]) => method === "question.request"),
+    ).toHaveLength(1);
+    settle({ status: "cancelled" });
+    await first;
+  });
+
+  it("revokes retained authority and cancels its live question", async () => {
+    const gatewayCall: AgentHarnessQuestionGatewayCall = vi.fn(async (method, _opts, rawParams) => {
+      const params = rawParams as { id: string };
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise(() => undefined);
+      }
+      return { status: "cancelled" };
+    });
+    const capability = createStructuredInputCapability({
+      sessionKey: "agent:main:revoke",
+      gatewayCall,
+      delivery: { onBlockReply: vi.fn() },
+    });
+    const input = compileForm({ answer: { type: "string" } });
+    const pending = capability.request({ toolCallId: "call-revoke", input, timeoutMs: 60_000 });
+    await vi.waitFor(() => expect(capability.blockingDeadlineMs()).toBeDefined());
+
+    capability.close("run ended");
+    await expect(pending).resolves.toMatchObject({ status: "cancelled" });
+    await expect(
+      capability.request({ toolCallId: "call-stale", input, timeoutMs: 60_000 }),
+    ).resolves.toMatchObject({ status: "cancelled" });
+    expect(capability.blockingDeadlineMs()).toBeUndefined();
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "question.resolve",
+      expect.anything(),
+      expect.objectContaining({ id: "call-revoke", cancel: true }),
+    );
+  });
+
   it("batches ordinary questions by three and isolates secret input from Gateway records", async () => {
     const gateway = createGateway((questions) =>
       Object.fromEntries(questions.map((question) => [question.questionId, [question.questionId]])),

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -255,6 +255,40 @@ describe("mcp-grant-store", () => {
     expect(grant.context).not.toHaveProperty("admittedRunContext");
   });
 
+  it("keeps structured-input authority private and revokes it with the grant", async () => {
+    const close = vi.fn();
+    const structuredInputCapability = {
+      request: vi.fn(),
+      blockingDeadlineMs: vi.fn(),
+      onBlockingDeadlineChange: vi.fn(() => () => undefined),
+      close,
+    };
+    const grant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:first", senderIsOwner: false },
+      runtimeOwnerToken: "runtime-one",
+      admittedRunContext: await admitted("run-private-input"),
+      structuredInputCapability,
+    });
+    activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: "runtime-one",
+      captureKey: "capture-a",
+    });
+
+    expect(grant).not.toHaveProperty("structuredInputCapability");
+    expect(grant.context).not.toHaveProperty("structuredInputCapability");
+    expect(
+      resolveMcpLoopbackClientGrant({
+        token: grant.token,
+        runtimeOwnerToken: "runtime-one",
+        captureKey: "capture-a",
+      })?.structuredInputCapability,
+    ).toBe(structuredInputCapability);
+
+    expect(revokeMcpLoopbackClientGrant(grant.token)).toBe(true);
+    expect(close).toHaveBeenCalledExactlyOnceWith("MCP grant revoked");
+  });
+
   it("rejects an active bearer and capture after its admitted authority closes", async () => {
     const admittedRunContext = await admitted("run-closed-grant");
     const grant = mintMcpLoopbackClientGrant({
@@ -398,6 +432,61 @@ describe("mcp-grant-store", () => {
       { token: stable.token, runtimeOwnerToken: "runtime-one" },
       { token: next.token, runtimeOwnerToken: "runtime-one" },
     ]);
+  });
+
+  it("moves fresh structured-input authority to a warm bearer and closes the stale run", async () => {
+    const staleClose = vi.fn();
+    const nextClose = vi.fn();
+    const capability = (close: () => void) => ({
+      request: vi.fn(),
+      blockingDeadlineMs: vi.fn(),
+      onBlockingDeadlineChange: vi.fn(() => () => undefined),
+      close,
+    });
+    const stable = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:first", senderIsOwner: false },
+      runtimeOwnerToken: "runtime-one",
+      admittedRunContext: await admitted("run-warm-first"),
+      structuredInputCapability: capability(staleClose),
+    });
+    const nextCapability = capability(nextClose);
+    const next = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:next", senderIsOwner: false },
+      runtimeOwnerToken: "runtime-one",
+      admittedRunContext: await admitted("run-warm-next"),
+      structuredInputCapability: nextCapability,
+    });
+
+    expect(
+      transferMcpLoopbackClientGrant({
+        sourceToken: next.token,
+        targetToken: stable.token,
+        runtimeOwnerToken: "runtime-one",
+      }),
+    ).toBe(true);
+    expect(staleClose).toHaveBeenCalledExactlyOnceWith("MCP grant transferred to a newer run");
+    expect(nextClose).not.toHaveBeenCalled();
+    expect(
+      activateMcpLoopbackClientGrantCapture({
+        token: stable.token,
+        runtimeOwnerToken: "runtime-one",
+        captureKey: "warm-capture",
+      }),
+    ).toBe(true);
+    expect(
+      resolveMcpLoopbackClientGrant({
+        token: stable.token,
+        runtimeOwnerToken: "runtime-one",
+        captureKey: "warm-capture",
+      })?.structuredInputCapability,
+    ).toBe(nextCapability);
+    expect(
+      activateMcpLoopbackClientGrantCapture({
+        token: next.token,
+        runtimeOwnerToken: "runtime-one",
+        captureKey: "stale-source",
+      }),
+    ).toBe(false);
   });
 
   it("revokes client grants by token or exact Gateway runtime", () => {

@@ -19,18 +19,6 @@ export class ReplyDispatchDeliveryError extends Error {
   }
 }
 
-export function isReplyDispatchDeliveryError(error: unknown): error is ReplyDispatchDeliveryError {
-  return (
-    isRecord(error) &&
-    error.code === REPLY_DISPATCH_DELIVERY_ERROR_CODE &&
-    (error.outcome === "delivered" ||
-      error.outcome === "delivered-not-visible" ||
-      error.outcome === "cancelled" ||
-      error.outcome === "failed-before-deliver" ||
-      error.outcome === "failed-deliver")
-  );
-}
-
 export function isReplyDispatchProvenInvisible(outcome: ReplyDispatchDeliveryOutcome): boolean {
   return outcome !== "delivered" && outcome !== "failed-deliver";
 }

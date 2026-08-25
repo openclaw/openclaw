@@ -11,10 +11,12 @@ import {
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { createStructuredInputCapability } from "../../harness/structured-input-execution.js";
 import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
@@ -39,6 +41,7 @@ import type {
   CronCreatorToolAllowlistEntry,
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
+import { callGatewayTool } from "../../tools/gateway.js";
 import { log } from "../logger.js";
 import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
@@ -153,6 +156,30 @@ export function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
+  const assertRunActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    params.runAbortController.signal,
+  );
+  const structuredInputCapability = createStructuredInputCapability({
+    sessionKey: attempt.sessionKey ?? params.sandboxSessionKey,
+    agentId: params.sessionAgentId,
+    runId: attempt.runId,
+    gatewayCall: callGatewayTool,
+    delivery: {
+      onBlockReply: attempt.onBlockReply,
+      onPartialReply: attempt.onPartialReply,
+    },
+    signal: params.runAbortController.signal,
+    isActive: () => {
+      try {
+        assertRunActive?.();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+  runCleanups.push(async (reason) => structuredInputCapability.close(reason));
   const spawnWorkspaceDir =
     params.effectiveCwd !== params.effectiveWorkspace
       ? params.resolvedWorkspace
@@ -285,6 +312,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
               : undefined,
           sessionId: attempt.sessionId,
           runId: attempt.runId,
+          structuredInputCapability,
           operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
           conversationRecall: attempt.conversationRecall,
           approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,

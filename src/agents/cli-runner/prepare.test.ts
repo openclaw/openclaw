@@ -3273,6 +3273,7 @@ describe("prepareCliRunContext", () => {
         workspaceDir: context.workspaceDir,
         modelProvider: "anthropic",
         modelId: "test-model",
+        modelHasVision: undefined,
         messageProvider: "discord",
         clientCaps: ["tool-events", "inline-widgets"],
         currentChannelId: "telegram:-100123:topic:42",
@@ -3282,6 +3283,7 @@ describe("prepareCliRunContext", () => {
         accountId: undefined,
         inboundEventKind: "room_event",
         sourceReplyDeliveryMode: "message_tool_only",
+        replyToMode: undefined,
         taskSuggestionDeliveryMode: "gateway",
         requireExplicitMessageTarget: true,
         senderIsOwner: false,
@@ -3321,6 +3323,7 @@ describe("prepareCliRunContext", () => {
       },
       runtimeOwnerToken: "loopback-owner-token",
       admittedRunContext: context.params.admittedRunContext,
+      structuredInputCapability: context.structuredInputCapability,
       toolAuth: {
         agentDir: expect.any(String),
         store: expect.objectContaining({ version: 1, profiles: {} }),

@@ -18,7 +18,7 @@ import {
 const QUESTION_BATCH_SIZE = 3;
 const STATUS_TEXT_LIMIT = 1_024;
 
-type StructuredInputExecutionResult =
+export type StructuredInputExecutionResult =
   | {
       status: "answered";
       answers: Record<string, string[]>;
@@ -39,6 +39,8 @@ type StructuredInputExecutionParams = {
   signal?: AbortSignal;
   isActive?: () => boolean;
   questionId?: (batch: number) => string | undefined;
+  onQuestionPending?: (questionId: string, expiresAtMs: number) => void;
+  onQuestionSettled?: (questionId: string) => void;
   promptOptions?: AgentHarnessUserInputPromptOptions & {
     unsupportedIntro?: string;
     urlIntro?: string;
@@ -159,27 +161,152 @@ async function runForm(
   return { status: "answered", answers, content: Object.fromEntries(content) };
 }
 
-function ask(
+async function ask(
   params: StructuredInputExecutionParams,
   questions: readonly AgentHarnessUserInputQuestion[],
   batch: number,
   intro: string | undefined,
 ): Promise<QuestionWaitAnswerResult> {
-  return runAgentHarnessGatewayQuestion({
-    questions,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    runId: params.runId,
-    timeoutMs: params.timeoutMs,
-    gatewayCall: params.gatewayCall,
-    delivery: params.delivery,
-    promptOptions: {
-      ...params.promptOptions,
-      ...(intro ? { intro } : {}),
+  const questionId = params.questionId?.(batch);
+  if (questionId) {
+    params.onQuestionPending?.(questionId, Date.now() + params.timeoutMs + 10_000);
+  }
+  try {
+    return await runAgentHarnessGatewayQuestion({
+      questions,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      runId: params.runId,
+      timeoutMs: params.timeoutMs,
+      gatewayCall: params.gatewayCall,
+      delivery: params.delivery,
+      promptOptions: {
+        ...params.promptOptions,
+        ...(intro ? { intro } : {}),
+      },
+      signal: params.signal,
+      questionId,
+    });
+  } finally {
+    if (questionId) {
+      params.onQuestionSettled?.(questionId);
+    }
+  }
+}
+
+export type StructuredInputCapability = {
+  request: (params: {
+    toolCallId: string;
+    input: StructuredInputCompileResult;
+    timeoutMs: number;
+    signal?: AbortSignal;
+    promptOptions?: StructuredInputExecutionParams["promptOptions"];
+  }) => Promise<StructuredInputExecutionResult>;
+  blockingDeadlineMs: () => number | undefined;
+  onBlockingDeadlineChange: (listener: () => void) => () => void;
+  close: (reason?: string) => void;
+};
+
+/** Binds structured input to one exact host run without exposing callable authority to children. */
+export function createStructuredInputCapability(
+  params: Omit<
+    StructuredInputExecutionParams,
+    | "input"
+    | "timeoutMs"
+    | "signal"
+    | "questionId"
+    | "promptOptions"
+    | "onQuestionPending"
+    | "onQuestionSettled"
+  > & { signal?: AbortSignal },
+): StructuredInputCapability {
+  const controller = new AbortController();
+  const deadlines = new Map<string, number>();
+  const deadlineListeners = new Set<() => void>();
+  let activeToolCallId: string | undefined;
+  let closed = false;
+  const isCapabilityActive = () =>
+    !closed &&
+    !controller.signal.aborted &&
+    params.signal?.aborted !== true &&
+    (params.isActive?.() ?? true);
+
+  return {
+    request: async (request) => {
+      const toolCallId = request.toolCallId.trim();
+      if (!toolCallId) {
+        throw new Error("structured input requires an exact tool call id");
+      }
+      if (!isCapabilityActive()) {
+        return { status: "cancelled", message: "Input request is no longer active." };
+      }
+      if (activeToolCallId) {
+        throw new Error("session already has a pending agent input request");
+      }
+      activeToolCallId = toolCallId;
+      const signal = request.signal
+        ? AbortSignal.any([controller.signal, request.signal])
+        : controller.signal;
+      try {
+        const result = await runStructuredInput({
+          ...params,
+          input: request.input,
+          timeoutMs: request.timeoutMs,
+          signal,
+          promptOptions: request.promptOptions,
+          isActive: isCapabilityActive,
+          questionId: (batch) => (batch === 0 ? toolCallId : `${toolCallId}:${batch}`),
+          onQuestionPending: (questionId, expiresAtMs) => {
+            deadlines.set(questionId, expiresAtMs);
+            for (const listener of deadlineListeners) {
+              listener();
+            }
+          },
+          onQuestionSettled: (questionId) => {
+            deadlines.delete(questionId);
+            for (const listener of deadlineListeners) {
+              listener();
+            }
+          },
+        });
+        return isCapabilityActive()
+          ? result
+          : { status: "cancelled", message: "Input request is no longer active." };
+      } finally {
+        for (const questionId of deadlines.keys()) {
+          if (questionId === toolCallId || questionId.startsWith(`${toolCallId}:`)) {
+            deadlines.delete(questionId);
+          }
+        }
+        if (activeToolCallId === toolCallId) {
+          activeToolCallId = undefined;
+        }
+      }
     },
-    signal: params.signal,
-    questionId: params.questionId?.(batch),
-  });
+    blockingDeadlineMs: () => {
+      let deadline: number | undefined;
+      for (const value of deadlines.values()) {
+        deadline = Math.max(deadline ?? value, value);
+      }
+      return deadline;
+    },
+    onBlockingDeadlineChange: (listener) => {
+      deadlineListeners.add(listener);
+      return () => deadlineListeners.delete(listener);
+    },
+    close: (reason = "structured input capability closed") => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      deadlines.clear();
+      for (const listener of deadlineListeners) {
+        listener();
+      }
+      deadlineListeners.clear();
+      controller.abort(new Error(reason));
+    },
+  };
 }
 
 function isActive(params: StructuredInputExecutionParams): boolean {

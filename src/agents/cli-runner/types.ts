@@ -60,6 +60,7 @@ import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import type { StructuredInputCapability } from "../harness/structured-input-execution.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -379,4 +380,6 @@ export type PreparedCliRunContext = {
   resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
+  /** Host-only operator input authority shared by native and loopback tools. */
+  structuredInputCapability: StructuredInputCapability;
 };

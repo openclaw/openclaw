@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import type { StructuredInputCapability } from "./harness/structured-input-execution.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -24,6 +25,8 @@ export type OpenClawToolsOptions = {
   runSessionKey?: string;
   agentChannel?: string;
   runId?: string;
+  /** Host-only input authority bound to the exact active run. */
+  structuredInputCapability?: StructuredInputCapability;
   agentAccountId?: string;
   /** Trusted account used for authorization; delivery keeps agentAccountId. */
   gatewayCallerAccountId?: string;

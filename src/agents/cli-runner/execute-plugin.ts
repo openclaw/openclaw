@@ -16,9 +16,7 @@ import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import { isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
-import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
-import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
   createCliLiveSessionCapability,
@@ -133,7 +131,6 @@ function cancelUserInput(message: string): CliBackendUserInputResult {
 function createPluginUserInputHandler(params: {
   context: PreparedCliRunContext;
   abortSignal: AbortSignal;
-  onPendingInput: (delta: 1 | -1) => void;
 }): (request: CliBackendUserInputRequest) => Promise<CliBackendUserInputResult> {
   const run = params.context.params;
   return async (request) => {
@@ -169,9 +166,13 @@ function createPluginUserInputHandler(params: {
       return cancelUserInput("OpenClaw cancelled an invalid operator input request.");
     }
 
-    params.onPendingInput(1);
     try {
-      const result = await runStructuredInput({
+      const toolCallId = request.toolCallId?.trim();
+      if (!toolCallId) {
+        return cancelUserInput("OpenClaw cancelled operator input without an exact tool call id.");
+      }
+      const result = await params.context.structuredInputCapability.request({
+        toolCallId,
         input: compileStructuredInputQuestions({
           questions: request.questions.map((question) => ({
             ...question,
@@ -179,25 +180,8 @@ function createPluginUserInputHandler(params: {
           })),
           intro: request.intro?.trim() || "Agent needs input:",
         }),
-        sessionKey: run.sessionKey ?? run.sessionId,
-        agentId: run.agentId,
-        runId: run.runId,
         timeoutMs: run.timeoutMs,
-        gatewayCall: callGatewayTool,
-        delivery: {
-          onBlockReply: run.onBlockReply,
-          onPartialReply: run.onPartialReply,
-        },
         signal,
-        isActive: () => {
-          try {
-            assertActive();
-            return true;
-          } catch {
-            return false;
-          }
-        },
-        questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
       });
       try {
         assertActive();
@@ -216,8 +200,6 @@ function createPluginUserInputHandler(params: {
       return cancelUserInput(
         "OpenClaw could not collect operator input; continue with your best judgment.",
       );
-    } finally {
-      params.onPendingInput(-1);
     }
   };
 }
@@ -350,8 +332,17 @@ export async function executePluginOwnedProcess(params: {
         allowResumeControlOnlyRetry: true,
         outstandingWorkGraceMs: BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
       });
-      if (decision.deferMs !== undefined) {
-        resetNoOutputTimer(decision.deferMs);
+      const blockingDeadlineMs = params.context.structuredInputCapability.blockingDeadlineMs();
+      const blockingInputDelayMs =
+        blockingDeadlineMs === undefined
+          ? undefined
+          : Math.min(
+              Math.max(0, blockingDeadlineMs - Date.now()),
+              noOutputTimeoutMs ?? Number.POSITIVE_INFINITY,
+            );
+      const deferMs = Math.max(decision.deferMs ?? 0, blockingInputDelayMs ?? 0);
+      if (deferMs > 0) {
+        resetNoOutputTimer(deferMs);
         return;
       }
       termination.reason = "no-output-timeout";
@@ -359,6 +350,8 @@ export async function executePluginOwnedProcess(params: {
       controller.abort(decision.error);
     }, delayMs);
   };
+  const unsubscribeBlockingDeadline =
+    params.context.structuredInputCapability.onBlockingDeadlineChange(() => resetNoOutputTimer());
 
   const replyBackendHandle = run.replyOperation
     ? {
@@ -433,9 +426,6 @@ export async function executePluginOwnedProcess(params: {
       requestUserInput: createPluginUserInputHandler({
         context: params.context,
         abortSignal: signal,
-        onPendingInput: (delta) => {
-          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
-        },
       }),
     });
     iterator = execution[Symbol.asyncIterator]();
@@ -492,6 +482,7 @@ export async function executePluginOwnedProcess(params: {
   } finally {
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
+    unsubscribeBlockingDeadline();
     // Permission callbacks can be retained by the plugin or its subprocess.
     // Closing the turn fences those capabilities before any outer cleanup runs.
     if (!controller.signal.aborted) {

@@ -26,52 +26,17 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { collectMessagingMediaUrlsFromRecord } from "./embedded-agent-tool-media.js";
 import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
-import { buildAgentHarnessQuestionPromptPayload } from "./harness/user-input-bridge.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import {
-  cancelAskUserPromptDelivery,
-  normalizeAskUserParams,
-  reserveAskUserPromptDelivery,
-  settleAskUserPromptDelivery,
-  waitForAskUserPromptReady,
-} from "./tools/ask-user-tool.js";
 
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
   edit: REQUIRED_PARAM_GROUPS.edit,
 } satisfies Record<string, readonly RequiredParamGroup[]>;
-
-function buildAskUserPromptPayload(
-  toolCallId: string,
-  sessionKey: string | undefined,
-  runId: string,
-  agentId: string | undefined,
-  args: unknown,
-) {
-  try {
-    const { questions, timeoutSeconds } = normalizeAskUserParams(args);
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId,
-      sessionKey,
-      runId,
-      agentId,
-      questions,
-      timeoutSeconds,
-    });
-    if (!reservation) {
-      return undefined;
-    }
-    return reservation;
-  } catch {
-    // Argument validation owns malformed calls; do not deliver an unusable prompt first.
-    return undefined;
-  }
-}
 
 function getRequiredParamGroupsForTool(
   toolName: string,
@@ -323,47 +288,14 @@ export function handleToolExecutionStart(
     lifecycleProvenance?: "nested";
   },
 ): void | Promise<void> {
-  const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
-  const askUserPromptReservation =
-    startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(
-          evt.toolCallId,
-          ctx.params.sessionKey,
-          ctx.params.runId,
-          ctx.params.agentId,
-          evt.args,
-        )
-      : undefined;
-  const cancelAskUserPromptReservation = () => {
-    if (askUserPromptReservation) {
-      cancelAskUserPromptDelivery(
-        evt.toolCallId,
-        ctx.params.sessionKey,
-        ctx.params.runId,
-        ctx.params.agentId,
-      );
-    }
-  };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    let onBlockReplyFlushResult: void | Promise<void>;
-    try {
-      onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
-        reason: "tool_start",
-        assistantMessageIndex: ctx.state.assistantMessageIndex,
-      });
-    } catch (error) {
-      cancelAskUserPromptReservation();
-      throw error;
-    }
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+      reason: "tool_start",
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+    });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(
-        () => continueToolExecutionStart(),
-        (error: unknown) => {
-          cancelAskUserPromptReservation();
-          throw error;
-        },
-      );
+      return onBlockReplyFlushResult.then(() => continueToolExecutionStart());
     }
     return continueToolExecutionStart();
   };
@@ -585,57 +517,15 @@ export function handleToolExecutionStart(
         }
       }
     }
-
-    if (toolName === "ask_user" && ctx.params.onToolResult) {
-      const payload = askUserPromptReservation;
-      if (payload) {
-        const questionId = payload.questionId;
-        void waitForAskUserPromptReady(questionId)
-          .then((questions) => {
-            if (!questions) {
-              return;
-            }
-            return ctx.params.onToolResult?.(
-              buildAgentHarnessQuestionPromptPayload({
-                questionId,
-                questions: questions.map(({ questionId: id, ...question }) => ({
-                  ...question,
-                  id,
-                })),
-                options: { intro: "Question for you:" },
-              }),
-            );
-          })
-          .then(
-            () => settleAskUserPromptDelivery(questionId),
-            (error: unknown) => {
-              settleAskUserPromptDelivery(questionId, error);
-              ctx.log.warn(`failed to deliver ask_user prompt: ${String(error)}`);
-            },
-          );
-      }
-    }
   };
 
   // Only the outer provider tool owns the block-reply presentation boundary.
   if (evt.lifecycleProvenance === "nested") {
     return continueToolExecutionStart();
   }
-  let flushBlockReplyBufferResult: void | Promise<void>;
-  try {
-    flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
-  } catch (error) {
-    cancelAskUserPromptReservation();
-    throw error;
-  }
+  const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
   if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(
-      () => continueAfterBlockReplyFlush(),
-      (error: unknown) => {
-        cancelAskUserPromptReservation();
-        throw error;
-      },
-    );
+    return flushBlockReplyBufferResult.then(() => continueAfterBlockReplyFlush());
   }
   return continueAfterBlockReplyFlush();
 }

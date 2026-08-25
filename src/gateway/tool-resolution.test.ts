@@ -107,6 +107,39 @@ describe("resolveGatewayScopedTools", () => {
     expect(imageTool?.description).toContain("private model context");
   });
 
+  it("injects private structured-input authority into the loopback ask_user tool", async () => {
+    const request = vi.fn(async () => ({ status: "cancelled" as const }));
+    const structuredInputCapability = {
+      request,
+      blockingDeadlineMs: () => undefined,
+      onBlockingDeadlineChange: () => () => undefined,
+      close: vi.fn(),
+    };
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      runId: "run-loopback-question",
+      surface: "loopback",
+      structuredInputCapability,
+    });
+    const askUser = result.tools.find((tool) => tool.name === "ask_user");
+
+    expect(askUser).toBeDefined();
+    await askUser?.execute?.("mcp-exact-call-id", {
+      questions: [
+        {
+          id: "choice",
+          header: "Choice",
+          question: "Continue?",
+          options: [{ label: "Yes" }, { label: "No" }],
+        },
+      ],
+    });
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: "mcp-exact-call-id" }),
+    );
+  });
+
   it("applies a borrowed runtime policy without reassigning session tools", () => {
     const cfg = {
       agents: {

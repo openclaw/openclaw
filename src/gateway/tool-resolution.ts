@@ -12,6 +12,7 @@ import {
   type ExecPolicyOverrides,
   type ExecSessionDefaults,
 } from "../agents/exec-defaults.js";
+import type { StructuredInputCapability } from "../agents/harness/structured-input-execution.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
@@ -119,6 +120,7 @@ export function resolveGatewayScopedTools(params: {
   spawnedBy?: string;
   skillWorkshop?: SkillWorkshopRunOptions;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  structuredInputCapability?: StructuredInputCapability;
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const sessionAgentId = resolveSessionAgentIds({
@@ -286,6 +288,7 @@ export function resolveGatewayScopedTools(params: {
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     runId: params.runId,
+    structuredInputCapability: params.structuredInputCapability,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,

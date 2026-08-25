@@ -28,6 +28,7 @@ import {
 } from "../bundle-mcp-config.js";
 import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import {
+  applyClaudeLoopbackToolTimeout,
   findClaudeMcpConfigPaths,
   injectClaudeMcpConfigArgs,
   injectClaudeWebSearchDisabledArgs,
@@ -208,29 +209,33 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   mcpToolsDeny?: Record<string, string[]>;
   webSearchEnabled?: boolean;
 }): Promise<PreparedCliBundleMcpConfig> {
+  const mergedConfig =
+    params.mode === "claude-config-file"
+      ? applyClaudeLoopbackToolTimeout(params.mergedConfig)
+      : params.mergedConfig;
   const mcpToolsDeny = normalizeMcpToolDenials(params.mcpToolsDeny);
   const webSearchDisabled = params.webSearchEnabled === false;
   const configHashInput =
     mcpToolsDeny || webSearchDisabled
-      ? { config: params.mergedConfig, mcpToolsDeny, webSearchDisabled }
-      : params.mergedConfig;
+      ? { config: mergedConfig, mcpToolsDeny, webSearchDisabled }
+      : mergedConfig;
   const serializedConfig = `${JSON.stringify(configHashInput, null, 2)}\n`;
   const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
   const serializedResumeConfig = `${JSON.stringify(
     mcpToolsDeny || webSearchDisabled
       ? {
-          config: canonicalizeBundleMcpConfigForResume(params.mergedConfig),
+          config: canonicalizeBundleMcpConfigForResume(mergedConfig),
           mcpToolsDeny,
           webSearchDisabled,
         }
-      : canonicalizeBundleMcpConfigForResume(params.mergedConfig),
+      : canonicalizeBundleMcpConfigForResume(mergedConfig),
     null,
     2,
   )}\n`;
   const mcpResumeHash = crypto.createHash("sha256").update(serializedResumeConfig).digest("hex");
 
   if (params.mode === "codex-config-overrides") {
-    const codexConfig = applyCodexMcpToolDenials(params.mergedConfig, mcpToolsDeny);
+    const codexConfig = applyCodexMcpToolDenials(mergedConfig, mcpToolsDeny);
     return {
       backend: injectBundleMcpBackendArgs(params.backend, (args) =>
         webSearchDisabled
@@ -245,7 +250,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 
   if (params.mode === "gemini-system-settings") {
     const settings = await writeGeminiSystemSettings(
-      params.mergedConfig,
+      mergedConfig,
       params.env,
       mcpToolsDeny,
       params.webSearchEnabled,
@@ -259,10 +264,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     };
   }
 
-  const runtimeConfig = resolveOpenClawMcpEnvTemplates(
-    params.mergedConfig,
-    params.env,
-  ) as BundleMcpConfig;
+  const runtimeConfig = resolveOpenClawMcpEnvTemplates(mergedConfig, params.env) as BundleMcpConfig;
   const temporary = await writeTemporaryBundleMcpJson(
     "openclaw-cli-mcp-",
     runtimeConfig,

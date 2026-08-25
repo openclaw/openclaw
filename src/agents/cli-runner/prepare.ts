@@ -111,6 +111,7 @@ import {
 } from "../embedded-agent-runner/sandbox-skills.js";
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
+import { createStructuredInputCapability } from "../harness/structured-input-execution.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { findModelCatalogEntry, loadManifestModelCatalog } from "../model-catalog.js";
@@ -122,6 +123,7 @@ import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import { callGatewayTool } from "../tools/gateway.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -1205,6 +1207,36 @@ export async function prepareCliRunContext(
       : hashCliSessionText(JSON.stringify([toolBoundExtraSystemPromptHash ?? null, bootstrapMode]));
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
+  let structuredInputAdmission = params.admittedRunContext;
+  const structuredInputCapability = createStructuredInputCapability({
+    sessionKey: params.sessionKey ?? params.sessionId,
+    agentId: params.agentId,
+    runId: params.runId,
+    gatewayCall: callGatewayTool,
+    delivery: {
+      onBlockReply: params.onBlockReply,
+      onPartialReply: params.onPartialReply,
+    },
+    signal: params.abortSignal,
+    isActive: () => {
+      if (!structuredInputAdmission) {
+        return false;
+      }
+      const assertActive = resolveAdmittedRunActiveAssertion(
+        structuredInputAdmission,
+        params.abortSignal,
+      );
+      if (!assertActive) {
+        return false;
+      }
+      try {
+        assertActive();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
   try {
     const mcpClientGrant =
       mcpLoopbackRuntime && mcpGrantContext
@@ -1212,12 +1244,14 @@ export async function prepareCliRunContext(
             context: mcpGrantContext,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
             admittedRunContext: params.admittedRunContext,
+            structuredInputCapability,
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
     const bindMcpClientGrantAdmission = (
       admittedRunContext: NonNullable<RunCliAgentParams["admittedRunContext"]>,
     ) => {
+      structuredInputAdmission = admittedRunContext;
       if (
         mcpClientGrant &&
         mcpLoopbackRuntime &&
@@ -1279,15 +1313,15 @@ export async function prepareCliRunContext(
           })()
         : undefined;
     let mcpClientGrantRevoked = false;
-    const cleanupMcpClientGrant = mcpClientGrant
-      ? async () => {
-          if (mcpClientGrantRevoked) {
-            return;
-          }
-          mcpClientGrantRevoked = true;
+    const cleanupMcpClientGrant = async () => {
+      if (!mcpClientGrantRevoked) {
+        mcpClientGrantRevoked = true;
+        if (mcpClientGrant) {
           prepareDeps.revokeMcpLoopbackClientGrant(mcpClientGrant.token);
         }
-      : undefined;
+      }
+      structuredInputCapability.close("CLI run preparation cleaned up");
+    };
     cleanupPreparedResources = cleanupMcpClientGrant;
     const loopbackServerConfig = mcpLoopbackRuntime
       ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
@@ -1317,16 +1351,13 @@ export async function prepareCliRunContext(
           : undefined,
       warn: (message) => cliBackendLog.warn(message),
     });
-    const cleanupPreparedBackend =
-      preparedBackend.cleanup || cleanupMcpClientGrant
-        ? async () => {
-            try {
-              await preparedBackend.cleanup?.();
-            } finally {
-              await cleanupMcpClientGrant?.();
-            }
-          }
-        : undefined;
+    const cleanupPreparedBackend = async () => {
+      try {
+        await preparedBackend.cleanup?.();
+      } finally {
+        await cleanupMcpClientGrant();
+      }
+    };
     cleanupPreparedResources = cleanupPreparedBackend;
     const prepareExecutionContext = {
       config: params.config,
@@ -1866,6 +1897,7 @@ export async function prepareCliRunContext(
         ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
         cwdHash,
         ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
+        structuredInputCapability,
       };
     }
     ensureContextEnginesInitialized();
@@ -1966,6 +1998,7 @@ export async function prepareCliRunContext(
       ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
+      structuredInputCapability,
     };
   } catch (err) {
     try {

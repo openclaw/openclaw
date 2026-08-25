@@ -10,6 +10,7 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
+import { createStructuredInputCapability } from "../harness/structured-input-execution.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
@@ -76,6 +77,17 @@ async function createExecution(
   if (options.abortSignal) {
     context.params.abortSignal = options.abortSignal;
   }
+  context.structuredInputCapability = createStructuredInputCapability({
+    sessionKey: context.params.sessionKey ?? context.params.sessionId,
+    agentId: context.params.agentId,
+    runId,
+    gatewayCall: callGatewayTool,
+    delivery: {
+      onBlockReply: async (payload) => await context.params.onBlockReply?.(payload),
+      onPartialReply: async (payload) => await context.params.onPartialReply?.(payload),
+    },
+    signal: context.params.abortSignal,
+  });
 
   return { admission, context };
 }
@@ -143,6 +155,25 @@ function registerOwnerSession(context: PreparedCliRunContext, generation: string
   capability.register(session);
   activeSessions.add(session);
   return { handle: session, close };
+}
+
+function controlBlockingInputDeadline(context: PreparedCliRunContext) {
+  let deadlineMs: number | undefined;
+  const listeners = new Set<() => void>();
+  context.structuredInputCapability = {
+    ...context.structuredInputCapability,
+    blockingDeadlineMs: () => deadlineMs,
+    onBlockingDeadlineChange: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  return (next: number | undefined) => {
+    deadlineMs = next;
+    for (const listener of listeners) {
+      listener();
+    }
+  };
 }
 
 function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
@@ -309,7 +340,7 @@ describe("plugin-owned CLI execution host boundary", () => {
         four: ["four"],
       },
     });
-    expect([...requests.keys()]).toEqual(["claude-question:0", "claude-question:1"]);
+    expect([...requests.keys()]).toEqual(["claude-question", "claude-question:1"]);
     expect([...requests.values()].map((request) => request.questions.length)).toEqual([3, 1]);
     expect(onBlockReply).toHaveBeenCalledTimes(2);
   });
@@ -746,6 +777,89 @@ describe("plugin-owned CLI execution host boundary", () => {
       exitCode: null,
       timedOut: true,
       noOutputTimedOut: true,
+    });
+  });
+
+  it("keeps a live structured-input question alive through the 3600s boundary", async () => {
+    vi.useFakeTimers();
+    const { context } = await createExecution({ timeoutMs: 5_000_000 });
+    const setDeadline = controlBlockingInputDeadline(context);
+    setDeadline(Date.now() + 3_610_000);
+    const streamStarted = createDeferred();
+    let completed = false;
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        streamStarted.resolve();
+        await waitUntilAborted(execution);
+        yield SUCCESS_RESULT;
+      },
+      { noOutputTimeoutMs: 900_000 },
+    ).then((result) => {
+      completed = true;
+      return result;
+    });
+    await streamStarted.promise;
+
+    await vi.advanceTimersByTimeAsync(3_600_000);
+
+    expect(completed).toBe(false);
+    setDeadline(undefined);
+    await vi.advanceTimersByTimeAsync(899_999);
+    expect(completed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(run).resolves.toMatchObject({
+      reason: "no-output-timeout",
+      noOutputTimedOut: true,
+    });
+  });
+
+  it("still aborts an ordinary silent MCP tool at the 15-minute watchdog", async () => {
+    vi.useFakeTimers();
+    const { context } = await createExecution({ timeoutMs: 1_000_000 });
+    const streamStarted = createDeferred();
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        streamStarted.resolve();
+        await waitUntilAborted(execution);
+        yield SUCCESS_RESULT;
+      },
+      { noOutputTimeoutMs: 900_000 },
+    );
+    await streamStarted.promise;
+
+    await vi.advanceTimersByTimeAsync(900_000);
+
+    await expect(run).resolves.toMatchObject({
+      reason: "no-output-timeout",
+      noOutputTimedOut: true,
+    });
+  });
+
+  it("keeps the lower overall timeout authoritative during structured input", async () => {
+    vi.useFakeTimers();
+    const { context } = await createExecution({ timeoutMs: 1_000 });
+    const setDeadline = controlBlockingInputDeadline(context);
+    setDeadline(Date.now() + 3_610_000);
+    const streamStarted = createDeferred();
+    const run = runPlugin(
+      context,
+      async function* (execution) {
+        streamStarted.resolve();
+        await waitUntilAborted(execution);
+        yield SUCCESS_RESULT;
+      },
+      { noOutputTimeoutMs: 900_000 },
+    );
+    await streamStarted.promise;
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(run).resolves.toMatchObject({
+      reason: "overall-timeout",
+      timedOut: true,
+      noOutputTimedOut: false,
     });
   });
 

@@ -103,7 +103,6 @@ import {
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
-import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
 /** Handles a tool-execution result and commits replay, media, hook, and error state. */
@@ -116,9 +115,6 @@ export async function handleToolExecutionEnd(
   const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   ctx.state.liveEditDiffStateById.delete(toolCallId);
-  if (toolName === "ask_user") {
-    cancelAskUserPromptDelivery(toolCallId, ctx.params.sessionKey, ctx.params.runId);
-  }
   const runId = ctx.params.runId;
   const isError = evt.isError;
   const result = evt.result;

@@ -6,6 +6,7 @@ import {
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { StructuredInputCapability } from "../agents/harness/structured-input-execution.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
@@ -106,6 +107,8 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   admittedRunContext?: AdmittedRunContext;
   activeCaptureKey?: string;
   toolAuth?: McpLoopbackToolAuth;
+  /** Callable host authority retained outside cloneable child-visible context. */
+  structuredInputCapability?: StructuredInputCapability;
 };
 
 type McpLoopbackClientGrantRevocation = {
@@ -213,6 +216,7 @@ export function mintMcpLoopbackClientGrant(params: {
   runtimeOwnerToken: string;
   admittedRunContext?: AdmittedRunContext;
   toolAuth?: McpLoopbackToolAuth;
+  structuredInputCapability?: StructuredInputCapability;
 }): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
   if (!sessionKey) {
@@ -228,6 +232,9 @@ export function mintMcpLoopbackClientGrant(params: {
     runtimeOwnerToken,
     ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
+    ...(params.structuredInputCapability
+      ? { structuredInputCapability: params.structuredInputCapability }
+      : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
   return structuredClone({
@@ -316,6 +323,12 @@ export function transferMcpLoopbackClientGrant(params: {
   // have revoked that bearer, so recreate it only from this fresh admitted grant.
   // An existing bearer owned by another runtime is never replaceable.
   const { activeCaptureKey: _activeCaptureKey, ...inactiveSource } = source;
+  if (
+    target?.structuredInputCapability &&
+    target.structuredInputCapability !== source.structuredInputCapability
+  ) {
+    target.structuredInputCapability.close("MCP grant transferred to a newer run");
+  }
   clientGrantsByToken.set(params.targetToken, {
     ...inactiveSource,
     token: params.targetToken,
@@ -345,6 +358,7 @@ export function resolveMcpLoopbackClientGrant(params: {
       captureKey: string;
       admittedRunContext?: AdmittedRunContext;
       toolAuth?: McpLoopbackToolAuth;
+      structuredInputCapability?: StructuredInputCapability;
     }
   | undefined {
   const grant = clientGrantsByToken.get(params.token);
@@ -365,6 +379,9 @@ export function resolveMcpLoopbackClientGrant(params: {
     captureKey: grant.activeCaptureKey,
     ...(grant.admittedRunContext ? { admittedRunContext: grant.admittedRunContext } : {}),
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
+    ...(grant.structuredInputCapability
+      ? { structuredInputCapability: grant.structuredInputCapability }
+      : {}),
   };
 }
 
@@ -381,6 +398,7 @@ export function revokeMcpLoopbackClientGrant(token: string): boolean {
   if (!grant || !clientGrantsByToken.delete(token)) {
     return false;
   }
+  grant.structuredInputCapability?.close("MCP grant revoked");
   // Revocation must also release server-owned projections whose closures retain
   // this grant's prepared credentials.
   notifyMcpLoopbackClientGrantRevoked({ token, runtimeOwnerToken: grant.runtimeOwnerToken });

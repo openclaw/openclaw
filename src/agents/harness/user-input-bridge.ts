@@ -136,7 +136,7 @@ function buildAgentHarnessQuestionPresentation(params: {
 }
 
 /** Builds the exact question payload consumed by web chat and native channels. */
-export function buildAgentHarnessQuestionPromptPayload(params: {
+function buildAgentHarnessQuestionPromptPayload(params: {
   questionId: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   options?: AgentHarnessUserInputPromptOptions;

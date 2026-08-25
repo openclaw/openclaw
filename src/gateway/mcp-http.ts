@@ -327,6 +327,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
                   : {}),
               }
             : {}),
+          structuredInputCapability: activeBoundGrant?.structuredInputCapability,
           ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
           yieldContextCacheKey: yieldContext?.cacheKey,
           onYield: yieldContext?.onYield,

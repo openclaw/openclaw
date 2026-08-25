@@ -242,6 +242,12 @@ export function buildPreparedCliRunContext(
     normalizedModel: model,
     systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
+    structuredInputCapability: {
+      request: async () => ({ status: "cancelled" }),
+      blockingDeadlineMs: () => undefined,
+      onBlockingDeadlineChange: () => () => undefined,
+      close: () => undefined,
+    },
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
     claudeSkillsPluginArgs: [],

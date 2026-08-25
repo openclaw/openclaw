@@ -62,6 +62,7 @@ import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-des
 import { bindActiveCronCreatorAuthorityResolver } from "./cron-creator-authority-context.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
+import type { StructuredInputCapability } from "./harness/structured-input-execution.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import {
@@ -203,6 +204,8 @@ type OpenClawCodingToolsOptions = {
   oneShotCliRun?: boolean;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
+  /** Host-only input authority bound to this exact run. */
+  structuredInputCapability?: StructuredInputCapability;
   /** Exact admitted run instance for lifecycle-bound subprocess capabilities. */
   operationalRunInstance?: OperationalRunInstanceRef;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
@@ -771,6 +774,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
+            structuredInputCapability: options?.structuredInputCapability,
             runSessionKey: options?.runSessionKey,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,

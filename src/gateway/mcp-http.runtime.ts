@@ -2,6 +2,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import type { StructuredInputCapability } from "../agents/harness/structured-input-execution.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
@@ -38,6 +39,7 @@ type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> &
   authProfileStoreAgentDir?: string;
   grantToken?: string;
   senderIsOwner: boolean | undefined;
+  structuredInputCapability?: StructuredInputCapability;
   yieldContextCacheKey?: string;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
 };
@@ -92,6 +94,7 @@ function resolveMcpLoopbackTools(
     toolsAllow: _toolsAllow,
     authProfileStoreAgentDir,
     grantToken: _grantToken,
+    structuredInputCapability,
     ...scopeParams
   } = params;
   const scoped = resolveGatewayScopedTools({
@@ -102,6 +105,7 @@ function resolveMcpLoopbackTools(
     excludeToolNames,
     mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
+    structuredInputCapability,
   });
   return {
     agentId: scoped.agentId,

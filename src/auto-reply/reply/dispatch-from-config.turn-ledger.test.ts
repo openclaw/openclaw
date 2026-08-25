@@ -3,7 +3,7 @@ import {
   createReplyTurnLedger,
   requireQueuedReplyDelivery,
 } from "./dispatch-from-config.turn-ledger.js";
-import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
+import { ReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import { createReplyDispatcher, type ReplyDispatchDeliveryOutcome } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
@@ -21,15 +21,6 @@ function createUntrackedDispatcher(overrides: Partial<ReplyDispatcher> = {}): Re
 }
 
 describe("requireQueuedReplyDelivery", () => {
-  it("rejects a branded delivery error with an invalid outcome", () => {
-    expect(
-      isReplyDispatchDeliveryError({
-        code: "REPLY_DISPATCH_DELIVERY_ERROR",
-        outcome: "invalid",
-      }),
-    ).toBe(false);
-  });
-
   it.each([
     ["delivered", true],
     ["delivered-not-visible", false],
@@ -50,8 +41,8 @@ describe("requireQueuedReplyDelivery", () => {
         return;
       }
       const error = await delivery.catch((caught: unknown) => caught);
-      expect(isReplyDispatchDeliveryError(error)).toBe(true);
-      if (isReplyDispatchDeliveryError(error)) {
+      expect(error).toBeInstanceOf(ReplyDispatchDeliveryError);
+      if (error instanceof ReplyDispatchDeliveryError) {
         expect(error.outcome).toBe(outcome);
       }
     },

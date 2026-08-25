@@ -144,7 +144,7 @@ async function resolvePendingAgentQuestionAnswers(
 }
 
 /** Registers one gateway question as the next plain-text claim target for its session. */
-export function registerPendingAgentQuestion(params: {
+function registerPendingAgentQuestion(params: {
   questionId: string;
   sessionKey: string;
   questions: readonly AgentHarnessUserInputQuestion[];
