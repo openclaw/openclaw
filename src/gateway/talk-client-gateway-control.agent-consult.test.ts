@@ -8,8 +8,13 @@ import {
   createEmbeddedRunHandle,
   testing as embeddedRunsTesting,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
+import {
+  consumeRequesterFinalAttachment,
+  promoteRequesterFinalAttachment,
+} from "../agents/subagents/requester-final-attachment.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
   authorizeClientVoiceConfirmation,
@@ -134,7 +139,7 @@ describe("Talk client agent consult admission", () => {
       suppress: false,
     });
     mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
-      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 60_000 });
       await params.agentRuntime.runEmbeddedAgent({
         ...coreParams,
         ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
@@ -298,6 +303,44 @@ describe("Talk client agent consult admission", () => {
       expect(isRunCurrent).toHaveBeenCalledWith("run-talk");
     },
   );
+
+  it("registers the provider late-final callback before a yielded run settles", async () => {
+    const core = deferred<{ payloads: never[] }>();
+    mocks.runEmbeddedAgentCore.mockReturnValueOnce(core.promise);
+    const append = vi.fn(() => true);
+    const runner = createRunner();
+    runner.runPrompt.adoptCompletionClaims();
+
+    const run = runner.runPrompt({
+      prompt: "investigate",
+      requesterFinal: { append },
+    });
+    await vi.waitFor(() => expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledOnce());
+    expect(
+      promoteRequesterFinalAttachment({
+        requesterAgentId: "researcher",
+        requesterSessionKey: "agent:researcher:talk",
+        requesterTurnRunId: "run-talk",
+        batchRunIds: ["run-child"],
+        rearmGeneration: 1,
+      }),
+    ).toBe(true);
+    core.resolve({ payloads: [] });
+    await expect(run).resolves.toEqual({ text: "done" });
+    expect(runner.runPrompt.claimAppend()).toBe(true);
+    expect(
+      consumeRequesterFinalAttachment({
+        requesterAgentId: "researcher",
+        requesterSessionKey: "agent:researcher:talk",
+        requesterSessionId: "session-talk",
+        batchRunIds: ["run-child"],
+        rearmGeneration: 1,
+        text: "late final",
+      }),
+    ).toBe("appended");
+    expect(append).toHaveBeenCalledExactlyOnceWith("late final");
+    expect(getAgentEventLifecycleGeneration()).toEqual(expect.any(String));
+  });
 
   it("waits for backend publication and projects its registered caller authority", async () => {
     const announced = deferred<void>();

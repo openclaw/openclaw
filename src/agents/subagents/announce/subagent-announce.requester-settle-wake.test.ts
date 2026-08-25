@@ -3,18 +3,16 @@
 // nested/cron/single-delivered paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import {
+  promoteRequesterFinalAttachment,
+  registerRequesterFinalAttachment,
+} from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 const deliverSpy = vi.fn(
-  async (
-    _params: Record<string, unknown>,
-  ): Promise<{
-    delivered: boolean;
-    path: string;
-    disposition?: "ambiguous" | "permanent_failure" | "intentional_non_delivery";
-    reason?: string;
-  }> => ({
+  async (_params: Record<string, unknown>): Promise<SubagentAnnounceDeliveryResult> => ({
     delivered: true,
     path: "direct",
   }),
@@ -765,11 +763,34 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       },
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-    deliverSpy.mockResolvedValueOnce({
-      delivered: false,
-      path: "direct",
-      reason: "visible_reply_missing",
+    const append = vi.fn(() => true);
+    registerRequesterFinalAttachment({
+      requesterAgentId: "main",
+      requesterSessionKey: REQUESTER,
+      requesterSessionId: "sess-main",
+      requesterTurnRunId: "run-requester",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      timeoutMs: 60_000,
+      append,
     });
+    promoteRequesterFinalAttachment({
+      requesterAgentId: "main",
+      requesterSessionKey: REQUESTER,
+      requesterTurnRunId: "run-requester",
+      batchRunIds: ["run-b"],
+      rearmGeneration: 1,
+    });
+    deliverSpy
+      .mockResolvedValueOnce({
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+      })
+      .mockResolvedValueOnce({
+        delivered: true,
+        path: "direct",
+        finalAssistantVisibleText: "consolidated final",
+      });
 
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -798,7 +819,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
         delivered: true,
         path: "direct",
+        finalAssistantVisibleText: "consolidated final",
       });
+      expect(append).toHaveBeenCalledExactlyOnceWith("consolidated final");
     } finally {
       vi.useRealTimers();
     }

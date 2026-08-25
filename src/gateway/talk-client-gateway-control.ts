@@ -473,6 +473,7 @@ export function createTalkClientGatewayControlOwner(params: {
         const claimed = params.runAgentConsult.claimFailureAppend?.() === true;
         return current && claimed;
       },
+      revokeRequesterFinal: () => params.runAgentConsult.revokeRequesterFinal?.(),
       steer: params.runAgentConsult.steer
         ? async (request: Parameters<RealtimeVoiceAgentConsultRunner>[0]) => {
             assertActive();
@@ -666,6 +667,7 @@ export function createTalkClientGatewayControlOwner(params: {
           owners.delete(params.voiceSessionId);
         }
         if (!options?.preserveRuns) {
+          params.runAgentConsult.revokeRequesterFinal?.();
           for (const { controller, closeDisposition } of consultControllers.values()) {
             if (closeDisposition === "abort") {
               controller.abort(new Error("Realtime voice session closed"));

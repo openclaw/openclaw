@@ -37,13 +37,18 @@ type PendingDelegation = {
   prompt: string;
 };
 
+type InternalAgentConsultRequest = Parameters<RealtimeVoiceAgentConsultRunner>[0] & {
+  requesterFinal?: {
+    append: (text: string) => boolean;
+  };
+};
+
 interface LifecycleBoundAgentConsultRunner {
-  (
-    ...args: Parameters<RealtimeVoiceAgentConsultRunner>
-  ): ReturnType<RealtimeVoiceAgentConsultRunner>;
+  (request: InternalAgentConsultRequest): Promise<{ text: string; yielded?: true }>;
   adoptCompletionClaims?: () => void;
   claimAppend?: () => boolean;
   claimFailureAppend?: () => boolean;
+  revokeRequesterFinal?: () => void;
   steer?: RealtimeVoiceAgentConsultRunner;
 }
 
@@ -91,12 +96,14 @@ export class OpenAIQuicksilverDelegationController {
   private activeDelegationId: string | undefined;
   private readonly completionClaimsAdopted: boolean;
   private consultController: AbortController | undefined;
+  private delegationGeneration = 0;
   private readonly onSessionAbort = () => {
     const reason = this.options.signal.reason;
     this.stop(reason instanceof Error ? reason : new Error("GPT-Live session stopped"));
   };
   private partialTranscriptRole: "user" | "assistant" | undefined;
   private pendingDelegation: PendingDelegation | undefined;
+  private requesterFinalOwner: { delegationId: string; generation: number } | undefined;
   private steeringPromise: Promise<void> | undefined;
   private stopped = false;
   private transcript: OpenAIQuicksilverTranscriptEntry[] = [];
@@ -271,6 +278,7 @@ export class OpenAIQuicksilverDelegationController {
     if (this.consultController) {
       this.pendingDelegation = delegation;
       const runner = this.options.runAgentConsult;
+      this.revokeRequesterFinal();
       if (runner.steer) {
         this.schedulePendingSteering(this.consultController, runner.steer);
       } else {
@@ -287,9 +295,11 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     const controller = new AbortController();
+    const generation = ++this.delegationGeneration;
     this.consultController = controller;
     this.activeDelegationId = delegation.id;
-    void this.runDelegation(delegation, controller.signal)
+    this.requesterFinalOwner = { delegationId: delegation.id, generation };
+    void this.runDelegation(delegation, generation, controller.signal)
       .catch((error: unknown) =>
         this.fail(toErrorObject(error, "OpenAI GPT-Live delegation failed")),
       )
@@ -360,13 +370,18 @@ export class OpenAIQuicksilverDelegationController {
 
   private markStopped(): void {
     this.stopped = true;
+    this.revokeRequesterFinal();
     this.options.signal.removeEventListener("abort", this.onSessionAbort);
     this.pendingDelegation = undefined;
     this.partialTranscriptRole = undefined;
     this.transcript = [];
   }
 
-  private async runDelegation(delegation: PendingDelegation, signal: AbortSignal): Promise<void> {
+  private async runDelegation(
+    delegation: PendingDelegation,
+    generation: number,
+    signal: AbortSignal,
+  ): Promise<void> {
     let text: string;
     let failed = false;
     const runner = this.options.runAgentConsult;
@@ -378,7 +393,13 @@ export class OpenAIQuicksilverDelegationController {
           "speakable",
         );
       }
-      const result = await runner({ prompt: delegation.prompt, signal });
+      const result = await runner({
+        prompt: delegation.prompt,
+        signal,
+        requesterFinal: {
+          append: (finalText) => this.appendRequesterFinal(delegation.id, generation, finalText),
+        },
+      });
       if (signal.aborted) {
         runner.claimAppend?.();
         return;
@@ -435,6 +456,29 @@ export class OpenAIQuicksilverDelegationController {
     );
   }
 
+  private appendRequesterFinal(delegationId: string, generation: number, text: string): boolean {
+    const owner = this.requesterFinalOwner;
+    if (
+      this.stopped ||
+      !owner ||
+      owner.delegationId !== delegationId ||
+      owner.generation !== generation
+    ) {
+      return false;
+    }
+    this.requesterFinalOwner = undefined;
+    return this.sendAppend(
+      { type: "delegation.context.append", delegation_item_id: delegationId },
+      boundOpenAIQuicksilverDelegationResult(text),
+      "speakable",
+    );
+  }
+
+  private revokeRequesterFinal(): void {
+    this.requesterFinalOwner = undefined;
+    this.options.runAgentConsult.revokeRequesterFinal?.();
+  }
+
   private sendAppend(
     target:
       | { type: "session.context.append" }
@@ -442,7 +486,7 @@ export class OpenAIQuicksilverDelegationController {
     text: string,
     channel: "speakable" | "commentary",
     socket = this.options.getSocket(),
-  ): void {
+  ): boolean {
     for (const chunk of chunkOpenAIQuicksilverAppendText(text)) {
       // A control reply belongs to this call/socket, not the task it may have cancelled.
       if (
@@ -452,7 +496,7 @@ export class OpenAIQuicksilverDelegationController {
         socket !== this.options.getSocket() ||
         socket.readyState !== WEBSOCKET_OPEN
       ) {
-        return;
+        return false;
       }
       socket.send(
         JSON.stringify({
@@ -462,6 +506,7 @@ export class OpenAIQuicksilverDelegationController {
         }),
       );
     }
+    return true;
   }
 
   private fail(error: Error): void {

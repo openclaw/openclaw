@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
  * Requester-agent handoff and direct delivery for subagent announcements.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -71,6 +72,8 @@ import {
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+
+const REQUESTER_FINAL_VISIBLE_TEXT_MAX_CHARS = 12_000;
 
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
@@ -645,6 +648,14 @@ export async function sendSubagentAnnounceDirectly(params: {
     }
     const requesterVisibleFinalDelivered =
       hasFinalMessagingToolDelivery || (shouldDeliverAgentFinal && automaticFinalDelivered);
+    const finalAssistantVisibleText =
+      requesterVisibleFinalDelivered &&
+      typeof directAnnounceResult?.meta?.finalAssistantVisibleText === "string"
+        ? truncateUtf16Safe(
+            directAnnounceResult.meta.finalAssistantVisibleText.trim(),
+            REQUESTER_FINAL_VISIBLE_TEXT_MAX_CHARS,
+          )
+        : "";
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
       (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
@@ -691,6 +702,7 @@ export async function sendSubagentAnnounceDirectly(params: {
           hasVisibleCompletionReply))
         ? { requesterVisibleFinalDelivered: true }
         : {}),
+      ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
     };
   } catch (err) {
     const disposition = hasAnnounceSendEvidence(err)
