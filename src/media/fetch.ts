@@ -5,6 +5,7 @@ import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/fi
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isAbortError } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readChunkWithIdleTimeout,
@@ -612,7 +613,14 @@ function shouldRetryMediaFetch(err: unknown): boolean {
       return false;
     }
     if (err.code === "http_error") {
-      return typeof err.status === "number" && (err.status === 408 || err.status >= 500);
+      // 429 is retryable to match channel extensions (LINE/SMS/Telegram).
+      // Retry-After is not honored here: like 408/5xx, the generic backoff is
+      // used. The only retry-enabled caller (attachments.cache.ts) bounds this
+      // to 3 attempts / ~3.5s worst case, so ignoring the header is tolerable.
+      return (
+        typeof err.status === "number" &&
+        (err.status === 408 || err.status === 429 || err.status >= 500)
+      );
     }
     if (err.code === "fetch_failed") {
       if (isAbortError(err) || isAbortError(err.cause)) {
@@ -634,11 +642,15 @@ async function withMediaFetchRetry<T>(
     return await fn();
   }
   const callerShouldRetry = retry.shouldRetry;
+  const signal = options.requestInit?.signal;
   return await retryAsync(fn, {
     label: "media:fetch",
     ...retry,
     shouldRetry: (err, attempt) =>
       callerShouldRetry ? callerShouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    // Honor caller cancellation during backoff (e.g. 429 retry delay) unless the
+    // caller supplied its own sleep. Mirrors extensions/discord/src/api.ts.
+    sleep: retry.sleep ?? (signal ? (ms: number) => sleepWithAbort(ms, signal) : undefined),
   });
 }
 
