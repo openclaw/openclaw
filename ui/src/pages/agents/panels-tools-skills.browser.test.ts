@@ -412,6 +412,11 @@ describe("agents tools panel (browser)", () => {
                 severity: "info",
                 message: "MCP servers are configured but not connected yet.",
               },
+              {
+                id: "tool-schema-quarantined",
+                severity: "warning",
+                message: "A tool with an unsupported schema was quarantined.",
+              },
             ],
           },
         }),
@@ -420,9 +425,21 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".agent-tools-notices .callout.info")?.textContent?.trim()).toBe(
-      "MCP servers are configured but not connected yet.",
-    );
+    expect(
+      Array.from(container.querySelectorAll(".agent-tools-notices .callout")).map((notice) => ({
+        className: notice.className,
+        text: notice.textContent?.trim(),
+      })),
+    ).toEqual([
+      {
+        className: "callout info",
+        text: "MCP servers are configured but not connected yet.",
+      },
+      {
+        className: "callout warn",
+        text: "A tool with an unsupported schema was quarantined.",
+      },
+    ]);
   });
 
   it("closes expanded tool rows when the parent group collapses", async () => {

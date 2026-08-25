@@ -444,7 +444,7 @@ describe("renderModelProviders", () => {
       "Config refresh failed after the secret was committed.",
     ]);
     expect(messages[0]?.classList.contains("success")).toBe(true);
-    expect(messages[1]?.classList.contains("warning")).toBe(true);
+    expect(messages[1]?.classList.contains("warn")).toBe(true);
   });
 
   it("keeps committed default-model success visible beside its refresh warning", () => {
@@ -467,7 +467,7 @@ describe("renderModelProviders", () => {
       "Config refresh failed after the model defaults were committed.",
     ]);
     expect(messages[0]?.classList.contains("success")).toBe(true);
-    expect(messages[1]?.classList.contains("warning")).toBe(true);
+    expect(messages[1]?.classList.contains("warn")).toBe(true);
   });
 
   it("announces provider and default-model mutation failures as accessible alerts", () => {
@@ -480,12 +480,13 @@ describe("renderModelProviders", () => {
       }),
     );
 
-    expect(text(container.querySelector('[data-provider-id="openai"] [role="alert"]'))).toBe(
-      "Provider credential could not be saved.",
-    );
-    expect(text(container.querySelector('.model-providers__defaults [role="alert"]'))).toBe(
-      "Default models could not be saved.",
-    );
+    const providerAlert = container.querySelector('[data-provider-id="openai"] [role="alert"]');
+    const defaultsAlert = container.querySelector('.model-providers__defaults [role="alert"]');
+
+    expect(text(providerAlert)).toBe("Provider credential could not be saved.");
+    expect(text(defaultsAlert)).toBe("Default models could not be saved.");
+    expect(providerAlert?.classList.contains("danger")).toBe(true);
+    expect(defaultsAlert?.classList.contains("danger")).toBe(true);
   });
 
   it("keeps model behavior available while provider data loads", () => {

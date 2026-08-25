@@ -193,7 +193,7 @@ function renderEffectiveToolNotices(result: ToolsEffectiveResult | null) {
       ${notices.map(
         (notice) => html`
           <div
-            class="callout ${notice.severity === "warning" ? "warning" : "info"}"
+            class="callout ${notice.severity === "warning" ? "warn" : "info"}"
             style="margin-top: 12px"
           >
             ${formatUiExternalText(notice.message)}
