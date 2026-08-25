@@ -54,6 +54,7 @@ import {
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
+  EMBEDDED_RUN_COMPLETION_CLAIMS,
   EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS,
   EMBEDDED_RUN_WAITERS,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
@@ -634,6 +635,13 @@ function prepareEmbeddedAgentQueueMessage(
   return { kind: "embedded_run", queueMessage };
 }
 
+function revokeCompletionClaim(sessionId: string, runId?: string): void {
+  const claim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
+  if (claim?.promoted && claim.runId === runId) {
+    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
+  }
+}
+
 /**
  * Abort embedded OpenClaw runs.
  *
@@ -669,6 +677,7 @@ export function abortEmbeddedAgentRun(
       diag.warn(`abort failed: sessionId=${sessionId} err=${String(err)}`);
       return false;
     }
+    revokeCompletionClaim(sessionId, handle.runId);
     return true;
   }
 
@@ -691,6 +700,7 @@ export function abortEmbeddedAgentRun(
       diag.debug(params.formatDebugMessage(id));
       try {
         handle.abort(opts?.reason);
+        revokeCompletionClaim(id, handle.runId);
         aborted = true;
       } catch (err) {
         diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
@@ -758,6 +768,30 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
     diag.debug(`run active check: sessionId=${sessionId} active=true`);
   }
   return active;
+}
+
+export function isEmbeddedAgentRunHandleCurrent(sessionId: string, runId: string): boolean {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  return handle?.runId === runId && ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) === handle;
+}
+
+export function prepareEmbeddedAgentRunCompletionClaim(
+  sessionId: string,
+  runId: string,
+): () => boolean {
+  const claim = {
+    runId,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    promoted: false,
+  };
+  EMBEDDED_RUN_COMPLETION_CLAIMS.set(sessionId, claim);
+  return () => {
+    if (EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) !== claim) {
+      return false;
+    }
+    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
+    return claim.promoted && isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration);
+  };
 }
 
 /**
@@ -1179,6 +1213,16 @@ export function setActiveEmbeddedRun(
   if (handle.runId) {
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
+  const completionClaim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
+  if (
+    completionClaim &&
+    completionClaim.runId === handle.runId &&
+    completionClaim.lifecycleGeneration === incomingLifecycleGeneration
+  ) {
+    completionClaim.promoted = true;
+  } else if (completionClaim) {
+    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
+  }
   clearActiveRunSessionKeys(sessionId);
   setActiveRunSessionKey(sessionKey, sessionId);
   clearActiveRunSessionFiles(sessionId);
@@ -1301,6 +1345,7 @@ const testing = {
     EMBEDDED_RUN_WAITERS.clear();
     ACTIVE_EMBEDDED_RUNS.clear();
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.clear();
+    EMBEDDED_RUN_COMPLETION_CLAIMS.clear();
     RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.clear();
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();

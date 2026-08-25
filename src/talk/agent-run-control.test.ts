@@ -11,6 +11,7 @@ import {
 import type { TalkEvent } from "./talk-events.js";
 
 function createDeps(options: {
+  activeRunId?: string;
   activeSessionId?: string;
   queued?: boolean;
   abortResult?: boolean;
@@ -19,6 +20,9 @@ function createDeps(options: {
 }) {
   return {
     abortEmbeddedAgentRun: vi.fn(() => options.abortResult ?? true),
+    isEmbeddedAgentRunHandleCurrent: vi.fn(
+      (_sessionId: string, runId: string) => runId === options.activeRunId,
+    ),
     queueEmbeddedAgentMessageWithOutcomeAsync: vi.fn(
       async (
         sessionId: string,
@@ -126,6 +130,54 @@ describe("classifyRealtimeVoiceAgentControlText", () => {
 });
 
 describe("controlRealtimeVoiceAgentRun", () => {
+  it("does not steer a replacement embedded run for a stale owner", async () => {
+    const deps = createDeps({ activeSessionId: "session-replacement" });
+
+    const result = await controlRealtimeVoiceAgentRun(
+      {
+        sessionKey: "agent:main:main",
+        text: "use the safer path",
+        mode: "steer",
+        expectedSessionId: "session-original",
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      mode: "steer",
+      queued: false,
+      reason: "run_owner_changed",
+    });
+    expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
+  });
+
+  it("does not steer a different run that reused the owner's session id", async () => {
+    const deps = createDeps({
+      activeSessionId: "session-reused",
+      activeRunId: "run-replacement",
+    });
+
+    const result = await controlRealtimeVoiceAgentRun(
+      {
+        sessionKey: "agent:main:main",
+        text: "use the safer path",
+        mode: "steer",
+        expectedSessionId: "session-reused",
+        expectedRunId: "run-original",
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      mode: "steer",
+      queued: false,
+      reason: "run_owner_changed",
+    });
+    expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
+  });
+
   it("queues steering into the active embedded run", async () => {
     const deps = createDeps({ activeSessionId: "session-active" });
 

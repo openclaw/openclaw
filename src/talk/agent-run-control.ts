@@ -7,6 +7,7 @@
 import type { EmbeddedAgentQueueMessageOutcome } from "../agents/embedded-agent-runner/runs.js";
 import {
   abortEmbeddedAgentRun,
+  isEmbeddedAgentRunHandleCurrent,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "../agents/embedded-agent-runner/runs.js";
@@ -41,6 +42,7 @@ export {
 
 type RealtimeVoiceAgentControlDeps = {
   abortEmbeddedAgentRun: (sessionId: string) => boolean;
+  isEmbeddedAgentRunHandleCurrent: (sessionId: string, runId: string) => boolean;
   queueEmbeddedAgentMessageWithOutcomeAsync: (
     sessionId: string,
     text: string,
@@ -61,6 +63,7 @@ type RealtimeVoiceAgentControlDeps = {
 const defaultDeps: RealtimeVoiceAgentControlDeps = {
   abortEmbeddedAgentRun,
   getDiagnosticSessionActivitySnapshot,
+  isEmbeddedAgentRunHandleCurrent,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 };
@@ -72,6 +75,8 @@ export async function controlRealtimeVoiceAgentRun(
     text: string;
     mode?: unknown;
     recentEvents?: readonly TalkEvent[];
+    expectedRunId?: string;
+    expectedSessionId?: string;
   },
   deps: RealtimeVoiceAgentControlDeps = defaultDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
@@ -80,6 +85,25 @@ export async function controlRealtimeVoiceAgentRun(
   const intent = resolveRealtimeVoiceAgentControlIntent({ text, mode: params.mode });
   const mode = intent.mode;
   const sessionId = deps.resolveActiveEmbeddedRunSessionId(sessionKey);
+  if (
+    (params.expectedSessionId && sessionId !== params.expectedSessionId) ||
+    (params.expectedRunId &&
+      (!sessionId || !deps.isEmbeddedAgentRunHandleCurrent(sessionId, params.expectedRunId)))
+  ) {
+    return {
+      ok: false,
+      mode,
+      sessionKey,
+      ...(sessionId ? { sessionId } : {}),
+      active: Boolean(sessionId),
+      queued: false,
+      reason: "run_owner_changed",
+      message: "The active OpenClaw run changed before this control could be applied.",
+      speak: false,
+      show: false,
+      suppress: true,
+    };
+  }
   const activity = deps.getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
   const active = Boolean(sessionId || activity.activeWorkKind || activity.hasActiveEmbeddedRun);
 

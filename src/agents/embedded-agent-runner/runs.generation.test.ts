@@ -27,6 +27,7 @@ import {
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunAbortableForRunId,
+  prepareEmbeddedAgentRunCompletionClaim,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
@@ -104,6 +105,23 @@ describe("embedded run registry lifecycle generations", () => {
     resetDiagnosticRunActivityForTest();
     resetDiagnosticEventsForTest();
     lifecycleMock.reset();
+  });
+
+  it("revokes a completed Talk claim on lifecycle rotation", () => {
+    const handle = createRunHandle({
+      queueMessage: vi.fn(async () => {}),
+      runId: "completed-run",
+    });
+    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim(
+      "completed-session",
+      "completed-run",
+    );
+    setActiveEmbeddedRun("completed-session", handle);
+    clearActiveEmbeddedRun("completed-session", handle);
+
+    rotateAgentEventLifecycleGeneration();
+
+    expect(claimCompletion()).toBe(false);
   });
 
   it("rejects a delayed prior-lifecycle registration for a current session owner", async () => {

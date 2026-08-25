@@ -149,7 +149,7 @@ export function createTalkRealtimeRelaySession(
         sessionKey: relaySessionKey,
         ownerConnId: params.connId,
         authority: params.consultAuthority,
-        getVoiceSessionId: () => relaySessionId,
+        getVoiceSessionId: () => getActiveRelay()?.id,
         initialItems: [],
         runIdPrefix: "talk-realtime-relay-consult",
         surface: "a gateway-relay Talk session",
@@ -160,17 +160,22 @@ export function createTalkRealtimeRelaySession(
             sessionKey: relaySessionKey,
             runId,
           }),
+        isRunCurrent: (runId) => getActiveRelay()?.activeAgentRuns.get(runId) === relaySessionKey,
       })
     : undefined;
-  const runAgentConsult = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
-    if (!getActiveRelay()) {
-      throw new Error("Realtime gateway-relay session is closed");
-    }
-    if (!consultRunner) {
-      throw new Error("Realtime gateway-relay agent consult requires a pinned session key");
-    }
-    return await consultRunner.runPrompt({ prompt, signal });
-  };
+  const runAgentConsult = consultRunner
+    ? Object.assign(async (request: Parameters<typeof consultRunner.runPrompt>[0]) => {
+        if (!getActiveRelay()) {
+          throw new Error("Realtime gateway-relay session is closed");
+        }
+        return await consultRunner.runPrompt(request);
+      }, consultRunner.runPrompt)
+    : async () => {
+        if (!getActiveRelay()) {
+          throw new Error("Realtime gateway-relay session is closed");
+        }
+        throw new Error("Realtime gateway-relay agent consult requires a pinned session key");
+      };
   const runControl = createTalkRealtimeRunControlOwner({
     hasActiveRun: () => {
       const relay = getActiveRelay();

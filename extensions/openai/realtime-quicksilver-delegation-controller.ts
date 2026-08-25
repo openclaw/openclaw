@@ -25,6 +25,14 @@ type PendingDelegation = {
   prompt: string;
 };
 
+interface LifecycleBoundAgentConsultRunner {
+  (
+    ...args: Parameters<RealtimeVoiceAgentConsultRunner>
+  ): ReturnType<RealtimeVoiceAgentConsultRunner>;
+  claimAppend?: () => boolean;
+  steer?: RealtimeVoiceAgentConsultRunner;
+}
+
 type OpenAIQuicksilverDelegationControllerOptions = {
   getSocket: () => OpenAIQuicksilverSocket | undefined;
   isCanceledError?: (error: unknown) => boolean;
@@ -33,7 +41,7 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   onSessionStarted?: (expiresAt: number | undefined) => void;
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
   onWireEventType?: (eventType: string) => void;
-  runAgentConsult: RealtimeVoiceAgentConsultRunner;
+  runAgentConsult: LifecycleBoundAgentConsultRunner;
   signal: AbortSignal;
 };
 
@@ -60,6 +68,7 @@ export class OpenAIQuicksilverDelegationController {
   };
   private partialTranscriptRole: "user" | "assistant" | undefined;
   private pendingDelegation: PendingDelegation | undefined;
+  private steeringPromise: Promise<void> | undefined;
   private stopped = false;
   private transcript: OpenAIQuicksilverTranscriptEntry[] = [];
 
@@ -179,11 +188,15 @@ export class OpenAIQuicksilverDelegationController {
       id,
       prompt: buildOpenAIQuicksilverDelegationPrompt({ input, transcript }),
     };
-    this.activeDelegationId = id;
     if (this.consultController) {
-      // Frameless bidi has one active handoff: retain only the newest queued request.
       this.pendingDelegation = delegation;
-      this.consultController.abort(new Error("GPT-Live delegation superseded"));
+      const runner = this.options.runAgentConsult;
+      if (runner.steer) {
+        this.schedulePendingSteering(this.consultController, runner.steer);
+      } else {
+        // Preserve the generic runner fallback; the Gateway runner always steers.
+        this.consultController.abort(new Error("GPT-Live delegation superseded"));
+      }
       return;
     }
     this.launchDelegation(delegation);
@@ -207,12 +220,54 @@ export class OpenAIQuicksilverDelegationController {
         this.consultController = undefined;
         const pending = this.pendingDelegation;
         this.pendingDelegation = undefined;
+        this.activeDelegationId = undefined;
         if (pending) {
           this.launchDelegation(pending);
-        } else {
-          this.activeDelegationId = undefined;
         }
       });
+  }
+
+  private schedulePendingSteering(
+    controller: AbortController,
+    steer: RealtimeVoiceAgentConsultRunner,
+  ): void {
+    if (this.steeringPromise) {
+      return;
+    }
+    const steering = (async () => {
+      await Promise.resolve();
+      while (!this.stopped && !controller.signal.aborted && this.consultController === controller) {
+        const delegation = this.pendingDelegation;
+        this.pendingDelegation = undefined;
+        if (!delegation) {
+          return;
+        }
+        try {
+          await steer({ prompt: delegation.prompt, signal: controller.signal });
+        } catch (error) {
+          if (this.stopped || controller.signal.aborted || this.options.isCanceledError?.(error)) {
+            return;
+          }
+          const fatal = toErrorObject(error, "OpenAI GPT-Live delegation steering failed");
+          controller.abort(fatal);
+          this.fail(fatal);
+          return;
+        }
+        if (this.stopped || controller.signal.aborted || this.consultController !== controller) {
+          return;
+        }
+        this.activeDelegationId = delegation.id;
+      }
+    })();
+    const completion = steering.finally(() => {
+      if (this.steeringPromise === completion) {
+        this.steeringPromise = undefined;
+      }
+      if (this.pendingDelegation && !this.stopped) {
+        this.schedulePendingSteering(controller, steer);
+      }
+    });
+    this.steeringPromise = completion;
   }
 
   private markStopped(): void {
@@ -226,15 +281,14 @@ export class OpenAIQuicksilverDelegationController {
 
   private async runDelegation(delegation: PendingDelegation, signal: AbortSignal): Promise<void> {
     let text: string;
+    const runner = this.options.runAgentConsult;
     try {
-      const result = await this.options.runAgentConsult({ prompt: delegation.prompt, signal });
-      if (signal.aborted) {
-        return;
-      }
+      const result = await runner({ prompt: delegation.prompt, signal });
       text = boundOpenAIQuicksilverDelegationResult(result.text);
     } catch (error) {
       // Host steering can reject with an abort marker outside this controller's own signal.
       if (signal.aborted || this.options.isCanceledError?.(error)) {
+        runner.claimAppend?.();
         return;
       }
       this.options.logger.warn(
@@ -242,7 +296,20 @@ export class OpenAIQuicksilverDelegationController {
       );
       text = CONSULT_FAILURE_TEXT;
     }
-    this.sendAppend(delegation.id, text, "speakable");
+    while (this.steeringPromise) {
+      await this.steeringPromise;
+    }
+    if (signal.aborted || this.stopped) {
+      runner.claimAppend?.();
+      return;
+    }
+    if (runner.claimAppend?.() === false) {
+      return;
+    }
+    const delegationId = this.activeDelegationId;
+    if (delegationId) {
+      this.sendAppend(delegationId, text, "speakable");
+    }
   }
 
   private sendAppend(

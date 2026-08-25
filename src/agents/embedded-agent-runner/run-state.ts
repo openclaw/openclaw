@@ -94,6 +94,12 @@ const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
+  // Talk opts in before registration; only the matching active run promotes this
+  // one-shot final-delivery claim. Replacement, cancel, or rotation revokes it.
+  completionClaims: new Map<
+    string,
+    { runId: string; lifecycleGeneration: string; promoted: boolean }
+  >(),
   activeRunLifecycleGenerations: new WeakMap<EmbeddedAgentQueueHandle, string>(),
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
@@ -113,6 +119,12 @@ export const ACTIVE_EMBEDDED_RUNS =
 export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
   embeddedRunState.activeRunsByRunId ??
   (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
+export const EMBEDDED_RUN_COMPLETION_CLAIMS =
+  embeddedRunState.completionClaims ??
+  (embeddedRunState.completionClaims = new Map<
+    string,
+    { runId: string; lifecycleGeneration: string; promoted: boolean }
+  >());
 const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
   embeddedRunState.activeRunLifecycleGenerations ??
   (embeddedRunState.activeRunLifecycleGenerations = new WeakMap<
@@ -176,6 +188,11 @@ function evictPriorLifecycleEmbeddedRuns(): void {
     if (ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) === handle) {
       ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.delete(runId);
       RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.delete(runId);
+    }
+  }
+  for (const [sessionId, claim] of EMBEDDED_RUN_COMPLETION_CLAIMS) {
+    if (!isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)) {
+      EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
     }
   }
   for (const [sessionKey, sessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {

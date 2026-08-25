@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { prepareEmbeddedAgentRunCompletionClaim } from "../agents/embedded-agent-runner/runs.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { consultRealtimeVoiceAgent } from "../talk/agent-consult-runtime.js";
 import {
@@ -25,6 +27,7 @@ import {
 } from "../talk/client-voice-confirmation.js";
 import { registerClientVoiceConsultRun } from "../talk/client-voice-session.js";
 import type {
+  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBridge,
   RealtimeVoiceGatewayControl,
   RealtimeVoiceToolCallEvent,
@@ -240,10 +243,20 @@ export function createTalkClientAgentConsultRunner(params: {
   runIdPrefix?: string;
   surface?: string;
   registerRun?: (params: { runId: string }) => void;
+  isRunCurrent?: (runId: string) => boolean;
 }) {
   const authority = params.authority ?? resolveTalkAgentConsultAuthority(undefined);
   let agentRuntime: ReturnType<typeof createPluginRuntime>["agent"] | undefined;
-  const runArgs = async (args: unknown, signal?: AbortSignal) => {
+  type PromptOwner = {
+    claimCompletion?: () => boolean;
+    cleanup?: () => void;
+    identity?: { runId: string; sessionId: string };
+    isCurrent?: () => boolean;
+    resolveRunStarted: () => void;
+    runStarted: Promise<void>;
+  };
+  let promptOwner: PromptOwner | undefined;
+  const runArgs = async (args: unknown, signal?: AbortSignal, owner?: PromptOwner) => {
     const parsedArgs = parseRealtimeVoiceAgentConsultArgs(args);
     const voiceSessionId = params.getVoiceSessionId();
     if (!voiceSessionId) {
@@ -281,6 +294,10 @@ export function createTalkClientAgentConsultRunner(params: {
       ...authority,
       abortSignal: signal,
       onRunStarted: ({ runId, sessionId, timeoutMs }) => {
+        if (owner) {
+          owner.identity = { runId, sessionId };
+          owner.claimCompletion = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
+        }
         if (params.registerRun) {
           params.registerRun({ runId });
         } else {
@@ -295,28 +312,105 @@ export function createTalkClientAgentConsultRunner(params: {
         if (confirmationGrant) {
           bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId });
         }
-        if (!params.ownerConnId) {
-          return undefined;
+        const registration = params.ownerConnId
+          ? registerChatAbortController({
+              chatAbortControllers: params.context.chatAbortControllers,
+              runId,
+              sessionId,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+              timeoutMs,
+              ownerConnId: params.ownerConnId,
+              controlUiVisible: false,
+              kind: "chat-send",
+            })
+          : undefined;
+        if (owner) {
+          const entry = registration?.entry;
+          owner.cleanup = registration?.cleanup;
+          owner.isCurrent = () =>
+            params.getVoiceSessionId() === voiceSessionId &&
+            (!params.ownerConnId ||
+              (params.context.chatAbortControllers.get(runId) === entry &&
+                entry?.controller.signal.aborted === false &&
+                entry.ownerConnId === params.ownerConnId &&
+                entry.sessionId === sessionId &&
+                entry.sessionKey === params.sessionKey)) &&
+            (params.isRunCurrent?.(runId) ?? true);
+          owner.resolveRunStarted();
         }
-        const registration = registerChatAbortController({
-          chatAbortControllers: params.context.chatAbortControllers,
-          runId,
-          sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          timeoutMs,
-          ownerConnId: params.ownerConnId,
-          controlUiVisible: false,
-          kind: "chat-send",
-        });
-        return { abortSignal: registration.controller.signal, cleanup: registration.cleanup };
+        return registration
+          ? {
+              abortSignal: registration.controller.signal,
+              cleanup: owner ? undefined : registration.cleanup,
+            }
+          : undefined;
       },
     });
   };
+  const isOwnerCurrent = (owner: PromptOwner): boolean =>
+    promptOwner === owner && owner.isCurrent?.() === true;
+  const claimPromptAppend = (): boolean => {
+    const owner = promptOwner;
+    if (!owner) {
+      return false;
+    }
+    const current = isOwnerCurrent(owner);
+    const completed = owner.claimCompletion?.() === true;
+    promptOwner = undefined;
+    owner.cleanup?.();
+    return current && completed;
+  };
+  const steerPrompt: RealtimeVoiceAgentConsultRunner = async ({ prompt, signal }) => {
+    signal?.throwIfAborted();
+    const owner = promptOwner;
+    if (!owner) {
+      throw new Error("Realtime voice agent consult has no active owner");
+    }
+    await owner.runStarted;
+    signal?.throwIfAborted();
+    if (!isOwnerCurrent(owner)) {
+      throw new Error("Realtime voice agent consult owner is no longer current");
+    }
+    const result = await controlRealtimeVoiceAgentRun({
+      sessionKey: params.sessionKey,
+      text: prompt,
+      mode: "steer",
+      expectedRunId: owner.identity?.runId,
+      expectedSessionId: owner.identity?.sessionId,
+    });
+    if (!result.ok || result.queued !== true || !isOwnerCurrent(owner)) {
+      throw new Error(result.message);
+    }
+    return { text: "" };
+  };
+  const runPrompt = Object.assign(
+    async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
+      if (promptOwner) {
+        throw new Error("Realtime voice agent consult already has an active owner");
+      }
+      const voiceSessionId = params.getVoiceSessionId();
+      if (!voiceSessionId) {
+        throw new Error("Realtime browser voice session is not ready for agent consult");
+      }
+      const { promise: runStarted, resolve: resolveRunStarted } = createDeferredCore();
+      const owner: PromptOwner = { resolveRunStarted, runStarted };
+      promptOwner = owner;
+      signal?.addEventListener("abort", owner.resolveRunStarted, { once: true });
+      try {
+        return await runArgs({ question: prompt }, signal, owner);
+      } catch (error) {
+        owner.resolveRunStarted();
+        throw error;
+      } finally {
+        signal?.removeEventListener("abort", owner.resolveRunStarted);
+      }
+    },
+    { claimAppend: claimPromptAppend, steer: steerPrompt },
+  );
   return {
     runArgs,
-    runPrompt: async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
-      await runArgs({ question: prompt }, signal),
+    runPrompt,
   };
 }
 

@@ -9,12 +9,15 @@ import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.j
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
+  abortEmbeddedAgentRun,
   abortAndDrainEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunHandleActive,
+  isEmbeddedAgentRunHandleCurrent,
   isEmbeddedRunAbandoned,
   markActiveEmbeddedRunAbandoned,
+  prepareEmbeddedAgentRunCompletionClaim,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
@@ -214,6 +217,85 @@ describe("embedded-agent runner run lifecycle", () => {
 
     expect(isEmbeddedAgentRunHandleActive("session-a")).toBe(false);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+  });
+
+  it("rejects a replaced run under the same session id", () => {
+    const firstHandle = createRunHandle({ runId: "run-first" });
+    const replacementHandle = createRunHandle({ runId: "run-replacement" });
+    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim("session-reused", "run-first");
+
+    setActiveEmbeddedRun("session-reused", firstHandle);
+    expect(isEmbeddedAgentRunHandleCurrent("session-reused", "run-first")).toBe(true);
+
+    setActiveEmbeddedRun("session-reused", replacementHandle);
+    expect(isEmbeddedAgentRunHandleCurrent("session-reused", "run-first")).toBe(false);
+    expect(isEmbeddedAgentRunHandleCurrent("session-reused", "run-replacement")).toBe(true);
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("consumes a Talk completion claim once after the active handle clears", () => {
+    const handle = createRunHandle({ runId: "run-complete" });
+    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim(
+      "session-complete",
+      "run-complete",
+    );
+
+    setActiveEmbeddedRun("session-complete", handle);
+    clearActiveEmbeddedRun("session-complete", handle);
+
+    expect(isEmbeddedAgentRunHandleCurrent("session-complete", "run-complete")).toBe(false);
+    expect(claimCompletion()).toBe(true);
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("keeps a Talk completion claim through a same-run replacement handle", () => {
+    const firstHandle = createRunHandle({ runId: "run-retried" });
+    const replacementHandle = createRunHandle({ runId: "run-retried" });
+    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim(
+      "session-retried",
+      "run-retried",
+    );
+
+    setActiveEmbeddedRun("session-retried", firstHandle);
+    clearActiveEmbeddedRun("session-retried", firstHandle);
+    setActiveEmbeddedRun("session-retried", replacementHandle);
+    clearActiveEmbeddedRun("session-retried", replacementHandle);
+
+    expect(claimCompletion()).toBe(true);
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("rejects an unregistered or reset Talk completion claim", () => {
+    const neverRegistered = prepareEmbeddedAgentRunCompletionClaim(
+      "session-unregistered",
+      "run-unregistered",
+    );
+    expect(neverRegistered()).toBe(false);
+    setActiveEmbeddedRun("session-unregistered", createRunHandle({ runId: "run-unregistered" }));
+    expect(neverRegistered()).toBe(false);
+
+    const resetClaim = prepareEmbeddedAgentRunCompletionClaim("session-reset", "run-reset");
+    const handle = createRunHandle({ runId: "run-reset" });
+    setActiveEmbeddedRun("session-reset", handle);
+    clearActiveEmbeddedRun("session-reset", handle);
+    testing.resetActiveEmbeddedRuns();
+    expect(resetClaim()).toBe(false);
+  });
+
+  it("rejects Talk completion after explicit cancel and terminal clear fallback", () => {
+    const abort = vi.fn();
+    const handle = createRunHandle({ abort, runId: "run-cancelled" });
+    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim(
+      "session-cancelled",
+      "run-cancelled",
+    );
+
+    setActiveEmbeddedRun("session-cancelled", handle);
+    expect(abortEmbeddedAgentRun("session-cancelled")).toBe(true);
+    clearActiveEmbeddedRun("session-cancelled", handle);
+
+    expect(abort).toHaveBeenCalledOnce();
+    expect(claimCompletion()).toBe(false);
   });
 
   it("clears a relative compatibility file key after normalization", () => {
