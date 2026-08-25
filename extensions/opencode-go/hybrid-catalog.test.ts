@@ -97,6 +97,16 @@ function modelsDevFixture() {
           limit: { context: 400_000, output: 128_000 },
           cost: { input: 2, output: 6, cache_read: 0.3 },
         },
+        // The Go seed caps this model's effective context below its native
+        // window; hybrid mapping must keep the cap.
+        "gpt-5.6-luna": {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          reasoning: true,
+          modalities: { input: ["text", "image"] },
+          limit: { context: 1_050_000, output: 128_000 },
+          cost: { input: 0.2, output: 1.2, cache_read: 0.02, cache_write: 0.25 },
+        },
         "go-hybrid-only": {
           id: "go-hybrid-only",
           name: "Go Hybrid Only",
@@ -182,6 +192,26 @@ describe("opencode-go hybrid catalog", () => {
       contextWindow: 1_048_576,
       maxTokens: 131_072,
       cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+    });
+  });
+
+  it("keeps the static context-token cap on hybrid rows", async () => {
+    const config = await buildOpencodeGoHybridProviderConfig({
+      apiKey: "k",
+      discoveryApiKey: "go-capped",
+      fetchGuard: gatewayFetchGuard(["gpt-5.6-luna"]),
+      fetchModelsDev: async () => modelsDevFixture(),
+      staticModels: staticHybridModels(),
+      gatewayEndpoint: "https://opencode.ai/zen/go/v1/models",
+      gatewayTimeoutMs: 5_000,
+      openaiBaseUrl: "https://opencode.ai/zen/go/v1",
+      anthropicBaseUrl: "https://opencode.ai/zen/go",
+    });
+    expect(config.models.find((model) => model.id === "gpt-5.6-luna")).toMatchObject({
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      // The Go seed's effective-context cap must survive hybrid mapping.
+      contextTokens: 922_000,
     });
   });
 

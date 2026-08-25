@@ -336,6 +336,12 @@ export function mapModelsDevRowToModel(params: {
       8_192,
     contextWindow,
   );
+  // Static seeds may cap effective context below the native window (provider
+  // safety margin); compaction/session budgets read contextTokens first, so a
+  // dropped cap would silently raise those budgets to the full window.
+  const staticContextTokens = readPositiveNumber(params.staticBase?.contextTokens);
+  const contextTokens =
+    staticContextTokens !== undefined ? Math.min(staticContextTokens, contextWindow) : undefined;
   const name =
     normalizeBoundedOptionalString(params.row.name, MODELS_DEV_MAX_NAME_LENGTH) ??
     params.staticBase?.name ??
@@ -359,6 +365,7 @@ export function mapModelsDevRowToModel(params: {
     cost,
     contextWindow,
     maxTokens,
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
     compat: {
       supportsUsageInStreaming: true,
       supportsReasoningEffort: reasoning,

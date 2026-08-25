@@ -215,6 +215,9 @@ describe("opencode hybrid catalog", () => {
     expect(hybrid.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
       api: "openai-responses",
       baseUrl: "https://opencode.ai/zen/v1",
+      // The Zen seed's effective-context cap must survive hybrid mapping;
+      // compaction/session budgets read it instead of the native window.
+      contextTokens: 922_000,
     });
     expect(
       resolveOpencodeZenFamilyTransport(

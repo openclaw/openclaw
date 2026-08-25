@@ -276,6 +276,27 @@ describe("mapModelsDevRowToModel third-party limit bounds", () => {
     expect(mapRow({ context: value }).contextWindow).toBe(128_000);
   });
 
+  it("preserves the static context-token cap clamped to the mapped window", () => {
+    const capped = base({
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      // Zen/Go static seeds deliberately cap effective context below the
+      // native window; runtime compaction/session budgets prefer this cap.
+      contextTokens: 922_000,
+    });
+    expect(mapRow({ context: 1_050_000, output: 128_000 }, capped).contextTokens).toBe(922_000);
+    // A smaller real remote window clamps the cap down with it.
+    expect(mapRow({ context: 400_000 }, capped).contextTokens).toBe(400_000);
+    // Corrupt oversized metadata falls back to the static window; cap still applies.
+    expect(mapRow({ context: 9e12 }, capped).contextTokens).toBe(922_000);
+  });
+
+  it("does not invent a context-token cap when the static seed has none", () => {
+    expect(
+      mapRow({ context: 1_050_000 }, base({ contextWindow: 200_000 })).contextTokens,
+    ).toBeUndefined();
+  });
+
   it("keeps the row present when only its limits are corrupted", () => {
     const hybridModels = [
       mapRow({ context: 9e12, output: 9e11 }, base({ contextWindow: 200_000 })),
