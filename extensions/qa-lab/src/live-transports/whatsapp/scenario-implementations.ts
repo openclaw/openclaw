@@ -3,10 +3,12 @@ import { whatsappCapabilityScenarios } from "./whatsapp-live.scenario-implementa
 import { whatsappConversationScenarios } from "./whatsapp-live.scenario-implementations.conversation.js";
 import { whatsappDeliveryScenarios } from "./whatsapp-live.scenario-implementations.delivery.js";
 import { whatsappUserPathScenarios } from "./whatsapp-live.scenario-implementations.user-path.js";
+import { whatsappQaPollVoteHookProofScenario } from "./whatsapp-live.scenario-implementations.poll-vote-proof.js";
 
 export const whatsappScenarioImplementations: Record<string, WhatsAppQaScenarioImplementation> = {
   ...whatsappCapabilityScenarios,
   ...whatsappConversationScenarios,
   ...whatsappDeliveryScenarios,
   ...whatsappUserPathScenarios,
+  whatsappQaPollVoteHookProofScenario,
 };

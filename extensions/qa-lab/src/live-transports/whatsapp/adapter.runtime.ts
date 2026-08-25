@@ -191,6 +191,7 @@ export async function createWhatsAppQaTransportAdapter(
       driverAuthDir,
       explicitScenarioSelection: options.explicitScenarioSelection === true,
       getDriver: () => driver,
+      repoRoot: options.repoRoot,
       replaceDriver: async (nextDriver) => {
         driver = nextDriver;
         observedCount = driver.getObservedMessages().length;
