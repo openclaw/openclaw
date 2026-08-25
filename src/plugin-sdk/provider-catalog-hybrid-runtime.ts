@@ -166,10 +166,14 @@ export function mapModelsDevCost(
   return base;
 }
 
-function mapModelsDevInput(modalities: ModelsDevModelRow["modalities"]): Array<"text" | "image"> {
+// Corrupt modalities fall back like every other metadata field so a vision-
+// capable static seed does not silently lose image input.
+function mapModelsDevInput(
+  modalities: ModelsDevModelRow["modalities"],
+): Array<"text" | "image"> | undefined {
   const raw = modalities?.input;
   if (!Array.isArray(raw)) {
-    return ["text"];
+    return undefined;
   }
   return raw.includes("image") ? ["text", "image"] : ["text"];
 }
@@ -262,9 +266,9 @@ export async function fetchModelsDevProviderSlice(params: {
       readRows: (body) => [body],
       // The whole document is one "row", so row-count is vacuous. Admit only
       // documents that look like a models.dev catalog — at least one top-level
-      // provider slice carrying a models record — so a garbage 200 (CDN error
-      // envelope, captive portal) cannot poison the year-sticky cache with
-      // silent static degradation.
+      // provider slice carrying a NON-EMPTY models record — so a garbage 200
+      // (CDN error envelope, captive portal, shape-valid-but-empty body)
+      // cannot poison the year-sticky cache with silent static degradation.
       shouldCacheRows: (modelRows) => {
         const doc = modelRows[0];
         if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
@@ -277,7 +281,12 @@ export async function fetchModelsDevProviderSlice(params: {
           }
           // SAFETY: slice passed the plain-object check above.
           const models = (slice as { models?: unknown }).models;
-          return Boolean(models) && typeof models === "object";
+          return (
+            Boolean(models) &&
+            typeof models === "object" &&
+            !Array.isArray(models) &&
+            Object.keys(models as Record<string, unknown>).length > 0
+          );
         });
       },
       now: params.now,
@@ -350,10 +359,7 @@ export function mapModelsDevRowToModel(params: {
     typeof params.row.reasoning === "boolean"
       ? params.row.reasoning
       : (params.staticBase?.reasoning ?? true);
-  const input =
-    params.row.modalities?.input !== undefined
-      ? mapModelsDevInput(params.row.modalities)
-      : (params.staticBase?.input ?? ["text"]);
+  const input = mapModelsDevInput(params.row.modalities) ?? params.staticBase?.input ?? ["text"];
   const mapped = normalizeModelCompat({
     id: params.modelId,
     name,

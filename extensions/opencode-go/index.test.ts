@@ -554,7 +554,7 @@ describe("opencode-go provider plugin", () => {
   it("uses cached live OpenCode Go discovery and falls back to static rows on failure", async () => {
     const liveIds = ["minimax-m3", "qwen3.7-max", "qwen3.7-plus"];
     let failGateway = false;
-    const fetchGuard = vi.fn(async (req: { url: string }) => {
+    const fetchGuard = vi.fn(async (req: { url: string; init?: { headers?: HeadersInit } }) => {
       if (req.url.includes("models.dev")) {
         return {
           response: new Response(JSON.stringify({ "opencode-go": { models: {} } })),
@@ -587,11 +587,21 @@ describe("opencode-go provider plugin", () => {
       fetchGuard,
     });
 
-    // Hybrid catalog fetches gateway IDs plus models.dev; both are process-cached.
+    // Hybrid catalog fetches gateway IDs plus models.dev; admitted documents
+    // are process-cached across builds.
     expect(fetchGuard).toHaveBeenCalledTimes(2);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
     expect(first.models.map((model) => model.id).toSorted()).toEqual(liveIds);
     expect(second.models.map((model) => model.id).toSorted()).toEqual(liveIds);
+    // Credential routing in one authenticated build: the gateway request keeps
+    // its discovery Bearer token, while third-party models.dev stays key-free.
+    const modelsDevCall = fetchGuard.mock.calls.find((call) => call[0].url.includes("models.dev"));
+    const gatewayCall = fetchGuard.mock.calls.find((call) => !call[0].url.includes("models.dev"));
+    expect(modelsDevCall).toBeDefined();
+    expect(new Headers(modelsDevCall?.[0].init?.headers).get("authorization")).toBeNull();
+    expect(new Headers(gatewayCall?.[0].init?.headers).get("authorization")).toBe(
+      "Bearer resolved-opencode-key",
+    );
 
     clearLiveCatalogCacheForTests();
     failGateway = true;

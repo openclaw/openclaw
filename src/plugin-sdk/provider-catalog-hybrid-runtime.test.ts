@@ -167,7 +167,7 @@ describe("fetchModelsDevProviderSlice privacy and cache-admission gates", () => 
   });
 
   it("does not sticky-cache garbage 200 documents; a later good fetch replaces them", async () => {
-    let stage: "empty" | "envelope" | "good" = "empty";
+    let stage: "empty" | "envelope" | "no-models" | "good" = "empty";
     const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async (req) => ({
       response: new Response(
         JSON.stringify(
@@ -175,7 +175,11 @@ describe("fetchModelsDevProviderSlice privacy and cache-admission gates", () => 
             ? modelsDevDocument()
             : stage === "envelope"
               ? { error: "quota exceeded", code: 1000 }
-              : {},
+              : stage === "no-models"
+                ? // Shape-valid but empty: admitting it would stick silent
+                  // static degradation in the process-sticky cache.
+                  { opencode: { models: {} } }
+                : {},
         ),
       ),
       finalUrl: req.url,
@@ -189,6 +193,8 @@ describe("fetchModelsDevProviderSlice privacy and cache-admission gates", () => 
     };
     expect((await fetchModelsDevProviderSlice(params)).size).toBe(0);
     stage = "envelope";
+    expect((await fetchModelsDevProviderSlice(params)).size).toBe(0);
+    stage = "no-models";
     expect((await fetchModelsDevProviderSlice(params)).size).toBe(0);
     stage = "good";
     const recovered = await fetchModelsDevProviderSlice(params);
@@ -295,6 +301,26 @@ describe("mapModelsDevRowToModel third-party limit bounds", () => {
     expect(
       mapRow({ context: 1_050_000 }, base({ contextWindow: 200_000 })).contextTokens,
     ).toBeUndefined();
+  });
+
+  it("falls back to the static input modalities when remote metadata is corrupt", () => {
+    const visionSeed = base({
+      contextWindow: 200_000,
+      maxTokens: 32_768,
+      input: ["text", "image"],
+    });
+    expect(mapRow({}, visionSeed).input).toEqual(["text", "image"]);
+    const corrupted = mapModelsDevRowToModel({
+      modelId: "corrupt-model",
+      row: { id: "corrupt-model", limit: { context: 200_000 }, modalities: { input: "text" } },
+      providerId: "p",
+      resolveTransport: () => transport,
+      staticBase: visionSeed,
+      applyPolicyOverlay: identityOverlay,
+    });
+    expect(corrupted.input).toEqual(["text", "image"]);
+    // Without a static seed, corrupt modalities degrade to text-only.
+    expect(mapRow({ context: 200_000, output: 32_768 }).input).toEqual(["text"]);
   });
 
   it("keeps the row present when only its limits are corrupted", () => {

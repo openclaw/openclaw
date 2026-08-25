@@ -167,6 +167,30 @@ describe("opencode hybrid catalog", () => {
     });
   });
 
+  it("maps models.dev context_over_200k pricing into tieredPricing and rejects corrupt tiers", () => {
+    expect(
+      mapModelsDevCost({
+        input: 2,
+        output: 8,
+        cache_read: 0.2,
+        context_over_200k: { input: 3, output: 12, cache_read: 0.3 },
+      }),
+    ).toEqual({
+      input: 2,
+      output: 8,
+      cacheRead: 0.2,
+      cacheWrite: 0,
+      tieredPricing: [
+        { input: 2, output: 8, cacheRead: 0.2, cacheWrite: 0, range: [0, 200_000] },
+        { input: 3, output: 12, cacheRead: 0.3, cacheWrite: 0, range: [200_000] },
+      ],
+    });
+    // Corrupt over-200k rates degrade to flat base pricing.
+    expect(
+      mapModelsDevCost({ input: 2, output: 8, context_over_200k: { input: "x", output: 12 } }),
+    ).toEqual({ input: 2, output: 8, cacheRead: 0, cacheWrite: 0 });
+  });
+
   it("parses models.dev provider slices by key", () => {
     const slice = parseModelsDevProviderSlice(modelsDevFixture(), "opencode");
     expect(slice.has("claude-opus-5")).toBe(true);
