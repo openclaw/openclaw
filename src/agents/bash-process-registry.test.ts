@@ -22,7 +22,6 @@ import {
   markExited,
   markTerminalPollObserved,
   recordNotifyOnExitRemoval,
-  setJobTtlMs,
   tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -43,6 +42,7 @@ describe("bash process registry", () => {
     maxOutputChars: number;
     pendingMaxOutputChars: number;
     backgrounded: boolean;
+    cleanupMs?: number;
   }): ProcessSession {
     return createProcessSessionFixture({
       id: params.id ?? "sess",
@@ -50,6 +50,7 @@ describe("bash process registry", () => {
       maxOutputChars: params.maxOutputChars,
       pendingMaxOutputChars: params.pendingMaxOutputChars,
       backgrounded: params.backgrounded,
+      cleanupMs: params.cleanupMs,
     });
   }
 
@@ -212,8 +213,8 @@ describe("bash process registry", () => {
     markBackgrounded(session);
     markExited(session, 0, null, "completed");
     const finishedSessions = listFinishedSessions();
-    const endedAt = finishedSessions[0]?.endedAt;
-    expect(endedAt).toEqual(expect.any(Number));
+    const endedAt = finishedSessions[0]?.endedAt ?? 0;
+    expect(endedAt).toBeGreaterThan(0);
     expect(finishedSessions).toStrictEqual([
       {
         id: "sess",
@@ -221,6 +222,7 @@ describe("bash process registry", () => {
         scopeKey: undefined,
         startedAt: session.startedAt,
         endedAt,
+        expiresAt: endedAt + session.cleanupMs,
         cwd: "/tmp",
         status: "completed",
         exitCode: 0,
@@ -411,29 +413,37 @@ describe("bash process registry", () => {
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
   });
 
-  it("clamps a zero retention TTL to one minute", () => {
+  it("clamps and isolates finished-session retention at admission", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-07-09T00:00:00Z"));
-      setJobTtlMs(0);
 
-      const session = createRegistrySession({
-        id: "zero-ttl",
+      const shortRetention = createRegistrySession({
+        id: "short-retention",
         maxOutputChars: 100,
         pendingMaxOutputChars: 30_000,
         backgrounded: true,
+        cleanupMs: 0,
       });
-      addSession(session);
-      markExited(session, 0, null, "completed");
+      const longRetention = createRegistrySession({
+        id: "long-retention",
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 30_000,
+        backgrounded: true,
+        cleanupMs: 3 * 60 * 60 * 1000,
+      });
+      addSession(shortRetention);
+      addSession(longRetention);
+      markExited(shortRetention, 0, null, "completed");
+      markExited(longRetention, 0, null, "completed");
 
-      vi.advanceTimersByTime(30_000);
-      expect(listFinishedSessions()).toHaveLength(1);
+      vi.advanceTimersByTime(60 * 1000);
+      expect(getFinishedSession(shortRetention.id)).toBeUndefined();
+      expect(getFinishedSession(longRetention.id)).toBeDefined();
 
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(3 * 60 * 60 * 1000 - 60 * 1000);
       expect(listFinishedSessions()).toHaveLength(0);
     } finally {
-      resetProcessRegistryForTests();
-      setJobTtlMs(30 * 60 * 1000);
       resetProcessRegistryForTests();
       vi.useRealTimers();
     }

@@ -4,7 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { getFinishedSession } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 
 function createExecHostDefaultsConfig(
@@ -71,6 +73,7 @@ describe("Agent-specific exec tool defaults", () => {
   });
 
   afterEach(() => {
+    resetProcessRegistryForTests();
     tempDirs.cleanup();
   });
 
@@ -380,5 +383,45 @@ describe("Agent-specific exec tool defaults", () => {
     });
     const details = result?.details as { status?: string } | undefined;
     expect(details?.status).toBe("completed");
+  });
+
+  it("admits per-agent cleanup retention with the background exec", async () => {
+    const cleanupMs = 3 * 60 * 60 * 1000;
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            host: "gateway",
+            mode: "full",
+            cleanupMs: 60 * 1000,
+          },
+        },
+        agents: {
+          list: [{ id: "main", tools: { exec: { cleanupMs } } }],
+        },
+      },
+      exec: { backgroundMs: 0 },
+      sessionKey: "agent:main:main",
+      ...createTempAgentDirs("test-main-cleanup-retention"),
+    });
+
+    const result = await requireExecTool(tools).execute("call-main-cleanup-retention", {
+      command: "echo done",
+      background: true,
+    });
+    const sessionId = (result.details as { sessionId?: string }).sessionId;
+    expect(sessionId).toEqual(expect.any(String));
+    if (!sessionId) {
+      throw new Error("expected a background process session");
+    }
+
+    await vi.waitFor(() => {
+      expect(getFinishedSession(sessionId)).toBeDefined();
+    });
+    const finished = getFinishedSession(sessionId);
+    if (!finished) {
+      throw new Error("expected a finished process session");
+    }
+    expect(finished.expiresAt - finished.endedAt).toBe(cleanupMs);
   });
 });

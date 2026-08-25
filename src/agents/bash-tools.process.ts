@@ -21,7 +21,6 @@ import {
   listFinishedSessions,
   listRunningSessions,
   markTerminalPollObserved,
-  setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import { appendExecTimeoutRetryGuidance, renderExecExitLabel } from "./bash-tools.exec-output.js";
@@ -47,7 +46,6 @@ import type { AgentToolWithMeta } from "./tools/common.js";
 
 /** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
-  cleanupMs?: number;
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
   scopeKey?: string;
@@ -255,13 +253,10 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
   });
 }
 
-/** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
+/** Build the process-control tool with optional scope and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
-  if (defaults?.cleanupMs !== undefined) {
-    setJobTtlMs(defaults.cleanupMs);
-  }
   const scopeKey = defaults?.scopeKey;
   const supervisor = getProcessSupervisor();
   const inputWaitIdleMs = clampWithDefault(

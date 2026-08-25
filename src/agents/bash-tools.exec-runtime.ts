@@ -43,6 +43,7 @@ import {
   isProcessSessionIdTaken,
   markExited,
   recordNotifyOnExitRemoval,
+  resolveProcessCleanupMs,
   tail,
 } from "./bash-process-registry.js";
 import {
@@ -634,6 +635,7 @@ export async function runExecProcess(opts: {
   warnings: string[];
   maxOutput: number;
   pendingMaxOutput: number;
+  cleanupMs?: number;
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
@@ -673,6 +675,7 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
     agentId: opts.agentId,
     mainKey: opts.mainKey,
     sessionScope: opts.sessionScope,

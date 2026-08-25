@@ -24,7 +24,12 @@ function clampTtl(value: number | undefined) {
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
-let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
+const defaultJobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
+
+/** Resolves the immutable retention duration owned by one admitted exec process. */
+export function resolveProcessCleanupMs(value?: number): number {
+  return value === undefined ? defaultJobTtlMs : clampTtl(value);
+}
 
 /** Lifecycle status recorded for background process sessions. */
 type ProcessStatus = "running" | "completed" | "failed" | "killed";
@@ -55,6 +60,8 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Finished-result retention resolved when this exact exec process starts. */
+  cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
   /** `session.mainKey` from the runtime config, snapshotted at exec start.
@@ -117,6 +124,7 @@ interface FinishedSession {
   scopeKey?: string;
   startedAt: number;
   endedAt: number;
+  expiresAt: number;
   cwd?: string;
   status: ProcessStatus;
   exitCode?: number | null;
@@ -150,11 +158,10 @@ export function isProcessSessionIdTaken(id: string): boolean {
   );
 }
 
-/** Adds a running session and starts retention sweeping if needed. */
+/** Adds a running session with its admission-time retention already resolved. */
 export function addSession(session: ProcessSession) {
   processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
   runningSessions.set(session.id, session);
-  startSweeper();
 }
 
 /** Sorts registered process records newest-first, including same-millisecond starts. */
@@ -197,6 +204,7 @@ function deleteFinishedSession(id: string): boolean {
 export function deleteSession(id: string) {
   runningSessions.delete(id);
   deleteFinishedSession(id);
+  scheduleSweeper();
 }
 
 /** Removes completed process records belonging to retired session identities. */
@@ -216,6 +224,7 @@ export function clearFinishedSessionsForScopes(scopeKeys: Iterable<string>): voi
       deleteFinishedSession(id);
     }
   }
+  scheduleSweeper();
 }
 
 /** Appends process output while enforcing aggregate and pending-output caps. */
@@ -361,12 +370,14 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   // Keep full completed logs; evict older records rather than silently
   // truncating the process poll/log contract or dropping the newest result.
   deleteFinishedSession(session.id);
+  const endedAt = Date.now();
   const finished: FinishedSession = {
     id: session.id,
     command: session.command,
     scopeKey: session.scopeKey,
     startedAt: session.startedAt,
-    endedAt: Date.now(),
+    endedAt,
+    expiresAt: endedAt + session.cleanupMs,
     cwd: session.cwd,
     status,
     exitCode: session.exitCode,
@@ -397,6 +408,7 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     }
     deleteFinishedSession(oldestSessionId);
   }
+  scheduleSweeper();
 }
 
 /** Returns the last `max` characters of text without adding ellipses. */
@@ -468,30 +480,26 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     { resetProcessRegistryForTests };
 }
 
-/** Overrides finished-session retention TTL, clamped to supported bounds. */
-export function setJobTtlMs(value?: number) {
-  if (value === undefined || Number.isNaN(value)) {
-    return;
-  }
-  jobTtlMs = clampTtl(value);
-  stopSweeper();
-  startSweeper();
-}
-
 function pruneFinishedSessions() {
-  const cutoff = Date.now() - jobTtlMs;
+  const now = Date.now();
   for (const [id, session] of finishedSessions.entries()) {
-    if (session.endedAt < cutoff) {
+    if (session.expiresAt <= now) {
       deleteFinishedSession(id);
     }
   }
+  scheduleSweeper();
 }
 
-function startSweeper() {
-  if (sweeper) {
+function scheduleSweeper() {
+  stopSweeper();
+  let nextExpiration = Number.POSITIVE_INFINITY;
+  for (const session of finishedSessions.values()) {
+    nextExpiration = Math.min(nextExpiration, session.expiresAt);
+  }
+  if (!Number.isFinite(nextExpiration)) {
     return;
   }
-  sweeper = setInterval(pruneFinishedSessions, Math.max(30_000, jobTtlMs / 6));
+  sweeper = setTimeout(pruneFinishedSessions, Math.max(0, nextExpiration - Date.now()));
   sweeper.unref?.();
 }
 
@@ -499,6 +507,6 @@ function stopSweeper() {
   if (!sweeper) {
     return;
   }
-  clearInterval(sweeper);
+  clearTimeout(sweeper);
   sweeper = null;
 }

@@ -529,6 +529,7 @@ export function createExecTool(
             approvalRunningNoticeMs,
             maxOutput,
             pendingMaxOutput,
+            cleanupMs: defaults?.cleanupMs,
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
           });
@@ -578,6 +579,7 @@ export function createExecTool(
           warnings,
           maxOutput,
           pendingMaxOutput,
+          cleanupMs: defaults?.cleanupMs,
           notifyOnExit,
           notifyOnExitEmptySuccess,
           scopeKey: defaults?.scopeKey,
