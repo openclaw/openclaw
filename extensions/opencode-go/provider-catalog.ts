@@ -1,8 +1,8 @@
 // Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import { createScopedHybridDynamicModelHooks } from "openclaw/plugin-sdk/provider-catalog-hybrid-runtime";
 import {
-  buildLiveModelProviderConfig,
   fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -11,6 +11,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildOpencodeGoHybridProviderConfig } from "./hybrid-catalog.js";
 
 const PROVIDER_ID = "opencode-go";
 
@@ -23,7 +24,7 @@ const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
 ]);
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
-const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
+
 type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   provider: typeof PROVIDER_ID;
   api: NonNullable<ModelDefinitionConfig["api"]>;
@@ -189,11 +190,16 @@ function buildOpencodeGoModel(row: OpencodeGoModelRow): OpencodeGoModelDefinitio
 
 const OPENCODE_GO_RESOLVABLE_MODELS = OPENCODE_GO_MODEL_ROWS.map(buildOpencodeGoModel);
 
-const OPENCODE_GO_MODEL_BY_ID = new Map(
+const OPENCODE_GO_RESOLVABLE_MODEL_BY_ID = new Map(
   OPENCODE_GO_RESOLVABLE_MODELS.map((model) => [model.id, model]),
 );
+
 const OPENCODE_GO_MODELS = OPENCODE_GO_RESOLVABLE_MODELS.filter(
   (model) => !OPENCODE_GO_MODEL_STATUS.has(model.id),
+);
+// Gateway ids for deprecated/preview rows must never enter hybrid live catalogs.
+const OPENCODE_GO_HIDDEN_GATEWAY_IDS: ReadonlySet<string> = new Set(
+  OPENCODE_GO_MODEL_STATUS.keys(),
 );
 
 type FetchOpencodeGoLiveModelIdsParams = {
@@ -201,6 +207,7 @@ type FetchOpencodeGoLiveModelIdsParams = {
   discoveryApiKey?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
+  fetchModelsDev?: () => Promise<unknown>;
 };
 
 export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
@@ -234,21 +241,18 @@ export async function resolveOpencodeGoStarterModel(params: {
 export async function buildOpencodeGoLiveProviderConfig(
   params: FetchOpencodeGoLiveModelIdsParams = {},
 ): Promise<ModelProviderConfig> {
-  return await buildLiveModelProviderConfig({
-    providerId: PROVIDER_ID,
-    endpoint: OPENCODE_GO_MODELS_ENDPOINT,
-    providerConfig: {
-      api: "openai-completions",
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-    },
-    models: OPENCODE_GO_MODELS,
+  return await buildOpencodeGoHybridProviderConfig({
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
     signal: params.signal,
-    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
-    ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
-    auditContext: "opencode-go-model-discovery",
+    fetchModelsDev: params.fetchModelsDev,
+    staticModels: OPENCODE_GO_MODELS,
+    gatewayEndpoint: OPENCODE_GO_MODELS_ENDPOINT,
+    gatewayTimeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
+    openaiBaseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+    anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+    skipGatewayIds: OPENCODE_GO_HIDDEN_GATEWAY_IDS,
   });
 }
 
@@ -276,8 +280,22 @@ export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
   const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_GO_MODEL_BY_ID.get(normalizedModelId);
+  return OPENCODE_GO_RESOLVABLE_MODEL_BY_ID.get(normalizedModelId);
 }
+
+// Profile-scoped dynamic resolution: a hybrid catalog built for one OpenCode
+// credential is never visible to another profile's lookups.
+const opencodeGoDynamicModels = createScopedHybridDynamicModelHooks({
+  providerIds: ["opencode-go", "opencode"],
+  buildLiveProviderConfig: async (apiKey) =>
+    await buildOpencodeGoLiveProviderConfig({ apiKey, discoveryApiKey: apiKey }),
+});
+
+export const prepareOpencodeGoDynamicModel: typeof opencodeGoDynamicModels.prepareDynamicModel = (
+  ctx,
+) => opencodeGoDynamicModels.prepareDynamicModel(ctx);
+export const resolveOpencodeGoScopedDynamicModel: typeof opencodeGoDynamicModels.resolveDynamicModel =
+  (ctx) => opencodeGoDynamicModels.resolveDynamicModel(ctx);
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {
   return (

@@ -57,6 +57,8 @@ export type FetchLiveProviderModelIdsParams = {
   readRows?: (body: unknown) => readonly unknown[];
   readModelId?: (row: unknown) => string | undefined;
   buildRequestHeaders?: (ctx: LiveModelCatalogHeaderContext) => HeadersInit;
+  /** Override the default bounded-response ceiling for catalogs known to be larger. */
+  bodyMaxBytes?: number;
 };
 
 export type FetchLiveProviderModelRowsParams = Omit<FetchLiveProviderModelIdsParams, "readModelId">;
@@ -65,6 +67,8 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
   ttlMs?: number;
   cacheKeyParts?: readonly unknown[];
   shouldCacheRows?: (rows: readonly unknown[]) => boolean;
+  /** Test hook for deterministic cache expiry. */
+  now?: () => number;
 };
 
 export type LiveModelRowProjection<T extends ModelDefinitionConfig = ModelDefinitionConfig> = (
@@ -207,11 +211,17 @@ function buildHeaders(
   return headers;
 }
 
-async function readLiveModelCatalogJson(response: Response, timeoutMs: number): Promise<unknown> {
-  const buffer = await readResponseWithLimit(response, LIVE_MODEL_CATALOG_BODY_MAX_BYTES, {
+async function readLiveModelCatalogJson(
+  response: Response,
+  timeoutMs: number,
+  maxBytes: number = LIVE_MODEL_CATALOG_BODY_MAX_BYTES,
+): Promise<unknown> {
+  const buffer = await readResponseWithLimit(response, maxBytes, {
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(`Live model catalog response exceeded ${maxBytes} bytes (${size} bytes received)`),
+    onOverflow: ({ size, maxBytes: overflowMaxBytes }) =>
+      new Error(
+        `Live model catalog response exceeded ${overflowMaxBytes} bytes (${size} bytes received)`,
+      ),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
@@ -343,7 +353,7 @@ async function fetchLiveProviderModelCatalogPage(
       await cancelUnreadResponseBody(response);
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
-    const body = await readLiveModelCatalogJson(response, params.timeoutMs);
+    const body = await readLiveModelCatalogJson(response, params.timeoutMs, params.bodyMaxBytes);
     return {
       body,
       finalUrl,
@@ -430,6 +440,7 @@ export async function getCachedLiveProviderModelRows(
     ttlMs: params.ttlMs,
     load: async () => await fetchLiveProviderModelRows(params),
     shouldCache: params.shouldCacheRows,
+    now: params.now,
   });
 }
 

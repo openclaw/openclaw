@@ -64,21 +64,64 @@ function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
   );
   const sameLine = new Set<number>();
   const standalone = new Set<number>();
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    if (token !== ts.SyntaxKind.SingleLineCommentTrivia) {
+  // A bare scanner cannot resume template-substitution lexing: at the `}` that
+  // closes `${…}` it emits CloseBraceToken, and the next scan() treats the
+  // closing backtick as opening a phantom literal that swallows every later
+  // comment. Track each open substitution's brace depth and finish the
+  // substitution with reScanTemplateToken so SAFETY comments placed after
+  // substituted template literals stay visible. Accepted residual gap: bare
+  // scan() never produces regex tokens, so a brace-bearing regex inside a
+  // substitution can still desync the frames — over-counting only, which the
+  // SAFETY-comment ratchet treats as the safe direction.
+  const openSubstitutionBraceDepths: number[] = [];
+  let token = scanner.scan();
+  while (token !== ts.SyntaxKind.EndOfFileToken) {
+    const innermostDepth = openSubstitutionBraceDepths.at(-1);
+    if (token === ts.SyntaxKind.CloseBraceToken && innermostDepth === 0) {
+      token = scanner.reScanTemplateToken(false);
+      if (token === ts.SyntaxKind.TemplateMiddle) {
+        // Same template continues with its next `${ … }` substitution.
+        openSubstitutionBraceDepths[openSubstitutionBraceDepths.length - 1] = 0;
+      } else {
+        // TemplateTail ends this template; nested templates stay on the stack.
+        openSubstitutionBraceDepths.pop();
+      }
+      token = scanner.scan();
       continue;
     }
-    const comment = source.slice(scanner.getTokenPos(), scanner.getTextPos()).trim();
-    if (!/^\/\/\s*SAFETY:\s*\S/u.test(comment)) {
-      continue;
+    switch (token) {
+      case ts.SyntaxKind.TemplateHead:
+        openSubstitutionBraceDepths.push(0);
+        break;
+      case ts.SyntaxKind.OpenBraceToken:
+        if (innermostDepth !== undefined) {
+          openSubstitutionBraceDepths[openSubstitutionBraceDepths.length - 1] = innermostDepth + 1;
+        }
+        break;
+      case ts.SyntaxKind.CloseBraceToken:
+        if (innermostDepth !== undefined && innermostDepth > 0) {
+          // Object-literal brace inside a substitution, not the terminator.
+          openSubstitutionBraceDepths[openSubstitutionBraceDepths.length - 1] = innermostDepth - 1;
+        }
+        break;
+      case ts.SyntaxKind.SingleLineCommentTrivia: {
+        const comment = source.slice(scanner.getTokenPos(), scanner.getTextPos()).trim();
+        if (!/^\/\/\s*SAFETY:\s*\S/u.test(comment)) {
+          break;
+        }
+        const position = scanner.getTokenPos();
+        const line = sourceFile.getLineAndCharacterOfPosition(position).line;
+        sameLine.add(line);
+        const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
+        if (source.slice(lineStart, position).trim() === "") {
+          standalone.add(line);
+        }
+        break;
+      }
+      default:
+        break;
     }
-    const position = scanner.getTokenPos();
-    const line = sourceFile.getLineAndCharacterOfPosition(position).line;
-    sameLine.add(line);
-    const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
-    if (source.slice(lineStart, position).trim() === "") {
-      standalone.add(line);
-    }
+    token = scanner.scan();
   }
   return { sameLine, standalone };
 }

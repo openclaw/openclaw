@@ -461,6 +461,9 @@
       "openclaw/plugin-sdk/provider-catalog-live-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-live-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/provider-catalog-hybrid-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-hybrid-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/provider-catalog-shared": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-shared.d.ts"
       ],
