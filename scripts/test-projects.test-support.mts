@@ -138,6 +138,7 @@ type ChangedTestTargetOptions = {
   combineSiblingWithImportGraph?: boolean;
   forceFullImportGraph?: boolean;
   includeExtensionImpact?: boolean;
+  pathsFromGit?: boolean;
 };
 
 type ChangedTestTargetPlan = {
@@ -1152,10 +1153,7 @@ function listExplicitTestTargetFilesFromGit(cwd: string) {
   if (result.status !== 0) {
     return null;
   }
-  return result.stdout
-    .split("\0")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+  return result.stdout.split("\0").filter((line) => line.length > 0 && isImportableGraphFile(line));
 }
 
 function listExplicitTestTargetFilesForCwd(cwd: string) {
@@ -1493,7 +1491,7 @@ function listImportGraphFilesFromGit(
   roots: readonly string[],
   extensions: readonly string[],
 ) {
-  const result = spawnSync("git", ["ls-files", "--", ...roots], {
+  const result = spawnSync("git", ["ls-files", "-z", "--", ...roots], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -1502,8 +1500,7 @@ function listImportGraphFilesFromGit(
     return null;
   }
   return result.stdout
-    .split("\n")
-    .map((line) => normalizePathPattern(line.trim()))
+    .split("\0")
     .filter((line) => line.length > 0 && extensions.some((ext) => line.endsWith(ext)));
 }
 
@@ -3163,7 +3160,9 @@ export function resolveChangedTestTargetPlan(
   if (toolingTargets) {
     return { mode: "targets", targets: toolingTargets };
   }
-  const changedLanes = detectChangedLanes(executableChangedPaths);
+  const changedLanes = detectChangedLanes(executableChangedPaths, {
+    pathsFromGit: options.pathsFromGit,
+  });
   const env = options.env ?? {};
   const useBroadFallback = options.broad ?? shouldUseBroadChangedTargets(env);
   const skipImportGraph = changedLanes.lanes.all && !useBroadFallback;
@@ -3250,6 +3249,7 @@ export function resolveChangedTestTargetPlanForArgs(
   const changedPaths = listChangedPaths(baseRef, cwd);
   return resolveChangedTestTargetPlan(changedPaths, {
     cwd,
+    pathsFromGit: true,
     ...options,
   });
 }

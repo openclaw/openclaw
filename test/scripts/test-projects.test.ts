@@ -2050,6 +2050,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toStrictEqual([]);
   });
 
+  it("fails safe for raw Git paths that explicit-path normalization would rewrite", () => {
+    expect(
+      resolveChangedTestTargetPlanForArgs(
+        ["--changed", "origin/main"],
+        process.cwd(),
+        () => [String.raw`scripts\changed-lanes.mts`],
+        { broad: true },
+      ),
+    ).toEqual({ mode: "broad", targets: [] });
+  });
+
   it("keeps unknown root surface skip reasons available to changed-mode callers", () => {
     expect(
       resolveChangedTestTargetPlanForArgs(["--changed", "origin/main"], process.cwd(), () => [

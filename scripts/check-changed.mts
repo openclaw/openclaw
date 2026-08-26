@@ -278,7 +278,16 @@ function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string 
   if (stagedPaths.length === 0) {
     return [...timedArgs, "--no-changes"];
   }
-  return [...timedArgs, "--base", "HEAD", "--head", "HEAD", "--", ...stagedPaths];
+  return [
+    ...timedArgs,
+    "--paths-from-git",
+    "--base",
+    "HEAD",
+    "--head",
+    "HEAD",
+    "--",
+    ...stagedPaths,
+  ];
 }
 
 export function shouldRunNpmLockGuard(paths: string[]) {
@@ -1110,8 +1119,7 @@ function printSummary(timings: ChangedCheckTiming[], options: ChangedCheckRunOpt
 function parseArgs(argv: string[]) {
   const separatorIndex = argv.indexOf("--");
   const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
-  const explicitPaths =
-    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizeChangedPath);
+  const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
   const args = {
     base: "origin/main",
     head: "HEAD",
@@ -1119,6 +1127,7 @@ function parseArgs(argv: string[]) {
     dryRun: false,
     timed: false,
     noChanges: false,
+    pathsFromGit: false,
     help: false,
     paths: new Array<string>(),
   };
@@ -1132,6 +1141,7 @@ function parseArgs(argv: string[]) {
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
       booleanFlag("--no-changes", "noChanges"),
+      booleanFlag("--paths-from-git", "pathsFromGit"),
       booleanFlag("--help", "help"),
       booleanFlag("-h", "help"),
     ],
@@ -1140,12 +1150,15 @@ function parseArgs(argv: string[]) {
         if (arg.startsWith("-")) {
           throw new Error(`Unknown option: ${arg}`);
         }
-        target.paths.push(normalizeChangedPath(arg));
+        target.paths.push(arg);
         return "handled";
       },
     },
   );
   parsed.paths.push(...explicitPaths);
+  if (!parsed.pathsFromGit) {
+    parsed.paths = parsed.paths.map(normalizeChangedPath);
+  }
   return parsed;
 }
 
@@ -1209,11 +1222,13 @@ async function main() {
       process.exitCode = delegated.exitCode;
     }
     if (paths) {
+      const pathsFromGit = args.pathsFromGit || (!args.noChanges && args.paths.length === 0);
       const result = detectChangedLanesForPaths({
         paths,
         base: args.base,
         head: args.head,
         staged: args.staged,
+        pathsFromGit,
       });
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {

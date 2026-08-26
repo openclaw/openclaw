@@ -47,7 +47,7 @@ export function normalizeChangedPath(inputPath) {
  * @returns {{ path: string; surface: ChangedPathSurface; isChangedLaneTest: boolean; isTestOnly: boolean; isNativeOnly: boolean }}
  */
 export function getChangedPathFacts(inputPath) {
-  const path = typeof inputPath === "string" ? inputPath.trim() : "";
+  const path = typeof inputPath === "string" ? inputPath : "";
   const surface = SURFACE_PATTERNS.find(([, pattern]) => pattern.test(path))?.[0] ?? "unknown";
 
   return {

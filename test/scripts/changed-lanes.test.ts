@@ -395,6 +395,66 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { tooling: true });
   });
 
+  it("preserves exact Git tokens across range, staged, untracked, plan, and delegation", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir } = createSyntheticMergeRepo("openclaw-changed-lanes-raw-paths-");
+    git(dir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+    const rangePath = "scripts/中文.ts";
+    const stagedPath = "scripts/trailing.ts ";
+    const untrackedPaths = [String.raw`scripts\generated.ts`, " scripts/generated.ts", "--"];
+    writeRepoFile(dir, rangePath, "export const range = true;\n");
+    commitAll(dir, "range");
+    writeRepoFile(dir, stagedPath, "export const staged = true;\n");
+    git(dir, ["add", "--", stagedPath]);
+    for (const untrackedPath of untrackedPaths) {
+      writeRepoFile(dir, untrackedPath, "export const untracked = true;\n");
+    }
+
+    const expectedPaths = [rangePath, stagedPath, ...untrackedPaths].toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+    expect(listChangedPathsFromGit({ base: "origin/main", cwd: dir })).toEqual(expectedPaths);
+    expect(listStagedChangedPaths(dir)).toEqual([stagedPath]);
+
+    const result = runChangedLanesCli(dir, ["--json", "--base", "origin/main"]);
+    expect(result.paths).toEqual(expectedPaths);
+    expectLanes(result.lanes, { scripts: true, tooling: true, all: true });
+    expect(
+      createChangedCheckPlan(
+        detectChangedLanes(result.paths, { pathsFromGit: true }),
+      ).commands.find((command) => command.name === "format changed files"),
+    ).toEqual({
+      name: "format changed files",
+      args: ["format:check", "--no-error-on-unmatched-pattern", "--", ...expectedPaths],
+    });
+
+    const delegatedArgs = buildChangedCheckCrabboxArgs(["--staged", "--timed"], { cwd: dir });
+    expect(delegatedArgs.slice(delegatedArgs.indexOf("check:changed") + 1)).toEqual([
+      "--timed",
+      "--paths-from-git",
+      "--base",
+      "HEAD",
+      "--head",
+      "HEAD",
+      "--",
+      stagedPath,
+    ]);
+  });
+
+  it("still normalizes explicit Windows-style paths", () => {
+    const result = runRepoScript("scripts/changed-lanes.mjs", [
+      "--json",
+      "--",
+      String.raw`scripts\changed-lanes.mts`,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(parseChangedLaneOutput(result.stdout).paths).toEqual(["scripts/changed-lanes.mts"]);
+  });
+
   it("falls back to a two-dot diff when a delegated checkout has no merge base", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-no-merge-base-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -642,12 +702,12 @@ describe("scripts/changed-lanes", () => {
     expect(hasDeadcodeScannedSource(changedPaths)).toBe(expected);
   });
 
-  it("ignores the explicit path separator", () => {
-    const result = detectChangedLanes(["--", "scripts/test-live-acp-bind-docker.sh"]);
+  it("preserves an exact -- filename after the explicit path separator", () => {
+    const result = runRepoScript("scripts/changed-lanes.mjs", ["--json", "--", "--"]);
 
-    expect(result.paths).toEqual(["scripts/test-live-acp-bind-docker.sh"]);
-    expect(result.lanes.liveDockerTooling).toBe(true);
-    expect(result.lanes.all).toBe(false);
+    expect(result.status).toBe(0);
+    expect(parseChangedLaneOutput(result.stdout).paths).toEqual(["--"]);
+    expect(parseChangedLaneOutput(result.stdout).lanes.all).toBe(true);
   });
 
   it("routes a subagent-announce-only Docker diff through the live Docker lane", () => {
@@ -1198,6 +1258,7 @@ describe("scripts/changed-lanes", () => {
     const args = buildChangedCheckCrabboxArgs(["--staged", "--timed"], { cwd: dir });
     expect(args.slice(args.indexOf("check:changed") + 1)).toEqual([
       "--timed",
+      "--paths-from-git",
       "--base",
       "HEAD",
       "--head",

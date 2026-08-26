@@ -253,6 +253,7 @@ function resolvePreciseChangedTargets(
       cwd,
       forceFullImportGraph: true,
       includeExtensionImpact: false,
+      pathsFromGit: true,
     });
   const plan =
     changedPaths.length > 0
@@ -413,7 +414,7 @@ export function hasCoreExtensionImpact(changedPaths: string[], options: CwdOptio
       !isPolicyTestOwnedPath(changedPath),
   );
   return (
-    detectChangedLanes(changedPaths).extensionImpactFromCore ||
+    detectChangedLanes(changedPaths, { pathsFromGit: true }).extensionImpactFromCore ||
     (regularLivePaths.some((changedPath) => changedPath.startsWith("src/")) &&
       hasImportGraphImpactOnTargets(regularLivePaths, publicPluginSdkEntrySources, cwd))
   );

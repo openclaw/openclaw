@@ -256,6 +256,10 @@ describe("CI changed Node test plan", () => {
     expect(createChangedNodeTestShards(["package.json"])).toBeNull();
   });
 
+  it("fails safe for raw Git paths that resemble normalized script paths", () => {
+    expect(createChangedNodeTestShards([String.raw`scripts\changed-lanes.mts`])).toBeNull();
+  });
+
   it("keeps minimal-gateway boot coverage reachable from gateway startup changes", () => {
     // A gateway startup stall must fail in the gateway lane; the boot smoke is
     // selected purely through the import graph, so a rename or an import shape
