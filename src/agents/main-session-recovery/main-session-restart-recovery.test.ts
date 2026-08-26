@@ -65,8 +65,8 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
@@ -622,7 +622,7 @@ describe("main-session-restart-recovery", () => {
     expect(markResult).toEqual({ marked: 1, skipped: 0 });
 
     const recovery = await recoverRestartAbortedMainSessions({ cfg });
-    expect(recovery).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(recovery).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
 
     expect(gatewayParams()).toMatchObject({ agentId: "ops", sessionKey: "global" });
 
@@ -4082,7 +4082,7 @@ describe("main-session-restart-recovery", () => {
     vi.mocked(callGateway)
       .mockRejectedValueOnce(new Error("temporary dispatch failure"))
       .mockResolvedValueOnce({ runId: "run-resumed" })
-      .mockResolvedValueOnce({ runId: "run-resumed", status: "running" });
+      .mockResolvedValueOnce({ runId: "run-resumed" });
 
     scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease({
       delayMs: 0,
