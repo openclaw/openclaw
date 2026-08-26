@@ -4541,11 +4541,13 @@ describe("main-session-restart-recovery", () => {
 
       expect(result).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
       expect(acceptedObserver).toBeTypeOf("function");
-      expect(scheduleSpy).toHaveBeenCalledWith({
-        sessionId: "main-session",
-        sessionKey: "agent:main:main",
-        storePath,
-      });
+      expect(scheduleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "main-session",
+          sessionKey: "agent:main:main",
+          storePath,
+        }),
+      );
       expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
         status: "running",
         abortedLastRun: true,
@@ -4556,6 +4558,125 @@ describe("main-session-restart-recovery", () => {
         loadSessionEntry({ sessionKey: "agent:main:main", storePath })
           ?.restartRecoveryDeliveryRunId,
       ).toBeUndefined();
+      const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+        sessionId: "main-session",
+        storePath,
+      });
+      expect(trajectoryEvents).toEqual([
+        expect.objectContaining({
+          type: "session.ended",
+          runId: expect.any(String),
+          data: expect.objectContaining({ status: "interrupted", aborted: true }),
+        }),
+      ]);
+    } finally {
+      scheduleSpy.mockRestore();
+    }
+  });
+
+  it("restores an accepted recovery that fails before execution starts for an ops-owned fixed-store global session", async () => {
+    const storePath = path.join(tmpDir, "shared", "sessions.json");
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+      session: { scope: "global", store: storePath },
+    } satisfies OpenClawConfig;
+
+    await replaceSessionEntry(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      runningSessionEntry("global-session", {
+        abortedLastRun: true,
+        lifecycleRunId: "global-run",
+        restartRecoveryDeliveryRunId: "recovery-global",
+        restartRecoveryDeliverySourceRunId: "source-global",
+      }),
+    );
+    await writeTranscript(path.dirname(storePath), "global-session", [
+      { role: "user", content: "recover without losing the owner" },
+    ]);
+
+    const scheduleSpy = vi
+      .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
+      .mockImplementation(() => {});
+    let acceptedObserver: ((payload: unknown) => void) | undefined;
+    const dispatchAgent = vi.fn<GatewayRecoveryRuntime["dispatchAgent"]>(
+      async (request, _timeoutMs, options) => {
+        const runId = request.idempotencyKey!;
+        await commitMainSessionRecovery({
+          command: {
+            kind: "admit_recovery",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            now: Date.now(),
+            runId,
+            sessionId: "global-session",
+          },
+          requireWriteSuccess: true,
+          target: { sessionKey: "global", storePath },
+          agentId: "ops",
+        });
+        acceptedObserver = options?.onAccepted;
+        acceptedObserver?.({ runId, status: "accepted" });
+        throw new Error("detached execution failed before provider start");
+      },
+    );
+
+    try {
+      const result = await retryRestartAbortedMainSessionRecovery({
+        cfg,
+        agentId: "ops",
+        expectedRecoveryRunId: "recovery-global",
+        expectedRecoverySourceRunId: "source-global",
+        expectedSessionId: "global-session",
+        sessionKey: "global",
+        storePath,
+        gatewayRuntime: {
+          abortAgent: vi.fn(),
+          dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
+          waitForAgent: vi.fn(async () => ({
+            runId: "recovery-global",
+            status: "timeout",
+            timeoutPhase: "queue",
+            providerStarted: false,
+          })) as GatewayRecoveryRuntime["waitForAgent"],
+          sendRecoveryNotice: vi.fn(),
+        },
+      });
+
+      expect(result).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
+      expect(acceptedObserver).toBeTypeOf("function");
+      expect(scheduleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "global-session",
+          sessionKey: "global",
+          storePath,
+          agentId: "ops",
+        }),
+      );
+      expect(loadSessionEntry({ sessionKey: "global", storePath, agentId: "ops" })).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliverySourceRunId: "source-global",
+        mainRestartRecovery: { chargedAttempts: 1 },
+      });
+      expect(
+        loadSessionEntry({ sessionKey: "global", storePath, agentId: "ops" })
+          ?.restartRecoveryDeliveryRunId,
+      ).toBeUndefined();
+      const trajectoryEvents = await loadSqliteTrajectoryRuntimeEvents({
+        agentId: "ops",
+        sessionId: "global-session",
+        storePath,
+      });
+      expect(trajectoryEvents).toEqual([
+        expect.objectContaining({
+          type: "session.ended",
+          runId: expect.any(String),
+          data: expect.objectContaining({ status: "interrupted", aborted: true }),
+        }),
+      ]);
     } finally {
       scheduleSpy.mockRestore();
     }

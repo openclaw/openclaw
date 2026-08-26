@@ -46,7 +46,7 @@ export async function probeRestartRecoveryTerminalStatus(
   }
 }
 
-export async function settleRestartRecoveryDispatch(params: {
+async function settleRestartRecoveryDispatch(params: {
   expectedRecoveryRunId: string;
   expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
@@ -115,7 +115,7 @@ export async function settleRestartRecoveryDispatch(params: {
   });
 }
 
-export function isExactRestartRecoveryDispatchAdmission(params: {
+function isExactRestartRecoveryDispatchAdmission(params: {
   admission: Awaited<ReturnType<typeof commitMainSessionRecovery>>;
   lifecycleGeneration: string;
   recoveryRunId: string;

@@ -194,49 +194,6 @@ export async function resumeMainSession(params: {
     reservation = undefined;
     return { current, result };
   };
-  const restoreAcceptedRecovery = async () => {
-    if (params.shouldContinue?.() === false) {
-      return undefined;
-    }
-    const restored = await commitMainSessionRecovery({
-      command: {
-        kind: "mark_admitted_recovery_interrupted",
-        lifecycleGeneration,
-        now: Date.now(),
-        runId: recoveryRunId,
-        sessionId: params.entry.sessionId,
-      },
-      requireWriteSuccess: true,
-      shouldContinue: params.shouldContinue,
-      target: { sessionKey: params.sessionKey, storePath: params.storePath },
-    });
-    return params.shouldContinue?.() !== false &&
-      restored.transition.kind === "applied" &&
-      restored.entry &&
-      restored.sessionKey
-      ? {
-          sessionId: restored.entry.sessionId,
-          sessionKey: restored.sessionKey,
-          storePath: params.storePath,
-        }
-      : undefined;
-  };
-  const repairAcceptedRecovery = async () => {
-    const restored = await repairMainSessionRecoveryMutation({
-      mutation: restoreAcceptedRecovery,
-      onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
-      onError: (restoreError) => {
-        if (params.shouldContinue?.() !== false) {
-          log.warn(
-            `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
-          );
-        }
-      },
-    });
-    if (params.shouldContinue?.() !== false) {
-      scheduleMainSessionRecoveryPendingTarget(restored);
-    }
-  };
   try {
     const reserved = await commitMainSessionRecovery({
       command: {
@@ -436,7 +393,49 @@ export async function resumeMainSession(params: {
       canRestoreAcceptedFailure &&
       params.shouldContinue?.() !== false
     ) {
-      await repairAcceptedRecovery();
+      // Resolve the trajectory target before opening the restore transaction:
+      // filesystem/registry inspection must not run while the session write
+      // lock is held. A resolver failure leaves the admitted row to the normal
+      // startup-orphan recovery path instead of throwing past the rollback.
+      let restoreAdmittedRecovery:
+        | ReturnType<typeof createRestoreAdmittedRecoveryInterrupted>
+        | undefined;
+      try {
+        restoreAdmittedRecovery = createRestoreAdmittedRecoveryInterrupted({
+          agentId: params.dbAgentId ?? params.agentId,
+          lifecycleGeneration,
+          logWarn: (message) => log.warn(message),
+          runId: recoveryRunId,
+          sessionId: () => params.entry.sessionId,
+          sessionKey: params.sessionKey,
+          shouldContinue: params.shouldContinue,
+          storePath: params.storePath,
+          trajectoryTarget: resolveSqliteTargetFromSessionStorePath(params.storePath, {
+            agentId: params.dbAgentId ?? params.agentId,
+          }),
+        });
+      } catch (resolveError) {
+        log.warn(
+          `failed to resolve trajectory target for accepted restart recovery ${params.sessionKey}: ${String(resolveError)}`,
+        );
+        restoreAdmittedRecovery = undefined;
+      }
+      const restored = restoreAdmittedRecovery
+        ? await repairMainSessionRecoveryMutation({
+            mutation: restoreAdmittedRecovery,
+            onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+            onError: (restoreError) => {
+              if (params.shouldContinue?.() !== false) {
+                log.warn(
+                  `failed to restore accepted restart recovery ${params.sessionKey}: ${String(restoreError)}`,
+                );
+              }
+            },
+          })
+        : undefined;
+      if (params.shouldContinue?.() !== false) {
+        scheduleMainSessionRecoveryPendingTarget(restored);
+      }
     } else if (
       dispatchAccepted &&
       !executionStarted &&
