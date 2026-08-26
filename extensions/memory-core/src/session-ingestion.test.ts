@@ -73,4 +73,50 @@ describe("session ingestion", () => {
       "User: Bravo durable note.",
     ]);
   });
+
+  it("resumes after a validated transcript append", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
+    tempDirs.push(dir);
+    const archiveFile = path.join(dir, "archive.jsonl");
+    const record = (id: string, content: string) =>
+      `${JSON.stringify({
+        type: "message",
+        id,
+        timestamp: "2026-04-05T18:00:00.000Z",
+        message: {
+          role: "user",
+          content,
+          timestamp: "2026-04-05T18:00:00.000Z",
+        },
+      })}\n`;
+    await fs.writeFile(
+      archiveFile,
+      record("message-1", "Alpha durable note.") + record("message-2", "Bravo durable note."),
+    );
+    const source = foreignSessionIngestionSource("main", archiveFile);
+    const first = await scanSessionIngestionSource({
+      source,
+      seenMessages: {},
+      verifyContent: true,
+      maxCandidates: 1,
+      classifyDay: () => "include",
+    });
+    if (!first.fileState) {
+      throw new Error("expected initial backfill checkpoint");
+    }
+
+    await fs.appendFile(archiveFile, record("message-3", "Charlie durable note."));
+    const second = await scanSessionIngestionSource({
+      source,
+      previous: first.fileState,
+      seenMessages: {},
+      verifyContent: true,
+      classifyDay: () => "include",
+    });
+
+    expect(second.candidates.map((candidate) => candidate.snippet)).toEqual([
+      "User: Bravo durable note.",
+      "User: Charlie durable note.",
+    ]);
+  });
 });

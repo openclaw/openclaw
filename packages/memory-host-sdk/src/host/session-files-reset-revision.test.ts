@@ -13,13 +13,30 @@ import {
 } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { buildSessionEntry, type SessionFileEntry } from "./session-files.js";
+import { hashText } from "./hash.js";
+import {
+  buildSessionEntry,
+  matchesSessionEntryPrefixHash,
+  type SessionFileEntry,
+} from "./session-files.js";
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
   if (!entry) {
     throw new Error("expected session entry");
   }
   return entry;
+}
+
+function legacySessionEntryHash(entry: SessionFileEntry): string {
+  return hashText(
+    entry.content +
+      "\n" +
+      entry.lineMap.join(",") +
+      "\n" +
+      entry.messageTimestampsMs.join(",") +
+      "\n" +
+      JSON.stringify(entry.lineProvenance),
+  );
 }
 
 let tmpDir: string;
@@ -54,7 +71,7 @@ afterEach(() => {
 });
 
 describe("SQLite session reset content revision", () => {
-  it("invalidates a session hash when a reset boundary changes its generation", async () => {
+  it("invalidates current and legacy prefix hashes across a reset generation", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:chat:reset-revision";
@@ -80,6 +97,22 @@ describe("SQLite session reset content revision", () => {
       updatedAtMs: 1,
     };
     const before = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    const beforeLineCount = before.content.split("\n").length;
+    const legacyBeforeHash = legacySessionEntryHash(before);
+
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "ordinary appended text" } }],
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+    const afterAppend = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
+    expect(matchesSessionEntryPrefixHash(afterAppend, beforeLineCount, before.hash)).toBe(true);
+    expect(matchesSessionEntryPrefixHash(afterAppend, beforeLineCount, legacyBeforeHash)).toBe(
+      true,
+    );
 
     await resetSessionEntryLifecycle({
       agentId: "main",
@@ -94,8 +127,8 @@ describe("SQLite session reset content revision", () => {
     });
 
     const after = requireSessionEntry(await buildSessionEntry(sessionKey, buildOptions));
-    expect(after.content).toBe(before.content);
-    expect(after.lineMap).toEqual(before.lineMap);
+    expect(after.content).toBe(afterAppend.content);
+    expect(after.lineMap).toEqual(afterAppend.lineMap);
     const cutoffSymbol = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
     expect(Object.getOwnPropertyDescriptor(after, cutoffSymbol)).toMatchObject({
       enumerable: false,
@@ -103,5 +136,7 @@ describe("SQLite session reset content revision", () => {
     });
     expect(Object.keys(after)).not.toContain(cutoffSymbol.description);
     expect(after.hash).not.toBe(before.hash);
+    expect(matchesSessionEntryPrefixHash(after, beforeLineCount, before.hash)).toBe(false);
+    expect(matchesSessionEntryPrefixHash(after, beforeLineCount, legacyBeforeHash)).toBe(false);
   });
 });

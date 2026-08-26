@@ -7,6 +7,7 @@ export {
   listSessionTranscriptCorpusEntriesForAgent,
   loadDreamingNarrativeTranscriptPathSetForAgent,
   loadSessionTranscriptClassificationForAgent,
+  matchesSessionEntryPrefixHash,
   normalizeSessionTranscriptPathForComparison,
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionIdentityForTranscriptFile,

@@ -21,7 +21,14 @@ import {
   seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
 import { previewRemHarness } from "./rem-harness.js";
-import { writeSessionIngestionState } from "./session-ingestion.js";
+import {
+  appendSessionCorpusLines,
+  foreignSessionIngestionSource,
+  mergeTrackedMessageHashes,
+  readSessionIngestionState,
+  scanSessionIngestionSource,
+  writeSessionIngestionState,
+} from "./session-ingestion.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
@@ -1888,6 +1895,150 @@ describe("memory-core dreaming phases", () => {
     expect(persistedLines).toHaveLength(160);
     expect(corpus).toContain("bulk-line-0");
     expect(corpus).toContain("bulk-line-159");
+  });
+
+  it("does not restage transcript messages after the seen-hash cap rolls over", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const transcriptPath = path.join(workspaceDir, "rollover-session.jsonl");
+    const originalCount = 4_097;
+    try {
+      const startMs = Date.parse("2026-04-05T09:00:00.000Z");
+      const record = (id: string, timestamp: number | string, content: string) =>
+        `${JSON.stringify({
+          type: "message",
+          id,
+          timestamp,
+          message: { role: "user", content, timestamp },
+        })}\n`;
+      await fs.writeFile(
+        transcriptPath,
+        Array.from({ length: originalCount }, (_, index) =>
+          record(`message-${index}`, startMs + index, `rollover-message-${index % 16}`),
+        ).join(""),
+      );
+      const source = foreignSessionIngestionSource("main", transcriptPath);
+      const initialScan = await scanSessionIngestionSource({
+        source,
+        seenMessages: {},
+        verifyContent: true,
+        classifyDay: () => "include",
+      });
+      const initialFileState = expectDefined(initialScan.fileState, "initial ingestion checkpoint");
+      expect(initialScan.candidates).toHaveLength(originalCount);
+      const firstRenderedCorpusLine = expectDefined(
+        initialScan.candidates[0]?.rendered,
+        "first rendered rollover corpus line",
+      );
+      const initialResults = await appendSessionCorpusLines({
+        workspaceDir,
+        day: "2026-04-05",
+        lines: initialScan.candidates,
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_sessions__:2026-04-05",
+        // One old claim is enough to detect accidental reinforcement after the append.
+        results: initialResults.slice(0, 1),
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+      });
+      await writeSessionIngestionState(workspaceDir, {
+        version: 3,
+        files: { [source.stateKey]: initialFileState },
+        seenMessages: {
+          [source.scope]: mergeTrackedMessageHashes(
+            [],
+            initialScan.candidates.map((candidate) => candidate.hash),
+          ),
+        },
+      });
+
+      await fs.appendFile(
+        transcriptPath,
+        record("message-new", "2026-04-06T09:00:00.000Z", "rollover-message-new"),
+      );
+      const persisted = await readSessionIngestionState(workspaceDir);
+      expect(persisted.seenMessages[source.scope]).toHaveLength(4_096);
+      expect(persisted.seenMessages[source.scope]).not.toContain(initialScan.candidates[0]?.hash);
+      const appendedScan = await scanSessionIngestionSource({
+        source,
+        previous: persisted.files[source.stateKey],
+        seenMessages: persisted.seenMessages,
+        verifyContent: true,
+        classifyDay: () => "include",
+      });
+      expect(appendedScan.candidates.map((candidate) => candidate.snippet)).toEqual([
+        "User: rollover-message-new",
+      ]);
+      const appendedFileState = expectDefined(
+        appendedScan.fileState,
+        "appended ingestion checkpoint",
+      );
+      const appendedResults = await appendSessionCorpusLines({
+        workspaceDir,
+        day: "2026-04-06",
+        lines: appendedScan.candidates,
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_sessions__:2026-04-06",
+        results: appendedResults,
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-06",
+        nowMs: Date.parse("2026-04-06T10:05:00.000Z"),
+      });
+      await writeSessionIngestionState(workspaceDir, {
+        version: 3,
+        files: { [source.stateKey]: appendedFileState },
+        seenMessages: {
+          [source.scope]: mergeTrackedMessageHashes(
+            persisted.seenMessages[source.scope] ?? [],
+            appendedScan.candidates.map((candidate) => candidate.hash),
+          ),
+        },
+      });
+
+      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      const corpusLines = (
+        await Promise.all(
+          (
+            await fs.readdir(sessionCorpusDir)
+          )
+            .filter((name) => name.endsWith(".txt"))
+            .map((name) => fs.readFile(path.join(sessionCorpusDir, name), "utf-8")),
+        )
+      )
+        .flatMap((content) => content.split(/\r?\n/u))
+        .filter(Boolean);
+      expect(corpusLines.filter((line) => line === firstRenderedCorpusLine)).toHaveLength(1);
+      expect(
+        corpusLines.filter((line) => line.endsWith("User: rollover-message-new")),
+      ).toHaveLength(1);
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-06T10:05:00.000Z"),
+      });
+      const originalCandidates = ranked.filter(
+        (candidate) => candidate.snippet === "User: rollover-message-0",
+      );
+      const appendedCandidates = ranked.filter(
+        (candidate) => candidate.snippet === "User: rollover-message-new",
+      );
+      expect(originalCandidates).toHaveLength(1);
+      expect(originalCandidates[0]?.dailyCount).toBe(1);
+      expect(appendedCandidates).toHaveLength(1);
+      expect(appendedCandidates[0]?.dailyCount).toBe(1);
+    } finally {
+      restoreDreamingTestEnv();
+    }
   });
 
   it("preserves checkpoints for known sessions beyond a capped sweep", async () => {
