@@ -22,7 +22,10 @@ import {
   extractToolResultText,
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "../utils/system-prompt-cache-boundary.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   isSafeResponsesReplayItemId,
@@ -255,12 +258,54 @@ export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from ".
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
+  promptCacheBreakpoint?: boolean;
   replayReasoningItems?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
   authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
 };
+
+function buildResponsesSystemPromptContent(
+  systemPrompt: string,
+  promptCacheBreakpoint: boolean,
+): ResponseInputMessageContentList {
+  if (!promptCacheBreakpoint) {
+    return [
+      {
+        type: "input_text",
+        text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(systemPrompt)),
+      },
+    ];
+  }
+
+  const split = splitSystemPromptCacheBoundary(systemPrompt);
+  if (!split) {
+    return [
+      {
+        type: "input_text",
+        text: sanitizeTransportPayloadText(systemPrompt),
+        prompt_cache_breakpoint: { mode: "explicit" },
+      },
+    ];
+  }
+
+  const content: ResponseInputMessageContentList = [];
+  if (split.stablePrefix) {
+    content.push({
+      type: "input_text",
+      text: sanitizeTransportPayloadText(split.stablePrefix),
+      prompt_cache_breakpoint: { mode: "explicit" },
+    });
+  }
+  if (split.dynamicSuffix) {
+    content.push({
+      type: "input_text",
+      text: sanitizeTransportPayloadText(split.dynamicSuffix),
+    });
+  }
+  return content.length > 0 ? content : [{ type: "input_text", text: "" }];
+}
 
 function convertResponsesMessagesWithStyle(
   model: Model,
@@ -338,12 +383,13 @@ function convertResponsesMessagesWithStyle(
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push(
-      buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
-        {
-          type: "input_text",
-          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
-        },
-      ]),
+      buildResponsesInputMessage(
+        resolveResponsesInstructionRole(model),
+        buildResponsesSystemPromptContent(
+          context.systemPrompt,
+          options?.promptCacheBreakpoint === true,
+        ),
+      ),
     );
   }
   // The compact endpoint's output is already canonical provider input, not
@@ -593,6 +639,7 @@ export function convertProviderResponsesMessages<TApi extends Api>(
   allowedToolCallProviders: ReadonlySet<string>,
   options?: {
     includeSystemPrompt?: boolean;
+    promptCacheBreakpoint?: boolean;
     replayResponsesItemIds?: boolean;
     sessionId?: string;
     authProfileId?: string;

@@ -1,6 +1,6 @@
 import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
-import type { Model } from "../llm/types.js";
+import type { Model, OpenAIResponsesCompat } from "../llm/types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
 
 /**
@@ -8,7 +8,7 @@ import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
  * discovery, overrides, and compat normalization.
  */
 export type ProviderRuntimeModel = Omit<Model, "compat"> & {
-  compat?: ModelCompatConfig;
+  compat?: ModelCompatConfig & Pick<OpenAIResponsesCompat, "supportsExplicitPromptCaching">;
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;

@@ -19,6 +19,7 @@ import {
   resolveOpenAISimpleReasoningEffort,
   type OpenAIRequestReasoningEffort,
 } from "./openai-request-reasoning.js";
+import { resolveOpenAIResponsesPromptCachePlan } from "./openai-responses-prompt-cache.js";
 import {
   applyCommonResponsesParams,
   applyResponsesServiceTierPricing,
@@ -135,15 +136,18 @@ function buildParams(
   options?: OpenAIResponsesOptions,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
+  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const promptCachePlan = resolveOpenAIResponsesPromptCachePlan(model, cacheRetention);
   const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
     replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
     replayMode,
+    promptCacheBreakpoint: promptCachePlan?.useBreakpoint,
   });
 
-  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const compat = getCompat(model);
+  const promptCacheParams = resolveOpenAIPromptCacheParams(model, cacheRetention, compat);
   const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
@@ -152,7 +156,14 @@ function buildParams(
       cacheRetention === "none" || !compat.supportsPromptCacheKey
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
+    ...(promptCachePlan
+      ? {
+          prompt_cache_options: {
+            ...promptCacheParams.prompt_cache_options,
+            ...promptCachePlan.options,
+          },
+        }
+      : promptCacheParams),
     store: false,
   };
 

@@ -1,6 +1,6 @@
 /**
  * Synchronous Amazon Bedrock Mantle provider registration. It wires discovery,
- * runtime bearer-token preparation, stream wrappers, and failover classifiers.
+ * runtime bearer-token preparation, model capabilities, and failover classifiers.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -37,13 +37,30 @@ function normalizeMantleResolvedModel(params: {
     : resolveClaudeSonnet5ModelIdentity(ref)
       ? resolveMantleSonnet5Cost()
       : undefined;
-  if (!cost) {
+  const needsPromptCacheCompat =
+    /^openai\.gpt-5\.6(?:[-.]|$)/iu.test(params.modelId.trim()) &&
+    params.model.api === "openai-responses" &&
+    (params.model.compat?.supportsExplicitPromptCaching !== true ||
+      params.model.compat?.supportsPromptCacheKey === undefined ||
+      params.model.compat?.supportsLongCacheRetention !== false);
+  const needsCostUpdate = cost !== undefined && !modelCostsEqual(params.model.cost, cost);
+  if (!needsCostUpdate && !needsPromptCacheCompat) {
     return undefined;
   }
-  if (modelCostsEqual(params.model.cost, cost)) {
-    return undefined;
-  }
-  return { ...params.model, cost };
+  return {
+    ...params.model,
+    ...(needsCostUpdate ? { cost } : {}),
+    ...(needsPromptCacheCompat
+      ? {
+          compat: {
+            ...params.model.compat,
+            supportsExplicitPromptCaching: true,
+            supportsLongCacheRetention: false,
+            supportsPromptCacheKey: params.model.compat?.supportsPromptCacheKey ?? true,
+          },
+        }
+      : {}),
+  };
 }
 
 /** Register the Amazon Bedrock Mantle provider with OpenClaw. */

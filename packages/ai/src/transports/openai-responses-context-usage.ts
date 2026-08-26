@@ -84,6 +84,13 @@ export function recordResponsesContextUsage(
       request.instructions === undefined &&
       firstInput?.type === "message" &&
       (firstInput.role === "developer" || firstInput.role === "system"),
+    // Reconstruct the admitted prompt's cache shape before comparing prefix bytes.
+    promptCacheBreakpoint:
+      firstInput?.type === "message" &&
+      Array.isArray(firstInput.content) &&
+      firstInput.content.some(
+        (part) => part.type === "input_text" && part.prompt_cache_breakpoint?.mode === "explicit",
+      ),
     prefixHash: contextFingerprint(request.input, replayOutput),
     prefixLength: request.input.length + replayOutput.length,
     promptTokens: usage.promptTokens,
@@ -137,7 +144,11 @@ export function resolveResponsesContextUsageBoundary(
       model,
       { messages: messages.filter(isProviderMessage), systemPrompt },
       TOOL_CALL_PROVIDERS,
-      { ...identity, includeSystemPrompt: includeSystemPrompt === true },
+      {
+        ...identity,
+        includeSystemPrompt: includeSystemPrompt === true,
+        promptCacheBreakpoint: state.promptCacheBreakpoint === true,
+      },
     );
     if (
       input.length < prefixLength ||

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const openAiMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -231,14 +232,29 @@ describe("OpenAI Responses provider", () => {
   });
 
   it.each([
-    { id: "gpt-5.6-sol", cacheRetention: "short", ttl: undefined, retention: undefined },
-    { id: "gpt-5.6-sol", cacheRetention: "long", ttl: "30m", retention: undefined },
-    { id: "gpt-5.6-sol", cacheRetention: "none", ttl: undefined, retention: undefined },
-    { id: "gpt-5.5", cacheRetention: "long", ttl: undefined, retention: "24h" },
-    { id: "gpt-5.5", cacheRetention: "short", ttl: undefined, retention: undefined },
+    {
+      id: "gpt-5.6-sol",
+      cacheRetention: "short",
+      cacheOptions: { mode: "explicit" },
+      retention: undefined,
+    },
+    {
+      id: "gpt-5.6-sol",
+      cacheRetention: "long",
+      cacheOptions: { ttl: "30m", mode: "explicit" },
+      retention: undefined,
+    },
+    {
+      id: "gpt-5.6-sol",
+      cacheRetention: "none",
+      cacheOptions: { mode: "explicit" },
+      retention: undefined,
+    },
+    { id: "gpt-5.5", cacheRetention: "long", cacheOptions: undefined, retention: "24h" },
+    { id: "gpt-5.5", cacheRetention: "short", cacheOptions: undefined, retention: undefined },
   ] as const)(
     "serializes $id $cacheRetention caching through both Responses builders",
-    async ({ id, cacheRetention, ttl, retention }) => {
+    async ({ id, cacheRetention, cacheOptions, retention }) => {
       const requestModel = model({ id });
       const options = { apiKey: "sentinel-key", sessionId: "cache-session", cacheRetention };
       const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
@@ -253,8 +269,8 @@ describe("OpenAI Responses provider", () => {
         expect((params as { prompt_cache_retention?: unknown }).prompt_cache_retention).toBe(
           retention,
         );
-        if (ttl) {
-          expect(params).toHaveProperty("prompt_cache_options", { ttl });
+        if (cacheOptions) {
+          expect(params).toHaveProperty("prompt_cache_options", cacheOptions);
         } else {
           expect(params).not.toHaveProperty("prompt_cache_options");
         }
@@ -308,4 +324,52 @@ describe("OpenAI Responses provider", () => {
       }
     },
   );
+
+  it("applies explicit GPT-5.6 caching to simple Responses completions", async () => {
+    await streamSimpleOpenAIResponses(
+      model({
+        id: "openai.gpt-5.6-luna",
+        name: "openai.gpt-5.6-luna",
+        provider: "amazon-bedrock-mantle",
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+        compat: {
+          supportsExplicitPromptCaching: true,
+          supportsPromptCacheKey: true,
+          supportsLongCacheRetention: false,
+        },
+      }),
+      {
+        systemPrompt: `Stable instructions${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic turn context`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sentinel-key",
+        cacheRetention: "long",
+        sessionId: "session-123",
+      },
+    ).result();
+
+    const payload = openAiMockState.params[0] as Record<string, unknown>;
+    expect(payload.prompt_cache_options).toEqual({ mode: "explicit" });
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+    expect(payload.input).toEqual([
+      {
+        type: "message",
+        role: "developer",
+        content: [
+          {
+            type: "input_text",
+            text: "Stable instructions",
+            prompt_cache_breakpoint: { mode: "explicit" },
+          },
+          { type: "input_text", text: "Dynamic turn context" },
+        ],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
+  });
 });

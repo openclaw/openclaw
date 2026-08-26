@@ -183,16 +183,27 @@ describe("OpenAI Responses provider prompt observer", () => {
     },
   );
 
-  it.each(["native", "shared", "chatgpt"] as const)(
-    "preserves measured checkpoint usage through %s egress and saved-history replay",
-    async (transport) => {
+  it.each([
+    { transport: "native", explicitPromptCache: false },
+    { transport: "shared", explicitPromptCache: false },
+    { transport: "chatgpt", explicitPromptCache: false },
+    { transport: "native", explicitPromptCache: true },
+    { transport: "shared", explicitPromptCache: true },
+  ] as const)(
+    "preserves measured checkpoint usage through $transport egress (explicit cache=$explicitPromptCache) and saved-history replay",
+    async ({ transport, explicitPromptCache }) => {
       const identity = { sessionId: `usage-${transport}`, authProfileId: "usage-profile" };
       const model = createModel<Api>(
         transport === "chatgpt"
           ? { api: "openai-chatgpt-responses", baseUrl: "https://chatgpt.test/backend-api" }
-          : {},
+          : explicitPromptCache
+            ? { id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }
+            : {},
       );
       const context = createOrphanedToolOutputCompactionContext(model, identity);
+      if (explicitPromptCache) {
+        context.systemPrompt = `Stable policy${SYSTEM_PROMPT_CACHE_BOUNDARY}Current runtime facts`;
+      }
       const toolOutput = context.messages.find((message) => message.role === "toolResult");
       if (!toolOutput || toolOutput.role !== "toolResult") {
         throw new Error("missing tool-output fixture");
