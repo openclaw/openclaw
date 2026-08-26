@@ -124,7 +124,6 @@ type SpawnedProcessResult = {
   exitSignal: NodeJS.Signals | null;
   forwardedSignal: NodeJS.Signals | null;
 };
-type RunNodeExit = number | NodeJS.Signals;
 
 function asRunNodeChild(value: unknown): RunNodeChild {
   if (!value || typeof value !== "object" || !("on" in value) || typeof value.on !== "function") {
@@ -1146,7 +1145,11 @@ const signalSpawnedProcess = (
   }
 };
 
-const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDeps) => {
+const waitForSpawnedProcess = async (
+  childProcess: RunNodeChild,
+  deps: RunNodeDeps,
+  acceptShutdownGrace = false,
+) => {
   let forwardedSignal: NodeJS.Signals | null = null;
   let forceKillTimer: NodeJS.Timeout | null = null;
   let cleanedForwardedSignalGroup = false;
@@ -1188,7 +1191,9 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
     }, shutdownGraceMs);
   };
 
-  childProcess.on("message", onMessage);
+  if (acceptShutdownGrace) {
+    childProcess.on("message", onMessage);
+  }
   const signalHandlers = FORWARDED_SIGNALS.map(
     (signal) => [signal, () => forwardSignal(signal)] as const,
   );
@@ -1211,28 +1216,28 @@ const waitForSpawnedProcess = async (childProcess: RunNodeChild, deps: RunNodeDe
         settle({ exitCode: 1, exitSignal: null, forwardedSignal });
       };
       const handleExit = (exitCode: number | null, exitSignal: NodeJS.Signals | null) => {
-        if ((forwardedSignal || exitSignal) && !cleanedForwardedSignalGroup) {
+        if (forwardedSignal && !cleanedForwardedSignalGroup) {
           cleanedForwardedSignalGroup = true;
           signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
         }
         settle({ exitCode, exitSignal, forwardedSignal });
       };
-      childProcess.on("error", handleError);
-      childProcess.on("exit", handleExit);
+      if ("once" in childProcess) {
+        childProcess.on("error", handleError);
+        childProcess.on("exit", handleExit);
+      } else {
+        childProcess.on("error", handleError);
+        childProcess.on("exit", handleExit);
+      }
     });
   } finally {
     cleanupSignals();
   }
 };
 
-const getInterruptedSpawnOutcome = (
-  res: SpawnedProcessResult,
-  platform: NodeJS.Platform,
-): RunNodeExit | null => {
+const getInterruptedSpawnExitCode = (res: SpawnedProcessResult) => {
   if (res.exitSignal) {
-    // The child did not acknowledge completion. A numeric exit could let the
-    // watch parent retry after the owner of detached workers has disappeared.
-    return platform === "win32" ? getSignalExitCode(res.exitSignal) : res.exitSignal;
+    return getSignalExitCode(res.exitSignal);
   }
   if (res.forwardedSignal) {
     return getSignalExitCode(res.forwardedSignal);
@@ -1242,23 +1247,28 @@ const getInterruptedSpawnOutcome = (
 
 const runNodeChild = async (deps: RunNodeDeps, args: string[]) => {
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
+  // The parent route grants lifecycle IPC; generic children must not extend
+  // the launcher's five-second force-kill boundary with a shaped message.
+  const acceptShutdownGrace = deps.args.slice(0, 3).join(" ") === "qa mantis run";
   const nodeProcess = asRunNodeChild(
     deps.spawn(deps.execPath, args, {
       cwd: deps.cwd,
       detached: useProcessGroup,
       env: deps.env,
-      // IPC lets trusted child commands declare a bounded cleanup grace while
-      // keeping the launcher's five-second default for every other command.
       stdio: deps.outputTee
-        ? ["inherit", "pipe", "pipe", "ipc"]
-        : ["inherit", "inherit", "inherit", "ipc"],
+        ? acceptShutdownGrace
+          ? ["inherit", "pipe", "pipe", "ipc"]
+          : ["inherit", "pipe", "pipe"]
+        : acceptShutdownGrace
+          ? ["inherit", "inherit", "inherit", "ipc"]
+          : "inherit",
     }),
   );
   pipeSpawnedOutput(nodeProcess, deps);
-  const res = await waitForSpawnedProcess(nodeProcess, deps);
-  const interrupted = getInterruptedSpawnOutcome(res, deps.platform);
-  if (interrupted !== null) {
-    return interrupted;
+  const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace);
+  const interruptedExitCode = getInterruptedSpawnExitCode(res);
+  if (interruptedExitCode !== null) {
+    return interruptedExitCode;
   }
   return res.exitCode ?? 1;
 };
@@ -1354,7 +1364,7 @@ const createSyncIoTraceStderrFilter = (deps: RunNodeDeps) => {
   };
 };
 
-const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: RunNodeExit) => {
+const closeRunNodeOutputTee = async (deps: RunNodeDeps, exitCode: number) => {
   if (!deps.outputTee) {
     return exitCode;
   }
@@ -1640,7 +1650,7 @@ function createRunNodeDeps(params: RunNodeMainParams) {
 }
 
 /** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
-export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
+export async function runNodeMain(params: RunNodeMainParams = {}): Promise<number> {
   const deps = createRunNodeDeps(params);
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
@@ -1650,7 +1660,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
   deps.outputTee = createRunNodeOutputTee(deps);
 
   try {
-    let exitCode: RunNodeExit = 1;
+    let exitCode = 1;
     if (shouldFastPathExistingDistForGatewayClient(deps)) {
       exitCode = await runOpenClaw(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
@@ -1741,7 +1751,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
         );
         pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
         const result = await waitForSpawnedProcess(build, deps);
-        return getInterruptedSpawnOutcome(result, deps.platform) ?? result.exitCode ?? 1;
+        return getInterruptedSpawnExitCode(result) ?? result.exitCode ?? 1;
       });
     });
     if (buildExitCode !== 0) {
@@ -1757,13 +1767,7 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
-    .then((outcome) => {
-      if (typeof outcome === "string") {
-        process.kill(process.pid, outcome);
-        return;
-      }
-      process.exit(outcome);
-    })
+    .then((code) => process.exit(code))
     .catch((err: unknown) => {
       console.error(err);
       process.exit(1);

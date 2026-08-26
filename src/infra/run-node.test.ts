@@ -560,7 +560,7 @@ describe("run-node script", () => {
     await expect(fs.readFile(outputPath, "utf-8")).resolves.toContain("[openclaw]");
     expect(spawnCalls.at(-1)?.args).toEqual(["openclaw.mjs", "status"]);
     expect(spawnCalls.at(-1)?.env.OPENCLAW_RUN_NODE_OUTPUT_LOG).toBe(outputPath);
-    expect(spawnCalls.at(-1)?.stdio).toEqual(["inherit", "pipe", "pipe", "ipc"]);
+    expect(spawnCalls.at(-1)?.stdio).toEqual(["inherit", "pipe", "pipe"]);
   });
 
   it("routes local build stdout to stderr before JSON command output", async ({ tmp }) => {
@@ -1409,9 +1409,7 @@ describe("run-node script", () => {
       expect(spawnCall?.[1]).toEqual(
         rebuild ? expectedBuildSpawn().slice(1) : ["openclaw.mjs", "status"],
       );
-      expect(spawnCall?.[2].stdio).toEqual(
-        rebuild ? ["inherit", "pipe", "pipe", "ipc"] : ["inherit", "inherit", "inherit", "ipc"],
-      );
+      expect(spawnCall?.[2].stdio).toEqual(rebuild ? ["inherit", "pipe", "pipe"] : "inherit");
       expect(spawnCall?.[2]).toMatchObject({ detached: false });
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
@@ -1421,7 +1419,7 @@ describe("run-node script", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "keeps the five-second force-kill default when the child declares no shutdown grace",
+    "keeps the five-second force-kill bound when a generic child requests extended grace",
     async ({ tmp }) => {
       vi.useFakeTimers();
       try {
@@ -1452,15 +1450,21 @@ describe("run-node script", () => {
         });
 
         await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+        const spawnCall = firstMockCall(spawn) as
+          | [string, string[], { stdio?: unknown }]
+          | undefined;
+        expect(spawnCall?.[2].stdio).toBe("inherit");
+        expect(child.listenerCount("message")).toBe(0);
+        child.emit("message", { graceMs: 125_000, type: "openclaw:shutdown-grace" });
         fakeProcess.emit("SIGTERM");
         await vi.advanceTimersByTimeAsync(4_999);
         expect(groupSignals).toEqual([[-42_421, "SIGTERM"]]);
         await vi.advanceTimersByTimeAsync(1);
-        await expect(exitCodePromise).resolves.toBe(1);
         expect(groupSignals).toEqual([
           [-42_421, "SIGTERM"],
           [-42_421, "SIGKILL"],
         ]);
+        await expect(exitCodePromise).resolves.toBe(1);
       } finally {
         vi.useRealTimers();
       }
@@ -1472,7 +1476,19 @@ describe("run-node script", () => {
     async ({ tmp }) => {
       vi.useFakeTimers();
       try {
-        await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+        await setupStampedProject(tmp, {
+          files: {
+            [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+            [QA_RUNTIME_PLUGIN_SDK_ENTRY]: "export const qaRuntime = true;\n",
+          },
+          oldPaths: [
+            ROOT_SRC,
+            ROOT_TSCONFIG,
+            ROOT_PACKAGE,
+            QA_LAB_PLUGIN_SDK_ENTRY,
+            QA_RUNTIME_PLUGIN_SDK_ENTRY,
+          ],
+        });
         const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: false } });
         const child = Object.assign(new EventEmitter(), { pid: 42_422, kill: vi.fn() });
         const groupSignals: Array<[number, string | number]> = [];
@@ -1484,6 +1500,7 @@ describe("run-node script", () => {
           pid: child.pid,
         }));
         const exitCodePromise = runNodeCommand(tmp, {
+          args: ["qa", "mantis", "run"],
           platform: "darwin",
           process: fakeProcess,
           signalProcess: (pid: number, signal?: string | number) => {
@@ -1499,6 +1516,11 @@ describe("run-node script", () => {
         });
 
         await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+        const spawnCall = firstMockCall(spawn) as
+          | [string, string[], { stdio?: unknown }]
+          | undefined;
+        expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "qa", "mantis", "run"]);
+        expect(spawnCall?.[2].stdio).toEqual(["inherit", "inherit", "inherit", "ipc"]);
         child.emit("message", { graceMs: 125_000, type: "openclaw:shutdown-grace" });
         fakeProcess.emit("SIGTERM");
         await vi.advanceTimersByTimeAsync(5_000);
@@ -1584,9 +1606,7 @@ describe("run-node script", () => {
       );
       expect(spawnCall?.[2]).toMatchObject({
         detached: true,
-        stdio: rebuild
-          ? ["inherit", "pipe", "pipe", "ipc"]
-          : ["inherit", "inherit", "inherit", "ipc"],
+        stdio: rebuild ? ["inherit", "pipe", "pipe"] : "inherit",
       });
       expect(spawn).toHaveBeenCalledOnce();
       expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
