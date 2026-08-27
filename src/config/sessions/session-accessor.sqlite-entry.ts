@@ -89,9 +89,7 @@ import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js
 
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 
-type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
-  skipMaintenance?: boolean;
-};
+type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions;
 
 type ResolvedSqliteSessionEntry = {
   existing: SessionEntry | undefined;
@@ -631,6 +629,7 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
       );
       currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
       result = cloneSessionEntry(next);
+      options.afterWriteInTransaction?.(result);
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     return { maintenancePlans, result };

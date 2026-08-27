@@ -26,6 +26,7 @@ import {
 import { getRuntimeConfig } from "../../config/io.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -41,6 +42,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
+import { appendInterruptedSessionTrajectoryEndSync } from "../../trajectory/interrupted-end.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-admission.js";
 import {
@@ -1085,6 +1087,13 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
   updatedAt: number;
 }): Promise<void> {
   try {
+    // Resolve the trajectory database target before opening the session write
+    // transaction so filesystem/registry inspection does not run while the
+    // session lock is held.
+    const trajectoryTarget = resolveSqliteTargetFromSessionStorePath(params.storePath, {
+      agentId: params.agentId,
+    });
+    let interruptedRunId: string | undefined;
     await updateSessionEntry(
       {
         agentId: params.agentId,
@@ -1106,6 +1115,7 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
         ) {
           return null;
         }
+        interruptedRunId = entry.lifecycleRunId;
         const endedAt = Date.now();
         return {
           status: "killed",
@@ -1119,6 +1129,20 @@ async function persistForceClearedEmbeddedRunTerminalState(params: {
         skipMaintenance: true,
         takeCacheOwnership: true,
         requireWriteSuccess: false,
+        afterWriteInTransaction: (result) => {
+          // Only this invocation's own running-to-killed transition records the
+          // event; a stale snapshot returns an unchanged entry and skips the hook.
+          if (result.status === "killed") {
+            appendInterruptedSessionTrajectoryEndSync({
+              agentDatabaseAgentId: trajectoryTarget.agentId ?? params.agentId,
+              agentDatabasePath: trajectoryTarget.path,
+              runId: interruptedRunId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              storePath: params.storePath,
+            });
+          }
+        },
       },
     );
   } catch (err) {

@@ -30,6 +30,7 @@ const TRAJECTORY_RUNTIME_DELETE_RUN_BATCH_SIZE = 100;
 
 export type SqliteTrajectoryRuntimeScope = {
   agentId?: string;
+  agentDatabasePath?: string;
   env?: NodeJS.ProcessEnv;
   maxGlobalRuntimeBytes?: number;
   maxRuntimeBytes?: number;
@@ -142,7 +143,8 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
     tailEvents?: number;
   },
 ): SqliteTrajectoryRuntimeEventRow[] {
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
+  const dbOptions = toDatabaseOptions(scope);
+  const database = openOpenClawAgentDatabase(dbOptions);
   const db = getTrajectoryKysely(database.db);
   const tailEvents =
     scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
@@ -170,7 +172,8 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
   if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
     query = query.limit(Math.max(0, Math.floor(maxEvents)));
   }
-  const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
+  const result = executeSqliteQuerySync(database.db, query);
+  const rows = result.rows.map((row) => ({
     event: JSON.parse(row.event_json) as TrajectoryEvent,
     seq: row.seq,
   }));
@@ -273,10 +276,23 @@ function getTrajectoryKysely(database: import("node:sqlite").DatabaseSync) {
 
 function toDatabaseOptions(scope: {
   agentId?: string;
+  agentDatabasePath?: string;
   env?: NodeJS.ProcessEnv;
   storePath: string;
 }): OpenClawAgentDatabaseOptions {
   const requestedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : undefined;
+  if (scope.agentDatabasePath) {
+    if (!requestedAgentId) {
+      throw new Error(
+        "Trajectory store scope requires an explicit agent id when agentDatabasePath is provided.",
+      );
+    }
+    return {
+      agentId: requestedAgentId,
+      env: scope.env,
+      path: scope.agentDatabasePath,
+    };
+  }
   const target = resolveSqliteTargetFromSessionStorePath(
     scope.storePath,
     requestedAgentId ? { agentId: requestedAgentId } : {},

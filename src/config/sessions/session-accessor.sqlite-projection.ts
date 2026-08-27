@@ -102,6 +102,7 @@ export async function applySessionEntryReplacements<T>(params: {
   update: (
     entries: SessionEntryReplacementSnapshot[],
   ) => Promise<SessionEntryReplacementUpdate<T>> | SessionEntryReplacementUpdate<T>;
+  afterWriteInTransaction?: (result: T) => void;
 }): Promise<T> {
   return await applySessionEntryExactReplacements(params);
 }

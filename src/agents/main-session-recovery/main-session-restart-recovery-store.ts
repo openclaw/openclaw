@@ -91,11 +91,12 @@ async function completePendingFinalRecoveryWithNotice(
   entry: SessionEntry,
   sessionKey: string,
   storePath: string,
+  agentId?: string,
 ): Promise<boolean> {
   const endedAt = Date.now();
   let completed = false;
   await updateSessionEntry(
-    { sessionKey, storePath },
+    { sessionKey, storePath, agentId },
     (current) => {
       if (
         current.sessionId !== entry.sessionId ||
@@ -153,11 +154,13 @@ export type ExpectedRestartRecoveryClaim = {
 export function loadExpectedRestartRecoveryClaim(params: {
   expected: ExpectedRestartRecoveryClaim;
   storePath: string;
+  agentId?: string;
 }): SessionEntry | undefined {
   const exact = loadExactSessionEntry({
     readConsistency: "latest",
     sessionKey: params.expected.sessionKey,
     storePath: params.storePath,
+    agentId: params.agentId,
   });
   const entry = exact?.sessionKey === params.expected.sessionKey ? exact.entry : undefined;
   return entry?.sessionId === params.expected.sessionId &&
@@ -173,11 +176,13 @@ export function loadExpectedRestartRecoveryClaim(params: {
 export function loadExpectedRestartRecoveryTarget(params: {
   expected: ExpectedRestartRecoveryTarget;
   storePath: string;
+  agentId?: string;
 }): SessionEntry | undefined {
   const exact = loadExactSessionEntry({
     sessionKey: params.expected.sessionKey,
     storePath: params.storePath,
     readConsistency: "latest",
+    agentId: params.agentId,
   });
   const entry = exact?.sessionKey === params.expected.sessionKey ? exact.entry : undefined;
   return entry?.sessionId === params.expected.sessionId &&
@@ -221,6 +226,7 @@ export async function recoverStore(params: {
   observationOnly?: boolean;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   storePath: string;
+  agentId?: string;
   stateDir?: string;
   handledSessionKeys: Set<string>;
   expectedClaim?: ExpectedRestartRecoveryClaim;
@@ -261,22 +267,28 @@ export async function recoverStore(params: {
     providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
   const resolveActiveSessionKeys = () =>
     providedActiveSessionKeys ?? normalizeStringSet(listActiveEmbeddedRunSessionKeys());
+  const partitionAgentId = params.agentId;
   let entries: Array<{ sessionKey: string; entry: SessionEntry }>;
   try {
     if (params.expectedClaim) {
       const entry = loadExpectedRestartRecoveryClaim({
         expected: params.expectedClaim,
         storePath: params.storePath,
+        agentId: partitionAgentId,
       });
       entries = entry ? [{ sessionKey: params.expectedClaim.sessionKey, entry }] : [];
     } else if (params.expectedTarget) {
       const entry = loadExpectedRestartRecoveryTarget({
         expected: params.expectedTarget,
         storePath: params.storePath,
+        agentId: partitionAgentId,
       });
       entries = entry ? [{ sessionKey: params.expectedTarget.sessionKey, entry }] : [];
     } else {
-      entries = listSessionEntriesByStatus({ storePath: params.storePath }, ["running"]);
+      entries = listSessionEntriesByStatus(
+        { storePath: params.storePath, agentId: partitionAgentId },
+        ["running"],
+      );
     }
   } catch (err) {
     mainSessionRecoveryLog.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
@@ -314,7 +326,10 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    const agentId = dispatchTarget.agentId;
+    // The partition owner drives all durable reads/writes; the dispatch target
+    // only supplies the logical agent/canonical key for the resumed turn.
+    const dbAgentId = partitionAgentId;
+    const dispatchAgentId = dispatchTarget.agentId;
     const dispatchSessionKey =
       params.expectedClaim?.canonicalSessionKey ??
       params.expectedTarget?.canonicalSessionKey ??
@@ -349,6 +364,7 @@ export async function recoverStore(params: {
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
       target: { sessionKey, storePath: params.storePath },
+      agentId: dbAgentId,
     });
     if (!observed.entry || observed.transition.kind !== "observed") {
       result.skipped++;
@@ -372,7 +388,7 @@ export async function recoverStore(params: {
         return result;
       }
       const tombstone = await tombstoneMainRestartRecoveryWithNotice({
-        agentId,
+        agentId: dbAgentId,
         cfg: params.cfg,
         entry,
         gatewayRuntime: params.gatewayRuntime,
@@ -406,6 +422,7 @@ export async function recoverStore(params: {
         const current = loadExpectedRestartRecoveryTarget({
           expected: { sessionId: entry.sessionId, sessionKey },
           storePath: params.storePath,
+          agentId: partitionAgentId,
         });
         if (
           current?.mainRestartRecovery?.chargedAttempts === MAX_RECOVERY_RETRIES &&
@@ -416,6 +433,7 @@ export async function recoverStore(params: {
             sessionId: entry.sessionId,
             sessionKey,
             storePath: params.storePath,
+            agentId: partitionAgentId,
           });
         }
       }
@@ -428,7 +446,7 @@ export async function recoverStore(params: {
         return result;
       }
       const tombstone = await tombstoneMainRestartRecoveryWithNotice({
-        agentId,
+        agentId: dbAgentId,
         cfg: params.cfg,
         entry,
         gatewayRuntime: params.gatewayRuntime,
@@ -456,7 +474,8 @@ export async function recoverStore(params: {
     ) => {
       recordResumeResult(
         await resumeIfCurrent({
-          agentId,
+          agentId: dispatchAgentId,
+          dbAgentId,
           canonicalSessionKey: dispatchSessionKey,
           cfg: params.cfg,
           entry,
@@ -482,7 +501,7 @@ export async function recoverStore(params: {
     }
     if (pendingAction === "complete") {
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
-        agentId,
+        agentId: dbAgentId,
         entry,
         messages: [],
         pendingFinalDeliveryIntentId: entry.pendingFinalDelivery?.intentId,
@@ -503,6 +522,7 @@ export async function recoverStore(params: {
         entry,
         sessionKey,
         params.storePath,
+        dbAgentId,
       );
       result[completed ? "settled" : "skipped"]++;
       continue;
@@ -532,7 +552,7 @@ export async function recoverStore(params: {
     try {
       messages = await readSessionMessagesAsync(
         {
-          agentId,
+          agentId: dbAgentId,
           sessionEntry: entry,
           sessionId: entry.sessionId,
           sessionKey,
@@ -591,6 +611,7 @@ export async function recoverStore(params: {
         source: completionSource,
         storePath: params.storePath,
         sessionKey,
+        agentId: dbAgentId,
       });
       if (reconciliation.outcome === "reconciled") {
         params.handledSessionKeys.add(resumeDedupeKey);
@@ -619,7 +640,7 @@ export async function recoverStore(params: {
         return result;
       }
       const completion = await markSessionCompletedAfterRecoveryCheckpoint({
-        agentId,
+        agentId: dbAgentId,
         entry,
         messages,
         reason: resumePolicy.reason,

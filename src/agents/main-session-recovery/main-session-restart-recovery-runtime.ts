@@ -78,14 +78,15 @@ export async function recoverRestartAbortedMainSessions(params: {
   const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
   const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
-  for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
+  for (const target of await resolveRestartRecoveryStorePaths(params)) {
     if (params.shouldContinue?.() === false) {
       return result;
     }
     const storeResult = await recoverStore({
       cfg: params.cfg,
       onExhaustedTarget: params.onExhaustedTarget,
-      storePath,
+      storePath: target.storePath,
+      agentId: target.agentId,
       stateDir: params.stateDir,
       handledSessionKeys,
       activeSessionIds: params.activeSessionIds,
@@ -118,6 +119,7 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
   sessionKey: string;
   stateDir?: string;
   storePath: string;
+  agentId?: string;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<RecoveryCounts> {
   const expected = {
@@ -136,6 +138,7 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
   return await recoverExpectedRestartRecovery({
     ...params,
     ...(expectedClaim ? { expectedClaim } : { expectedTarget: expected }),
+    agentId: params.agentId,
   });
 }
 
@@ -143,6 +146,7 @@ async function recoverExpectedRestartRecovery(params: {
   cfg?: OpenClawConfig;
   expectedClaim?: ExpectedRestartRecoveryClaim;
   expectedTarget?: ExpectedRestartRecoveryTarget;
+  agentId?: string;
   lifecycleGeneration?: string;
   observationOnly?: boolean;
   sessionKey: string;
@@ -156,11 +160,13 @@ async function recoverExpectedRestartRecovery(params: {
       ? loadExpectedRestartRecoveryClaim({
           expected: params.expectedClaim,
           storePath: params.storePath,
+          agentId: params.agentId,
         })
       : params.expectedTarget
         ? loadExpectedRestartRecoveryTarget({
             expected: params.expectedTarget,
             storePath: params.storePath,
+            agentId: params.agentId,
           })
         : undefined;
   if (!loadExpected()) {
@@ -188,6 +194,7 @@ async function recoverExpectedRestartRecovery(params: {
           cfg: params.cfg,
           observationOnly: params.observationOnly,
           storePath: params.storePath,
+          agentId: params.agentId,
           stateDir: params.stateDir,
           handledSessionKeys: new Set<string>(),
           expectedClaim: params.expectedClaim,
@@ -213,6 +220,8 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
   sessionKey: string;
   stateDir?: string;
   storePath: string;
+  /** Durable SQLite partition owner; exact reads without it select the store's default partition. */
+  agentId?: string;
 }): void {
   const recover = () =>
     runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -226,6 +235,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
         sessionKey: params.sessionKey,
         stateDir: params.stateDir,
         storePath: params.storePath,
+        agentId: params.agentId,
         gatewayRuntime,
       });
     });
@@ -242,6 +252,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
           sessionKey: params.sessionKey,
         },
         storePath: params.storePath,
+        agentId: params.agentId,
       });
       if (result.failed === 0 && (result.started > 0 || result.settled > 0 || !stillPending)) {
         return true;
@@ -320,6 +331,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
               sessionId: target.sessionId,
               sessionKey: target.sessionKey,
             },
+            agentId: target.agentId,
             lifecycleGeneration,
             observationOnly: true,
             sessionKey: target.sessionKey,

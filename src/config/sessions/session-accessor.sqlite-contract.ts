@@ -177,6 +177,11 @@ export type SessionEntryPatchOptions = {
   replaceEntry?: boolean;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
+  /**
+   * Runs inside the same SQLite write transaction after the patched entry is
+   * written. Throwing here rolls back the entry mutation.
+   */
+  afterWriteInTransaction?: (result: SessionEntry) => void;
 };
 
 export type SessionEntryPatchContext = {

@@ -9,8 +9,11 @@ import {
   isEmbeddedAgentRunAbortableForRunId,
   retainEmbeddedAgentRunAbortabilityForRunId,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   commitMainSessionRecovery,
+  createRestoreAdmittedRecoveryInterrupted,
   type MainSessionRecoveryPendingTarget,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
@@ -22,6 +25,7 @@ import {
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -402,6 +406,14 @@ export async function prepareAgentRunDispatch(params: {
       return undefined;
     }
     try {
+      // Resolve the trajectory database target before admitting the recovery:
+      // resolution performs filesystem/registry inspection that can throw, and
+      // a failure must reject the run while the row is still in its
+      // pre-admission state. Resolving after admit_recovery would leave an
+      // admitted row with no restore closure when resolution throws.
+      const trajectoryTarget = resolveSqliteTargetFromSessionStorePath(lifecycleStorePath, {
+        agentId: params.activeSessionAgentId,
+      });
       const recoveryAdmission = await commitMainSessionRecovery({
         command: {
           kind: "admit_recovery",
@@ -411,6 +423,10 @@ export async function prepareAgentRunDispatch(params: {
           sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
         },
         requireWriteSuccess: true,
+        // The durable fixed-store partition owner, not the store's default:
+        // admitting without it selects the default partition for a global row
+        // owned by another agent (e.g. ops) and rejects the reservation.
+        agentId: params.activeSessionAgentId,
         target: { sessionKey: recoverySessionKey, storePath: lifecycleStorePath },
       });
       if (recoveryAdmission.transition.kind !== "admitted_recovery") {
@@ -419,35 +435,16 @@ export async function prepareAgentRunDispatch(params: {
         );
       }
       const admittedRecoverySessionKey = recoveryAdmission.sessionKey ?? recoverySessionKey;
-      let restored = false;
-      restoreAdmittedRestartRecoveryInterrupted = async () => {
-        if (restored) {
-          return undefined;
-        }
-        const recovery = await commitMainSessionRecovery({
-          command: {
-            kind: "mark_admitted_recovery_interrupted",
-            lifecycleGeneration: params.lifecycleGeneration,
-            now: Date.now(),
-            runId: params.runId,
-            sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
-          },
-          requireWriteSuccess: true,
-          target: { sessionKey: admittedRecoverySessionKey, storePath: lifecycleStorePath },
-        });
-        restored = true;
-        const expectedSessionId =
-          params.request.expectedExistingSessionId ?? params.getAdmittedSessionId();
-        return recovery.transition.kind === "applied" &&
-          recovery.entry?.sessionId === expectedSessionId &&
-          recovery.sessionKey
-          ? {
-              sessionId: recovery.entry.sessionId,
-              sessionKey: recovery.sessionKey,
-              storePath: lifecycleStorePath,
-            }
-          : undefined;
-      };
+      restoreAdmittedRestartRecoveryInterrupted = createRestoreAdmittedRecoveryInterrupted({
+        agentId: params.activeSessionAgentId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        logWarn: (message) => params.context.logGateway.warn(message),
+        runId: params.runId,
+        sessionId: () => params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
+        sessionKey: admittedRecoverySessionKey,
+        storePath: lifecycleStorePath,
+        trajectoryTarget,
+      });
     } catch (err) {
       activeRunAbort.cleanup({ force: true });
       activeGatewayWorkAdmission.release();
@@ -459,6 +456,26 @@ export async function prepareAgentRunDispatch(params: {
       return undefined;
     }
   }
+  // Restores an admitted recovery that exits before dispatch. The admitted row
+  // must not outlive its run without either dispatch or the interrupted
+  // terminal event; the closure is idempotent via its internal restored flag,
+  // so late/duplicate exits are safe. Restore failure only warns: the
+  // deferred repair queue keeps the rollback alive across retries.
+  const restoreAdmittedRecoveryBeforeExit = async (): Promise<void> => {
+    const mutation = restoreAdmittedRestartRecoveryInterrupted;
+    if (!mutation) {
+      return;
+    }
+    const pending = await repairMainSessionRecoveryMutation({
+      mutation,
+      onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
+      onError: (err) =>
+        params.context.logGateway.warn(
+          `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
+        ),
+    });
+    scheduleMainSessionRecoveryPendingTarget(pending);
+  };
   let userTurn: PreparedAgentRunUserTurn;
   try {
     userTurn = await prepareAgentRunUserTurn({
@@ -491,6 +508,7 @@ export async function prepareAgentRunDispatch(params: {
       params.onUserTurnMediaPersisted();
     }
   } catch (err) {
+    await restoreAdmittedRecoveryBeforeExit();
     activeRunAbort.cleanup({ force: true });
     activeGatewayWorkAdmission.release();
     params.io.emitAcceptance([false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, err)]);
@@ -502,6 +520,7 @@ export async function prepareAgentRunDispatch(params: {
     params.assertGatewayWorkAdmissionAllowed();
   } catch (err) {
     releasePreparedAgentRunUserTurn(userTurn);
+    await restoreAdmittedRecoveryBeforeExit();
     activeRunAbort.cleanup({ force: true });
     activeGatewayWorkAdmission.release();
     params.io.emitAcceptance([
@@ -513,6 +532,7 @@ export async function prepareAgentRunDispatch(params: {
   }
   if (params.respondToGatewayAdmissionOutcome()) {
     releasePreparedAgentRunUserTurn(userTurn);
+    await restoreAdmittedRecoveryBeforeExit();
     activeRunAbort.cleanup({ force: true });
     return undefined;
   }

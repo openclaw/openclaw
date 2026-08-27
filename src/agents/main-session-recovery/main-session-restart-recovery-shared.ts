@@ -12,6 +12,7 @@ import {
   hasSessionEntriesByStatusReadOnly,
   type SessionTranscriptTurnExpectedState,
 } from "../../config/sessions/session-accessor.js";
+import { listDurableSqliteTargetOwnersForSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
@@ -28,6 +29,8 @@ export type ExpectedRestartRecoveryTarget = {
 
 export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
   storePath: string;
+  /** Durable SQLite owner partition that owns the exhausted row. */
+  agentId?: string;
 };
 
 export function buildRestartRecoveryExpectedState(
@@ -76,6 +79,12 @@ export function normalizeStringSet(values: Iterable<string> | undefined): Set<st
 
 export const normalizeFiniteTimestamp = asFiniteNumber;
 
+type RestartRecoveryStoreTarget = {
+  storePath: string;
+  /** Durable SQLite owner partition that contains running rows. Undefined means the store's default owner. */
+  agentId?: string;
+};
+
 export function hasCurrentProcessOwner(params: {
   activeSessionIds: Set<string>;
   activeSessionKeys: Set<string>;
@@ -91,7 +100,7 @@ export function hasCurrentProcessOwner(params: {
 export async function resolveRestartRecoveryStorePaths(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
-}): Promise<string[]> {
+}): Promise<RestartRecoveryStoreTarget[]> {
   const storePaths = new Set<string>();
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -123,7 +132,25 @@ export async function resolveRestartRecoveryStorePaths(params: {
   }
   // Agent databases also hold auth and model-catalog state. Enter the writer
   // lane only when the session owner proves that a running row may need repair.
-  return [...storePaths]
-    .filter((storePath) => hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"]))
-    .toSorted((a, b) => a.localeCompare(b));
+  // Fixed stores partition rows across per-agent SQLite siblings, so a running
+  // session under any durable owner keeps the store in the recovery scan.
+  const targets: RestartRecoveryStoreTarget[] = [];
+  for (const storePath of storePaths) {
+    const owners = listDurableSqliteTargetOwnersForSessionStorePath(storePath);
+    if (owners.length === 0) {
+      if (hasSessionEntriesByStatusReadOnly({ env, storePath }, ["running"])) {
+        targets.push({ storePath });
+      }
+      continue;
+    }
+    for (const agentId of owners) {
+      if (hasSessionEntriesByStatusReadOnly({ env, storePath, agentId }, ["running"])) {
+        targets.push({ storePath, agentId });
+      }
+    }
+  }
+  return targets.toSorted((a, b) => {
+    const byPath = a.storePath.localeCompare(b.storePath);
+    return byPath !== 0 ? byPath : (a.agentId ?? "").localeCompare(b.agentId ?? "");
+  });
 }
