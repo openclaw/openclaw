@@ -298,7 +298,7 @@ describe("nextcloud talk room info", () => {
 
     expect(kind).toBeUndefined();
     expect(runtime.error).toHaveBeenCalledWith(
-      "nextcloud-talk: room lookup error: Error: Nextcloud Talk room info failed: malformed JSON response",
+      "nextcloud-talk: room lookup error: ProviderJsonParseError: Nextcloud Talk room info failed: malformed JSON response",
     );
     expect(release).toHaveBeenCalledTimes(1);
   });

@@ -8,6 +8,7 @@ import {
   extractProviderRequestId,
   formatProviderErrorPayload,
   ProviderHttpError,
+  ProviderJsonParseError,
   readProviderBinaryResponse,
   readProviderJsonResponse,
   readProviderTextResponse,
@@ -495,7 +496,7 @@ describe("provider error utils", () => {
       requestHeaders: { "X-Proxy-Auth": credential },
     }).catch((cause: unknown) => cause);
 
-    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(ProviderJsonParseError);
     expect(error).toMatchObject({ message: "Provider response failed: malformed JSON response" });
     expect(String((error as Error).cause)).not.toContain(credential);
   });

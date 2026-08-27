@@ -213,7 +213,6 @@ describe("production lint suppressions", () => {
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",
-        "src/agents/provider-http-errors.ts|preserve-caught-error|1",
         "src/agents/sessions/session-manager-persistence.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
