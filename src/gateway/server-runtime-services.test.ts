@@ -16,6 +16,112 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
+type StartSessionDeliveryRuntime =
+  typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
+type StartHeartbeatRunner = typeof import("../infra/heartbeat-runner.js").startHeartbeatRunner;
+type DrainPendingDeliveries =
+  typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
+type RecoverPendingDeliveries =
+  typeof import("../infra/outbound/delivery-queue-recovery.js").recoverPendingDeliveries;
+type MigrateLegacyPendingOutboundDeliveries =
+  typeof import("../infra/outbound/delivery-queue-migration.js").migrateLegacyPendingOutboundDeliveries;
+
+const hoisted = vi.hoisted(() => {
+  const heartbeatRunner = {
+    stop: vi.fn(),
+    updateConfig: vi.fn(),
+  };
+  const stopSessionUpstreamMonitor = vi.fn();
+  const stopSessionDeliveryRuntime = vi.fn();
+  return {
+    heartbeatRunner,
+    startHeartbeatRunner: vi.fn<StartHeartbeatRunner>(() => heartbeatRunner),
+    runHeartbeatOnce: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
+    startChannelHealthMonitor: vi.fn(() => ({
+      stop: vi.fn(),
+      shutdown: vi.fn(),
+      waitForIdle: vi.fn(async () => {}),
+    })),
+    stopSessionUpstreamMonitor,
+    stopSessionDeliveryRuntime,
+    startSessionDeliveryRuntime: vi.fn<StartSessionDeliveryRuntime>(
+      () => stopSessionDeliveryRuntime,
+    ),
+    schedulePendingSessionDeliveries: vi.fn(async () => undefined),
+    startSessionUpstreamMonitor: vi.fn(() => ({ stop: stopSessionUpstreamMonitor })),
+    recoverPendingDeliveries: vi.fn<RecoverPendingDeliveries>(async () => ({
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    })),
+    migrateLegacyPendingOutboundDeliveries: vi.fn<MigrateLegacyPendingOutboundDeliveries>(
+      async () => ({ moved: 0, skipped: 0, remaining: 0 }),
+    ),
+    drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
+    recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+    deliverQueuedSessionDelivery: vi.fn(async () => undefined),
+    settleQueuedSessionDelivery: vi.fn(async () => undefined),
+    deliverOutboundPayloads: vi.fn(),
+    assertQueuedConversationDeliveryAttemptAuthorized: vi.fn(),
+  };
+});
+
+vi.mock("../infra/heartbeat-runner.js", () => ({
+  resolveHeartbeatAgents: (cfg: { agents?: { defaults?: { heartbeat?: unknown } } }) => [
+    { agentId: "main", heartbeat: cfg.agents?.defaults?.heartbeat },
+  ],
+  startHeartbeatRunner: hoisted.startHeartbeatRunner,
+  runHeartbeatOnce: hoisted.runHeartbeatOnce,
+}));
+
+vi.mock("../sessions/session-upstream-monitor.js", () => ({
+  startSessionUpstreamMonitor: hoisted.startSessionUpstreamMonitor,
+}));
+
+vi.mock("../infra/outbound/deliver.js", () => ({
+  deliverOutboundPayloads: hoisted.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: hoisted.deliverOutboundPayloads,
+}));
+
+vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
+  recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
+  drainPendingDeliveriesCore: hoisted.drainPendingDeliveries,
+}));
+
+vi.mock("../infra/outbound/delivery-queue-migration.js", () => ({
+  migrateLegacyPendingOutboundDeliveries: hoisted.migrateLegacyPendingOutboundDeliveries,
+}));
+
+vi.mock("./conversation-route-ownership.js", () => ({
+  assertQueuedConversationDeliveryAttemptAuthorized:
+    hoisted.assertQueuedConversationDeliveryAttemptAuthorized,
+}));
+
+vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
+  startSessionDeliveryRuntime: hoisted.startSessionDeliveryRuntime,
+  schedulePendingSessionDeliveries: hoisted.schedulePendingSessionDeliveries,
+}));
+
+vi.mock("./server-restart-sentinel.js", () => ({
+  deliverQueuedSessionDelivery: hoisted.deliverQueuedSessionDelivery,
+  recoverPendingRestartContinuationDeliveries: hoisted.recoverPendingRestartContinuationDeliveries,
+  settleQueuedSessionDelivery: hoisted.settleQueuedSessionDelivery,
+}));
+
+vi.mock("./channel-health-monitor.js", () => ({
+  startChannelHealthMonitor: hoisted.startChannelHealthMonitor,
+}));
+// oxfmt-ignore
+vi.mock("./server-followup-queue-recovery.js", () => ({ scheduleRestoredFollowupQueueRecovery: () => () => {} }));
 import {
   createLog,
   createMaintenanceHandles,
@@ -266,10 +372,11 @@ describe("server-runtime-services", () => {
     expect(services.heartbeatRunner.updateConfig).toBe(hoisted.heartbeatRunner.updateConfig);
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
-    expect(log.child).toHaveBeenNthCalledWith(1, "delivery-recovery");
-    expect(log.child).toHaveBeenNthCalledWith(2, "session-delivery-recovery");
-    const deliveryLog = log.child.mock.results[0]?.value;
-    const sessionDeliveryLog = log.child.mock.results[1]?.value;
+    expect(log.child).toHaveBeenNthCalledWith(1, "followup-queue-recovery");
+    expect(log.child).toHaveBeenNthCalledWith(2, "delivery-recovery");
+    expect(log.child).toHaveBeenNthCalledWith(3, "session-delivery-recovery");
+    // oxfmt-ignore
+    const deliveryLog = log.child.mock.results[1]?.value, sessionDeliveryLog = log.child.mock.results[2]?.value;
     if (!deliveryLog || !sessionDeliveryLog) {
       throw new Error("Expected delivery recovery log children");
     }
@@ -407,8 +514,8 @@ describe("server-runtime-services", () => {
     expect(firstStopped).toBe(false);
     expect(secondStopped).toBe(false);
     expect(getActiveGatewayRootWorkCount()).toBe(1);
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledWith(
+    expect(log.child.mock.results[1]?.value.warn).toHaveBeenCalledOnce();
+    expect(log.child.mock.results[1]?.value.warn).toHaveBeenCalledWith(
       "delivery recovery is still pending after 5000ms; waiting before runtime teardown",
     );
 
@@ -417,7 +524,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(firstStopped).toBe(false);
     expect(secondStopped).toBe(false);
-    expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
+    expect(log.child.mock.results[1]?.value.warn).toHaveBeenCalledOnce();
 
     if (!resolveDrain) {
       throw new Error("Expected outbound retry drain resolver to be initialized");

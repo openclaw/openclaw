@@ -38,25 +38,35 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   const { cfg, agentId, heartbeat, startedAt } = wake;
   const { delivery, visibility, sender, runSessionKey, suppressOriginatingContext } = prepared;
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: "alerts-disabled",
-      durationMs: Date.now() - startedAt,
-      channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
-    });
-    return { status: "skipped", reason: "alerts-disabled" };
+    // Restored follow-up recovery uses a heartbeat wake only to reach agent-runner
+    // drain registration. Presentation-suppressed heartbeats must still run that
+    // path; channel delivery of HEARTBEAT_OK/alerts stays gated below.
+    if (wake.wakeSource !== "followup-queue-restore") {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "alerts-disabled",
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+      });
+      return { status: "skipped", reason: "alerts-disabled" };
+    }
   }
   const policy = createHeartbeatDispatch(opts, wake, prepared);
   const state: ReplyOperationRunState = { heartbeat: policy };
   const signal = getHeartbeatWakeAbortSignal();
   const channel = delivery.channel !== "none" ? delivery.channel : undefined;
+  const isRestoreOnlyCarrierWake = wake.wakeSource === "followup-queue-restore";
   const typing =
     channel &&
     isHeartbeatTypingEnabled({
       cfg,
       agentId,
-      hasChatDelivery: Boolean(delivery.to && (visibility.showAlerts || visibility.showOk)),
+      hasChatDelivery: Boolean(
+        !isRestoreOnlyCarrierWake &&
+          delivery.to &&
+          (visibility.showAlerts || visibility.showOk),
+      ),
     })
       ? createHeartbeatTypingCallbacks({
           cfg,

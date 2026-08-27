@@ -311,6 +311,12 @@ async function prepareHeartbeatDispatchReply(
   const restoreActivity = () =>
     restoreHeartbeatUpdatedAt({ agentId, storePath, sessionKey, updatedAt: previousUpdatedAt });
   const suppressSelected = () => suppressPendingFinalDelivery(selected, { preserveActivity: true });
+  if (wakeSource === "followup-queue-restore") {
+    await restoreActivity();
+    await suppressSelected();
+    finish({ status: "skipped", reason: "followup-queue-restore", silent: true }, false);
+    return {};
+  }
   if (outcome.kind === "ack") {
     if ("response" in outcome && outcome.response) {
       await record(outcome.response);
