@@ -39,7 +39,7 @@ function writeLocation(location: RouteLocation) {
   return `${location.pathname}${location.search}${location.hash}`;
 }
 
-export function createBrowserHistory(): RouterHistory {
+export function createBrowserHistory(onNavigate?: () => void): RouterHistory {
   const listeners = new Set<(location: RouteLocation) => void>();
   let stopPopState: (() => void) | undefined;
 
@@ -48,6 +48,7 @@ export function createBrowserHistory(): RouterHistory {
       return;
     }
     const onPopState = () => {
+      onNavigate?.();
       const location = readLocation();
       for (const listener of listeners) {
         listener(location);

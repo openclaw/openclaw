@@ -271,6 +271,9 @@ export type ApplicationRuntime = {
   } | null;
   readonly confirmPendingGatewayConnection: () => void;
   readonly cancelPendingGatewayConnection: () => void;
+  readonly canPaintSavedTranscript: boolean;
+  readonly releaseStartupRouteGate: () => void;
+  readonly navigationGeneration: number;
   start: () => Promise<void>;
   stop: () => void;
 };
@@ -288,7 +291,10 @@ type PendingRouterStartNavigation = {
 export function bootstrapApplication(
   dependencies: BootstrapApplicationDependencies = {},
 ): ApplicationRuntime {
-  const history = createBrowserHistory();
+  let navigationGeneration = 0;
+  const history = createBrowserHistory(() => {
+    navigationGeneration += 1;
+  });
   const startupLocation = history.location();
   const [basePath, resourceBasePath] = resolveControlUiPaths(
     startupLocation.pathname || globalThis.location?.pathname || "/",
@@ -344,6 +350,11 @@ export function bootstrapApplication(
         }));
 
   const settings = startup.settings;
+  const canPaintSavedTranscript =
+    !startup.changed &&
+    startup.password === null &&
+    startup.pendingBootstrapToken === null &&
+    startup.pendingGatewayUrl === null;
   const gateway = createApplicationGateway(
     settings,
     startup.password ?? "",
@@ -525,6 +536,7 @@ export function bootstrapApplication(
     options: ApplicationNavigationOptions | undefined,
     requested: "push" | "replace",
   ) => {
+    navigationGeneration += 1;
     const location = routeLocation(routeId, options);
     // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
     if (!routerStarted) {
@@ -585,6 +597,11 @@ export function bootstrapApplication(
     },
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
+    canPaintSavedTranscript,
+    releaseStartupRouteGate: () => resolveInitialFirstRunDecision?.(),
+    get navigationGeneration() {
+      return navigationGeneration;
+    },
     start: () => {
       const stopRouter = () => router.stop();
       if (startsApplicationRouter) {

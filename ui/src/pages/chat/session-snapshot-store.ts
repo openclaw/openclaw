@@ -167,6 +167,12 @@ async function readSnapshotRecord(sessionKey: string): Promise<SessionSnapshotRe
   }
 }
 
+export async function readStoredChatSnapshot(
+  sessionKey: string,
+): Promise<ChatSessionSnapshot | null> {
+  return (await readSnapshotRecord(sessionKey))?.snapshot ?? null;
+}
+
 async function readSnapshotRecords(): Promise<SessionSnapshotRecord[] | null> {
   const database = await openSessionSnapshotDatabase();
   if (!database) {
