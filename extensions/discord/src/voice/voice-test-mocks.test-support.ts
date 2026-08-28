@@ -21,7 +21,6 @@ const {
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
   realtimeSessionMock,
-  decodeOpusStreamMock,
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
@@ -37,6 +36,7 @@ const {
     off: ReturnType<typeof vi.fn>;
     receiver: {
       speaking: {
+        users: Map<string, number>;
         on: ReturnType<typeof vi.fn>;
         off: ReturnType<typeof vi.fn>;
       };
@@ -74,6 +74,7 @@ const {
       off: vi.fn(),
       receiver: {
         speaking: {
+          users: new Map(),
           on: vi.fn(),
           off: vi.fn(),
         },
@@ -149,7 +150,9 @@ const {
       (...args: unknown[]) => Promise<string | undefined>
     >(async () => undefined),
     resolveVoiceIngressWithParticipantsMock: vi.fn(),
-    transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    transcribeAudioFileMock: vi.fn(async (_params: { filePath: string }) => ({
+      text: "hello from voice",
+    })),
     prepareTtsRequestMock: vi.fn(async ({ cfg, text }: { cfg: unknown; text: string }) => ({
       cfg,
       directives: {
@@ -197,7 +200,6 @@ const {
       }),
     ),
     realtimeSessionMock: realtimeSessionMockLocal,
-    decodeOpusStreamMock: vi.fn(),
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
@@ -230,7 +232,6 @@ export const voiceTestMocks = {
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
   realtimeSessionMock,
-  decodeOpusStreamMock,
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
@@ -405,10 +406,6 @@ vi.mock("./audio.js", async () => {
     ...actual,
     createDiscordOpusEncodeStream: vi.fn(() => new PassThrough()),
     createDiscordOpusPlaybackStream: vi.fn(() => new PassThrough()),
-    decodeOpusStream: (...args: Parameters<typeof actual.decodeOpusStream>) =>
-      decodeOpusStreamMock.getMockImplementation()
-        ? decodeOpusStreamMock(...args)
-        : actual.decodeOpusStream(...args),
     decodeOpusStreamChunks: decodeOpusStreamChunksMock,
   };
 });

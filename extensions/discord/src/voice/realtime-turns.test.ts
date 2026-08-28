@@ -592,7 +592,6 @@ defineDiscordVoiceTests(
 
     it("treats a bare wake name as an activation for the next realtime transcript", async () => {
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "follow-up answer" }] });
-      const onUtterance = vi.fn();
       const manager = createAgentProxyManager(
         undefined,
         { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
@@ -604,15 +603,6 @@ defineDiscordVoiceTests(
       );
 
       await manager.join({ guildId: "g1", channelId: "1001" });
-      await manager.join(
-        { guildId: "g1", channelId: "1001" },
-        {
-          transcripts: {
-            sessionId: "notes-1",
-            onUtterance,
-          },
-        },
-      );
       const entry = getSessionEntry(manager);
       const bridgeParams = lastRealtimeBridgeParams();
 
@@ -632,15 +622,6 @@ defineDiscordVoiceTests(
       expect(lastAgentCommandArgs().message).not.toContain("Multy");
       expect(lastAgentCommandArgs().extraSystemPrompt).toBe("owner prompt");
       expectUserMessageIncludes("follow-up answer");
-      await vi.waitFor(() =>
-        expect(onUtterance).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sessionId: "notes-1",
-            text: "What's your take on rebuilding everything?",
-            speaker: { id: "u-owner", label: "Owner" },
-          }),
-        ),
-      );
     });
 
     it("reuses recently ignored speaker context when wake-name consult has no pending turn", async () => {

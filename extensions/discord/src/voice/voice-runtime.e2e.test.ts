@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough, type Readable } from "node:stream";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests(
@@ -25,7 +26,7 @@ defineDiscordVoiceTests(
     loggerWarnMock,
     controlRealtimeVoiceAgentRunMock,
     realtimeSessionMock,
-    decodeOpusStreamMock,
+    decodeOpusStreamChunksMock,
     managerModule,
     realtimeModule,
     segmentModule,
@@ -47,20 +48,12 @@ defineDiscordVoiceTests(
     processVoiceSegment,
     updateVoiceState,
     handleSpeakingStart,
+    receiveRecordedSpeech,
   }) => {
     it("composes join, audio ingress, agent dispatch, playback, and leave", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamMock.mockResolvedValueOnce(Buffer.alloc(96_000));
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "composed voice reply" }] });
-      const stream = {
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      };
-      connection.receiver.subscribe.mockReturnValueOnce(stream);
       const manager = createManager({
         groupPolicy: "open",
         allowFrom: ["discord:u-speaker"],
@@ -69,8 +62,7 @@ defineDiscordVoiceTests(
 
       expect((await manager.join({ guildId: "g1", channelId: "1001" })).ok).toBe(true);
       const entry = getSessionEntry(manager);
-      await handleSpeakingStart(manager, entry, "u-speaker");
-      await entry.processingQueue;
+      await receiveRecordedSpeech(manager, undefined, entry, "u-speaker");
       await entry.playbackQueue;
 
       expect(connection.receiver.subscribe).toHaveBeenCalledWith(
@@ -425,7 +417,6 @@ defineDiscordVoiceTests(
     it("releases late TTS without playback after the voice session leaves", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamMock.mockResolvedValueOnce(Buffer.alloc(96_000));
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "late voice reply" }] });
       const release = vi.fn(async () => undefined);
       let resolveStream!: (value: unknown) => void;
@@ -434,20 +425,13 @@ defineDiscordVoiceTests(
           resolveStream = resolve;
         }),
       );
-      connection.receiver.subscribe.mockReturnValueOnce({
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      });
       const manager = createManager(
         makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
       );
       await manager.join({ guildId: "g1", channelId: "1001" });
       const entry = getSessionEntry(manager);
 
-      const speaking = handleSpeakingStart(manager, entry, "u-speaker");
+      const speaking = receiveRecordedSpeech(manager, undefined, entry, "u-speaker");
       await vi.waitFor(() => expect(textToSpeechStreamMock).toHaveBeenCalledOnce());
       await manager.leave({ guildId: "g1" });
       resolveStream({
@@ -761,30 +745,34 @@ defineDiscordVoiceTests(
     it("does not run STT or playback after leave wins decoding", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
-      let resolveDecode!: (audio: Buffer) => void;
-      decodeOpusStreamMock.mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveDecode = resolve;
-        }),
+      let resolveDecode!: () => void;
+      const decodeReady = new Promise<void>((resolve) => {
+        resolveDecode = resolve;
+      });
+      decodeOpusStreamChunksMock.mockImplementationOnce(
+        async (
+          input: Readable,
+          callbacks: { onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void> },
+        ) => {
+          for await (const packet of input) {
+            await decodeReady;
+            await callbacks.onChunk(Buffer.alloc(96_000), packet);
+          }
+        },
       );
       const manager = createManager(
         makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
       );
       await manager.join({ guildId: "g1", channelId: "1001" });
       const entry = getSessionEntry(manager);
-      const stream = {
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      };
+      const stream = new PassThrough({ objectMode: true });
       connection.receiver.subscribe.mockReturnValueOnce(stream);
 
       const speaking = handleSpeakingStart(manager, entry, "u-speaker");
-      await vi.waitFor(() => expect(decodeOpusStreamMock).toHaveBeenCalledOnce());
+      stream.end(Buffer.from("opus-packet"));
+      await vi.waitFor(() => expect(decodeOpusStreamChunksMock).toHaveBeenCalledOnce());
       await manager.leave({ guildId: "g1" });
-      resolveDecode(Buffer.alloc(96_000));
+      resolveDecode();
       await speaking;
       await entry.processingQueue;
 
@@ -850,19 +838,14 @@ defineDiscordVoiceTests(
       );
     });
 
-    it("provider reset fences transcript, tool, playback, and consult completions", async () => {
-      const onUtterance = vi.fn();
+    it("provider reset fences tool, playback, and consult completions", async () => {
       let resolveConsult!: (result: { payloads: Array<{ text: string }> }) => void;
       agentCommandMock.mockReturnValueOnce(
         new Promise((resolve) => {
           resolveConsult = resolve;
         }),
       );
-      const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      await manager.join(
-        { guildId: "g1", channelId: "1001" },
-        { transcripts: { sessionId: "transcript-1", onUtterance } },
-      );
+      const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
       beginSpeakerTurn(entry);
       const consult = bridgeParams.onToolCall?.(
         {
@@ -885,7 +868,6 @@ defineDiscordVoiceTests(
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(onUtterance).not.toHaveBeenCalled();
       expect(realtimeSessionMock.submitToolResult).not.toHaveBeenCalled();
       expect(player.play).toHaveBeenCalledTimes(playCallsBeforeReset);
       expectUserMessageNotIncludes("stale consult completion");

@@ -1286,13 +1286,13 @@ Notes:
 - Voice transcript turns and `/vc` commands use Discord entries in `commands.ownerAllowFrom` for owner status. When no Discord command owner is configured, the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`) can still authorize voice access without granting owner status. Agent tool visibility follows the configured tool policy for the routed session.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
 - `voice.autoJoin[].whenOccupied` defaults to `false`. Set it to `true` for an auto-managed room that should contain the bot only while at least one human is present. OpenClaw joins on the first human arrival and leaves after the last human departs; the OpenClaw bot and other bots do not count. Startup, fresh gateway sessions, and resumed gateway sessions reconcile from Discord's voice-state roster.
-- Occupancy management owns only sessions that it joined. A manual `/vc join`, transcript capture, follow-user session, active session in another channel, or other ad-hoc join is not moved or disconnected when the configured room empties.
+- Occupancy management owns only sessions that it joined. A manual `/vc join`, standalone transcript-only session, follow-user session, active session in another channel, or other ad-hoc join is not moved or disconnected when the configured room empties. Attaching transcript capture to an occupancy-managed session preserves that ownership.
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options; the upstream defaults are `daveEncryption=true` and `decryptionFailureTolerance=24`.
 - OpenClaw uses the bundled `libopus-wasm` codec for Discord voice receive and realtime raw PCM playback. It ships a pinned libopus WebAssembly build and does not require native opus addons.
 - `voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts. Default: `30000`.
 - `voice.reconnectGraceMs` controls how long OpenClaw waits for a disconnected voice session to begin reconnecting before destroying it. Default: `15000`.
-- In `stt-tts` mode, voice playback does not stop just because another user starts speaking. To avoid feedback loops, OpenClaw ignores new voice capture while TTS is playing; speak after playback finishes for the next turn. Realtime modes forward speaker starts as barge-in signals to the realtime provider.
+- In `stt-tts` mode, voice playback does not stop just because another user starts speaking. To avoid feedback loops, OpenClaw does not admit new conversational turns while TTS is playing; an explicitly started capture still records that speech. Speak after playback finishes for the next conversational turn. Realtime modes forward authorized speaker starts as barge-in signals when interruption is enabled.
 - In realtime modes, echo from speakers into an open mic can look like barge-in and interrupt playback. For echo-heavy Discord rooms, set `voice.realtime.providers.openai.interruptResponseOnInputAudio: false` to keep OpenAI from auto-interrupting on input audio. Add `voice.realtime.bargeIn: true` if you still want Discord speaker-start events to interrupt active playback. The OpenAI realtime bridge ignores playback truncations shorter than `voice.realtime.minBargeInAudioEndMs` as likely echo/noise and logs them as skipped instead of clearing Discord playback.
 - `voice.captureSilenceGraceMs` controls how long OpenClaw waits after Discord reports a speaker has stopped before finalizing that audio segment for STT. Default: `2000`; raise it if Discord splits normal pauses into choppy partial transcripts.
 - When ElevenLabs is the selected TTS provider, Discord voice playback uses streaming TTS and starts from the provider response stream. Providers without streaming support fall back to the synthesized temp-file path.
@@ -1301,6 +1301,65 @@ Notes:
 - `The operation was aborted` receive events are expected when OpenClaw finalizes a captured speaker segment; they are verbose diagnostics, not warnings.
 - Verbose Discord voice logs include a bounded one-line STT transcript preview for each accepted speaker segment, so debugging shows both the user side and the agent reply side without dumping unbounded transcript text.
 - In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like "and", plus obvious non-actionable closings like "be right back" or "bye". Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
+
+### Capture voice transcripts
+
+`voice.autoJoin` controls presence and conversation; it does not start durable
+recording. Start capture explicitly with the `transcripts` agent tool, or configure
+an existing `transcripts.autoStart` source. See [Transcripts CLI](/cli/transcripts#configuration)
+for configuration and inspection commands.
+
+An authorized agent can start capture with:
+
+```json
+{
+  "action": "start",
+  "providerId": "discord-voice",
+  "accountId": "work",
+  "guildId": "123456789012345678",
+  "channelId": "234567890123456789"
+}
+```
+
+Capture subscribes to that exact account, guild, and channel until stopped. It
+attaches to an existing matching voice connection without changing conversation
+or occupancy ownership. When it matches the account's configured `voice.autoJoin`
+target, normal voice conversation remains enabled regardless of which starts
+first. With `whenOccupied: true`, capture waits through empty rooms and resumes
+on the next normal join. It also follows same-channel connection recovery and
+replacement of the same account's voice manager. Capture never moves an existing
+connection to another channel.
+
+An authorized capture records participants in the selected room independently of
+command access. Guild/channel users and roles, `commands.ownerAllowFrom`, and
+wake-name gates still control conversation, agent tools, and active-run controls;
+recording does not grant any of those permissions. Speech during protected
+playback is recorded without interrupting playback or triggering a reply.
+
+Recording uses one per-speaker audio stream and batch transcription, with the
+receiver's user ID, independently resolved display label, and audio-ingress time.
+Authorized speakers can also feed realtime conversation from the same decoded
+audio. This costs an additional batch transcription for realtime speech, but
+avoids treating the realtime provider's mixed, unattributed finals as meeting
+records. Continuous speech is split into contiguous, bounded audio uploads;
+these are segments within the same capture session, not separate meetings.
+In `stt-tts` mode, authorized conversation shares that batch transcription and
+waits for the normal end of speech before responding.
+
+With no configured auto-join target or active conversation in that guild, a
+manual capture joins silently in transcript-only mode. A subsequent `/vc join`
+enables normal conversation on that connection. A capture for another channel
+stays registered without taking over the configured or active conversation.
+
+Stop with the `transcripts` tool's `stop` action and the returned `sessionId`.
+Stopping capture works while disconnected and does not disconnect a connection
+owned by conversation. Already-received audio can finish recording across a
+connection transition while the same capture remains active. Stop or replacement
+revokes pending publication; old audio cannot enter a new capture. Leaving an
+occupied room does not finalize the capture:
+one session can span multiple occupations, with its summary generated at explicit
+stop or when the auto-start service stops its capture. There are no automatic
+per-meeting boundaries or Discord summary posts.
 
 ### Follow users in voice
 
@@ -1457,7 +1516,7 @@ Voice as an extension of an existing Discord channel session:
 
 In `agent-proxy` mode the bot joins the configured voice channel, but OpenClaw agent turns use the target channel's normal routed session and agent. The realtime voice session speaks the returned result back into the voice channel. The supervisor agent can still use normal message tools according to its tool policy, including sending a separate Discord message if that is the right action.
 
-While a delegated OpenClaw run is active, new Discord voice transcripts are treated as live run control before starting another agent turn. Phrases such as "status", "cancel that", "use the smaller fix", or "when you're done also check tests" are classified as status, cancel, steering, or follow-up input for the active session. Status, cancel, accepted steering, and follow-up outcomes are spoken back into the voice channel so the caller knows whether OpenClaw handled the request.
+While a delegated OpenClaw run is active, command-authorized Discord conversation transcripts are treated as live run control before starting another agent turn. Phrases such as "status", "cancel that", "use the smaller fix", or "when you're done also check tests" are classified as status, cancel, steering, or follow-up input for the active session. Status, cancel, accepted steering, and follow-up outcomes are spoken back into the voice channel so the caller knows whether OpenClaw handled the request.
 
 Useful target forms:
 
@@ -1511,7 +1570,7 @@ Expected voice logs:
 - On barge-in detection: `discord voice: realtime barge-in detected source=speaker-start ...` or `discord voice: realtime barge-in detected source=active-speaker-audio ...`, followed by `discord voice: realtime barge-in requested reason=... outputAudioMs=... outputActive=...`
 - On realtime interruption: `discord voice: realtime model interrupt requested client:response.cancel reason=barge-in`, followed by either `discord voice: realtime model audio truncated client:conversation.item.truncate reason=barge-in audioEndMs=...` or `discord voice: realtime model interrupt confirmed server:response.done status=cancelled ...`
 - On ignored echo/noise: `discord voice: realtime model interrupt ignored client:conversation.item.truncate.skipped reason=barge-in audioEndMs=0 minAudioEndMs=250`
-- On disabled barge-in: `discord voice: realtime capture ignored during playback (barge-in disabled) ...`
+- On disabled barge-in: `discord voice: capture ignored: ... reason=protected playback`
 - On idle playback: `discord voice: realtime barge-in ignored reason=... outputActive=false ... playbackChunks=0`
 
 To debug cut-off audio, read the realtime voice logs as a timeline:
@@ -1540,7 +1599,7 @@ Common patterns:
 - `source=speaker-start` followed by `speaker turn closed ... hasAudio=false` means Discord reported a speaker start but no audio reached OpenClaw. That can be a transient Discord voice event, noise gate behavior, or a client briefly keying the mic.
 - `audio playback stopped reason=output-audio-overflow` means sustained delivery problems exceeded the bounded pending-audio queue. Check the associated `Discord realtime audio playback overflow` error and preceding provider or Discord connection diagnostics; ordinary playback backpressure should not produce this error.
 - `audio playback stopped reason=stream-close` without a nearby barge-in or `provider-clear-audio` means the local Discord playback stream ended unexpectedly. Check the preceding provider and Discord player logs.
-- `capture ignored during playback (barge-in disabled)` means OpenClaw intentionally dropped input while assistant audio was active. Enable `voice.realtime.bargeIn` if you want speech to interrupt playback.
+- `capture ignored: ... reason=protected playback` means OpenClaw intentionally withheld conversational input while assistant audio was active. An explicitly started capture still records that speech. Enable `voice.realtime.bargeIn` if you want speech to interrupt playback.
 - `barge-in ignored ... outputActive=false` means Discord or provider VAD reported speech, but OpenClaw had no active playback to interrupt. This should not cut off audio.
 
 Credentials are resolved per component: LLM route auth for `voice.model`, STT auth for `tools.media.audio`, TTS auth for `tts`/`voice.tts`, and realtime provider auth for `voice.realtime.providers` or the provider's normal auth config.

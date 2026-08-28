@@ -134,6 +134,10 @@ export class DiscordVoiceSessions {
       cfg: OpenClawConfig;
       client: Client;
       destroyed: () => boolean;
+      getTranscripts: (entry: {
+        guildId: string;
+        channelId: string;
+      }) => VoiceSessionEntry["transcripts"];
       discordConfig: DiscordAccountConfig;
       membership: DiscordVoiceMembershipTracker;
       onLeaveFollowState: (guildId: string) => void;
@@ -168,15 +172,11 @@ export class DiscordVoiceSessions {
 
     const existing = this.params.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
-      existing.autoJoinWhenOccupied = options?.autoJoinWhenOccupied === true;
       if (authority) {
         existing.generation = authority.generation;
       }
-      if (options?.transcripts) {
-        existing.transcripts = options.transcripts;
-      }
       if (
-        !options?.transcripts &&
+        (!options?.captureOnly || !existing.captureOnly) &&
         isDiscordRealtimeVoiceMode(voiceMode) &&
         existing.realtimeLifecycle.status !== "active" &&
         existing.realtimeLifecycle.status !== "starting"
@@ -420,8 +420,10 @@ export class DiscordVoiceSessions {
       this.params.onSessionStopped(entry, optionsLocal.reason);
     };
 
+    const getTranscripts = this.params.getTranscripts;
     const entry: VoiceSessionEntry = {
       generation: authority?.generation ?? 0,
+      captureOnly: options?.captureOnly === true,
       autoJoinWhenOccupied: options?.autoJoinWhenOccupied === true,
       sessionLifecycle: { status: "active" },
       guildId,
@@ -446,7 +448,9 @@ export class DiscordVoiceSessions {
       processingQueue: Promise.resolve(),
       ttsStreamFallbackWarned: false,
       capture: createVoiceCaptureState(),
-      transcripts: options?.transcripts,
+      get transcripts(): VoiceSessionEntry["transcripts"] {
+        return getTranscripts(entry);
+      },
       receiveRecovery: createVoiceReceiveRecoveryState(),
       realtimeLifecycle: { status: "inactive", generation: 0 },
       stop(reason) {
@@ -511,7 +515,7 @@ export class DiscordVoiceSessions {
     connection.on(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
     connection.on(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
     player.on("error", playerErrorHandler);
-    if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode)) {
+    if (!entry.captureOnly && isDiscordRealtimeVoiceMode(voiceMode)) {
       const realtimeResult = await this.attachRealtimeSession(entry, voiceMode, {
         isCurrent: authority?.isCurrent,
       });
@@ -566,7 +570,7 @@ export class DiscordVoiceSessions {
 
   async leave(
     params: { guildId: string; channelId?: string },
-    options?: { preserveFollowState?: boolean; transcriptsSessionId?: string },
+    options?: { preserveFollowState?: boolean },
   ): Promise<VoiceOperationResult> {
     const guildId = params.guildId.trim();
     logVoiceVerbose(`leave requested: guild ${guildId} channel ${params.channelId ?? "current"}`);
@@ -576,28 +580,6 @@ export class DiscordVoiceSessions {
     }
     if (params.channelId && params.channelId !== entry.channelId) {
       return { ok: false, message: "Not connected to that voice channel." };
-    }
-    if (options?.transcriptsSessionId) {
-      if (!entry.transcripts || entry.transcripts.sessionId !== options.transcriptsSessionId) {
-        return {
-          ok: false,
-          message: "Transcripts session is not active in this voice channel.",
-          guildId,
-          channelId: entry.channelId,
-        };
-      }
-      if (
-        entry.realtimeLifecycle.status === "active" ||
-        entry.realtimeLifecycle.status === "starting"
-      ) {
-        entry.transcripts = undefined;
-        return {
-          ok: true,
-          message: `Stopped transcripts for ${formatMention({ channelId: entry.channelId })}.`,
-          guildId,
-          channelId: entry.channelId,
-        };
-      }
     }
     entry.stop();
     if (!entry.receiveRecovery.decryptRecoveryInFlight) {

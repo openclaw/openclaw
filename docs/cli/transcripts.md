@@ -181,6 +181,44 @@ Meeting transcript capture is enabled by default. To opt out globally:
 }
 ```
 
+Automatic channel captures belong to the agent selected by normal channel and
+account routing. Use that agent to inspect or summarize its notes; native
+account access checks still apply. Existing notes are not reassigned when
+bindings change.
+
+Run the `transcripts` tool with `action: "status"` to discover active capture IDs
+and their sources, then pass the full `sessionId` to `summarize` or `stop`.
+The visible listing shows up to five sessions within 2,000 characters and reports
+omissions. IDs are never shortened; structured `details.active` retains all
+sessions the caller can access.
+
+Discord `voice.autoJoin` alone does not record. An explicit `transcripts` tool
+start or the `autoStart` entry above subscribes to the selected account, guild,
+and channel. When that source matches the account's configured voice auto-join
+target, capture preserves normal conversation and `whenOccupied` behavior: it
+waits while the room is empty and resumes on subsequent joins and connection
+recovery. Capture also rebinds when the same account's voice manager restarts.
+With no configured auto-join target or active conversation in that guild,
+manual capture retains silent transcript-only behavior. A source for another
+channel stays registered without taking over that guild's conversation.
+See [Discord voice capture](/channels/discord#capture-voice-transcripts).
+
+An authorized Discord source records all participants independently of command
+allowlists. Recording grants no conversation, tool, or run-control authority.
+Per-speaker batch transcription preserves speaker IDs and audio-ingress times,
+including overlapping speech and speech during protected playback. Realtime
+conversation keeps its existing authorization and wake-name gates and incurs
+additional batch transcription while recording is active. Long speech uses
+bounded contiguous audio uploads within the same session.
+Batch-only conversation shares the transcription and responds at the normal
+end of speech, not at each upload boundary.
+
+An empty room does not end a Discord capture session or generate its summary.
+One session can span several room occupations until explicit capture stop or
+auto-start service shutdown. Stop detaches the subscription even while
+disconnected, without disconnecting an independently conversation-owned session.
+There is no automatic per-meeting segmentation or summary posting to Discord.
+
 The meeting provider ids are `google-meet`, `teams`, and `zoom`. Their aliases
 are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`, and
 `zoom-meetings`, respectively. Meeting providers attach to an already-active

@@ -68,10 +68,23 @@ describe("transcripts tool with the registered Discord provider", () => {
     setActivePluginRegistry(registry, "discord-transcripts-tool-test");
   });
 
-  afterEach(() => {
+  const managers = new Map<string, DiscordTranscriptsVoiceManager>();
+  function registerManager(params: { accountId: string; manager: DiscordTranscriptsVoiceManager }) {
+    managers.set(params.accountId, params.manager);
+    setDiscordTranscriptsVoiceManager(params);
+  }
+  afterEach(async () => {
+    for (const entry of activeSessions.values()) {
+      await discordVoiceTranscriptsSourceProvider.stop!({
+        sessionId: entry.session.sessionId,
+        source: entry.session.source,
+      });
+    }
     activeSessions.clear();
-    setDiscordTranscriptsVoiceManager({ accountId: "account-a", manager: null });
-    setDiscordTranscriptsVoiceManager({ accountId: "account-b", manager: null });
+    for (const [accountId, manager] of managers) {
+      setDiscordTranscriptsVoiceManager({ accountId, manager: null, expectedManager: manager });
+    }
+    managers.clear();
     setActivePluginRegistry(createEmptyPluginRegistry(), "discord-transcripts-tool-test-cleanup");
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
@@ -83,20 +96,20 @@ describe("transcripts tool with the registered Discord provider", () => {
     const accountALeave = vi.fn(async () => ({ ok: true, message: "left account-a" }));
     const accountBJoin = vi.fn(async () => ({ ok: true, message: "joined account-b" }));
     const accountBLeave = vi.fn(async () => ({ ok: true, message: "left account-b" }));
-    setDiscordTranscriptsVoiceManager({
+    registerManager({
       accountId: "account-a",
       manager: {
-        join: accountAJoin,
-        leave: accountALeave,
+        startTranscriptsCapture: accountAJoin,
+        stopTranscriptsCapture: accountALeave,
         resolveAccessTarget: ({ guildId, channelId }: { guildId: string; channelId: string }) =>
           resolveAccessTarget(guildId, channelId),
       } as unknown as DiscordTranscriptsVoiceManager,
     });
-    setDiscordTranscriptsVoiceManager({
+    registerManager({
       accountId: "account-b",
       manager: {
-        join: accountBJoin,
-        leave: accountBLeave,
+        startTranscriptsCapture: accountBJoin,
+        stopTranscriptsCapture: accountBLeave,
         resolveAccessTarget: ({ guildId, channelId }: { guildId: string; channelId: string }) =>
           resolveAccessTarget(guildId, channelId),
       } as unknown as DiscordTranscriptsVoiceManager,
@@ -216,10 +229,10 @@ describe("transcripts tool with the registered Discord provider", () => {
   it("rejects a Discord sender that the voice command policy denies", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-discord-provider-denied-");
     const join = vi.fn(async () => ({ ok: true, message: "joined" }));
-    setDiscordTranscriptsVoiceManager({
+    registerManager({
       accountId: "account-a",
       manager: {
-        join,
+        startTranscriptsCapture: join,
         resolveAccessTarget: ({ guildId, channelId }: { guildId: string; channelId: string }) =>
           resolveAccessTarget(guildId, channelId),
       } as unknown as DiscordTranscriptsVoiceManager,

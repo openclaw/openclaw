@@ -1,4 +1,4 @@
-import type { Readable } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
 import type { MockCallSource, TestRealtimeSessionEntry } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -17,7 +17,6 @@ defineDiscordVoiceTests(
     joinVoiceChannelMock,
     transcribeAudioFileMock,
     realtimeSessionMock,
-    decodeOpusStreamMock,
     decodeOpusStreamChunksMock,
     createClient,
     createManager,
@@ -34,7 +33,63 @@ defineDiscordVoiceTests(
     makePoisonedDaveConnections,
     updateVoiceState,
     handleSpeakingStart,
+    startTranscripts,
+    stopTranscripts,
+    beginSpeakerTurn,
+    lastRealtimeBridgeParams,
+    emitFinalRealtimeUserTranscript,
+    receiveRecordedSpeech,
+    agentCommandMock,
   }) => {
+    it.each(["agent-proxy", "bidi"] as const)(
+      "keeps exact capture and %s conversation after destructive recovery",
+      async (mode) => {
+        const manager = createManager(
+          makeVoiceConfig(
+            { mode, realtime: { provider: "openai", requireWakeName: true } },
+            { groupPolicy: "open", allowFrom: ["discord:u-owner"] },
+          ),
+        );
+        await manager.join({ guildId: "g1", channelId: "1001" });
+        const onUtterance = vi.fn();
+        expect(await startTranscripts(manager, onUtterance)).toMatchObject({ ok: true });
+        await receiveRecordedSpeech(manager, "before recovery");
+        await emitFinalRealtimeUserTranscript(lastRealtimeBridgeParams(), "before recovery");
+        expect(onUtterance).toHaveBeenCalledOnce();
+        const oldEntry = getSessionEntry(manager);
+        emitDecryptFailure(manager);
+        emitDecryptFailure(manager);
+        emitDecryptFailure(manager);
+        await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
+        await receiveRecordedSpeech(manager, "after recovery");
+        await emitFinalRealtimeUserTranscript(lastRealtimeBridgeParams(), "after recovery");
+        expect(onUtterance).toHaveBeenCalledTimes(2);
+        expect(agentCommandMock).not.toHaveBeenCalled();
+        await receiveRecordedSpeech(manager, "stale connection", oldEntry);
+        expect(onUtterance).toHaveBeenCalledTimes(2);
+        expect(await stopTranscripts()).toMatchObject({ ok: true });
+        expectConnectedStatus(manager, "1001");
+        beginSpeakerTurn(getSessionEntry(manager));
+        if (mode === "agent-proxy") {
+          await emitFinalRealtimeUserTranscript(
+            lastRealtimeBridgeParams(),
+            "OpenClaw, what changed?",
+          );
+        } else {
+          await lastRealtimeBridgeParams().onToolCall?.(
+            {
+              itemId: "consult-after-recovery",
+              callId: "consult-after-recovery",
+              name: "openclaw_agent_consult",
+              args: { question: "what changed?" },
+            },
+            realtimeSessionMock,
+          );
+        }
+        expect(agentCommandMock).toHaveBeenCalledOnce();
+        expect(onUtterance).toHaveBeenCalledTimes(2);
+      },
+    );
     it("authorizes realtime speakers before subscribing receiver streams", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
@@ -667,16 +722,6 @@ defineDiscordVoiceTests(
     it("resets DAVE receive recovery after realtime audio decodes", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamChunksMock.mockImplementationOnce(
-        async (
-          _stream: Readable,
-          params: {
-            onChunk: (pcm48kStereo: Buffer) => void;
-          },
-        ) => {
-          params.onChunk(Buffer.alloc(8));
-        },
-      );
       const manager = createAgentProxyManager(undefined, {
         allowFrom: ["discord:u-speaker"],
       });
@@ -688,14 +733,7 @@ defineDiscordVoiceTests(
       const attempts = getVoiceReceive(manager).daveRecoveryAttempts;
       attempts.set("g1", Date.now());
       expect(entry.receiveRecovery.decryptFailureCount).toBe(2);
-      const stream = {
-        on: vi.fn(),
-        destroy: vi.fn(),
-        async *[Symbol.asyncIterator]() {},
-      };
-      connection.receiver.subscribe.mockReturnValueOnce(stream);
-
-      await handleSpeakingStart(manager, entry, "u-speaker");
+      await receiveRecordedSpeech(manager, undefined, entry, "u-speaker");
 
       expect(decodeOpusStreamChunksMock).toHaveBeenCalledTimes(1);
       expect(entry.receiveRecovery.decryptFailureCount).toBe(0);
@@ -704,105 +742,71 @@ defineDiscordVoiceTests(
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
     });
 
-    it("cleans up realtime receive streams after WASM bounds failures", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamChunksMock.mockImplementationOnce(
-        async (
-          stream: Readable,
-          params: {
-            onError: (err: unknown) => void;
-          },
-        ) => {
-          const err = new Error("memory access out of bounds");
-          params.onError(err);
-          const errorListener = (
-            stream as unknown as {
-              on: ReturnType<typeof vi.fn>;
+    it.each(["agent-proxy", "stt-tts"] as const)(
+      "cleans up %s receive streams without clearing decoder failure state",
+      async (mode) => {
+        const connection = createConnectionMock();
+        joinVoiceChannelMock.mockReturnValueOnce(connection);
+        const stream = new PassThrough({ objectMode: true });
+        decodeOpusStreamChunksMock.mockImplementationOnce(
+          async (
+            input: Readable,
+            params: {
+              onError: (err: unknown) => void;
+              onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void>;
+            },
+          ) => {
+            for await (const packet of input) {
+              const err = new Error("memory access out of bounds");
+              params.onError(err);
+              stream.emit("error", err);
+              await params.onChunk(Buffer.alloc(8), packet);
             }
-          ).on.mock.calls.find(([event]) => event === "error")?.[1] as
-            | ((err: unknown) => void)
-            | undefined;
-          errorListener?.(err);
-        },
-      );
-      const manager = createAgentProxyManager(undefined, {
-        allowFrom: ["discord:u-speaker"],
-      });
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      const entry = getSessionEntry(manager);
-      const stream = {
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      };
-      connection.receiver.subscribe.mockReturnValueOnce(stream);
-
-      await handleSpeakingStart(manager, entry, "u-speaker");
-
-      const errorListener = stream.on.mock.calls.find(([event]) => event === "error")?.[1];
-      expect(errorListener).toBeTypeOf("function");
-      expect(stream.off).toHaveBeenCalledWith("error", errorListener);
-      expect(stream.destroy).toHaveBeenCalledTimes(1);
-      expect(entry.capture.activeSpeakers.has("u-speaker")).toBe(false);
-      expect(entry.capture.activeCaptureStreams.has("u-speaker")).toBe(false);
-      expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
-    });
-
-    it("keeps receive recovery state after non-realtime decoder failures", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamMock.mockImplementationOnce(
-        async (
-          _stream: Readable,
-          params: {
-            onError: (err: unknown) => void;
           },
-        ) => {
-          params.onError(new Error("memory access out of bounds"));
-          return Buffer.alloc(8);
-        },
-      );
-      const manager = createManager(
-        makeVoiceConfig({}, { groupPolicy: "open", allowFrom: ["discord:u-speaker"] }),
-      );
+        );
+        const manager = createManager(
+          makeVoiceConfig(
+            { mode, realtime: { provider: "openai" } },
+            { groupPolicy: "open", allowFrom: ["discord:u-speaker"] },
+          ),
+        );
 
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      const entry = getSessionEntry(manager);
-      const stream = {
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      };
-      connection.receiver.subscribe.mockReturnValueOnce(stream);
+        await manager.join({ guildId: "g1", channelId: "1001" });
+        const entry = getSessionEntry(manager);
+        connection.receiver.subscribe.mockReturnValueOnce(stream);
 
-      await handleSpeakingStart(manager, entry, "u-speaker");
+        const receiving = handleSpeakingStart(manager, entry, "u-speaker");
+        stream.end(Buffer.from("opus-packet"));
+        await receiving;
+        await entry.processingQueue;
 
-      expect(transcribeAudioFileMock).not.toHaveBeenCalled();
-      expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
-      expect(entry.receiveRecovery.lastDecryptFailureAt).toBeGreaterThan(0);
-      expect(stream.destroy).toHaveBeenCalledTimes(1);
-    });
+        expect(stream.destroyed).toBe(true);
+        expect(stream.listenerCount("error")).toBe(0);
+        expect(entry.capture.activeSpeakers.has("u-speaker")).toBe(false);
+        expect(entry.capture.activeCaptureStreams.has("u-speaker")).toBe(false);
+        expect(transcribeAudioFileMock).not.toHaveBeenCalled();
+        expect(entry.receiveRecovery.decryptFailureCount).toBe(1);
+        expect(entry.receiveRecovery.lastDecryptFailureAt).toBeGreaterThan(0);
+      },
+    );
 
     it("processes partial non-realtime audio after abort-like stream endings", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
-      decodeOpusStreamMock.mockImplementationOnce(
+      decodeOpusStreamChunksMock.mockImplementationOnce(
         async (
-          _stream: Readable,
+          input: Readable,
           params: {
             onError: (err: unknown) => void;
+            onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void>;
           },
         ) => {
-          const err = new Error("The operation was aborted");
-          err.name = "AbortError";
-          params.onError(err);
-          return Buffer.alloc(48_000);
+          for await (const packet of input) {
+            await params.onChunk(Buffer.alloc(48_000), packet);
+            const err = new Error("The operation was aborted");
+            err.name = "AbortError";
+            params.onError(err);
+          }
         },
       );
       const manager = createManager(
@@ -811,21 +815,17 @@ defineDiscordVoiceTests(
 
       await manager.join({ guildId: "g1", channelId: "1001" });
       const entry = getSessionEntry(manager);
-      const stream = {
-        on: vi.fn(),
-        off: vi.fn(),
-        destroy: vi.fn(),
-        destroyed: false,
-        async *[Symbol.asyncIterator]() {},
-      };
+      const stream = new PassThrough({ objectMode: true });
       connection.receiver.subscribe.mockReturnValueOnce(stream);
 
-      await handleSpeakingStart(manager, entry, "u-speaker");
+      const receiving = handleSpeakingStart(manager, entry, "u-speaker");
+      stream.end(Buffer.from("opus-packet"));
+      await receiving;
       await entry.processingQueue;
 
       expect(transcribeAudioFileMock).toHaveBeenCalledTimes(1);
       expect(entry.receiveRecovery.decryptFailureCount).toBe(0);
-      expect(stream.destroy).toHaveBeenCalledTimes(1);
+      expect(stream.destroyed).toBe(true);
     });
 
     it("allows the same speaker to restart after finalize fires", async () => {
@@ -851,11 +851,7 @@ defineDiscordVoiceTests(
         expect(firstStream.destroy).toHaveBeenCalledTimes(1);
         expect(entry?.capture.activeSpeakers.has("u1")).toBe(false);
 
-        const secondStream = {
-          on: vi.fn(),
-          destroy: vi.fn(),
-          async *[Symbol.asyncIterator]() {},
-        };
+        const secondStream = new PassThrough({ objectMode: true });
         connection.receiver.subscribe.mockReturnValueOnce(secondStream);
 
         await handleSpeakingStart(manager, entry, "u1");

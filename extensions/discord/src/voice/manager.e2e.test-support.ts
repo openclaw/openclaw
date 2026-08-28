@@ -17,6 +17,12 @@ type TestRealtimeSpeakerTurn = {
 };
 
 export type TestRealtimeSessionEntry = {
+  connection: {
+    receiver: {
+      speaking: { users: Map<string, number> };
+      subscribe: ReturnType<typeof vi.fn>;
+    };
+  };
   capture: Omit<ReturnType<typeof createVoiceCaptureState>, "activeCaptureStreams"> & {
     activeCaptureStreams: Map<string, { generation: number; stream: unknown }>;
   };

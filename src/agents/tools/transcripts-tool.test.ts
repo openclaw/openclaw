@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type {
   TranscriptSourceProvider,
+  TranscriptStartRequest,
   TranscriptStopRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
@@ -729,18 +731,22 @@ describe("transcripts tool", () => {
       start,
       stop,
     });
-    const { service, tool } = await createHarness(stateDir, {
-      autoStart: [
-        {
-          providerId: "discord-voice",
-          accountId: "account-a",
-          sessionId: "standup",
-          title: "Standup",
-          guildId: "guild-1",
-          channelId: "channel-1",
-        },
-      ],
-    });
+    const { service, tool } = await createHarness(
+      stateDir,
+      {
+        autoStart: [
+          {
+            providerId: "discord-voice",
+            accountId: "account-a",
+            sessionId: "standup",
+            title: "Standup",
+            guildId: "guild-1",
+            channelId: "channel-1",
+          },
+        ],
+      },
+      "main",
+    );
 
     service.start();
     for (let i = 0; i < 20 && start.mock.calls.length === 0; i += 1) {
@@ -772,7 +778,7 @@ describe("transcripts tool", () => {
     await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
       title: "Standup",
       source: { accountId: "account-a" },
-      metadata: {},
+      metadata: { agentId: "main" },
     });
     await expect(
       tool.execute("status-auto-start", { action: "status" }, undefined, vi.fn()),
@@ -789,6 +795,94 @@ describe("transcripts tool", () => {
     await service.stop();
     expect(stop).toHaveBeenCalledOnce();
   });
+
+  it.each(["account-a", undefined])(
+    "lets the routed agent read auto-started notes with account %s",
+    async (accountId) => {
+      const stateDir = tempDirs.make("openclaw-transcripts-routed-");
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {}, research: {} } },
+        bindings: [
+          {
+            type: "route",
+            agentId: "research",
+            match: {
+              channel: "discord",
+              accountId: "account-a",
+              peer: { kind: "channel", id: "room-a" },
+            },
+          },
+        ],
+        transcripts: {
+          autoStart: [
+            {
+              providerId: "room-audio",
+              accountId,
+              guildId: "guild-a",
+              channelId: "room-a",
+            },
+          ],
+        },
+      };
+      const start = vi.fn(async (request: TranscriptStartRequest) => {
+        await request.onUtterance({
+          text: "Decision: keep meeting notes with their routed agent.",
+        });
+        return { ok: true as const, session: request.session };
+      });
+      getTranscriptSourceProviderMock.mockReturnValue({
+        id: "room-audio",
+        name: "Room Audio",
+        sourceKinds: ["live-audio"],
+        accessControl: discordAccountOwnership(() => ({ ok: true, value: "account-a" })),
+        start,
+        stop: async (request: TranscriptStopRequest) => ({
+          ok: true as const,
+          sessionId: request.sessionId,
+        }),
+      } satisfies TranscriptSourceProvider);
+      const logger = { warn: vi.fn() };
+      const service = createTranscriptsAutoStartService({ config, stateDir, logger });
+      const toolOptions = {
+        config,
+        stateDir,
+        caller: { kind: "operator", source: "local" },
+      } as const;
+      const ownerTool = createTranscriptsTool({ ...toolOptions, agentId: "research" });
+      const otherTool = createTranscriptsTool({ ...toolOptions, agentId: "main" });
+
+      service.start();
+      try {
+        await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        const sessionId = start.mock.calls[0]![0].session.sessionId;
+        await expect(storeFor(stateDir).readSession(sessionId)).resolves.toMatchObject({
+          metadata: { agentId: "research" },
+          source: { agentId: "research", accountId: "account-a" },
+        });
+        const statusResult = await ownerTool.execute("routed-status", { action: "status" });
+        expect(statusResult).toMatchObject({
+          content: [{ type: "text", text: expect.stringContaining(sessionId) }],
+          details: { active: [expect.objectContaining({ sessionId })] },
+        });
+        for (const identity of ["room-audio", "account-a", "guild-a", "room-a"]) {
+          expect(statusResult.content).toEqual([
+            { type: "text", text: expect.stringContaining(identity) },
+          ]);
+        }
+        await expect(
+          otherTool.execute("other-status", { action: "status" }),
+        ).resolves.toMatchObject({
+          content: [{ type: "text", text: expect.not.stringContaining(sessionId) }],
+          details: { active: [] },
+        });
+        await expect(
+          ownerTool.execute("routed-summary", { action: "summarize", sessionId }),
+        ).resolves.toMatchObject({ details: { sessionId } });
+      } finally {
+        await service.stop();
+      }
+    },
+  );
 
   it("does not retain an explicit account when provider resolution returns undefined", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");

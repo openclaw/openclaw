@@ -14,7 +14,6 @@ import {
   type RealtimeVoiceWakeNamePolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { convertDiscordPcm48kStereoToRealtimePcm24kMono } from "./audio.js";
 import type { DiscordRealtimePlaybackPort } from "./realtime-playback.js";
 import { mergeRealtimePartialTranscript } from "./realtime-transcript.js";
@@ -46,11 +45,6 @@ type PendingSpeakerTurn = RealtimeVoiceTurnContextHandle<
   DiscordRealtimeSpeakerContext,
   PendingSpeakerTurnStats
 >;
-
-type TranscriptUtteranceAttribution = {
-  context: DiscordRealtimeSpeakerContext;
-  startedAt: number;
-};
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
@@ -141,17 +135,13 @@ export class DiscordRealtimeTurns {
       return;
     }
     this.partialUserTranscript = "";
-    const transcriptsTurn = this.peekPendingSpeakerTurn();
-    let transcriptAttribution = this.transcriptAttributionFromTurn(transcriptsTurn);
     const humanParticipantCount = this.params.getHumanParticipantCount();
     const requireWakeName = this.isWakeNameRequired(humanParticipantCount);
     const wakeNameResult = this.resolveWakeNameTranscript(trimmed, requireWakeName);
     let forcedSpeakerContext: DiscordRealtimeSpeakerContext | undefined;
     if (!wakeNameResult.allowed) {
       const pendingWakeNameFollowup = this.consumePendingWakeNameFollowup();
-      transcriptAttribution ??= pendingWakeNameFollowup;
       if (!pendingWakeNameFollowup) {
-        this.recordTranscriptUtterance(trimmed, transcriptAttribution, providerEpoch);
         this.rememberIgnoredWakeNameSpeakerContext(this.consumePendingSpeakerContext());
         logger.info(
           `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} humanParticipants=${humanParticipantCount} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.params.wakeNames().join(",") || "none"}`,
@@ -163,7 +153,6 @@ export class DiscordRealtimeTurns {
         `discord voice: realtime wake-name follow-up accepted chars=${trimmed.length} speaker=${forcedSpeakerContext.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
       );
     }
-    this.recordTranscriptUtterance(trimmed, transcriptAttribution, providerEpoch);
     const acceptedText = wakeNameResult.allowed ? wakeNameResult.text || trimmed : trimmed;
     if (wakeNameResult.allowed && !wakeNameResult.text.trim()) {
       this.armWakeNameFollowup();
@@ -316,49 +305,6 @@ export class DiscordRealtimeTurns {
     return isRealtimeVoiceWakeNameRequired(this.params.wakeNamePolicy(), humanParticipantCount);
   }
 
-  private transcriptAttributionFromTurn(
-    turn: PendingSpeakerTurn | undefined,
-  ): TranscriptUtteranceAttribution | undefined {
-    return turn ? { context: turn.context, startedAt: turn.startedAt } : undefined;
-  }
-
-  private recordTranscriptUtterance(
-    text: string,
-    attribution: TranscriptUtteranceAttribution | undefined,
-    providerEpoch: number,
-  ): void {
-    const transcripts = this.params.entry.transcripts;
-    if (!transcripts || !attribution) {
-      return;
-    }
-    const context = attribution.context;
-    const utterance = {
-      sessionId: transcripts.sessionId,
-      startedAt: new Date(attribution.startedAt).toISOString(),
-      final: true,
-      speaker: { id: context.userId, label: context.speakerLabel },
-      text,
-      metadata: {
-        channel: "discord",
-        guildId: this.params.entry.guildId,
-        channelId: this.params.entry.channelId,
-        voiceSessionKey: this.params.entry.voiceSessionKey,
-      },
-    };
-    void Promise.resolve()
-      .then(() => {
-        if (providerEpoch !== this.params.providerEpoch()) {
-          return;
-        }
-        return transcripts.onUtterance(utterance);
-      })
-      .catch((error: unknown) => {
-        logger.warn(
-          `discord voice: realtime transcripts utterance failed: ${formatErrorMessage(error)}`,
-        );
-      });
-  }
-
   private armWakeNameFollowup(): void {
     const turn = this.peekPendingSpeakerTurn();
     const context = this.consumePendingSpeakerContext();
@@ -382,7 +328,9 @@ export class DiscordRealtimeTurns {
     );
   }
 
-  private consumePendingWakeNameFollowup(): TranscriptUtteranceAttribution | undefined {
+  private consumePendingWakeNameFollowup():
+    | { context: DiscordRealtimeSpeakerContext; startedAt: number }
+    | undefined {
     const pending = this.pendingWakeNameFollowup;
     this.pendingWakeNameFollowup = undefined;
     const now = asDateTimestampMs(Date.now());

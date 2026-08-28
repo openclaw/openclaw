@@ -1,4 +1,6 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Discord plugin module implements transcripts source behavior.
@@ -10,9 +12,43 @@ import { listEnabledDiscordAccounts, resolveDiscordAccount } from "../accounts.j
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
 import { resolveDiscordVoiceAccess } from "./owner-access.js";
-import type { DiscordVoiceManager } from "./voice-runtime.js";
+import type { VoiceOperationResult, VoiceSessionEntry } from "./session.js";
 
-const managersByAccountId = new Map<string, DiscordVoiceManager>();
+type CaptureSource = { accountId: string; guildId: string; channelId: string };
+type CaptureTarget = Pick<CaptureSource, "guildId" | "channelId">;
+type DiscordTranscriptsManager = {
+  resolveAccessTarget: (
+    target: CaptureTarget,
+  ) => Promise<
+    | Pick<
+        Parameters<typeof authorizeDiscordVoiceIngress>[0],
+        "guild" | "channelName" | "channelSlug" | "parentId" | "parentName" | "parentSlug" | "scope"
+      >
+    | undefined
+  >;
+  startTranscriptsCapture: (target: CaptureTarget) => Promise<VoiceOperationResult>;
+  stopTranscriptsCapture: (target: CaptureTarget) => Promise<void>;
+};
+const managersByAccountId = new Map<string, DiscordTranscriptsManager>();
+type CaptureRegistration = NonNullable<VoiceSessionEntry["transcripts"]> & {
+  source: CaptureSource;
+  started: boolean;
+};
+const captures = new Map<string, CaptureRegistration>();
+const logger = createSubsystemLogger("discord/voice");
+
+function captureKey(source: CaptureSource): string {
+  return JSON.stringify([source.accountId, source.guildId, source.channelId]);
+}
+
+export function resolveDiscordTranscriptsCapture(
+  source: CaptureSource,
+  manager: DiscordTranscriptsManager,
+): CaptureRegistration | undefined {
+  return managersByAccountId.get(source.accountId) === manager
+    ? captures.get(captureKey(source))
+    : undefined;
+}
 const managerWaiters = new Set<{
   accountId?: string;
   resolve: () => void;
@@ -32,18 +68,42 @@ function summarizeAccountIdsForError(accountIds: readonly string[]): string {
   });
 }
 
-export function setDiscordTranscriptsVoiceManager(params: {
-  accountId: string;
-  manager: DiscordVoiceManager | null;
-}): void {
+export function setDiscordTranscriptsVoiceManager(
+  params: { accountId: string } & (
+    | { manager: DiscordTranscriptsManager }
+    | { manager: null; expectedManager: DiscordTranscriptsManager }
+  ),
+): void {
+  if (managersByAccountId.get(params.accountId) === params.manager) {
+    return;
+  }
   if (params.manager) {
-    managersByAccountId.set(params.accountId, params.manager);
+    const manager = params.manager;
+    managersByAccountId.set(params.accountId, manager);
+    // Account restart replaces transport authority, not an explicitly started subscription.
+    for (const capture of captures.values()) {
+      if (capture.started && capture.source.accountId === params.accountId) {
+        void manager
+          .startTranscriptsCapture(capture.source)
+          .then((result) => {
+            if (
+              !result.ok &&
+              resolveDiscordTranscriptsCapture(capture.source, manager) === capture
+            ) {
+              logger.warn(`discord voice: transcripts reattach failed: ${result.message}`);
+            }
+          })
+          .catch((error: unknown) =>
+            logger.warn(`discord voice: transcripts reattach failed: ${formatErrorMessage(error)}`),
+          );
+      }
+    }
     for (const waiter of managerWaiters) {
       if (!waiter.accountId || waiter.accountId === params.accountId) {
         waiter.resolve();
       }
     }
-  } else {
+  } else if (managersByAccountId.get(params.accountId) === params.expectedManager) {
     managersByAccountId.delete(params.accountId);
   }
 }
@@ -115,7 +175,10 @@ const resolveDiscordTranscriptsAccountId: NonNullable<
 
 async function waitForManager(
   request: TranscriptStartRequest,
-): Promise<{ ok: true; value: DiscordVoiceManager | undefined } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; value: { accountId: string; manager: DiscordTranscriptsManager } | undefined }
+  | { ok: false; error: string }
+> {
   const accountResolution = resolveDiscordTranscriptsAccountId({
     cfg: request.cfg,
     source: request.session.source,
@@ -125,8 +188,8 @@ async function waitForManager(
   }
   const accountId = accountResolution.value;
   const existing = accountId ? managersByAccountId.get(accountId) : undefined;
-  if (existing) {
-    return { ok: true, value: existing };
+  if (existing && accountId) {
+    return { ok: true, value: { accountId, manager: existing } };
   }
   if (request.abortSignal?.aborted) {
     return { ok: true, value: undefined };
@@ -153,7 +216,8 @@ async function waitForManager(
   if (request.abortSignal?.aborted) {
     return { ok: true, value: undefined };
   }
-  return { ok: true, value: accountId ? managersByAccountId.get(accountId) : undefined };
+  const manager = accountId ? managersByAccountId.get(accountId) : undefined;
+  return { ok: true, value: accountId && manager ? { accountId, manager } : undefined };
 }
 
 export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
@@ -218,8 +282,8 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     if (!managerResolution.ok) {
       return managerResolution;
     }
-    const manager = managerResolution.value;
-    if (!manager) {
+    const binding = managerResolution.value;
+    if (!binding) {
       return { ok: false, error: "Discord voice manager is not available." };
     }
     if (request.abortSignal?.aborted) {
@@ -230,19 +294,47 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     if (!guildId || !channelId) {
       return { ok: false, error: "Discord transcripts require guildId and channelId." };
     }
-    const joined = await manager.join(
-      { guildId, channelId },
-      {
-        transcripts: {
-          sessionId: request.session.sessionId,
-          onUtterance: request.onUtterance,
-        },
+    const { accountId, manager } = binding;
+    const source = { accountId, guildId, channelId };
+    const key = captureKey(source);
+    const capture: CaptureRegistration = {
+      source,
+      started: false,
+      sessionId: request.session.sessionId,
+      isCurrent: () => captures.get(key) === capture,
+      onUtterance: (utterance) => {
+        // Received audio may finish after transport replacement, but never after source revocation.
+        if (capture.isCurrent()) {
+          return request.onUtterance(utterance);
+        }
       },
-    );
-    if (!joined.ok) {
-      return { ok: false, error: joined.message };
+    };
+    captures.set(key, capture);
+    try {
+      const joined = await manager.startTranscriptsCapture(source);
+      if (!joined.ok) {
+        return { ok: false, error: joined.message };
+      }
+      if (
+        request.abortSignal?.aborted ||
+        resolveDiscordTranscriptsCapture(source, manager) !== capture
+      ) {
+        return { ok: false, error: "Discord transcripts start was cancelled." };
+      }
+      capture.started = true;
+      return {
+        ok: true,
+        session: {
+          ...request.session,
+          source: { ...request.session.source, accountId, guildId, channelId },
+        },
+      };
+    } finally {
+      if (!capture.started && captures.get(key) === capture) {
+        captures.delete(key);
+        await manager.stopTranscriptsCapture(source);
+      }
     }
-    return { ok: true, session: request.session };
   },
   async stop(request) {
     const accountId = request.source.accountId?.trim();
@@ -252,26 +344,19 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
         error: "Discord transcripts require accountId to stop a voice session.",
       };
     }
-    const manager = managersByAccountId.get(accountId);
-    if (!manager) {
-      return { ok: false, error: "Discord voice manager is not available." };
-    }
     const guildId = request.source.guildId?.trim();
-    if (!guildId) {
-      return { ok: false, error: "Discord transcripts require guildId." };
+    const channelId = request.source.channelId?.trim();
+    if (!guildId || !channelId) {
+      return { ok: false, error: "Discord transcripts require guildId and channelId." };
     }
-    const result = await manager.leave(
-      {
-        guildId,
-        channelId: request.source.channelId,
-      },
-      {
-        transcriptsSessionId: request.sessionId,
-      },
-    );
-    if (!result.ok) {
-      return { ok: false, error: result.message };
+    const source = { accountId, guildId, channelId };
+    const key = captureKey(source);
+    if (captures.get(key)?.sessionId !== request.sessionId) {
+      return { ok: false, error: "Transcripts session is not active in this voice channel." };
     }
+    // Revoke before any await: retained callbacks and pending joins lose this exact capture.
+    captures.delete(key);
+    await managersByAccountId.get(accountId)?.stopTranscriptsCapture(source);
     return { ok: true, sessionId: request.sessionId, stoppedAt: new Date().toISOString() };
   },
   async status(source) {
@@ -279,18 +364,18 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     if (!accountId) {
       return [];
     }
-    const manager = managersByAccountId.get(accountId);
-    return (
-      manager?.status().map((entry) => ({
-        active: entry.ok,
-        message: entry.message,
-        source: {
-          providerId: "discord-voice",
-          accountId,
-          guildId: entry.guildId,
-          channelId: entry.channelId,
-        },
-      })) ?? []
-    );
+    return [...captures.values()]
+      .filter(
+        (capture) =>
+          capture.source.accountId === accountId &&
+          (!source.guildId || capture.source.guildId === source.guildId.trim()) &&
+          (!source.channelId || capture.source.channelId === source.channelId.trim()),
+      )
+      .map((capture) => ({
+        active: capture.started,
+        sessionId: capture.sessionId,
+        message: "Capture registered; recording while connected to the selected channel.",
+        source: { providerId: "discord-voice", ...capture.source },
+      }));
   },
 };

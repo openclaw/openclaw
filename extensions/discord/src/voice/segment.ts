@@ -21,7 +21,7 @@ import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
 const logger = createSubsystemLogger("discord/voice");
 
-export async function processDiscordVoiceSegment(params: {
+type DiscordVoiceSegmentParams = {
   entry: VoiceSessionEntry;
   accountId: string;
   wavPath: string;
@@ -33,32 +33,49 @@ export async function processDiscordVoiceSegment(params: {
   admissionAllowFrom?: string[];
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
-  ingressContext?: DiscordVoiceIngressContext;
+  ingressContext?: DiscordVoiceIngressContext | null;
   resolveIngressContext?: () => Promise<DiscordVoiceIngressContext | null>;
-  transcripts?: VoiceSessionEntry["transcripts"];
+  recording?: {
+    capture: NonNullable<VoiceSessionEntry["transcripts"]>;
+    startedAt: number;
+    speaker: Promise<{ label: string }>;
+  };
   enqueuePlayback: (entry: VoiceSessionEntry, task: () => Promise<void>) => void;
-}) {
+  onTranscript?: (text: string) => void;
+};
+
+export async function processDiscordVoiceSegment(params: DiscordVoiceSegmentParams) {
   const { entry, wavPath, userId, durationSeconds } = params;
+  const conversationCurrent = () =>
+    !entry.captureOnly && entry.sessionLifecycle.status === "active";
   logVoiceVerbose(
     `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
   );
   const ingress =
-    params.ingressContext ??
-    (params.resolveIngressContext
-      ? await params.resolveIngressContext()
-      : await resolveDiscordVoiceIngressContext({
-          entry,
-          userId,
-          cfg: params.cfg,
-          discordConfig: params.discordConfig,
-          admissionAllowFrom: params.admissionAllowFrom,
-          fetchGuildName: params.fetchGuildName,
-          speakerContext: params.speakerContext,
-        }));
-  if (!ingress) {
+    params.ingressContext !== undefined
+      ? params.ingressContext
+      : params.resolveIngressContext
+        ? await params.resolveIngressContext()
+        : await resolveDiscordVoiceIngressContext({
+            entry,
+            userId,
+            cfg: params.cfg,
+            discordConfig: params.discordConfig,
+            admissionAllowFrom: params.admissionAllowFrom,
+            fetchGuildName: params.fetchGuildName,
+            speakerContext: params.speakerContext,
+          });
+  const recording = params.recording;
+  if (!ingress && !recording?.capture.isCurrent()) {
     logVoiceVerbose(
       `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
+    return;
+  }
+  const speakerLabel = recording
+    ? (await recording.speaker).label
+    : (ingress?.speakerLabel ?? userId);
+  if (!ingress && !recording?.capture.isCurrent()) {
     return;
   }
   const transcript = await transcribeVoiceAudio({
@@ -76,16 +93,16 @@ export async function processDiscordVoiceSegment(params: {
     `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
   );
   logVoiceVerbose(
-    `transcript from ${ingress.speakerLabel} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceLogPreview(transcript)}`,
+    `transcript from ${speakerLabel} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceLogPreview(transcript)}`,
   );
-  if (params.transcripts) {
-    await params.transcripts.onUtterance({
-      sessionId: params.transcripts.sessionId,
-      startedAt: new Date().toISOString(),
+  if (recording?.capture.isCurrent()) {
+    await recording.capture.onUtterance({
+      sessionId: recording.capture.sessionId,
+      startedAt: new Date(recording.startedAt).toISOString(),
       final: true,
       speaker: {
         id: userId,
-        label: ingress.speakerLabel,
+        label: speakerLabel,
       },
       text: transcript,
       metadata: {
@@ -95,9 +112,33 @@ export async function processDiscordVoiceSegment(params: {
         voiceSessionKey: entry.voiceSessionKey,
       },
     });
+  }
+  if (!ingress || !conversationCurrent()) {
     return;
   }
 
+  if (params.onTranscript) {
+    params.onTranscript(transcript);
+    return;
+  }
+  await respondToDiscordVoiceTranscript({ ...params, ingress, transcript });
+}
+
+export async function respondToDiscordVoiceTranscript(
+  params: Omit<
+    DiscordVoiceSegmentParams,
+    "wavPath" | "durationSeconds" | "recording" | "onTranscript"
+  > & {
+    ingress: DiscordVoiceIngressContext;
+    transcript: string;
+  },
+): Promise<void> {
+  const { entry, ingress, transcript, userId } = params;
+  const conversationCurrent = () =>
+    !entry.captureOnly && entry.sessionLifecycle.status === "active";
+  if (!conversationCurrent()) {
+    return;
+  }
   let replyText: string;
   const control = await maybeControlDiscordVoiceAgentRun({
     entry,

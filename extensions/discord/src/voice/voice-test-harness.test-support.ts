@@ -18,6 +18,7 @@ import {
   type TestRealtimeSessionEntry,
 } from "./manager.e2e.test-support.js";
 import { createVoiceReceiveRecoveryState, DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
+import { createDiscordVoiceTranscriptFixture } from "./transcripts.test-support.js";
 import { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 const {
@@ -41,7 +42,6 @@ const {
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
   realtimeSessionMock,
-  decodeOpusStreamMock,
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
@@ -60,6 +60,7 @@ const { configureVoiceStateGateway, createClient, createClientWithMember } =
 const createRuntime = createVoiceTestRuntime;
 
 function buildVoiceTestHarness() {
+  const { startTranscripts, stopTranscripts } = createDiscordVoiceTranscriptFixture();
   beforeEach(() => {
     getVoiceConnectionMock.mockReset();
     getVoiceConnectionMock.mockReturnValue(undefined);
@@ -147,7 +148,6 @@ function buildVoiceTestHarness() {
       provider: { id: "openai", capabilities: { supportsActivationNameGating: true } },
       providerConfig: { model: "gpt-realtime-2", voice: "cedar" },
     });
-    decodeOpusStreamMock.mockReset();
     decodeOpusStreamChunksMock.mockReset();
     decodeOpusStreamChunksMock.mockResolvedValue(undefined);
   });
@@ -607,7 +607,41 @@ function buildVoiceTestHarness() {
     userId: string,
   ) => await getVoiceReceive(manager).handleSpeakingStart(entry, userId);
 
+  const receiveRecordedSpeech = async (
+    manager: InstanceType<typeof managerModule.DiscordVoiceManager>,
+    text?: string,
+    entry = getSessionEntry(manager),
+    userId = "u-owner",
+  ) => {
+    const stream = new PassThrough({ objectMode: true });
+    entry.connection.receiver.subscribe.mockReturnValueOnce(stream);
+    // Mock the codec and provider response, retaining receive ownership and WAV/STT dispatch.
+    decodeOpusStreamChunksMock.mockImplementation(
+      async (
+        input: import("node:stream").Readable,
+        callbacks: { onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void> },
+      ) => {
+        for await (const pcm of input) {
+          await callbacks.onChunk(pcm, pcm);
+        }
+      },
+    );
+    if (text !== undefined) {
+      transcribeAudioFileMock.mockResolvedValue({ text });
+    }
+    try {
+      const receiving = handleSpeakingStart(manager, entry, userId);
+      stream.end(Buffer.alloc(96_000));
+      await receiving;
+      await entry.processingQueue;
+    } finally {
+      stream.destroy();
+    }
+  };
+
   return {
+    startTranscripts,
+    stopTranscripts,
     PassThrough,
     DAVESession,
     expectDefined,
@@ -644,7 +678,6 @@ function buildVoiceTestHarness() {
     createRealtimeVoiceBridgeSessionMock,
     controlRealtimeVoiceAgentRunMock,
     realtimeSessionMock,
-    decodeOpusStreamMock,
     decodeOpusStreamChunksMock,
     updateVoiceStateMock,
     enqueueSystemEventMock,
@@ -693,6 +726,7 @@ function buildVoiceTestHarness() {
     processVoiceSegment,
     updateVoiceState,
     handleSpeakingStart,
+    receiveRecordedSpeech,
   };
 }
 

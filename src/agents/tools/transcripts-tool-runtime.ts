@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import { getTranscriptSourceProvider } from "../../transcripts/provider-registry.js";
 import type {
@@ -298,6 +299,26 @@ export async function startTranscripts(params: {
     configuredLifecycle: params.configuredLifecycle,
   });
   const providerSource = resolvedSource.source;
+  let agentId = params.ctx.agentId;
+  const channel = provider.accessControl?.channelId;
+  if (
+    !agentId &&
+    params.configuredLifecycle &&
+    params.ctx.config &&
+    channel &&
+    providerSource.channelId
+  ) {
+    // Configured room capture uses its normal channel-route owner after account
+    // resolution; otherwise that agent cannot read its own notes.
+    agentId = resolveAgentRoute({
+      cfg: params.ctx.config,
+      channel,
+      accountId: providerSource.accountId,
+      guildId: providerSource.guildId,
+      peer: { kind: "channel", id: providerSource.channelId },
+    }).agentId;
+    providerSource.agentId = agentId;
+  }
   if (!params.configuredLifecycle) {
     await authorizeTranscriptSource({
       action: "start",
@@ -313,7 +334,7 @@ export async function startTranscripts(params: {
     title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
-    metadata: params.ctx.agentId ? { agentId: params.ctx.agentId } : {},
+    metadata: agentId ? { agentId } : {},
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);

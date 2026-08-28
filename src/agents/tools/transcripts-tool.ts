@@ -22,6 +22,7 @@ import type {
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   activeSessions,
@@ -41,6 +42,8 @@ const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;
 const AUTO_START_STOP_TIMEOUT_MS = 5_000;
 const AUTO_START_PROVIDER_READY_TIMEOUT_MS = 30_000;
+const STATUS_ACTIVE_MAX_ENTRIES = 5;
+const STATUS_ACTIVE_MAX_CHARS = 2_000;
 
 type TranscriptSessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 
@@ -411,10 +414,38 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
     source: entry.session.source,
     cleanupPending: entry.cleanupPending === true,
   }));
+  const omittedNotice = "Additional active sessions omitted (display limit).";
+  const activeLines: string[] = [];
+  let remainingChars = STATUS_ACTIVE_MAX_CHARS - omittedNotice.length - 1;
+  for (const entry of active) {
+    if (activeLines.length === STATUS_ACTIVE_MAX_ENTRIES) {
+      break;
+    }
+    const line = JSON.stringify({
+      sessionId: entry.sessionId,
+      providerId: entry.providerId,
+      accountId: entry.source.accountId,
+      guildId: entry.source.guildId,
+      channelId: entry.source.channelId,
+      meetingUrl: entry.source.meetingUrl,
+      title: entry.title ? truncateUtf16Safe(entry.title, 120) : undefined,
+      ...(entry.cleanupPending ? { cleanupPending: true } : {}),
+    });
+    // Opaque IDs must remain actionable; omit whole rows instead of clipping them.
+    if (line.length + 1 > remainingChars) {
+      continue;
+    }
+    activeLines.push(line);
+    remainingChars -= line.length + 1;
+  }
+  if (activeLines.length < active.length) {
+    activeLines.push(omittedNotice);
+  }
   return toolText(
     [
       `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
       `Active sessions: ${active.length}`,
+      ...activeLines,
     ].join("\n"),
     { providers: uniqueProviders, active },
   );

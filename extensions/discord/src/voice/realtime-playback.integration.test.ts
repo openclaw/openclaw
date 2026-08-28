@@ -25,6 +25,7 @@ it("plays every frame of a burst through the real Opus encoder before releasing 
   );
   const entry: VoiceSessionEntry = {
     generation: 1,
+    captureOnly: false,
     autoJoinWhenOccupied: false,
     sessionLifecycle: { status: "active" },
     guildId: "guild",
