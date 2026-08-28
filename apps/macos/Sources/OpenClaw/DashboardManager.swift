@@ -42,9 +42,15 @@ final class DashboardManager {
     @ObservationIgnored private var displayedRouteAuthority: UInt64?
     @ObservationIgnored private var endpointGeneration: UInt64 = 0
     @ObservationIgnored private var presentationGeneration: UInt64 = 0
+    @ObservationIgnored private var controlUIAuthenticationState =
+        GatewayConnection.ControlUIAuthenticationState.pending
     @ObservationIgnored private var switchGenerations: [ObjectIdentifier: UInt64] = [:]
-    @ObservationIgnored private let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
-    @ObservationIgnored private let routeProbe: @Sendable () async -> Void
+    @ObservationIgnored private let controlUIAccessProvider:
+        @Sendable (GatewayConnection.Config) async -> GatewayConnection.ControlUIAccessResolution?
+    @ObservationIgnored private let controlUIAuthenticationStream:
+        @Sendable () async -> AsyncStream<GatewayConnection.ControlUIAuthenticationState>
+    @ObservationIgnored private let controlUIAccessIsCurrent:
+        @Sendable (GatewayConnection.ControlUIAccessResolution) async -> Bool
     @ObservationIgnored private let endpointStateProvider: @Sendable () async -> GatewayEndpointState
     @ObservationIgnored private let mainWindowAutosaveName: String
     @ObservationIgnored private let observesGatewayChanges: Bool
@@ -62,15 +68,17 @@ final class DashboardManager {
     private static let failureURL = URL(string: "about:blank")!
 
     private init(
-        authTokenProvider: @escaping @Sendable (GatewayConnection.Config) async -> String? = { config in
-            await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
+        controlUIAccessProvider: @escaping @Sendable (GatewayConnection.Config) async
+            -> GatewayConnection.ControlUIAccessResolution? = { config in
+            await GatewayConnection.shared.resolveControlUIAccess(config: config)
         },
-        routeProbe: @escaping @Sendable () async -> Void = {
-            _ = try? await GatewayConnection.shared.request(
-                method: "health",
-                params: nil,
-                timeoutMs: 3000,
-                retryTransportFailures: false)
+        controlUIAuthenticationStream: @escaping @Sendable () async
+            -> AsyncStream<GatewayConnection.ControlUIAuthenticationState> = {
+            await GatewayConnection.shared.subscribeControlUIAuthentication()
+        },
+        controlUIAccessIsCurrent: @escaping @Sendable (GatewayConnection.ControlUIAccessResolution) async
+            -> Bool = { resolution in
+            await GatewayConnection.shared.isCurrentControlUIAccessResolution(resolution)
         },
         endpointStateProvider: @escaping @Sendable () async -> GatewayEndpointState = {
             await GatewayEndpointStore.shared.currentState()
@@ -79,8 +87,9 @@ final class DashboardManager {
         automaticGatewayProfileRefreshEnabled: Bool = true,
         mainWindowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName)
     {
-        self.authTokenProvider = authTokenProvider
-        self.routeProbe = routeProbe
+        self.controlUIAccessProvider = controlUIAccessProvider
+        self.controlUIAuthenticationStream = controlUIAuthenticationStream
+        self.controlUIAccessIsCurrent = controlUIAccessIsCurrent
         self.endpointStateProvider = endpointStateProvider
         self.mainWindowAutosaveName = mainWindowAutosaveName
         self.observesGatewayChanges = observeGatewayChanges
@@ -89,7 +98,6 @@ final class DashboardManager {
             let names: [Notification.Name] = [
                 MacGatewayProfileStore.didChangeNotification,
                 .openclawConfigDidChange,
-                .controlChannelStateDidChange,
             ]
             self.gatewayRefreshObservers = names.map { name in
                 NotificationCenter.default.addObserver(
@@ -99,9 +107,6 @@ final class DashboardManager {
                 { [weak self] _ in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
-                        if name == .controlChannelStateDidChange {
-                            await self.handleControlChannelStateChange(ControlChannel.shared.state)
-                        }
                         await self.refreshGatewaySnapshots()
                     }
                 }
@@ -120,14 +125,27 @@ final class DashboardManager {
                 }
             }
         }
+        if observeGatewayChanges {
+            self.controlUIAuthenticationState = .pending
+            Task { [weak self] in
+                guard let stream = await self?.controlUIAuthenticationStream() else { return }
+                for await state in stream {
+                    guard let self else { return }
+                    self.controlUIAuthenticationState = state
+                    guard case .authenticated = state else { continue }
+                    Task { @MainActor [weak self] in
+                        await self?.handleControlUIAuthentication(state)
+                    }
+                }
+            }
+        }
     }
 
-    private func handleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
-        guard state == .connected else { return }
-        // Endpoint readiness can precede device authentication. Reconcile the
-        // existing document after auth arrives without inventing a route change.
+    private func handleControlUIAuthentication(
+        _ authenticationState: GatewayConnection.ControlUIAuthenticationState) async
+    {
         let endpointState = await self.endpointStateProvider()
-        await self.handleEndpointState(endpointState)
+        await self.handleEndpointState(endpointState, authenticationState: authenticationState)
     }
 
     /// The card's native update path only makes sense when the app owns the
@@ -158,7 +176,10 @@ final class DashboardManager {
         }
     }
 
-    func handleEndpointState(_ state: GatewayEndpointState) async {
+    func handleEndpointState(
+        _ state: GatewayEndpointState,
+        authenticationState: GatewayConnection.ControlUIAuthenticationState? = nil) async
+    {
         // The shared endpoint stream owns only the main window's primary route.
         // Profile-targeted documents keep their saved endpoint and credentials.
         guard self.mainTarget == .primary else { return }
@@ -166,7 +187,7 @@ final class DashboardManager {
         let generation = self.endpointGeneration
         guard let controller, controller.isWindowOpen else { return }
         guard case let .ready(mode, url, token, password, routeRevision) = state else {
-            if controller.currentURL != Self.failureURL || controller.auth.hasCredential {
+            if controller.currentURL != Self.failureURL || controller.auth.isReady {
                 self.replaceWithRouteFailure(controller)
             }
             self.displayedRouteRevision = nil
@@ -175,14 +196,19 @@ final class DashboardManager {
         }
         let config: GatewayConnection.Config = (url, token, password)
         let tlsParams = Self.primaryTLSParams(for: config, mode: mode)
-        var authToken = await self.authTokenProvider(config)
+        let resolution = await self.controlUIAccessProvider(config)
         guard self.endpointTransitionIsCurrent(generation, controller: controller) else { return }
-        if authToken == nil, password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty == nil {
-            await self.routeProbe()
-            guard self.endpointTransitionIsCurrent(generation, controller: controller) else { return }
-            authToken = await self.authTokenProvider(config)
-            guard self.endpointTransitionIsCurrent(generation, controller: controller) else { return }
+        if let authenticationState {
+            guard resolution?.authenticationState == authenticationState else { return }
         }
+        if let resolution {
+            guard self.controlUIAuthenticationState == resolution.authenticationState,
+                  await self.controlUIAccessIsCurrent(resolution),
+                  self.endpointTransitionIsCurrent(generation, controller: controller)
+            else { return }
+        }
+        let access = resolution?.access ?? .unavailable
+        let authToken = Self.controlUIToken(access)
         guard let dashboardURL = try? GatewayEndpointStore.dashboardURL(
             for: config,
             mode: mode,
@@ -190,19 +216,16 @@ final class DashboardManager {
         else {
             return
         }
-        let auth = DashboardWindowAuth(
-            gatewayUrl: Self.websocketURLString(for: dashboardURL),
-            token: authToken,
-            password: password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        let auth = Self.windowAuth(for: dashboardURL, access: access)
         let routeChanged = self.displayedRouteRevision.map { $0 != routeRevision }
             ?? (routeRevision > 0) || !controller.hasTLSParams(tlsParams)
-        let credentialChanged = controller.auth.token != auth.token || controller.auth.password != auth.password
+        let credentialChanged = controller.auth != auth
         if routeChanged || credentialChanged {
             if routeChanged {
                 self.displayedRouteAuthority = nil
             }
             self.displayedRouteRevision = routeRevision
-            guard auth.hasCredential else {
+            guard auth.isReady else {
                 self.replaceWithRouteFailure(controller)
                 return
             }
@@ -219,7 +242,7 @@ final class DashboardManager {
             controller.setUpdateBridgeEnabled(Self.updateBridgeEnabled(mode: mode))
             return
         }
-        guard auth.hasCredential, controller.isWindowOpen else { return }
+        guard auth.isReady, controller.isWindowOpen else { return }
         dashboardManagerLogger.info(
             "dashboard endpoint changed; reloading url=\(dashboardLogString(for: dashboardURL), privacy: .public)")
         controller.update(url: dashboardURL, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
@@ -272,9 +295,6 @@ final class DashboardManager {
     }
 
     func presentDashboard() {
-        if self.showConfiguredWindowIfPossible() {
-            return
-        }
         guard self.presentationTask == nil else { return }
         let presentation = self.currentPresentationTask()
         Task { @MainActor [weak self] in
@@ -287,75 +307,19 @@ final class DashboardManager {
         }
     }
 
-    @discardableResult
-    func showConfiguredWindowIfPossible() -> Bool {
-        guard self.mainTarget == .primary else { return false }
-        let mode = AppStateStore.shared.connectionMode
-        guard let endpoint = Self.immediateDashboardEndpoint(mode: mode),
-              let url = try? GatewayEndpointStore.dashboardURL(
-                  for: endpoint.config,
-                  mode: mode,
-                  authToken: endpoint.config.token)
-        else {
-            return false
-        }
-        let config = endpoint.config
-        let auth = DashboardWindowAuth(
-            gatewayUrl: Self.websocketURLString(for: url),
-            token: config.token,
-            password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
-        guard auth.hasCredential else {
-            return false
-        }
-        self.endpointGeneration &+= 1
-        if let controller, self.requiresIsolatedDashboardDocument(controller, auth: auth, endpoint: endpoint) {
-            self.replaceController(
-                controller,
-                url: url,
-                auth: auth,
-                mode: mode,
-                tlsParams: endpoint.tls?.params,
-                present: true)
-        } else if let controller {
-            controller.show(url: url, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
-        } else {
-            let controller = DashboardWindowController(
-                url: url,
-                auth: auth,
-                updater: self.updater,
-                updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode),
-                tlsParams: endpoint.tls?.params)
-            self.controller = controller
-            controller.show(url: url, auth: auth)
-        }
-        self.rememberPresentedEndpoint(endpoint)
-        self.observeEndpointChanges()
-        Task { await self.refreshGatewaySnapshots() }
-        Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
-        return true
-    }
-
     /// Preload failures stay invisible: navigation errors land in the
     /// controller's `showLoadFailure`, which never orders the window front, and
     /// preload skips `observeEndpointChanges()` so no observer path can call
     /// `showFailure`. The failure page is only seen on a later explicit show.
     func preloadIfConfigured() {
-        guard self.controller == nil,
-              AppStateStore.shared.onboardingSeen,
-              let (mode, url, auth, tlsParams) = self.immediateWindowConfiguration()
-        else { return }
-        let controller = DashboardWindowController(
-            url: url,
-            auth: auth,
-            updater: self.updater,
-            updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode),
-            tlsParams: tlsParams,
-            gatewaySnapshot: self.snapshot(for: .primary))
-        self.controller = controller
-        controller.loadInBackground(url: url, auth: auth)
+        guard self.controller == nil, AppStateStore.shared.onboardingSeen else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.controller == nil else { return }
+            try? await self.showResolvedPrimaryDashboard(present: false)
+        }
     }
 
-    private func showResolvedPrimaryDashboard() async throws {
+    private func showResolvedPrimaryDashboard(present: Bool = true) async throws {
         let mode = AppStateStore.shared.connectionMode
         self.endpointGeneration &+= 1
         let generation = self.endpointGeneration
@@ -375,16 +339,53 @@ final class DashboardManager {
         }
         let config = endpoint.config
         dashboardManagerLogger.info("dashboard config url=\(config.url.absoluteString, privacy: .public)")
-        let token = await self.authTokenProvider(config)
+        guard let resolution = await self.controlUIAccessProvider(config) else {
+            throw NSError(
+                domain: "Dashboard",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Waiting for a fresh authenticated connection."])
+        }
+        guard self.controlUIAuthenticationState == resolution.authenticationState,
+              await self.controlUIAccessIsCurrent(resolution)
+        else {
+            throw SupersededDashboardPresentation()
+        }
+        let access = resolution.access
         guard self.presentationIsCurrent(generation, controller: originalController) else {
             throw SupersededDashboardPresentation()
         }
-        let url = try GatewayEndpointStore.dashboardURL(for: config, mode: mode, authToken: token)
-        let auth = DashboardWindowAuth(
-            gatewayUrl: Self.websocketURLString(for: url),
-            token: token,
-            password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: mode,
+            authToken: Self.controlUIToken(access))
+        let auth = Self.windowAuth(for: url, access: access)
+        guard auth.isReady else {
+            throw NSError(
+                domain: "Dashboard",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Waiting for a fresh authenticated connection."])
+        }
 
+        self.installResolvedDashboard(
+            url: url,
+            auth: auth,
+            endpoint: endpoint,
+            mode: mode,
+            present: present)
+        self.observeEndpointChanges()
+        await self.refreshGatewaySnapshots()
+
+        // Refresh the cached hello payload without blocking window creation.
+        Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
+    }
+
+    private func installResolvedDashboard(
+        url: URL,
+        auth: DashboardWindowAuth,
+        endpoint: GatewayConnection.EndpointSnapshot,
+        mode: AppState.ConnectionMode,
+        present: Bool)
+    {
         if let controller, self.requiresIsolatedDashboardDocument(controller, auth: auth, endpoint: endpoint) {
             self.replaceController(
                 controller,
@@ -392,17 +393,17 @@ final class DashboardManager {
                 auth: auth,
                 mode: mode,
                 tlsParams: endpoint.tls?.params,
-                present: true)
+                present: present)
             self.rememberPresentedEndpoint(endpoint)
-            self.observeEndpointChanges()
-            await self.refreshGatewaySnapshots()
             return
         } else if let controller {
             dashboardManagerLogger.info("dashboard reuse window url=\(dashboardLogString(for: url), privacy: .public)")
-            controller.show(url: url, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
+            if present {
+                controller.show(url: url, auth: auth, updateBridgeEnabled: Self.updateBridgeEnabled(mode: mode))
+            } else {
+                controller.loadInBackground(url: url, auth: auth)
+            }
             self.rememberPresentedEndpoint(endpoint)
-            self.observeEndpointChanges()
-            await self.refreshGatewaySnapshots()
             return
         }
 
@@ -415,13 +416,12 @@ final class DashboardManager {
             tlsParams: endpoint.tls?.params,
             gatewaySnapshot: self.snapshot(for: .primary))
         self.controller = controller
-        controller.show(url: url, auth: auth)
+        if present {
+            controller.show(url: url, auth: auth)
+        } else {
+            controller.loadInBackground(url: url, auth: auth)
+        }
         self.rememberPresentedEndpoint(endpoint)
-        self.observeEndpointChanges()
-        await self.refreshGatewaySnapshots()
-
-        // Refresh the cached hello payload without blocking window creation.
-        Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
     }
 
     func show(atPath path: String, search: String? = nil) async {
@@ -501,16 +501,14 @@ final class DashboardManager {
         guard self.openForCommandTask == nil else { return }
         self.openForCommandTask = Task { @MainActor in
             defer { self.openForCommandTask = nil }
-            if !self.showConfiguredWindowIfPossible() {
-                do {
-                    try await self.show()
-                } catch {
-                    guard !Task.isCancelled else { return }
-                    // Commands are moment-bound; drop them with the failed open.
-                    self.pendingOpenCommands = []
-                    self.showFailure(error)
-                    return
-                }
+            do {
+                try await self.show()
+            } catch {
+                guard !Task.isCancelled else { return }
+                // Commands are moment-bound; drop them with the failed open.
+                self.pendingOpenCommands = []
+                self.showFailure(error)
+                return
             }
             let commands = self.pendingOpenCommands
             self.pendingOpenCommands = []
@@ -679,12 +677,29 @@ final class DashboardManager {
             let mode = AppStateStore.shared.connectionMode
             let endpoint = try await self.primaryEndpoint(mode: mode)
             let config = endpoint.config
-            let token = await self.authTokenProvider(config)
-            let url = try GatewayEndpointStore.dashboardURL(for: config, mode: mode, authToken: token)
-            let auth = DashboardWindowAuth(
-                gatewayUrl: Self.websocketURLString(for: url),
-                token: token,
-                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+            guard let resolution = await self.controlUIAccessProvider(config) else {
+                throw NSError(
+                    domain: "Dashboard",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Waiting for a fresh authenticated connection."])
+            }
+            guard self.controlUIAuthenticationState == resolution.authenticationState,
+                  await self.controlUIAccessIsCurrent(resolution)
+            else {
+                throw SupersededDashboardPresentation()
+            }
+            let access = resolution.access
+            let url = try GatewayEndpointStore.dashboardURL(
+                for: config,
+                mode: mode,
+                authToken: Self.controlUIToken(access))
+            let auth = Self.windowAuth(for: url, access: access)
+            guard auth.isReady else {
+                throw NSError(
+                    domain: "Dashboard",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Waiting for a fresh authenticated connection."])
+            }
             return WindowConfiguration(
                 url: url,
                 auth: auth,
@@ -799,6 +814,32 @@ final class DashboardManager {
         components.queryItems = nil
         components.fragment = nil
         return components.url?.absoluteString ?? dashboardURL.absoluteString
+    }
+
+    private static func controlUIToken(_ access: GatewayConnection.ControlUIAccess) -> String? {
+        guard case let .token(token) = access else { return nil }
+        return token
+    }
+
+    private static func windowAuth(
+        for dashboardURL: URL,
+        access: GatewayConnection.ControlUIAccess) -> DashboardWindowAuth
+    {
+        let gatewayURL = self.websocketURLString(for: dashboardURL)
+        return switch access {
+        case let .token(token):
+            DashboardWindowAuth(gatewayUrl: gatewayURL, token: token, password: nil)
+        case let .password(password):
+            DashboardWindowAuth(gatewayUrl: gatewayURL, token: nil, password: password)
+        case .noneRequired:
+            DashboardWindowAuth(
+                gatewayUrl: gatewayURL,
+                token: nil,
+                password: nil,
+                requirement: .none)
+        case .unavailable:
+            DashboardWindowAuth(gatewayUrl: gatewayURL, token: nil, password: nil)
+        }
     }
 
     private func primaryEndpoint(
@@ -945,24 +986,6 @@ extension DashboardManager {
             configuredFingerprint: mode == .remote
                 ? GatewayRemoteConfig.resolveTLSFingerprint(root: root)
                 : nil)?.params
-    }
-
-    private func immediateWindowConfiguration()
-        -> (AppState.ConnectionMode, URL, DashboardWindowAuth, GatewayTLSParams?)?
-    {
-        let mode = AppStateStore.shared.connectionMode
-        guard let endpoint = Self.immediateDashboardEndpoint(mode: mode),
-              let url = try? GatewayEndpointStore.dashboardURL(
-                  for: endpoint.config,
-                  mode: mode,
-                  authToken: endpoint.config.token)
-        else { return nil }
-        let config = endpoint.config
-        let auth = DashboardWindowAuth(
-            gatewayUrl: Self.websocketURLString(for: url),
-            token: config.token,
-            password: (config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty))
-        return auth.hasCredential ? (mode, url, auth, endpoint.tls?.params) : nil
     }
 
     private func presentationIsCurrent(
@@ -1176,8 +1199,21 @@ extension DashboardManager {
     /// Test instances skip `observeEndpointChanges()` so the shared endpoint
     /// store cannot race test-driven `handleEndpointState` calls.
     static func _testMake(
-        authTokenProvider: @escaping @Sendable (GatewayConnection.Config) async -> String? = { $0.token },
-        routeProbe: @escaping @Sendable () async -> Void = {},
+        controlUIAccessProvider: @escaping @Sendable (GatewayConnection.Config) async
+            -> GatewayConnection.ControlUIAccessResolution? = { config in
+            let state = GatewayConnection.ControlUIAuthenticationState.authenticated(
+                routeGeneration: 1,
+                socketGeneration: 1)
+            if let token = config.token { return .init(authenticationState: state, access: .token(token)) }
+            if let password = config.password { return .init(authenticationState: state, access: .password(password)) }
+            return nil
+        },
+        controlUIAuthenticationStream: @escaping @Sendable () async
+            -> AsyncStream<GatewayConnection.ControlUIAuthenticationState> = {
+            AsyncStream { $0.finish() }
+        },
+        controlUIAccessIsCurrent: @escaping @Sendable (GatewayConnection.ControlUIAccessResolution) async
+            -> Bool = { _ in true },
         endpointStateProvider: @escaping @Sendable () async -> GatewayEndpointState = {
             .unavailable(mode: .unconfigured, reason: "not configured")
         },
@@ -1191,8 +1227,9 @@ extension DashboardManager {
         -> DashboardManager
     {
         let manager = DashboardManager(
-            authTokenProvider: authTokenProvider,
-            routeProbe: routeProbe,
+            controlUIAccessProvider: controlUIAccessProvider,
+            controlUIAuthenticationStream: controlUIAuthenticationStream,
+            controlUIAccessIsCurrent: controlUIAccessIsCurrent,
             endpointStateProvider: endpointStateProvider,
             observeGatewayChanges: observeGatewayChanges,
             automaticGatewayProfileRefreshEnabled: automaticGatewayProfileRefreshEnabled,
@@ -1231,8 +1268,13 @@ extension DashboardManager {
         await self.performSwitchFrontmostDashboard(to: target)
     }
 
-    func _testHandleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
-        await self.handleControlChannelStateChange(state)
+    func _testHandleControlUIAuthentication(
+        _ state: GatewayConnection.ControlUIAuthenticationState = .authenticated(
+            routeGeneration: 1,
+            socketGeneration: 1)) async
+    {
+        self.controlUIAuthenticationState = state
+        await self.handleControlUIAuthentication(state)
     }
 
     func _testWindowTLSParams(for target: DashboardGatewayTarget) async throws -> GatewayTLSParams? {

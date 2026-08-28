@@ -90,13 +90,39 @@ struct DashboardLinkRequest: Equatable {
 }
 
 struct DashboardWindowAuth: Equatable {
+    enum Requirement: Equatable {
+        case credential
+        case none
+        case unavailable
+    }
+
     var gatewayUrl: String?
     var token: String?
     var password: String?
+    var requirement: Requirement
 
-    var hasCredential: Bool {
-        self.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
-            self.password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    init(
+        gatewayUrl: String?,
+        token: String?,
+        password: String?,
+        requirement: Requirement? = nil)
+    {
+        self.gatewayUrl = gatewayUrl
+        self.token = token
+        self.password = password
+        self.requirement = requirement ?? ((token != nil || password != nil) ? .credential : .unavailable)
+    }
+
+    var isReady: Bool {
+        switch self.requirement {
+        case .credential:
+            self.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
+                self.password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        case .none:
+            true
+        case .unavailable:
+            false
+        }
     }
 }
 

@@ -123,7 +123,12 @@ struct DashboardWindowOwnershipTests {
             password: nil,
             routeRevision: 2)
         let manager = DashboardManager._testMake(
-            authTokenProvider: { _ in await gate.authToken() },
+            controlUIAccessProvider: { _ in
+                guard let token = await gate.authToken() else { return nil }
+                return .init(
+                    authenticationState: .authenticated(routeGeneration: 1, socketGeneration: 1),
+                    access: .token(token))
+            },
             endpointStateProvider: { readyState })
         manager._testSetController(controller)
         defer { manager.close() }
@@ -141,7 +146,7 @@ struct DashboardWindowOwnershipTests {
         #expect(failureController.window === originalWindow)
 
         await gate.update("after")
-        await manager._testHandleControlChannelStateChange(.connected)
+        await manager._testHandleControlUIAuthentication()
         let recoveredController = try #require(manager._testController())
         #expect(recoveredController !== failureController)
         #expect(recoveredController.window === originalWindow)
@@ -153,7 +158,7 @@ struct DashboardWindowOwnershipTests {
         #expect(authScripts[0].source.contains("after"))
         #expect(!authScripts[0].source.contains("before"))
 
-        await manager._testHandleControlChannelStateChange(.connected)
+        await manager._testHandleControlUIAuthentication()
         #expect(manager._testController() === recoveredController)
         #expect(recoveredController.window === originalWindow)
     }
@@ -171,7 +176,12 @@ struct DashboardWindowOwnershipTests {
         let originalWindow = try #require(controller.window)
         let gate = DashboardWindowOwnershipEndpointGate()
         let manager = DashboardManager._testMake(
-            authTokenProvider: { config in await gate.authToken(for: config) })
+            controlUIAccessProvider: { config in
+                guard let token = await gate.authToken(for: config) else { return nil }
+                return .init(
+                    authenticationState: .authenticated(routeGeneration: 1, socketGeneration: 1),
+                    access: .token(token))
+            })
         manager._testSetController(controller)
         defer { manager.close() }
 

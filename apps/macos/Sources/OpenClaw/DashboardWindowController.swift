@@ -854,13 +854,14 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         url: URL,
         auth: DashboardWindowAuth)
     {
-        guard auth.hasCredential else { return }
+        guard auth.isReady else { return }
         let allowedOrigin = self.originString(for: url)
         let allowedPath = self.allowedPath(for: url)
         let payload: [String: Any?] = [
             "gatewayUrl": auth.gatewayUrl,
             "token": auth.token,
             "password": auth.password,
+            "clearCredentials": auth.requirement == .none,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 }),
               let json = String(data: data, encoding: .utf8)

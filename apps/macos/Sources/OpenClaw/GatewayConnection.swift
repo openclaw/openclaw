@@ -77,6 +77,25 @@ actor GatewayConnection {
         fileprivate let client: GatewayChannelActor
     }
 
+    /// Socket-owned authentication epoch. It changes even when the logical
+    /// ControlChannel state remains connected across a physical reconnect.
+    enum ControlUIAuthenticationState: Equatable, Sendable {
+        case pending
+        case authenticated(routeGeneration: UInt64, socketGeneration: UInt64)
+    }
+
+    enum ControlUIAccess: Equatable, Sendable {
+        case token(String)
+        case password(String)
+        case noneRequired
+        case unavailable
+    }
+
+    struct ControlUIAccessResolution: Equatable, Sendable {
+        let authenticationState: ControlUIAuthenticationState
+        let access: ControlUIAccess
+    }
+
     enum Method: String {
         case agent
         case status
@@ -171,6 +190,10 @@ actor GatewayConnection {
     private var lastRetiredSocketGeneration: UInt64?
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
+    private var controlUIAuthenticationState = ControlUIAuthenticationState.pending
+    private var controlUIAuthenticationSubscribers: [
+        UUID: AsyncStream<ControlUIAuthenticationState>.Continuation
+    ] = [:]
     var realtimeTalkSubscribers: [
         UInt64: [UUID: AsyncStream<GatewayPush>.Continuation]
     ] = [:]
@@ -937,6 +960,7 @@ extension GatewayConnection {
         self.finishRealtimeTalkSubscribers()
         self.resetSocketGeneration()
         self.lastSnapshot = nil
+        self.publishControlUIAuthentication(.pending)
         self.resetCanvasPluginSurfaceState()
         let client = self.configuredConnection?.client
         self.configuredConnection = nil
@@ -952,11 +976,22 @@ extension GatewayConnection {
     private func handle(
         push: GatewayPush,
         routeGeneration: UInt64,
-        socketGeneration: UInt64)
+        socketGeneration: UInt64) async
     {
         guard routeGeneration == self.routeGeneration,
               admitSocketGeneration(socketGeneration)
         else { return }
+        if case .snapshot = push,
+           let client = self.configuredConnection?.client,
+           await client.authBinding(ifCurrentConnectionGeneration: socketGeneration) != nil,
+           routeGeneration == self.routeGeneration,
+           self.configuredConnection?.client === client,
+           self.activeSocketGeneration == socketGeneration
+        {
+            self.publishControlUIAuthentication(.authenticated(
+                routeGeneration: routeGeneration,
+                socketGeneration: socketGeneration))
+        }
         broadcast(push)
     }
 
@@ -980,6 +1015,7 @@ extension GatewayConnection {
         else { return }
         self.finishRealtimeTalkSubscribers(socketGeneration: socketGeneration)
         self.lastSnapshot = nil
+        self.publishControlUIAuthentication(.pending)
         self.resetCanvasPluginSurfaceState()
     }
 }
@@ -1031,9 +1067,9 @@ extension GatewayConnection {
     func _test_handlePush(
         _ push: GatewayPush,
         routeGeneration: UInt64? = nil,
-        socketGeneration: UInt64)
+        socketGeneration: UInt64) async
     {
-        self.handle(
+        await self.handle(
             push: push,
             routeGeneration: routeGeneration ?? self.routeGeneration,
             socketGeneration: socketGeneration)
@@ -1105,13 +1141,38 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
-    func controlUiAutoAuthToken(config: Config) async -> String? {
+    func resolveControlUIAccess(config: Config) async -> ControlUIAccessResolution? {
+        if let access = await self.controlUIAccess(config: config) {
+            return self.controlUIAccessResolution(access)
+        }
+        _ = try? await self.request(
+            method: Method.health.rawValue,
+            params: nil,
+            timeoutMs: 3000,
+            retryTransportFailures: false)
+        guard let access = await self.controlUIAccess(config: config) else { return nil }
+        return self.controlUIAccessResolution(access)
+    }
+
+    func isCurrentControlUIAccessResolution(_ resolution: ControlUIAccessResolution) -> Bool {
+        resolution.authenticationState == self.controlUIAuthenticationState
+    }
+
+    private func controlUIAccessResolution(_ access: ControlUIAccess) -> ControlUIAccessResolution? {
+        guard case .authenticated = self.controlUIAuthenticationState else { return nil }
+        return ControlUIAccessResolution(
+            authenticationState: self.controlUIAuthenticationState,
+            access: access)
+    }
+
+    private func controlUIAccess(config: Config) async -> ControlUIAccess? {
         guard let endpoint = try? await currentEndpoint(),
               endpoint.config.url == config.url,
               endpoint.config.token == config.token,
               endpoint.config.password == config.password,
               let client = self.configuredConnection?.client,
-              let socketGeneration = activeSocketGeneration,
+              case let .authenticated(routeGeneration, socketGeneration) = self.controlUIAuthenticationState,
+              routeGeneration == self.routeGeneration,
               controlUiRouteIsLive(
                   endpoint: endpoint,
                   client: client,
@@ -1131,25 +1192,61 @@ extension GatewayConnection {
 
         switch authBinding.source {
         case .sharedToken:
-            return config.token?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        case .deviceToken:
-            guard let gatewayID = configuredConnection?.endpoint.deviceAuthGatewayID?
-                .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-            else { return nil }
+            guard let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else {
+                return .unavailable
+            }
+            return .token(token)
+        case .password:
+            guard let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else {
+                return .unavailable
+            }
+            return .password(password)
+        case .deviceToken, .bootstrapToken:
             if let deviceToken = lastSnapshot?.auth["deviceToken"]?.value as? String,
                let token = deviceToken.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             {
-                return token
+                return .token(token)
             }
-            guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
-            return DeviceAuthStore.loadToken(
+            guard authBinding.source == .deviceToken else { return .unavailable }
+            guard let gatewayID = configuredConnection?.endpoint.deviceAuthGatewayID?
+                .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+            else { return .unavailable }
+            guard let identity = DeviceIdentityStore.loadOrCreatePersisted(),
+                  let token = DeviceAuthStore.loadToken(
                 deviceId: identity.deviceId,
                 role: "operator",
                 gatewayID: gatewayID)?.token
                 .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        case .bootstrapToken, .password, .none:
-            return nil
+            else { return .unavailable }
+            return .token(token)
+        case .none:
+            return .noneRequired
         }
+    }
+
+    func subscribeControlUIAuthentication() -> AsyncStream<ControlUIAuthenticationState> {
+        let id = UUID()
+        let state = self.controlUIAuthenticationState
+        let connection = self
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            continuation.yield(state)
+            self.controlUIAuthenticationSubscribers[id] = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { await connection.removeControlUIAuthenticationSubscriber(id) }
+            }
+        }
+    }
+
+    private func publishControlUIAuthentication(_ state: ControlUIAuthenticationState) {
+        guard state != self.controlUIAuthenticationState else { return }
+        self.controlUIAuthenticationState = state
+        for continuation in self.controlUIAuthenticationSubscribers.values {
+            continuation.yield(state)
+        }
+    }
+
+    private func removeControlUIAuthenticationSubscriber(_ id: UUID) {
+        self.controlUIAuthenticationSubscribers[id] = nil
     }
 
     private func controlUiRouteIsLive(

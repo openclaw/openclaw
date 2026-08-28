@@ -22,6 +22,7 @@ import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 describe("resolveApplicationStartupSettings", () => {
   beforeEach(() => {
     vi.stubGlobal("window", {});
+    vi.stubGlobal("sessionStorage", createStorageMock());
   });
 
   afterEach(() => {
@@ -55,6 +56,25 @@ describe("resolveApplicationStartupSettings", () => {
     expect(startup.pendingBootstrapToken).toBe("boot-456");
     expect(startup.pendingBootstrapProfile).toBeNull();
     expect(startup.location).toEqual({ pathname: "/dash", search: "", hash: "" });
+  });
+
+  it("clears persisted credentials for a native credentialless handoff", () => {
+    const gatewayUrl = "ws://127.0.0.1:18789";
+    setTestLocation({ protocol: "http:", host: "127.0.0.1:18789", pathname: "/" });
+    persistSessionToken(gatewayUrl, "stale-token");
+    window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+      gatewayUrl,
+      clearCredentials: true,
+    };
+
+    const startup = resolveApplicationStartupSettings(
+      makeUiSettings(gatewayUrl, { token: "stale-token" }),
+      { pathname: "/", search: "", hash: "" },
+    );
+
+    expect(startup.settings.token).toBe("");
+    expect(startup.password).toBeNull();
+    expect(loadSettings().token).toBe("");
   });
 });
 

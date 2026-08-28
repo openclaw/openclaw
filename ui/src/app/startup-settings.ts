@@ -7,7 +7,7 @@ import {
   type ControlUiBootstrapProfileHint,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
-import type { UiSettings } from "./settings.ts";
+import { persistSessionToken, type UiSettings } from "./settings.ts";
 
 type ApplicationStartupLocation = {
   pathname: string;
@@ -19,6 +19,7 @@ type NativeControlAuth = {
   gatewayUrl?: string | null;
   token?: string | null;
   password?: string | null;
+  clearCredentials?: boolean;
 };
 
 type ApplicationStartupSettings = {
@@ -96,9 +97,12 @@ export function resolveApplicationStartupSettings(
     const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
     const token = normalizeOptionalString(nativeAuth.token);
     const nativePassword = normalizeOptionalString(nativeAuth.password);
+    if (nativeAuth.clearCredentials && gatewayUrl) {
+      persistSessionToken(gatewayUrl, "");
+    }
     updateSettings({
       ...(gatewayUrl ? { gatewayUrl } : {}),
-      ...(token ? { token } : {}),
+      ...(token ? { token } : nativeAuth.clearCredentials ? { token: "" } : {}),
     });
     if (nativePassword) {
       password = nativePassword;

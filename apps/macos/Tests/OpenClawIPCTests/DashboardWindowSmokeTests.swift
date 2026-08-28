@@ -1045,8 +1045,13 @@ struct DashboardWindowSmokeTests {
         controller.show()
         let authGate = DashboardRouteAuthGate(token: "route-a-device-token")
         let manager = DashboardManager._testMake(
-            authTokenProvider: { _ in await authGate.authToken() },
-            routeProbe: { await authGate.probe() })
+            controlUIAccessProvider: { _ in
+                await authGate.probe()
+                guard let token = await authGate.authToken() else { return nil }
+                return .init(
+                    authenticationState: .authenticated(routeGeneration: 1, socketGeneration: 1),
+                    access: .token(token))
+            })
         manager._testSetController(controller)
         defer { manager._testController()?.closeDashboard() }
         let socketURL = try #require(URL(string: "ws://127.0.0.1:60001"))
@@ -1091,8 +1096,7 @@ struct DashboardWindowSmokeTests {
                 password: nil))
         controller.show()
         let manager = DashboardManager._testMake(
-            authTokenProvider: { _ in nil },
-            routeProbe: {})
+            controlUIAccessProvider: { _ in nil })
         manager._testSetController(controller)
         defer { manager._testController()?.closeDashboard() }
 

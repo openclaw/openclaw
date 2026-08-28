@@ -267,7 +267,6 @@ struct DashboardManagerGatewayTargetTests {
         try await manager.show()
         #expect(manager._testController() === controller)
         #expect(manager._testMainTarget() == .profile("studio"))
-        #expect(!manager.showConfiguredWindowIfPossible())
     }
 
     @Test func `profile dashboard autosave name is target specific`() {
