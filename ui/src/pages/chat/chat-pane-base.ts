@@ -38,7 +38,11 @@ import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.t
 import type { BoardTab } from "../../lib/board/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -466,6 +470,14 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // the sentinel never scrolls out of view when nothing new renders.
   protected readonly olderCursorsSeen = new Set<string>();
 
+  protected get removedAgent(): boolean {
+    const agentId = parseAgentSessionKey(this.state?.sessionKey)?.agentId;
+    const agents = this.context?.agents.state.agentsList?.agents;
+    return Boolean(
+      agentId && agents && !agents.some((agent) => normalizeAgentId(agent.id) === agentId),
+    );
+  }
+
   constructor() {
     super();
     observeNativeGateway(this);
@@ -479,6 +491,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
             }
             notify();
           }),
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => agents.subscribe(notify),
       )
       .watch(
         () => this.context?.runtimeConfig,

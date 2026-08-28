@@ -362,12 +362,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         dockSize: this.boardChatDockSize,
         chat,
         divider: this.renderBoardDivider("bottom"),
-        canMutate: board.provider.canMutate,
-        canGrant: board.provider.canGrant,
+        canMutate: !this.removedAgent && board.provider.canMutate,
+        canGrant: !this.removedAgent && board.provider.canGrant,
         callbacks: {
           appViewGeneration: board.provider.appViewGeneration,
-          applyOps: (ops) => board.provider.applyOps(ops),
-          grant: (name, decision) => board.provider.grant(name, decision),
+          applyOps: (ops) => (this.removedAgent ? Promise.resolve() : board.provider.applyOps(ops)),
+          grant: (name, decision) =>
+            this.removedAgent ? Promise.resolve() : board.provider.grant(name, decision),
           selectTab: (tabId) => {
             this.boardCommandDock = null;
             this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });

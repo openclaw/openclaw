@@ -122,13 +122,21 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
-      onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
+      onCompanionSubmit: (question) => {
+        if (!this.removedAgent) {
+          void this.submitSessionCompanionQuestion(question);
+        }
+      },
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
       onCompanionVisibilityChange: this.setSessionObserverVisibility,
       connected: state.connected,
       pendingQuestion: companionThread.pendingQuestion,
-      onClearCompanion: () => void this.clearSessionCompanion(),
+      onClearCompanion: () => {
+        if (!this.removedAgent) {
+          void this.clearSessionCompanion();
+        }
+      },
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,

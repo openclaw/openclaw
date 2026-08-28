@@ -60,7 +60,15 @@ function contextFor(
       snapshot: { phase: "connected", client, hello: null },
       subscribe: vi.fn(() => () => undefined),
     },
-    agents: { state: { agentsList: { mainKey: "main" } } },
+    agents: {
+      state: {
+        agentsList: {
+          defaultId: "roboclaw",
+          mainKey: "main",
+          agents: [{ id: "roboclaw" }, { id: "main" }],
+        },
+      },
+    },
     agentSelection: { state: { selectedId: "roboclaw" } },
     sessions: { state: { result: result(cachedSessions) }, list },
   } as unknown as ApplicationContext;
@@ -114,7 +122,7 @@ describe("gateway-backed session route resolution", () => {
       defaultId: "main",
       mainKey: "main",
       scope: "global",
-      agents: [],
+      agents: [{ id: "research" }],
     };
     context.gateway.snapshot.hello = {
       snapshot: {
@@ -362,7 +370,10 @@ describe("gateway-backed session route resolution", () => {
           return () => undefined;
         },
       },
-      agents: { state: { agentsList: null } },
+      agents: {
+        state: { agentsList: null },
+        ensureList: async () => ({ defaultId: "roboclaw", agents: [{ id: "roboclaw" }] }),
+      },
       sessions: { state: { result: result([]) }, list },
     } as unknown as ApplicationContext;
     const pending = loadChatRoute(

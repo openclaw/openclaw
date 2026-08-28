@@ -219,9 +219,12 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       sessionSuggestionBusyIds: this.sessionSuggestionBusyIds,
       sessionSuggestionsArchived: archived,
       canResolveSessionSuggestions:
+        !this.removedAgent &&
         canWrite &&
         isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.resolve") === true,
-      onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
+      onResolveSessionSuggestion: this.removedAgent
+        ? undefined
+        : this.resolveCurrentSessionSuggestion.bind(this),
       canAcceptTaskSuggestions:
         canAdmin && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.accept") === true,
       canAcceptTaskSuggestionModes:

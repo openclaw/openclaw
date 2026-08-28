@@ -102,6 +102,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       Boolean(placement) && placement?.state !== "local" && !hasAbortableSessionRun(state);
     const canPublishPullRequest =
       Boolean(publishClient) &&
+      !this.removedAgent &&
       Boolean(selectedSession?.key && !selectedSessionArchived) &&
       !hasAbortableSessionRun(state) &&
       publicationHasDirectPlacement &&
@@ -206,7 +207,12 @@ export class ChatPane extends ChatPaneLayoutRender {
     // Placement progress already explains its gate in the transcript. Other
     // gates need a reason here or a sessionDisabledBanner.
     const modelUnavailableMessage = chatModelUnavailableMessage(modelUnavailableReason);
+    const removedAgentMessage =
+      this.removedAgent && currentAgentId
+        ? t("chat.sessionRoute.agentRemoved", { agentId: currentAgentId })
+        : null;
     const disabledReason =
+      removedAgentMessage ??
       modelUnavailableMessage ??
       (sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
@@ -282,19 +288,20 @@ export class ChatPane extends ChatPaneLayoutRender {
       state.requestUpdate?.();
     };
     const replyMessageAccess = this.currentReplyMessageAccess(state.sessionKey);
-    const composerControls = catalogKey
-      ? undefined
-      : renderChatPaneComposerControls({
-          state,
-          selectedSession,
-          agentDefaultModel,
-          modelAccess: mutationAccess.model,
-          effortAccess: mutationAccess.effort,
-          permissionAccess: mutationAccess.permission,
-          canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-          toastAnchor: this,
-          onModelSetup: () => this.context.navigate("model-setup"),
-        });
+    const composerControls =
+      catalogKey || removedAgentMessage
+        ? undefined
+        : renderChatPaneComposerControls({
+            state,
+            selectedSession,
+            agentDefaultModel,
+            modelAccess: mutationAccess.model,
+            effortAccess: mutationAccess.effort,
+            permissionAccess: mutationAccess.permission,
+            canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
+            toastAnchor: this,
+            onModelSetup: () => this.context.navigate("model-setup"),
+          });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.presentationId,
@@ -386,8 +393,9 @@ export class ChatPane extends ChatPaneLayoutRender {
         ? (typing, preview) => this.sendTypingState(typing, preview)
         : undefined,
       canSend: catalogKey
-        ? this.catalogSession?.canContinue === true
-        : !modelSetupRequired &&
+        ? !removedAgentMessage && this.catalogSession?.canContinue === true
+        : !removedAgentMessage &&
+          !modelSetupRequired &&
           !modelUnavailableMessage &&
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
@@ -395,12 +403,13 @@ export class ChatPane extends ChatPaneLayoutRender {
           !placementStartupPending,
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledReasonTone:
-        sessionParticipationBlocked && !suggestionViewer && !catalogDisabledReason
+        removedAgentMessage ||
+        (sessionParticipationBlocked && !suggestionViewer && !catalogDisabledReason)
           ? "info"
           : "danger",
       disabledBanner: this.sessionDisabledBanner({
         catalogDisabledReason,
-        modelSetupRequired,
+        modelSetupRequired: modelSetupRequired && !removedAgentMessage,
         restartRecoveryTombstoned,
         selectedSessionArchived,
         selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
@@ -434,9 +443,10 @@ export class ChatPane extends ChatPaneLayoutRender {
           : undefined,
       sessions: state.sessionsResult,
       toolOverrides: selectedSession?.toolOverrides,
-      capabilityMenu: catalogKey
-        ? undefined
-        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
+      capabilityMenu:
+        catalogKey || removedAgentMessage
+          ? undefined
+          : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
       swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -605,7 +615,9 @@ export class ChatPane extends ChatPaneLayoutRender {
         onEditSubmit: sessionParticipationBlocked ? undefined : state.submitQueuedChatMessageEdit,
         onCancel: state.cancelQueuedChatMessageEdit,
       },
-      onGoalAction: (goalId, action) => void mutateChatGoal(state, { goalId, action }),
+      onGoalAction: removedAgentMessage
+        ? undefined
+        : (goalId, action) => void mutateChatGoal(state, { goalId, action }),
       goalDraftMode: state.chatGoalDraftMode ?? null,
       currentSessionId: state.currentSessionId,
       onGoalDraftModeChange: (mode) => {
@@ -613,7 +625,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.handleChatDraftChange(state.chatMessage);
       },
       onGoalSubmit:
-        suggestionViewer || catalogKey
+        suggestionViewer || catalogKey || removedAgentMessage
           ? undefined
           : (draft, submissionAction) => submitChatGoalDraft(state, draft, submissionAction),
       onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
@@ -623,11 +635,14 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.chatReplyTarget = null;
         state.requestUpdate?.();
       },
-      onSetReply: selectedSessionArchived ? undefined : setReply,
+      onSetReply: selectedSessionArchived || removedAgentMessage ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
-      onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
-      onForkMessage: sessionActionCallbacks.onForkMessage,
-      onClearHistory: sessionActionCallbacks.onClearHistory,
+      onRewindMessage:
+        selectedSessionArchived || removedAgentMessage
+          ? undefined
+          : sessionActionCallbacks.onRewindMessage,
+      onForkMessage: removedAgentMessage ? undefined : sessionActionCallbacks.onForkMessage,
+      onClearHistory: removedAgentMessage ? undefined : sessionActionCallbacks.onClearHistory,
       agentsList: state.agentsList,
       currentAgentId,
       ...chatProps,

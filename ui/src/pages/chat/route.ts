@@ -34,6 +34,16 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
   `;
 }
 
+function renderAgentNotFound(data: Extract<ChatRouteData, { kind: "agent-not-found" }>) {
+  return html`
+    <section class="card" role="status">
+      <h2>${t("chat.sessionRoute.agentNotFoundTitle")}</h2>
+      <p>${t("chat.sessionRoute.agentNotFound", { agentId: data.agentId })}</p>
+      <a class="btn primary" href=${data.fallbackHref}>${t("chat.sessionRoute.openDefault")}</a>
+    </section>
+  `;
+}
+
 function sessionLoaderDeps(
   face: BoardFace,
   context: ApplicationContext,
@@ -55,7 +65,7 @@ function sessionLoaderDeps(
 
 function sessionRenderOwnerKey(match: SessionOwnerMatch): string | undefined {
   const data = match.data as ChatRouteData | undefined;
-  return data?.kind === "ambiguous" ? undefined : CHAT_PAGE_OWNER_KEY;
+  return !data || data.kind === "session" ? CHAT_PAGE_OWNER_KEY : undefined;
 }
 
 function sessionPage(face: BoardFace) {
@@ -84,9 +94,11 @@ function sessionPage(face: BoardFace) {
           if (!routeData) {
             return nothing;
           }
-          return routeData.kind === "ambiguous"
-            ? renderAmbiguous(routeData)
-            : html`<openclaw-chat-page .data=${routeData}></openclaw-chat-page>`;
+          return routeData.kind === "session"
+            ? html`<openclaw-chat-page .data=${routeData}></openclaw-chat-page>`
+            : routeData.kind === "ambiguous"
+              ? renderAmbiguous(routeData)
+              : renderAgentNotFound(routeData);
         },
       })),
   });

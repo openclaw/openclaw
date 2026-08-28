@@ -23,6 +23,7 @@ import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
+  parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiSessionNavigationParentKey,
 } from "../../lib/sessions/session-key.ts";
@@ -178,12 +179,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       sharingReadAccess.allowed || sharingVisibilityAccess.allowed
         ? undefined
         : sharingReadAccess.reason;
-    const renameAccess = row
-      ? readSessionMethodAccess(this.context.gateway.snapshot, {
-          method: "sessions.patch",
-          params: { key: row.key, label: null },
-        })
-      : null;
+    const renameAccess =
+      row && !this.removedAgent
+        ? readSessionMethodAccess(this.context.gateway.snapshot, {
+            method: "sessions.patch",
+            params: { key: row.key, label: null },
+          })
+        : null;
     const renameDisabledReason =
       this.state?.connected !== true || !renameAccess
         ? t("sessionsView.actionRequiresConnection")
@@ -194,8 +196,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
     });
-    const archiveAllowed = Boolean(row && canArchiveSessionRow(row, configuredMainKey));
-    const deleteAllowed = Boolean(row && canDeleteSessionRows([row], configuredMainKey));
+    const archiveAllowed = Boolean(
+      row && !this.removedAgent && canArchiveSessionRow(row, configuredMainKey),
+    );
+    const deleteAllowed = Boolean(
+      row && !this.removedAgent && canDeleteSessionRows([row], configuredMainKey),
+    );
     const sessionActionDisabledReasons = row
       ? sessionMenuReasons({
           snapshot: this.context.gateway.snapshot,
@@ -399,7 +405,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       ownerViewing,
       personActivity,
       catalog,
-      editing: this.headerEditing && this.headerRenameSession?.key === row?.key,
+      editing:
+        !this.removedAgent && this.headerEditing && this.headerRenameSession?.key === row?.key,
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
@@ -407,7 +414,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
       branches: this.state ? displayedChatSessionBranches(this.state) : [],
-      branchSwitchDisabledReason,
+      branchSwitchDisabledReason: this.removedAgent
+        ? t("chat.sessionRoute.agentRemoved", {
+            agentId: parseAgentSessionKey(this.state?.sessionKey)?.agentId ?? "",
+          })
+        : branchSwitchDisabledReason,
       platform: this.headerPlatform,
       canReveal,
       copiedAction: this.headerCopiedAction,
@@ -433,67 +444,70 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               variant="session"
             ></openclaw-viewer-facepile>`
           : nothing,
-      faceControl: renderBoardViewSwitch({
-        hasBoard: board.hasBoard,
-        face: board.face,
-        dock: board.dock,
-        canChangeDock: canChangeBoardDock,
-        fullscreenControl: board.hasBoard ? this.boardFullscreen.renderButton() : undefined,
-        onSelectMode: (mode) => {
-          if (mode === "chat") {
-            void this.boardFullscreen.exit();
-          }
-          if (!canChangeBoardDock) {
-            const face = mode === "chat" ? "chat" : "dashboard";
-            this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
-            this.persistBoardSessionView({ face });
-            return;
-          }
-          if (mode === "chat") {
-            this.syncChatSidebarForDock("hidden");
-            this.persistBoardSessionView({ face: "chat" });
-            return;
-          }
-          this.persistBoardSessionView({ face: "dashboard" });
-          if (mode === "split") {
-            if (board.dock === "hidden") {
-              this.handleBoardDockChange(board.reopenDock);
-            } else {
-              this.syncChatSidebarForDock(board.dock);
-            }
-          } else if (board.dock !== "hidden") {
-            this.handleBoardDockChange("hidden");
-          }
-        },
-        onDockSideChange: (dock) => this.handleBoardDockChange(dock),
-      }),
-      sharingControl: sharingMethodsSupported
-        ? renderChatSessionSharing({
-            session: row,
-            state: row
-              ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
-              : undefined,
-            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
-            membersAvailable: sharingReadAccess.allowed,
-            openDisabledReason: sharingOpenDisabledReason,
-            visibilityDisabledReason: sharingVisibilityAccess.allowed
-              ? undefined
-              : sharingVisibilityAccess.reason,
-            memberAddDisabledReason: sharingMemberAddAccess.allowed
-              ? undefined
-              : sharingMemberAddAccess.reason,
-            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
-              ? undefined
-              : sharingMemberRemoveAccess.reason,
-            onOpen: () => row && void this.loadSessionSharing(row),
-            onVisibilityChange: (visibility) =>
-              row && void this.setSessionVisibility(row, visibility),
-            onMemberChange: (identityId, member) =>
-              row && void this.setSessionMember(row, identityId, member),
-          })
-        : nothing,
+      faceControl: this.removedAgent
+        ? nothing
+        : renderBoardViewSwitch({
+            hasBoard: board.hasBoard,
+            face: board.face,
+            dock: board.dock,
+            canChangeDock: canChangeBoardDock,
+            fullscreenControl: board.hasBoard ? this.boardFullscreen.renderButton() : undefined,
+            onSelectMode: (mode) => {
+              if (mode === "chat") {
+                void this.boardFullscreen.exit();
+              }
+              if (!canChangeBoardDock) {
+                const face = mode === "chat" ? "chat" : "dashboard";
+                this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
+                this.persistBoardSessionView({ face });
+                return;
+              }
+              if (mode === "chat") {
+                this.syncChatSidebarForDock("hidden");
+                this.persistBoardSessionView({ face: "chat" });
+                return;
+              }
+              this.persistBoardSessionView({ face: "dashboard" });
+              if (mode === "split") {
+                if (board.dock === "hidden") {
+                  this.handleBoardDockChange(board.reopenDock);
+                } else {
+                  this.syncChatSidebarForDock(board.dock);
+                }
+              } else if (board.dock !== "hidden") {
+                this.handleBoardDockChange("hidden");
+              }
+            },
+            onDockSideChange: (dock) => this.handleBoardDockChange(dock),
+          }),
+      sharingControl:
+        sharingMethodsSupported && !this.removedAgent
+          ? renderChatSessionSharing({
+              session: row,
+              state: row
+                ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
+                : undefined,
+              allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
+              membersAvailable: sharingReadAccess.allowed,
+              openDisabledReason: sharingOpenDisabledReason,
+              visibilityDisabledReason: sharingVisibilityAccess.allowed
+                ? undefined
+                : sharingVisibilityAccess.reason,
+              memberAddDisabledReason: sharingMemberAddAccess.allowed
+                ? undefined
+                : sharingMemberAddAccess.reason,
+              memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
+                ? undefined
+                : sharingMemberRemoveAccess.reason,
+              onOpen: () => row && void this.loadSessionSharing(row),
+              onVisibilityChange: (visibility) =>
+                row && void this.setSessionVisibility(row, visibility),
+              onMemberChange: (identityId, member) =>
+                row && void this.setSessionMember(row, identityId, member),
+            })
+          : nothing,
       sessionMenuAction:
-        row && this.state
+        row && this.state && !this.removedAgent
           ? html`<openclaw-chat-header-session-menu
               .session=${{
                 label:
@@ -542,7 +556,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       nativeGateways: this.nativeGateways,
       gatewaysSnapshot: this.gatewaysSnapshot,
       onboarding: this.onboarding,
-      onBeginRename: () => row && this.beginHeaderRename(row),
+      onBeginRename: () => row && !this.removedAgent && this.beginHeaderRename(row),
       onRenameInput: (value) => {
         this.headerRenameValue = value;
       },
@@ -561,9 +575,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onOpenParentSession: (sessionKey) => {
         this.onPaneSessionChange?.(this.paneId, sessionKey);
       },
-      onPlacementMove: () => row && void this.moveHeaderPlacement(row),
-      onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
+      onPlacementMove: () => row && !this.removedAgent && void this.moveHeaderPlacement(row),
+      onPlacementReclaim: () => row && !this.removedAgent && void this.reclaimHeaderPlacement(row),
       onBranchSelect: (leafEntryId) => {
+        if (this.removedAgent) {
+          return;
+        }
         const access = readChatSessionActionAccess(
           this.context.gateway.snapshot,
           Boolean(this.state?.chatRunId),

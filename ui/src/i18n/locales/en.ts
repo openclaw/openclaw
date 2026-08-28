@@ -5291,6 +5291,10 @@ export const en: TranslationMap = {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",
       additionalMatches: "Search results remain. Use a longer id prefix.",
+      agentNotFoundTitle: "Agent not found",
+      agentNotFound: 'Agent "{agentId}" is not configured and has no saved conversation.',
+      agentRemoved: 'Agent "{agentId}" was removed. This conversation is read-only.',
+      openDefault: "Open default chat",
     },
     commandResults: {
       startingNewThread: "Starting new session...",

@@ -60,6 +60,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
+    if (this.removedAgent) {
+      return;
+    }
     if (action.kind === "open-in") {
       openEditor(action.editor, action.path);
       return;
@@ -334,7 +337,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.context.gateway === scope.gateway &&
       this.context.sessions === scope.sessions &&
       scope.gateway.snapshot.phase === "connected" &&
-      scope.gateway.snapshot.client === scope.client
+      scope.gateway.snapshot.client === scope.client &&
+      !this.removedAgent
     );
   }
 
@@ -385,7 +389,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     this.headerEditing = false;
     this.headerRenameSession = null;
     const state = this.state;
-    if (!session || !state || unchangedGeneratedTitle || unchangedLabel) {
+    if (!session || !state || this.removedAgent || unchangedGeneratedTitle || unchangedLabel) {
       return;
     }
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {

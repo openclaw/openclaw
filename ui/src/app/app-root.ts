@@ -38,6 +38,7 @@ type FocusDashboardRouteState =
   | { kind: "not-found" }
   | { kind: "error"; message: string }
   | { kind: "ambiguous"; data: Extract<ChatRouteData, { kind: "ambiguous" }> }
+  | { kind: "agent-not-found"; data: Extract<ChatRouteData, { kind: "agent-not-found" }> }
   | { kind: "session"; data: Extract<ChatRouteData, { kind: "session" }> };
 
 function routeLocationHref(location: RouteLocation): string {
@@ -331,6 +332,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
         };
         return;
       }
+      if (result.kind === "agent-not-found") {
+        this.focusDashboardRoute = { kind: "agent-not-found", data: result };
+        return;
+      }
       this.focusDashboardRoute = { kind: "session", data: result };
       if (result.canonicalLocation && result.canonicalLocationSource) {
         this.replaceFocusDashboardLocation(
@@ -379,6 +384,15 @@ export class OpenClawApp extends OpenClawLightDomElement {
         <section class="board-document__state board-document__state--error stack" role="alert">
           <span>${t("dashboardDocument.loadFailed", { error: route.message })}</span>
           ${this.renderFocusEscape(t("dashboardDocument.close"))}
+        </section>
+      </main>`;
+    }
+    if (route.kind === "agent-not-found") {
+      return html`<main class="board-document">
+        <section class="board-document__state stack" role="status">
+          <strong>${t("chat.sessionRoute.agentNotFoundTitle")}</strong>
+          <span>${t("chat.sessionRoute.agentNotFound", { agentId: route.data.agentId })}</span>
+          ${this.renderFocusEscape(t("common.back"))}
         </section>
       </main>`;
     }
