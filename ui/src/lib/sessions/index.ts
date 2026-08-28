@@ -162,8 +162,18 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   // Canonical Gateway rows are the source of truth for everything except the
   // UI-owned facts the capability keeps beside them, so every published result
   // passes through the same overlay: swarm notes, then in-flight pin intents.
-  const decorateRows = (result: SessionsListResult | null): SessionsListResult | null =>
-    mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result)));
+  const decorateRows = (
+    result: SessionsListResult | null,
+    scope?: string,
+    requestRevision?: number,
+    agentId?: string | null,
+  ): SessionsListResult | null =>
+    mutations.applyConfirmedOwners(
+      mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result))),
+      scope,
+      requestRevision,
+      agentId === undefined ? state.agentId : agentId,
+    );
 
   const sessionEventSubscription = createSessionEventSubscriptionOwner({
     isCurrent: (scope) => connection.isCurrent(scope),
@@ -195,6 +205,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     observerError: () => sessionEventSubscriptionError,
     bootstrap: (scope, list) => sessionEventSubscription.ensure(scope, list),
     decorate: decorateRows,
+    observeCanonicalRows: (result, requestRevision, scope, agentId) =>
+      mutations.observeCanonicalOwners(result, requestRevision, scope, agentId),
+    retireCanonicalScope: (scope) => mutations.retireCanonicalOwnerScope(scope),
     onCanonicalList(result, requestRevision, agentId, observed) {
       mutations.settlePrepared(result);
       for (const row of observed?.sessions ?? []) {
@@ -229,7 +242,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connection,
     readState: () => state,
     publish,
-    refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    refreshReplacement: (agentId, reconcileOwner) =>
+      reconcileOwner
+        ? roster.refreshOwnerAssignmentScopes(agentId)
+        : roster.refreshReplacement(agentId),
+    ownerAssignmentScopeRevisions: (agentId) => roster.ownerAssignmentScopeRevisions(agentId),
     publishedRow: (key) => roster.publishedRow(key),
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated,
@@ -332,6 +349,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       ? { ...options, archivedFilter: "all" as const }
       : options;
     const reconciled = reconcileSessionChanged(previous, payload, reconcileOptions);
+    mutations.observeCanonicalOwnerEvent(reconciled.row, eventInfo?.agentId);
     let claimChanged = false;
     if (reconciled.applied && reconciled.key && eventInfo) {
       const claimKey = thinkingClaimKey(reconciled.key, eventInfo.agentId);
