@@ -61,6 +61,10 @@ export function formatUpdateRestartStatusValue(
     return muted(`skipped · ${reason ?? "restart skipped"}${age}`);
   }
 
+  if (payload.stats?.restart?.reason === "foreign-service-root") {
+    return warn(`restart skipped · service belongs to another OpenClaw root${age}`);
+  }
+
   const version = readAfterVersion(payload);
   return ok(`verified${version ? ` · gateway ${version}` : ""}${age}`);
 }
@@ -79,6 +83,12 @@ export function formatUpdateRestartActionLines(
     ];
   }
   const reason = readReason(payload);
+  if (payload.stats?.restart?.reason === "foreign-service-root") {
+    return [
+      "The installed Gateway service belongs to another OpenClaw root and was left untouched.",
+      "Update that installation, or reinstall the service deliberately from the updated root.",
+    ];
+  }
   if (
     payload.status === "skipped" &&
     (reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON ||

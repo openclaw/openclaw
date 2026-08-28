@@ -370,6 +370,7 @@ export async function finishUpdate(params: {
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
   let serviceUpdateVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
   let skipLegacyServiceRestart = serviceUpdateVerdict?.kind === "absent";
+  let foreignServiceRoot = serviceUpdateVerdict?.kind === "foreign";
   const serviceStateReadEnv = resolvePostUpdateServiceStateReadEnv({
     updateMode: resultWithPostUpdate.mode,
     processEnv: process.env,
@@ -403,6 +404,7 @@ export async function finishUpdate(params: {
         preManagedServiceStop: params.preManagedServiceStop,
       });
       gatewayServiceEnv = serviceState.env;
+      foreignServiceRoot = serviceUpdateVerdict.kind === "foreign";
       skipLegacyServiceRestart =
         serviceUpdateVerdict.kind === "foreign" || serviceUpdateVerdict.kind === "absent";
       if (serviceUpdateVerdict.kind === "unavailable") {
@@ -475,35 +477,46 @@ export async function finishUpdate(params: {
     skipPrompt: Boolean(params.opts.yes),
   });
 
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
-    jsonMode: Boolean(params.opts.json),
-  });
+  const finalResult: UpdateRunResult = foreignServiceRoot
+    ? {
+        ...resultWithPostUpdate,
+        restart: { status: "skipped", reason: "foreign-service-root" },
+      }
+    : resultWithPostUpdate;
+
+  if (!foreignServiceRoot) {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
 
   if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
     return;
   }
-  const restartOk = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
-    maybeRestartService({
-      shouldRestart: params.shouldRestart && serviceMutationAllowed,
-      result: resultWithPostUpdate,
-      channel: params.channel,
-      opts: params.opts,
-      refreshServiceEnv: refreshGatewayServiceEnv,
-      serviceUpdateVerdict,
-      serviceEnv: gatewayServiceEnv,
-      serviceInstallEnv: gatewayServiceInstallEnv,
-      gatewayPort,
-      restartScriptPath,
-      invocationCwd: params.invocationCwd,
-      nodeRunner: params.packageUpdateNodeRunner,
-      skipLegacyServiceRestart,
-      requireRunningServiceAfterRestart: params.preManagedServiceStop?.stopped === true,
-      serviceMutationSkipMessage,
-      timeoutMs: params.updateStepTimeoutMs,
-    }),
-  );
+  const restartOk =
+    foreignServiceRoot ||
+    (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
+      maybeRestartService({
+        shouldRestart: params.shouldRestart && serviceMutationAllowed,
+        result: finalResult,
+        channel: params.channel,
+        opts: params.opts,
+        refreshServiceEnv: refreshGatewayServiceEnv,
+        serviceUpdateVerdict,
+        serviceEnv: gatewayServiceEnv,
+        serviceInstallEnv: gatewayServiceInstallEnv,
+        gatewayPort,
+        restartScriptPath,
+        invocationCwd: params.invocationCwd,
+        nodeRunner: params.packageUpdateNodeRunner,
+        skipLegacyServiceRestart,
+        requireRunningServiceAfterRestart: params.preManagedServiceStop?.stopped === true,
+        serviceMutationSkipMessage,
+        timeoutMs: params.updateStepTimeoutMs,
+      }),
+    ));
   if (!restartOk) {
     await markControlPlaneUpdateRestartSentinelFailureBestEffort({
       meta: params.controlPlaneUpdateSentinelMeta,
@@ -526,7 +539,7 @@ export async function finishUpdate(params: {
         jsonMode: Boolean(params.opts.json),
       });
       const failedResult: UpdateRunResult = {
-        ...resultWithPostUpdate,
+        ...finalResult,
         status: "error",
         reason: "wrapper-retirement-failed",
       };
@@ -538,11 +551,11 @@ export async function finishUpdate(params: {
 
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: params.controlPlaneUpdateSentinelMeta,
-    result: resultWithPostUpdate,
+    result: finalResult,
     jsonMode: Boolean(params.opts.json),
   });
 
-  printResult(resultWithPostUpdate, { ...params.opts, hideSteps: params.showProgress });
+  printResult(finalResult, { ...params.opts, hideSteps: params.showProgress });
   if (!params.opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));
   }

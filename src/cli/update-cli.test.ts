@@ -5799,13 +5799,30 @@ describe("update-cli", () => {
     mockRunningManagedGateway(["node", otherEntrypoint, "gateway", "run"]);
     const preparations = mockGitUpdateAfterMutation();
 
-    await updateCommand({ yes: true });
+    const sentinel = await runControlPlaneUpdate({
+      meta: {},
+      options: { yes: true, json: true },
+    });
 
     expectNoSideEffects(serviceStop, prepareRestartScript, serviceRestart, runDaemonRestart);
     expect(runGatewayUpdate).toHaveBeenCalledTimes(1);
     expect(preparations).toEqual([
       { allowGatewayServiceRepair: false, allowGatewayActivation: false },
     ]);
+    expect(lastWriteJsonCall()).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        restart: { status: "skipped", reason: "foreign-service-root" },
+      }),
+    );
+    expect(sentinel?.payload).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        stats: expect.objectContaining({
+          restart: { status: "skipped", reason: "foreign-service-root" },
+        }),
+      }),
+    );
   });
 
   it("leaves a stopped git service down when plugin post-update fails", async () => {

@@ -795,6 +795,69 @@ describe("restart success continuation", () => {
 });
 
 describe("control-plane update restart sentinel", () => {
+  it("preserves a foreign-service-root restart skip without scheduling continuation", () => {
+    const payload = buildUpdateRestartSentinelPayload({
+      result: {
+        status: "ok",
+        mode: "git",
+        before: { sha: "aaaaaaaa" },
+        after: { sha: "aaaaaaaa" },
+        restart: { status: "skipped", reason: "foreign-service-root" },
+        steps: [],
+        durationMs: 42,
+      },
+      meta: {
+        sessionKey: "agent:main:webchat:dm:user-123",
+        continuationMessage: "Check the running version and finish the update report.",
+      },
+      nowMs: 1,
+    });
+
+    expect(payload.status).toBe("ok");
+    expect(payload.stats?.reason).toBeNull();
+    expect(payload.stats?.restart).toEqual({
+      status: "skipped",
+      reason: "foreign-service-root",
+    });
+    expect(payload.continuation).toBeUndefined();
+  });
+
+  it("does not verify a persisted foreign-service-root restart skip", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const payload = buildUpdateRestartSentinelPayload({
+        result: {
+          status: "ok",
+          mode: "git",
+          root: "/tmp/updated-openclaw",
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "bbbbbbbb" },
+          restart: { status: "skipped", reason: "foreign-service-root" },
+          steps: [],
+          durationMs: 42,
+        },
+        meta: {},
+        nowMs: 1,
+      });
+      await writeRestartSentinel(payload);
+
+      await expect(
+        finalizeUpdateRestartSentinelRunningVersion(
+          "2026.8.28",
+          process.env,
+          "aaaaaaaa",
+          "/tmp/foreign-openclaw",
+        ),
+      ).resolves.toBeNull();
+      await expect(readRestartSentinel()).resolves.toMatchObject({
+        payload: {
+          kind: "update",
+          status: "ok",
+          stats: { restart: { status: "skipped", reason: "foreign-service-root" } },
+        },
+      });
+    });
+  });
+
   it("reports a successful same-revision Git run as already current", () => {
     const payload = buildUpdateRestartSentinelPayload({
       result: {

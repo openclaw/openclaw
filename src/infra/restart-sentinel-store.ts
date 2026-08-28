@@ -31,6 +31,10 @@ type RestartSentinelStats = {
   after?: Record<string, unknown> | null;
   steps?: RestartSentinelStep[];
   reason?: string | null;
+  restart?: {
+    status: "skipped";
+    reason: "foreign-service-root";
+  };
   durationMs?: number | null;
 };
 
@@ -179,6 +183,7 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   const root = parseOptionalNullableString(value, "root");
   const handoffId = parseOptionalNullableString(value, "handoffId");
   const reason = parseOptionalNullableString(value, "reason");
+  const restart = value.restart;
   const before = value.before;
   const after = value.after;
   const steps = value.steps;
@@ -191,6 +196,10 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
     handoffId === false ||
     handoffId === null ||
     reason === false ||
+    (restart !== undefined &&
+      (!isPlainRecord(restart) ||
+        restart.status !== "skipped" ||
+        restart.reason !== "foreign-service-root")) ||
     (value.requiresRestart !== undefined && typeof value.requiresRestart !== "boolean") ||
     (before !== undefined && before !== null && !isPlainRecord(before)) ||
     (after !== undefined && after !== null && !isPlainRecord(after)) ||
@@ -224,6 +233,12 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   }
   if (reason !== undefined) {
     result.reason = reason;
+  }
+  if (restart !== undefined) {
+    result.restart = {
+      status: "skipped",
+      reason: "foreign-service-root",
+    };
   }
   if (durationMs !== undefined) {
     result.durationMs = durationMs as number | null;

@@ -57,6 +57,24 @@ describe("status update restart formatting", () => {
     ).toBe("ok(verified · gateway 2026.5.15)");
   });
 
+  it("does not call a foreign-service-root skip verified", () => {
+    const payload = {
+      ...basePayload,
+      status: "ok" as const,
+      stats: {
+        ...basePayload.stats,
+        restart: { status: "skipped" as const, reason: "foreign-service-root" as const },
+      },
+    };
+
+    expect(formatUpdateRestartStatusValue(payload)).toBe(
+      "restart skipped · service belongs to another OpenClaw root",
+    );
+    expect(formatUpdateRestartActionLines(payload)).toContain(
+      "The installed Gateway service belongs to another OpenClaw root and was left untouched.",
+    );
+  });
+
   it("adds action lines for failed and pending update restarts only", () => {
     expect(
       formatUpdateRestartActionLines({

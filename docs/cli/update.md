@@ -44,7 +44,7 @@ launcher scripts).
 | `--channel <stable\|extended-stable\|beta\|dev>` | Set the update channel and persist it after core update success. Extended-stable is package-only.                                                                                                                                                                                                                                             |
 | `--tag <dist-tag\|version\|spec>`                | Override the package target for this update only. It cannot be combined with an effective `extended-stable` channel, whose verified exact target is mandatory. Package installs reject the `main` shorthand; use `--channel dev` for the supported checkout and build flow. Other explicit package specs keep their package-manager behavior. |
 | `--dry-run`                                      | Preview planned actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.                                                                                                                                                                                                                 |
-| `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                  |
+| `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `restart` for a foreign-root managed Gateway skip, `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.               |
 | `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                             |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                               |
 
@@ -220,6 +220,13 @@ If restart cannot run, the command prints `Gateway: restart skipped (...)` or
 With `--no-restart`, package replacement or git rebuild still runs, but the
 managed service is not stopped or restarted, so the running Gateway keeps old
 code until you restart it manually.
+
+If a Git update finds a managed Gateway service owned by another OpenClaw root,
+it leaves that service untouched and reports
+`restart: { status: "skipped", reason: "foreign-service-root" }`. The updated
+checkout succeeds, but the installed Gateway continues running its previous
+code if it was running. Update the installation that owns it or deliberately
+reinstall the service from the updated root.
 
 ### Control-plane response shape
 

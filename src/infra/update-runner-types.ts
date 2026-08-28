@@ -35,6 +35,10 @@ export type UpdateRunResult = {
   };
   steps: UpdateStepResult[];
   durationMs: number;
+  restart?: {
+    status: "skipped";
+    reason: "foreign-service-root";
+  };
   recovery?:
     | { serviceRestartSafe: true }
     | {

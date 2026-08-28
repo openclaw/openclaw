@@ -10,6 +10,8 @@ import type {
   UpdateStepProgress,
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { formatCliCommand } from "../command-format.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 const STEP_LABELS: Record<string, string> = {
@@ -216,6 +218,14 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
   }
   if (result.reason) {
     defaultRuntime.log(`  Reason: ${theme.muted(result.reason)}`);
+  }
+  if (result.restart?.reason === "foreign-service-root") {
+    defaultRuntime.log(
+      `  Gateway restart: ${theme.warn("skipped; the installed service belongs to another OpenClaw root and was left untouched.")}`,
+    );
+    defaultRuntime.log(
+      `  Next: ${theme.muted(`If it is running, it still uses the previous code. Update the installation that owns the service, or run \`${replaceCliName(formatCliCommand("openclaw gateway install --force"), resolveCliName())}\` from this root to replace it deliberately.`)}`,
+    );
   }
 
   if (result.before?.version || result.before?.sha) {

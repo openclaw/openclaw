@@ -104,6 +104,9 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
   if (!snapshot || snapshot.payload.kind !== "update") {
     return null;
   }
+  if (snapshot.payload.stats?.restart?.status === "skipped") {
+    return null;
+  }
   const snapshotRoot = snapshot.payload.stats?.root;
   const expectedRoot =
     typeof snapshotRoot === "string" ? resolveUpdateInstallRoot(snapshotRoot) : null;

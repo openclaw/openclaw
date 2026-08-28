@@ -112,3 +112,23 @@ describe("update failure hints", () => {
     expect(output).not.toContain("npm config set prefix ~/.local");
   });
 });
+
+describe("update restart result", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("explains a foreign-service-root restart skip", () => {
+    const output = renderResult({
+      status: "ok",
+      mode: "git",
+      restart: { status: "skipped", reason: "foreign-service-root" },
+      steps: [],
+      durationMs: 1,
+    });
+
+    expect(output).toContain("installed service belongs to another OpenClaw root");
+    expect(output).toContain("If it is running, it still uses the previous code");
+    expect(output).toContain("gateway install --force");
+  });
+});

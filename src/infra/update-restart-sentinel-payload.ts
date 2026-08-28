@@ -28,6 +28,7 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
   const afterSha = result.after?.sha?.trim();
   return result.status === "ok" &&
     result.mode === "git" &&
+    result.restart?.status !== "skipped" &&
     result.postUpdate?.plugins?.changed !== true &&
     beforeSha &&
     afterSha &&
@@ -45,7 +46,7 @@ export function buildUpdateRestartSentinelPayload(params: {
   const result = normalizeControlPlaneUpdateResult(params.result);
   const { meta } = params;
   const continuation =
-    result.status === "ok"
+    result.status === "ok" && result.restart?.status !== "skipped"
       ? buildRestartSuccessContinuation({
           sessionKey: meta.sessionKey,
           continuationMessage: meta.continuationMessage,
@@ -79,6 +80,7 @@ export function buildUpdateRestartSentinelPayload(params: {
         },
       })),
       reason: result.reason ?? null,
+      ...(result.restart ? { restart: result.restart } : {}),
       durationMs: result.durationMs,
     },
   };
