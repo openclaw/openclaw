@@ -9,6 +9,7 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createPerplexityWebSearchProviderBase,
+  PERPLEXITY_SEARCH_CONTEXT_SIZE_SCHEMA,
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
 
@@ -29,6 +30,7 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
       type: "string",
       description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
     },
+    search_context_size: PERPLEXITY_SEARCH_CONTEXT_SIZE_SCHEMA,
   };
 
   if (transport !== "chat_completions") {
@@ -57,13 +59,15 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
     };
     properties.max_tokens = {
       type: "integer",
-      description: "Native Perplexity Search API only. Total content budget across all results.",
+      description:
+        "Native Perplexity Search API only. Total content budget across all results. Do not combine with search_context_size.",
       minimum: 1,
       maximum: 1000000,
     };
     properties.max_tokens_per_page = {
       type: "integer",
-      description: "Native Perplexity Search API only. Max tokens extracted per page.",
+      description:
+        "Native Perplexity Search API only. Max tokens extracted per page. Do not combine with search_context_size.",
       minimum: 1,
     };
   }
