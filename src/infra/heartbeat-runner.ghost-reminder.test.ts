@@ -6,6 +6,7 @@ import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import { resolveHeartbeatPreflight, resolveHeartbeatRunPrompt } from "./heartbeat-runner-prompt.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -854,11 +855,44 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
+      expect(getFirstReplyContext(replySpy).Body).toContain("Gateway restart ok");
       expectTelegramSend(sendTelegram, {
         to: "-100155462274",
         text: "Restart complete",
         messageThreadId: 42,
       });
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+    });
+  });
+
+  it("surfaces generic restart wake events in the same heartbeat model turn", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const { cfg, sessionKey } = await createConfig({
+        tmpDir,
+        storePath,
+        target: "none",
+      });
+      const restartNote = "Gateway restart ok";
+      enqueueSystemEvent(restartNote, { sessionKey });
+
+      const preflight = await resolveHeartbeatPreflight({
+        cfg,
+        agentId: "main",
+        heartbeat: cfg.agents?.defaults?.heartbeat,
+        source: "hook",
+        reason: "wake",
+      });
+      const prompt = resolveHeartbeatRunPrompt({
+        cfg,
+        heartbeat: cfg.agents?.defaults?.heartbeat,
+        preflight,
+        canRelayToUser: false,
+        startedAt: Date.now(),
+        scheduledTasks: [],
+        useHeartbeatResponseTool: false,
+      });
+
+      expect(prompt.prompt).toContain(restartNote);
     });
   });
 
@@ -895,6 +929,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
 
       expect(result.status).toBe("ran");
+      expect(getFirstReplyContext(replySpy).Body).toContain("Gateway restart ok");
       expect(getFirstReplyContext(replySpy).SessionKey).toBe(`${sessionKey}:heartbeat`);
       expectTelegramSend(sendTelegram, {
         to: "-100155462274",
