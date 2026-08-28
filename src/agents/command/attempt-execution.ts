@@ -217,6 +217,7 @@ type PersistTextTurnTranscriptParams = {
   skipAssistantTurn?: boolean;
   assistant: {
     api: string;
+    idempotencyKey?: string;
     provider: string;
     model: string;
     usage?: TranscriptUsage;
@@ -370,10 +371,14 @@ async function persistTextTurnTranscript(
         api: params.assistant.api,
         provider: params.assistant.provider,
         model: params.assistant.model,
+        ...(params.assistant.idempotencyKey
+          ? { idempotencyKey: params.assistant.idempotencyKey }
+          : {}),
         usage: resolveTranscriptUsage(params.assistant.usage),
         stopReason: "stop",
         timestamp: Date.now(),
       },
+      ...(params.assistant.idempotencyKey ? { idempotencyLookup: "scan" as const } : {}),
     });
   }
 
@@ -425,6 +430,7 @@ export async function persistAcpTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
   userInput?: UserTurnInput;
+  assistantIdempotencyKey?: string;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -442,6 +448,7 @@ export async function persistAcpTurnTranscript(params: {
     ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
     assistant: {
       api: "openai-responses",
+      idempotencyKey: params.assistantIdempotencyKey,
       provider: "openclaw",
       model: "acp-runtime",
     },
