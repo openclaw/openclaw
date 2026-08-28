@@ -4,7 +4,9 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const groupMocks = vi.hoisted(() => ({
   NotFound: class SessionGroupNotFoundError extends Error {},
+  add: vi.fn(),
   rename: vi.fn(),
+  reorder: vi.fn(),
   update: vi.fn(),
 }));
 const pathMocks = vi.hoisted(() => ({
@@ -13,12 +15,14 @@ const pathMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../session-groups.js", () => ({
+  addSessionGroup: groupMocks.add,
   deleteSessionGroup: vi.fn(),
   listSessionGroupDefaults: vi.fn(() => []),
   listSessionGroups: vi.fn(() => []),
   listSidebarSectionOrder: vi.fn(() => []),
   putSessionGroups: vi.fn(() => []),
   renameSessionGroup: groupMocks.rename,
+  reorderSessionGroups: groupMocks.reorder,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
 }));
@@ -193,6 +197,42 @@ describe("sessions.groups.update", () => {
       false,
       undefined,
       expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
+    );
+  });
+});
+
+describe("sessions.groups.add", () => {
+  beforeEach(() => {
+    groupMocks.add.mockReset();
+  });
+
+  it("returns the persisted sidebar section order", async () => {
+    groupMocks.add.mockReturnValue({ name: "New", position: 1 });
+    const listGroups = vi.mocked((await import("../session-groups.js")).listSessionGroups);
+    listGroups.mockReturnValue([
+      { name: "Existing", position: 0 },
+      { name: "New", position: 1 },
+    ]);
+    const listOrder = vi.mocked((await import("../session-groups.js")).listSidebarSectionOrder);
+    listOrder.mockReturnValue(["work", "category:Existing", "category:New", "ungrouped"]);
+
+    const respond = vi.fn();
+    await expectDefined(
+      sessionGroupHandlers["sessions.groups.add"],
+      'sessionGroupHandlers["sessions.groups.add"] test invariant',
+    )(updateOptions({ name: "New" }, respond));
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        groups: [
+          { name: "Existing", position: 0 },
+          { name: "New", position: 1 },
+        ],
+        sectionOrder: ["work", "category:Existing", "category:New", "ungrouped"],
+      },
+      undefined,
     );
   });
 });

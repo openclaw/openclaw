@@ -243,6 +243,10 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 let data = try await request(OpenClawChatGatewayRequests.sessionGroupsPut(names: names))
                 return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
             },
+            addGroup: { name in
+                let data = try await request(OpenClawChatGatewayRequests.sessionGroupsAdd(name: name))
+                return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)
+            },
             renameGroup: { name, to in
                 let data = try await request(OpenClawChatGatewayRequests.sessionGroupsRename(name: name, to: to))
                 return try JSONDecoder().decode(OpenClawChatSessionGroupsMutationResponse.self, from: data)

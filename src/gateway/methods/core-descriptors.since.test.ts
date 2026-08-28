@@ -85,6 +85,8 @@ const CURRENT_TRAIN_METHODS = [
   "plugins.inspect",
   "device.pair.setupStatus",
   "sessions.patchMany",
+  "sessions.groups.add",
+  "sessions.groups.reorder",
   "sessions.groups.update",
   "sessions.groups.defaults",
   "sessions.recover",
@@ -147,6 +149,10 @@ describe("core gateway method release trains", () => {
     ).toEqual(CURRENT_TRAIN_METHODS.toSorted());
     expect(methods.find((method) => method.name === "update.hold")?.since).toBe("2026.8");
     expect(methods.find((method) => method.name === "sessions.catalog.startTerminal")?.since).toBe(
+      "2026.8",
+    );
+    expect(methods.find((method) => method.name === "sessions.groups.add")?.since).toBe("2026.8");
+    expect(methods.find((method) => method.name === "sessions.groups.reorder")?.since).toBe(
       "2026.8",
     );
     expect(methods.find((method) => method.name === "worker.desktop.observe")?.since).toBe(
