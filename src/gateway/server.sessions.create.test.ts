@@ -3353,7 +3353,7 @@ test("sessions.create persists declared spawn lineage for spawn-owned creations"
   expect(created.payload?.entry?.spawnDepth).toBe(2);
 });
 
-test("sessions.create persists trusted visible-spawn policy and category inheritance", async () => {
+test("sessions.create inherits a parent group only when a visible spawn opts in", async () => {
   const { storePath } = await createSessionStoreDir();
   const parentSessionKey = "agent:main:main";
   await writeSessionStore({
@@ -3364,53 +3364,71 @@ test("sessions.create persists trusted visible-spawn policy and category inherit
     },
   });
 
-  const created = await directSessionReq<{
-    key?: string;
-    entry?: {
-      category?: string;
-      label?: string;
-      spawnedBy?: string;
-      completionOwnerSessionKey?: string;
-      parentSessionKey?: string;
-      spawnDepth?: number;
-      inheritedToolPolicyVersion?: number;
-      inheritedToolAllow?: string[];
-      inheritedToolDeny?: string[];
-    };
-  }>(
-    "sessions.create",
-    {
-      agentId: "main",
-      label: "Restricted visible child",
-      parentSessionKey,
-      spawnDepth: 1,
-    },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          syntheticClient: true,
-          sessionCreation: {
-            via: "spawn",
-            actor: { type: "agent", id: "main" },
-            requesterSessionKey: parentSessionKey,
-            completionOwnerSessionKey: "agent:main:discord:direct:alice",
-            inheritedToolPolicy: {
-              version: 1,
-              allow: ["read", "sessions_spawn"],
-              deny: ["exec"],
+  const createVisibleChild = async (inheritParentGroup: boolean) =>
+    await directSessionReq<{
+      key?: string;
+      entry?: {
+        category?: string;
+        label?: string;
+        spawnedBy?: string;
+        completionOwnerSessionKey?: string;
+        parentSessionKey?: string;
+        spawnDepth?: number;
+        inheritedToolPolicyVersion?: number;
+        inheritedToolAllow?: string[];
+        inheritedToolDeny?: string[];
+      };
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        label: inheritParentGroup ? "Grouped visible child" : "Ungrouped visible child",
+        parentSessionKey,
+        spawnDepth: 1,
+        ...(inheritParentGroup ? { inheritParentGroup: true } : {}),
+      },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true,
+            sessionCreation: {
+              via: "spawn",
+              actor: { type: "agent", id: "main" },
+              requesterSessionKey: parentSessionKey,
+              completionOwnerSessionKey: "agent:main:discord:direct:alice",
+              inheritedToolPolicy: {
+                version: 1,
+                allow: ["read", "sessions_spawn"],
+                deny: ["exec"],
+              },
             },
           },
-        },
-      } as never,
-    },
-  );
+        } as never,
+      },
+    );
+
+  const defaultChild = await createVisibleChild(false);
+  expect(defaultChild.ok, JSON.stringify(defaultChild.error)).toBe(true);
+  expect(defaultChild.payload?.entry).not.toHaveProperty("category");
+
+  const operatorOptIn = await directSessionReq("sessions.create", {
+    agentId: "main",
+    inheritParentGroup: true,
+    parentSessionKey,
+  });
+  expect(operatorOptIn).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: "inheritParentGroup requires a visible spawn" },
+  });
+
+  const created = await createVisibleChild(true);
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
   expect(created.payload?.entry).toMatchObject({
     category: "Projects",
-    label: "Restricted visible child",
+    label: "Grouped visible child",
     spawnedBy: parentSessionKey,
     completionOwnerSessionKey: "agent:main:discord:direct:alice",
     parentSessionKey,
@@ -3429,11 +3447,23 @@ test("sessions.create persists trusted visible-spawn policy and category inherit
     inheritedToolDeny: ["exec"],
   });
 
-  const operatorChild = await directSessionReq<{ entry?: { category?: string } }>(
-    "sessions.create",
-    { agentId: "main", parentSessionKey },
+  const parentMoved = await directSessionReq("sessions.patch", {
+    key: parentSessionKey,
+    category: "Planning",
+  });
+  expect(parentMoved.ok, JSON.stringify(parentMoved.error)).toBe(true);
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.category).toBe(
+    "Projects",
   );
-  expect(operatorChild.payload?.entry).not.toHaveProperty("category");
+
+  const childMoved = await directSessionReq("sessions.patch", {
+    key,
+    category: "Research",
+  });
+  expect(childMoved.ok, JSON.stringify(childMoved.error)).toBe(true);
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: parentSessionKey, storePath })?.category,
+  ).toBe("Planning");
 
   const explicitCategoryChild = await directSessionReq<{ entry?: { category?: string } }>(
     "sessions.create",
@@ -5106,6 +5136,7 @@ test("sessions.create loads selected global parent from the requested agent stor
       "sessions.create",
       {
         agentId: "work",
+        inheritParentGroup: true,
         parentSessionKey: "global",
         emitCommandHooks: true,
       },

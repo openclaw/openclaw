@@ -431,6 +431,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       agentId: sessionAgentId,
       label: p.label,
       category: p.category,
+      inheritParentGroup: p.inheritParentGroup,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
       contextWindow: p.contextWindow,
       thinkingLevel: p.thinkingLevel,
@@ -542,7 +543,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
     const createdCategory =
-      p.category === undefined && sessionCreation.via === "spawn"
+      p.category === undefined && p.inheritParentGroup === true
         ? created.entry.category
         : p.category;
     registerCreatedSessionCategory(normalizeOptionalString(createdCategory), context);

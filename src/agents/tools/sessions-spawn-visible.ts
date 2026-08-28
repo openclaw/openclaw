@@ -50,6 +50,12 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
         "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
+  inheritParentGroup: Type.Optional(
+    Type.Boolean({
+      description:
+        "Copy the parent session's sidebar group once when creating a visible session without category; later parent and child group changes are independent.",
+    }),
+  ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
   worktreeName: Type.Optional(Type.String({ description: "Worktree name" })),
   worktreeBaseRef: Type.Optional(Type.String({ description: "Worktree base ref" })),
@@ -113,9 +119,11 @@ export async function maybeSpawnVisibleSession(params: {
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
   const category = readToolStringParam(params.raw, "category");
+  const inheritParentGroup = params.raw.inheritParentGroup === true;
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
       ["category", category],
+      ["inheritParentGroup", inheritParentGroup],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -322,6 +330,7 @@ export async function maybeSpawnVisibleSession(params: {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
         ...(category ? { category } : {}),
+        ...(inheritParentGroup ? { inheritParentGroup: true } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,

@@ -293,6 +293,7 @@ export async function createGatewaySession(params: {
   agentId?: string;
   label?: string;
   category?: string;
+  inheritParentGroup?: boolean;
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
@@ -545,6 +546,18 @@ export async function createGatewaySession(params: {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "spawn tool policy requires spawnDepth"),
+    };
+  }
+  if (params.inheritParentGroup === true && !parentSessionKey) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "inheritParentGroup requires parentSessionKey"),
+    };
+  }
+  if (params.inheritParentGroup === true && params.creation?.via !== "spawn") {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "inheritParentGroup requires a visible spawn"),
     };
   }
   let canonicalParentSessionKey: string | undefined;
@@ -1033,7 +1046,7 @@ export async function createGatewaySession(params: {
         const requestedContextWindow = normalizeOptionalString(params.contextWindow);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         const category = normalizeOptionalString(
-          params.category === undefined && params.creation?.via === "spawn" && createdNewEntry
+          params.category === undefined && params.inheritParentGroup === true && createdNewEntry
             ? currentParentSessionEntry?.category
             : params.category,
         );

@@ -15,6 +15,12 @@ export const SessionsCreateParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
   category: Type.Optional(SessionLabelString),
+  inheritParentGroup: Type.Optional(
+    Type.Boolean({
+      description:
+        "Copy the parent session's group once for a visible spawn without category; requires parentSessionKey.",
+    }),
+  ),
   model: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
