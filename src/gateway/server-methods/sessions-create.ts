@@ -559,6 +559,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       displayName: preparedDisplayName,
       category: p.category,
+      inheritParentGroup: p.inheritParentGroup,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
       personalModelSelection,
       personalAccountDefaults,
@@ -667,7 +668,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
     const createdCategory =
-      p.category === undefined && sessionCreation.via === "spawn"
+      p.category === undefined && p.inheritParentGroup === true
         ? created.entry.category
         : p.category;
     registerCreatedSessionCategory(normalizeOptionalString(createdCategory), context);
