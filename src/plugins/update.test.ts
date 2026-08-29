@@ -1302,6 +1302,26 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("rethrows installer cancellation instead of recording an update failure", async () => {
+    const { config } = createNpmUpdateFixture({
+      pluginId: "demo",
+      packageName: "@acme/demo",
+      installedVersion: "1.0.0",
+      registryVersion: "1.1.0",
+    });
+    const controller = new AbortController();
+    const abortReason = new Error("Gateway startup interrupted by SIGTERM");
+    installPluginFromNpmSpecMock.mockImplementationOnce(async () => {
+      controller.abort(abortReason);
+      throw abortReason;
+    });
+
+    await expect(updatePlugin(config, "demo", { signal: controller.signal })).rejects.toBe(
+      abortReason,
+    );
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "skips integrity drift checks for unpinned npm specs during dry-run updates",

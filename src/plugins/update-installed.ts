@@ -511,7 +511,9 @@ export async function updateNpmInstalledPlugins(params: {
       clawhubPackage: recordClawHubPackage,
       dryRun: params.dryRun === true,
       run: runAttempt,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     consentCallbacks.rethrowCallbackError();
     if (attempt.kind === "exception") {
       if (attempt.error instanceof ManagedPluginLifecycleError && attempt.error.capabilityConsent) {

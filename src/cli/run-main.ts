@@ -72,7 +72,11 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
+import {
+  registerSignalExitBarrier,
+  registerSignalExitGate,
+  waitForSignalExitBarriers,
+} from "./signal-exit-barrier.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
@@ -1368,6 +1372,15 @@ async function runCliWithPreparedOutputMode(
   const gatewayStartupSignalOwner = isGatewayRunInvocation
     ? installGatewayStartupSignalOwner()
     : null;
+  let settleGatewayRunCleanup: (() => void) | undefined;
+  const gatewayRunCleanupSettled = gatewayStartupSignalOwner
+    ? new Promise<void>((resolve) => {
+        settleGatewayRunCleanup = resolve;
+      })
+    : null;
+  const unregisterGatewayRunSignalExitGate = gatewayRunCleanupSettled
+    ? registerSignalExitGate(gatewayRunCleanupSettled)
+    : null;
 
   try {
     const startupTraces = [startupTrace, options.additionalStartupTrace].filter(
@@ -1798,12 +1811,17 @@ async function runCliWithPreparedOutputMode(
       stopStartupProgress();
     }
   } finally {
-    gatewayStartupSignalOwner?.dispose();
-    pluginCliSession?.close();
-    uninstallGatewayRunRuntimeHooks?.();
-    await stopStartedProxy();
-    await closeCliResources();
-    pauseNonTtyStdinForCliExit();
+    try {
+      gatewayStartupSignalOwner?.dispose();
+      pluginCliSession?.close();
+      uninstallGatewayRunRuntimeHooks?.();
+      await stopStartedProxy();
+      await closeCliResources();
+      pauseNonTtyStdinForCliExit();
+    } finally {
+      settleGatewayRunCleanup?.();
+      unregisterGatewayRunSignalExitGate?.();
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

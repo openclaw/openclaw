@@ -369,7 +369,8 @@ export async function runPluginUpdateAttempt(params: {
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   signal?: AbortSignal;
 }): Promise<PluginUpdateAttemptResult> {
-  params.signal?.throwIfAborted();
+  const throwIfAborted = () => params.signal?.throwIfAborted();
+  throwIfAborted();
   const dryRunOption = params.dryRun ? { dryRun: true } : {};
   const phase = params.dryRun ? "check" : "update";
   const installNpmSpec = params.dryRun ? installPluginFromNpmSpec : params.installNpmSpecForUpdate;
@@ -457,12 +458,14 @@ export async function runPluginUpdateAttempt(params: {
                 }),
               );
   } catch (error) {
+    throwIfAborted();
     return {
       kind: "exception",
       message: `Failed to ${phase} ${params.pluginId}: ${String(error)}`,
       error,
     };
   }
+  throwIfAborted();
 
   let activeClawHubInstallSpec = params.effectiveSpec;
   let officialNpmFallbackInstallSpec = params.officialNpmFallbackSpecs?.installSpec;
@@ -488,6 +491,7 @@ export async function runPluginUpdateAttempt(params: {
         result,
       }),
     );
+    throwIfAborted();
     usedNpmFallback = true;
     npmChannelFallback = describeNpmChannelFallback({
       pluginId: params.pluginId,
@@ -526,6 +530,7 @@ export async function runPluginUpdateAttempt(params: {
         ...(params.signal ? { signal: params.signal } : {}),
       }),
     );
+    throwIfAborted();
   }
 
   if (
@@ -542,6 +547,7 @@ export async function runPluginUpdateAttempt(params: {
     params.logger.warn?.(
       `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec}; using ${params.clawhubSpecs.fallbackSpec} instead. Core update can still complete.`,
     );
+    throwIfAborted();
     result = await installPluginFromClawHub(
       installParams({
         spec: params.clawhubSpecs.fallbackSpec,
@@ -559,6 +565,7 @@ export async function runPluginUpdateAttempt(params: {
         ...(params.signal ? { signal: params.signal } : {}),
       }),
     );
+    throwIfAborted();
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
     if (params.officialNpmFallbackSpecs?.fallbackSpec) {
       officialNpmFallbackInstallSpec = params.officialNpmFallbackSpecs.fallbackSpec;
@@ -602,6 +609,7 @@ export async function runPluginUpdateAttempt(params: {
         ...(params.signal ? { signal: params.signal } : {}),
       }),
     );
+    throwIfAborted();
   }
 
   return {
