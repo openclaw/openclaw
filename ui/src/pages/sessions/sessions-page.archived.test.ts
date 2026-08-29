@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -22,6 +23,18 @@ afterEach(() => {
 });
 
 describe("sessions page archived deletion", () => {
+  const captureScopeChange = (context: ApplicationContext) => {
+    let notify: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0] = () => undefined;
+    context.agentSelection.subscribe = (listener) => {
+      notify = listener;
+      return () => undefined;
+    };
+    return (scopeId: string | null) => {
+      context.agentSelection.state.scopeId = scopeId;
+      notify(context.agentSelection.state);
+    };
+  };
+
   it("re-enumerates all archived sessions before bulk deletion", async () => {
     // The rendered result holds one archived row; enumeration must find both.
     const archivedKeys = ["agent:main:old-1", "agent:main:old-2"];
@@ -306,6 +319,60 @@ describe("sessions page archived deletion", () => {
     expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(sessions.deleteMany).not.toHaveBeenCalled();
     expect(page.error).toContain("archived session enumeration was incomplete");
+  });
+
+  it("abandons archived enumeration when the agent scope changes", async () => {
+    const pendingList = createDeferred<SessionsListResult>();
+    const sessions = createSessions({
+      list: vi.fn(() => pendingList.promise) as unknown as SessionCapability["list"],
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, sessions);
+    const changeScope = captureScopeChange(context);
+    const page = await createRenderedPage(
+      context,
+      { count: 1, sessions: [{ key: "agent:main:old", archived: true }] } as SessionsListResult,
+      "archived",
+    );
+
+    const deletion = page.deleteAllArchived();
+    await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledOnce());
+    changeScope("writer");
+    pendingList.resolve({
+      count: 1,
+      sessions: [{ key: "agent:main:old", archived: true }],
+    } as SessionsListResult);
+    await deletion;
+
+    expect(showConfirmDialog).not.toHaveBeenCalled();
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("abandons an archived deletion confirmation when the agent scope changes", async () => {
+    const pendingConfirmation = createDeferred<boolean>();
+    const sessions = createSessions({
+      list: vi.fn(async () => ({
+        count: 1,
+        sessions: [{ key: "agent:main:old", archived: true }],
+      })) as unknown as SessionCapability["list"],
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, sessions);
+    const changeScope = captureScopeChange(context);
+    const page = await createRenderedPage(
+      context,
+      { count: 1, sessions: [{ key: "agent:main:old", archived: true }] } as SessionsListResult,
+      "archived",
+    );
+    vi.mocked(showConfirmDialog).mockReturnValue(pendingConfirmation.promise);
+
+    const deletion = page.deleteAllArchived();
+    await vi.waitFor(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
+    changeScope("writer");
+    pendingConfirmation.resolve(true);
+    await deletion;
+
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
   });
 
   it.each([

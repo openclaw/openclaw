@@ -150,6 +150,7 @@ class SessionsPage extends OpenClawLightDomElement {
   private unsubscribeList?: () => void;
   private appliedListResult: SessionsListResult | null | undefined;
   private readonly observeAgentScope = watchAgentScope(() => {
+    this.invalidatePageWork();
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
     if (!this.deepLinkSessionKey) {
       this.page = 0;
