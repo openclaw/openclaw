@@ -248,6 +248,7 @@ export async function requestClawHub(
     disposeRetry: async ({ response }) => {
       await response.body?.cancel().catch(() => undefined);
     },
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 

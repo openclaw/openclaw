@@ -280,6 +280,7 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   hasOfficialNpmSpec: boolean;
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
+  signal?: AbortSignal;
   channelFallbackSuffix: string;
   npmChannelFallback?: PluginUpdateChannelFallback;
 }): Promise<PluginUpdateOutcome> {
@@ -310,8 +311,10 @@ export async function buildDryRunPluginUpdateOutcome(params: {
           probeNpmVersion: npmProbeVersion,
           updateChannel: params.updateChannel,
           timeoutMs: params.timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
         })
       : undefined;
+  params.signal?.throwIfAborted();
 
   if (unchanged) {
     const message =

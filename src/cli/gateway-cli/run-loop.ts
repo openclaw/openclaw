@@ -29,6 +29,7 @@ import {
   findOpenClawAgentDatabaseMediaMigrationRequiredError,
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
 } from "../../state/openclaw-agent-db-migration-required.js";
+import { sleep } from "../../utils/sleep.js";
 import {
   armShutdownHardExitWatchdog,
   type ShutdownHardExitWatchdog,
@@ -111,6 +112,7 @@ export async function runGatewayLoop(params: {
   startupSignal?: AbortSignal;
   releaseStartupSignalOwner?: () => void;
 }) {
+  params.startupSignal?.throwIfAborted();
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
   if (process.title === "openclaw") {
@@ -131,12 +133,19 @@ export async function runGatewayLoop(params: {
   // here pulls the lifecycle re-export graph into memory, immune to later disk
   // rotation.
   const eagerLifecycleRuntime = await loadGatewayLifecycleRuntimeModule();
+  params.startupSignal?.throwIfAborted();
   const supervisorMode = eagerLifecycleRuntime.detectGatewayRespawnSupervisor(
     process.env,
     process.platform,
     { includeLinuxOpenClawGatewayServiceMarker: true },
   );
-  let lock = await acquireGatewayLock({ port: params.lockPort });
+  let lock = await acquireGatewayLock({
+    port: params.lockPort,
+    ...(params.startupSignal
+      ? { sleep: async (ms: number) => await sleep(ms, params.startupSignal) }
+      : {}),
+  });
+  params.startupSignal?.throwIfAborted();
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;

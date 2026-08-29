@@ -3732,7 +3732,9 @@ describe("runCli exit behavior", () => {
       startupSigtermHandler();
       proxySigtermHandler();
 
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(exitSpy).not.toHaveBeenCalled();
 
       rejectBootstrap(startupError);

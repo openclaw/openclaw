@@ -281,6 +281,39 @@ describe("installPackageDir", () => {
     ).resolves.toHaveLength(0);
   });
 
+  it("does not publish staged files after validation observes cancellation", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("cancelled-install");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const installBaseDir = path.join(fixtureRoot, "plugins");
+    const targetDir = path.join(installBaseDir, "demo");
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+
+    await expect(
+      installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "install",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "",
+        signal: controller.signal,
+        afterInstall: async () => {
+          controller.abort(reason);
+          return { ok: true };
+        },
+      }),
+    ).rejects.toBe(reason);
+    await expectMissingPath(targetDir);
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+  });
+
   it("restores edits detected after the existing install moves to backup", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");

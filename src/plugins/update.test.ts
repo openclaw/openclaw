@@ -1596,6 +1596,36 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("stops prerelease metadata fallback when startup is cancelled", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    const { config } = createNpmUpdateFixture({
+      pluginId: "acpx",
+      packageName: "@openclaw/acpx",
+      installedVersion: "2026.5.2",
+      registryVersion: "2026.5.3-beta.1",
+      registryIntegrity: "sha512-beta",
+      spec: "@openclaw/acpx@2026.5.2",
+      integrity: "sha512-old",
+    });
+    runCommandWithTimeoutMock.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return {
+        code: 0,
+        stdout: JSON.stringify(["2026.5.2", "2026.5.3-beta.1"]),
+        stderr: "",
+      };
+    });
+
+    await expect(
+      updatePlugin(config, "acpx", {
+        syncOfficialPluginInstalls: true,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+  });
+
   it("keeps integrity drift checks for exact prerelease-only official pins", async () => {
     const { config } = createNpmUpdateFixture({
       pluginId: "voice-call",
