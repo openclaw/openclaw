@@ -9,9 +9,7 @@ import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { formatErrorMessage } from "./errors.js";
 import {
-  buildCronEventPrompt,
-  buildExecEventPrompt,
-  buildSystemEventPrompt,
+  buildHeartbeatEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
   isHeartbeatDeliveryAwarenessEvent,
@@ -253,20 +251,19 @@ export function resolveHeartbeatRunPrompt(params: {
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
-  const genericEvents =
-    params.preflight.shouldInspectPendingEvents && !params.preflight.isExecEventWake
-      ? pendingEventEntries
-          .filter(
-            (event) =>
-              !isExecCompletionEvent(event.text) &&
-              !(
-                (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
-                isCronSystemEvent(event.text)
-              ) &&
-              !isHeartbeatNoiseEvent(event.text),
-          )
-          .map((event) => event.text)
-      : [];
+  const genericEvents = params.preflight.shouldInspectPendingEvents
+    ? pendingEventEntries
+        .filter(
+          (event) =>
+            !isExecCompletionEvent(event.text) &&
+            !(
+              (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+              isCronSystemEvent(event.text)
+            ) &&
+            !isHeartbeatNoiseEvent(event.text),
+        )
+        .map((event) => event.text)
+    : [];
   const hasGenericEvents = genericEvents.length > 0;
   if (params.scheduledTasks.length > 0) {
     const taskList = params.scheduledTasks
@@ -292,24 +289,18 @@ ${completionInstruction}`;
   }
 
   const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool;
-  const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt(execEvents, {
-        deliverToUser: params.canRelayToUser,
-        useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
-      })
-    : hasCronEvents
-      ? buildCronEventPrompt(cronEvents, {
+  const basePrompt =
+    hasExecCompletion || hasCronEvents || hasGenericEvents
+      ? buildHeartbeatEventPrompt({
+          execEvents,
+          cronEvents,
+          genericEvents,
           deliverToUser: params.canRelayToUser,
           useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
         })
-      : hasGenericEvents
-        ? buildSystemEventPrompt(genericEvents, {
-            deliverToUser: params.canRelayToUser,
-            useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
-          })
-        : baseUsesHeartbeatResponseTool
-          ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-          : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
+      : baseUsesHeartbeatResponseTool
+        ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
+        : resolveConfiguredHeartbeatPrompt(params.cfg, params.heartbeat);
   const basePromptWithDirectives = appendHeartbeatScratch(
     basePrompt,
     params.heartbeatScratchContent,
@@ -334,16 +325,6 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
     return [];
   }
-  if (params.hasExecCompletion) {
-    return preflight.pendingEventEntries.filter((event) => isExecCompletionEvent(event.text));
-  }
-  if (params.hasCronEvents) {
-    return preflight.pendingEventEntries.filter(
-      (event) =>
-        (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
-        isCronSystemEvent(event.text),
-    );
-  }
   if (preflight.isExecEventWake && !params.hasExecCompletion) {
     return [];
   }
@@ -355,17 +336,21 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
   ) {
     return [];
   }
-  if (params.hasGenericEvents) {
-    // Generic events and known heartbeat noise are owned by this prompt. Keep
-    // dedicated exec/cron entries queued so their specialized prompt can own them.
-    return preflight.pendingEventEntries.filter(
-      (event) =>
-        !isExecCompletionEvent(event.text) &&
-        !(
-          (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
-          isCronSystemEvent(event.text)
-        ),
-    );
+  if (params.hasExecCompletion || params.hasCronEvents || params.hasGenericEvents) {
+    // Consume exactly the classes represented in the combined prompt. Heartbeat
+    // noise remains available for the ordinary fallback path when no event class
+    // owns this turn.
+    return preflight.pendingEventEntries.filter((event) => {
+      const isExec = isExecCompletionEvent(event.text);
+      const isCron =
+        (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
+        isCronSystemEvent(event.text);
+      return (
+        (isExec && params.hasExecCompletion) ||
+        (isCron && params.hasCronEvents) ||
+        (!isExec && !isCron && !isHeartbeatNoiseEvent(event.text) && params.hasGenericEvents)
+      );
+    });
   }
   return preflight.pendingEventEntries;
 }

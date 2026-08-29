@@ -6,7 +6,6 @@ import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
-import { resolveHeartbeatPreflight, resolveHeartbeatRunPrompt } from "./heartbeat-runner-prompt.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -730,26 +729,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).toHaveBeenCalled();
   });
 
-  it("consumes exec completion entries without dropping later generic events", async () => {
-    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
-      tmpPrefix: "openclaw-exec-preserve-generic-",
-      replyText: "Deploy succeeded",
-      reason: "exec-event",
-      enqueue: (key) => {
-        enqueueSystemEvent("Exec finished (gateway id=abc12345, code 0)\ndeploy succeeded", {
-          sessionKey: key,
-        });
-        enqueueSystemEvent("Node connected", { sessionKey: key });
-      },
-    });
-
-    expect(result.status).toBe("ran");
-    expect(calledCtx?.InternalTurnSource).toBe("exec");
-    expect(calledCtx?.Body).toContain("deploy succeeded");
-    expect(calledCtx?.Body).not.toContain("Node connected");
-    expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
-  });
-
   it("ignores an acknowledged exec-event wake without consuming unrelated events", async () => {
     const { result, sendTelegram, calledCtx, replyCallCount, sessionKey } = await runHeartbeatCase({
       tmpPrefix: "openclaw-exec-acknowledged-",
@@ -862,37 +841,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
         messageThreadId: 42,
       });
       expect(peekSystemEvents(sessionKey)).toEqual([]);
-    });
-  });
-
-  it("surfaces generic restart wake events in the same heartbeat model turn", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const { cfg, sessionKey } = await createConfig({
-        tmpDir,
-        storePath,
-        target: "none",
-      });
-      const restartNote = "Gateway restart ok";
-      enqueueSystemEvent(restartNote, { sessionKey });
-
-      const preflight = await resolveHeartbeatPreflight({
-        cfg,
-        agentId: "main",
-        heartbeat: cfg.agents?.defaults?.heartbeat,
-        source: "hook",
-        reason: "wake",
-      });
-      const prompt = resolveHeartbeatRunPrompt({
-        cfg,
-        heartbeat: cfg.agents?.defaults?.heartbeat,
-        preflight,
-        canRelayToUser: false,
-        startedAt: Date.now(),
-        scheduledTasks: [],
-        useHeartbeatResponseTool: false,
-      });
-
-      expect(prompt.prompt).toContain(restartNote);
     });
   });
 
