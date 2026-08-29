@@ -367,7 +367,9 @@ export async function runPluginUpdateAttempt(params: {
   installNpmSpecForUpdate: typeof installPluginFromNpmSpec;
   logger: PluginUpdateLogger;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+  signal?: AbortSignal;
 }): Promise<PluginUpdateAttemptResult> {
+  params.signal?.throwIfAborted();
   const dryRunOption = params.dryRun ? { dryRun: true } : {};
   const phase = params.dryRun ? "check" : "update";
   const installNpmSpec = params.dryRun ? installPluginFromNpmSpec : params.installNpmSpecForUpdate;
@@ -399,6 +401,7 @@ export async function runPluginUpdateAttempt(params: {
                 onIntegrityDrift: params.onIntegrityDrift,
               }),
               logger: params.logger,
+              ...(params.signal ? { signal: params.signal } : {}),
             }),
           )
         : params.record.source === "clawhub"
@@ -416,6 +419,7 @@ export async function runPluginUpdateAttempt(params: {
                 onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                 expectedPluginId: params.pluginId,
                 logger: params.logger,
+                ...(params.signal ? { signal: params.signal } : {}),
               }),
             )
           : params.record.source === "git"
@@ -432,6 +436,7 @@ export async function runPluginUpdateAttempt(params: {
                   onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
                   logger: params.logger,
+                  ...(params.signal ? { signal: params.signal } : {}),
                 }),
               )
             : await installPluginFromMarketplace(
@@ -448,6 +453,7 @@ export async function runPluginUpdateAttempt(params: {
                   onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
                   logger: params.logger,
+                  ...(params.signal ? { signal: params.signal } : {}),
                 }),
               );
   } catch (error) {
@@ -517,6 +523,7 @@ export async function runPluginUpdateAttempt(params: {
           onIntegrityDrift: params.onIntegrityDrift,
         }),
         logger: params.logger,
+        ...(params.signal ? { signal: params.signal } : {}),
       }),
     );
   }
@@ -549,6 +556,7 @@ export async function runPluginUpdateAttempt(params: {
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         expectedPluginId: params.pluginId,
         logger: params.logger,
+        ...(params.signal ? { signal: params.signal } : {}),
       }),
     );
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
@@ -591,6 +599,7 @@ export async function runPluginUpdateAttempt(params: {
         expectedPluginId: params.pluginId,
         expectedReplacementPluginId: params.expectedReplacementPluginId,
         logger: params.logger,
+        ...(params.signal ? { signal: params.signal } : {}),
       }),
     );
   }

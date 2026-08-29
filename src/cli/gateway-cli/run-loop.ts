@@ -107,6 +107,9 @@ export async function runGatewayLoop(params: {
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
+  /** Signal owned by CLI preflight until this loop installs its process handlers. */
+  startupSignal?: AbortSignal;
+  releaseStartupSignalOwner?: () => void;
 }) {
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
@@ -964,11 +967,17 @@ export async function runGatewayLoop(params: {
     });
   };
 
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGINT", onSigint);
-  process.on("SIGUSR1", onSigusr1);
-
   try {
+    process.on("SIGTERM", onSigterm);
+    process.on("SIGINT", onSigint);
+    process.on("SIGUSR1", onSigusr1);
+    // Transfer ownership only after the normal handlers are installed. If
+    // startup was interrupted in the handoff window, the finally block below
+    // still releases the lock and removes every listener before propagating
+    // the abort.
+    params.releaseStartupSignalOwner?.();
+    params.startupSignal?.throwIfAborted();
+
     const onRestart = async () => {
       // After an in-process restart (SIGUSR1), reset command-queue lane state.
       // Interrupted tasks from the previous lifecycle may have left `active`

@@ -107,7 +107,9 @@ export async function updateNpmInstalledPlugins(params: {
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
+  signal?: AbortSignal;
 }): Promise<PluginUpdateSummary> {
+  params.signal?.throwIfAborted();
   const logger = params.logger ?? {};
   const consentCallbacks = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   const installs = params.config.plugins?.installs ?? {};
@@ -152,6 +154,7 @@ export async function updateNpmInstalledPlugins(params: {
   };
 
   for (const pluginId of targets) {
+    params.signal?.throwIfAborted();
     if (params.skipIds?.has(pluginId)) {
       recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (already updated).`);
       continue;
@@ -383,6 +386,7 @@ export async function updateNpmInstalledPlugins(params: {
       const metadataResult = await resolveNpmSpecMetadata({
         spec: effectiveSpec!,
         timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
       if (metadataResult.ok) {
         const bypassTrustedOfficialUnchangedNpmCheck = shouldBypassTrustedOfficialUnchangedNpmCheck(
@@ -499,6 +503,7 @@ export async function updateNpmInstalledPlugins(params: {
           installNpmSpecForUpdate,
           logger,
           onIntegrityDrift: params.onIntegrityDrift,
+          ...(params.signal ? { signal: params.signal } : {}),
         }),
       );
     const attempt = await runPluginUpdateWithClawHubLease({

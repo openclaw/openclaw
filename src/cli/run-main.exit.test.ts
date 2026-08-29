@@ -1030,6 +1030,7 @@ describe("runCli exit behavior", () => {
         beforeStateMigrations: expect.any(Function),
         commandPath: ["gateway"],
         loadPlugins: false,
+        signal: expect.any(AbortSignal),
       }),
     );
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({

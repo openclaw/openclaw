@@ -378,10 +378,12 @@ async function runGitCommand(params: {
   source: ParsedGitPluginSpec;
   cwd?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
   const result = await runCommandWithTimeout(params.argv, {
     cwd: params.cwd,
     timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
+    ...(params.signal ? { signal: params.signal } : {}),
     env: createGitCommandEnv(),
   });
   if (result.code !== 0) {
@@ -444,6 +446,7 @@ export async function installPluginFromGitSpec(
       action: "clone",
       source: parsed,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (!clone.ok) {
       return clone;
@@ -456,6 +459,7 @@ export async function installPluginFromGitSpec(
         source: parsed,
         cwd: repoDir,
         timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
       if (!checkout.ok) {
         return checkout;
@@ -468,6 +472,7 @@ export async function installPluginFromGitSpec(
       source: parsed,
       cwd: repoDir,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (!rev.ok) {
       return rev;
@@ -529,6 +534,7 @@ export async function installPluginFromGitSpec(
             packageLock: true,
             quiet: true,
           }),
+          ...(params.signal ? { signal: params.signal } : {}),
         },
       );
       if (install.code !== 0) {

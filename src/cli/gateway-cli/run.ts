@@ -730,6 +730,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
 
   const startupTrace = createGatewayCliStartupTrace();
+  const throwIfStartupAborted = () => hooks.startupSignal?.throwIfAborted();
 
   // The heaviest part of gateway startup is loading the server module tree
   // (channels, plugins, HTTP stack, etc.). Start it before the foreground TTY
@@ -759,6 +760,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   };
   const { startGatewayServer } = await loadServerModule();
+  throwIfStartupAborted();
 
   setConsoleTimestampPrefix(true);
 
@@ -774,6 +776,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     await startupTrace.measure("cli.dev-config", () =>
       ensureDevGatewayConfig({ reset: Boolean(opts.reset) }),
     );
+    throwIfStartupAborted();
     if (opts.reset) {
       const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
       if (!(await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime }))) {
@@ -788,6 +791,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       opts,
       startupTrace,
     });
+  throwIfStartupAborted();
   if (
     !enforceGatewayRunFutureConfigGuard({
       opts,
@@ -835,6 +839,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
+  throwIfStartupAborted();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error(formatInvalidPortOption("--port"));
@@ -1187,6 +1192,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       healthHost,
       beginBoot,
       completeBoot,
+      ...(hooks.startupSignal ? { startupSignal: hooks.startupSignal } : {}),
+      ...(hooks.releaseStartupSignalOwner
+        ? { releaseStartupSignalOwner: hooks.releaseStartupSignalOwner }
+        : {}),
       start: async ({ startupStartedAt, requestHotReloadRecovery } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
@@ -1220,6 +1229,12 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       probeHealth: createConfiguredGatewayHealthProbe(cfg),
     });
   } catch (err) {
+    // The CLI-owned startup signal has already recorded the conventional
+    // signal exit code and the run-loop finally block released its lock.
+    // Avoid converting that controlled abort into a generic startup failure.
+    if (hooks.startupSignal?.aborted) {
+      return;
+    }
     if (isGatewayLockError(err)) {
       const errMessage = formatErrorMessage(err);
       defaultRuntime.error(

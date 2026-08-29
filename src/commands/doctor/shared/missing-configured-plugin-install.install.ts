@@ -92,6 +92,7 @@ export async function installCandidate(params: {
   preferNpm?: boolean;
   repairReason?: InstallCandidateRepairReason;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  signal?: AbortSignal;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
@@ -101,6 +102,7 @@ export async function installCandidate(params: {
   code?: string;
 }> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
+  params.signal?.throwIfAborted();
   try {
     const result = await installCandidatePackage({
       ...params,
@@ -222,6 +224,7 @@ async function installCandidatePackage(
           expectedPluginId: candidate.pluginId,
           onBeforePluginArtifactCommit: attemptConsent.onBeforePluginArtifactCommit,
           mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
+          ...(params.signal ? { signal: params.signal } : {}),
           logger: {
             terminalLinks: false,
             warn: (message) => warnings.push(stripAnsi(message)),
@@ -303,6 +306,7 @@ async function installCandidatePackage(
         ? { trustedSourceLinkedOfficialInstall: true }
         : {}),
       mode,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     return { result, capabilityConsent };
   };

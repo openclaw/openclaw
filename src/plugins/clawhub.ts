@@ -947,6 +947,7 @@ async function resolveCompatiblePackageVersion(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<({ ok: true } & ClawHubInstallArtifactDecision) | ClawHubInstallFailure> {
   const requestedVersion = resolveRequestedVersion(params);
   if (!requestedVersion) {
@@ -963,6 +964,7 @@ async function resolveCompatiblePackageVersion(params: {
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
   } catch (error) {
     if (isMissingArtifactResolverRoute(error)) {
@@ -973,6 +975,7 @@ async function resolveCompatiblePackageVersion(params: {
           baseUrl: params.baseUrl,
           token: params.token,
           timeoutMs: params.timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
         });
         artifactResponse = buildArtifactResolverResponseFromVersion({
           detail: params.detail,
@@ -1013,6 +1016,7 @@ async function resolveCompatiblePackageVersion(params: {
         baseUrl: params.baseUrl,
         token: params.token,
         timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
       versionEndpointCompatibility = selectedVersion.version?.compatibility ?? null;
     } catch (error) {
@@ -1270,6 +1274,7 @@ export async function installPluginFromClawHub(
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
   } catch (error) {
     return mapClawHubRequestError(error, {
@@ -1283,6 +1288,7 @@ export async function installPluginFromClawHub(
     baseUrl: params.baseUrl,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   if (!versionState.ok) {
     return versionState;
@@ -1323,6 +1329,7 @@ export async function installPluginFromClawHub(
         baseUrl: params.baseUrl,
         token: params.token,
         timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
         logger: params.logger,
         mode: params.mode,
       });
@@ -1352,6 +1359,7 @@ export async function installPluginFromClawHub(
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
   } catch (error) {
     if (isClawHubArtifactDownloadPolicyBlock(error)) {

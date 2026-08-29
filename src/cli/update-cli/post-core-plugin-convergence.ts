@@ -164,7 +164,9 @@ export async function runPostCorePluginConvergence(params: {
    */
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  signal?: AbortSignal;
 }): Promise<PostCoreConvergenceResult> {
+  params.signal?.throwIfAborted();
   const env: NodeJS.ProcessEnv = {
     ...params.env,
     OPENCLAW_COMPATIBILITY_HOST_VERSION: params.compatibilityHostVersion ?? VERSION,
@@ -192,6 +194,7 @@ export async function runPostCorePluginConvergence(params: {
     env,
     ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
     onCapabilityConsent: params.onCapabilityConsent,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
@@ -223,6 +226,7 @@ export async function runPostCorePluginConvergence(params: {
     records,
     env,
   });
+  params.signal?.throwIfAborted();
   const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records });
   const resolveInstallRecordPaths = (
     installRecords: Record<string, PluginInstallRecord>,

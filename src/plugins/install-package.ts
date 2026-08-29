@@ -62,6 +62,7 @@ function pickPackageInstallCommonParams(
     installPolicyRequest: params.installPolicyRequest,
     onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
     onEffectiveMode: params.onEffectiveMode,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 
