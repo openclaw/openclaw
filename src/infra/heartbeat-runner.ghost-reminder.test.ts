@@ -789,6 +789,27 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("consumes surfaced generic wake context while deferring base-session exec completions", async () => {
+    const execCompletion = "exec finished: webhook-triggered backup completed";
+    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-hook-mixed-isolated-",
+      replyText: "Handled internally",
+      reason: "hook:wake",
+      target: "none",
+      isolatedSession: true,
+      enqueue: (key) => {
+        enqueueSystemEvent("Gateway restart ok", { sessionKey: key });
+        enqueueSystemEvent(execCompletion, { sessionKey: key });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.Body).toContain("Gateway restart ok");
+    expect(calledCtx?.Body).not.toContain(execCompletion);
+    expect(peekSystemEvents(sessionKey)).toEqual([execCompletion]);
+  });
+
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {

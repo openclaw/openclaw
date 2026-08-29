@@ -325,13 +325,19 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
     return [];
   }
-  if (preflight.isExecEventWake && !params.hasExecCompletion) {
+  if (
+    preflight.isExecEventWake &&
+    !params.hasExecCompletion &&
+    !params.hasCronEvents &&
+    (!params.hasGenericEvents || !preflight.isWakePayload)
+  ) {
     return [];
   }
   if (
     preflight.isWakePayload &&
     !params.hasExecCompletion &&
     !params.hasCronEvents &&
+    !params.hasGenericEvents &&
     preflight.pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
   ) {
     return [];
