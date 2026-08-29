@@ -4,6 +4,18 @@ import { describe, expect, it } from "vitest";
 const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
 
 describe("detectChangedScope Windows routing", () => {
+  it("routes MCP stdio transport and its native regression to Windows", () => {
+    for (const changedPath of [
+      "src/agents/mcp-stdio-transport.ts",
+      "src/agents/mcp-stdio-transport.windows.test.ts",
+    ]) {
+      expect(detectChangedScope([changedPath]), changedPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
+
   it("routes completion profile installation and its native proof to Windows", () => {
     for (const profilePath of [
       "src/cli/completion-runtime.ts",
