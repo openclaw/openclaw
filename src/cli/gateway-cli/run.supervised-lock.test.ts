@@ -183,7 +183,14 @@ describe("supervised gateway lock recovery", () => {
       sleepStarted();
       expect(signal).toBe(controller.signal);
       await new Promise<void>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal?.addEventListener(
+          "abort",
+          () => {
+            expect(signal.reason).toBe(reason);
+            reject(reason);
+          },
+          { once: true },
+        );
       });
     });
 

@@ -707,7 +707,12 @@ async function readLimitedClawHubArchiveEntry<T>(
       settled = true;
       removeAbortListener();
       stream.destroy?.();
-      reject(limits.signal?.reason);
+      const reason = limits.signal?.reason;
+      reject(
+        reason instanceof Error
+          ? reason
+          : new Error("ClawHub archive verification aborted", { cause: reason }),
+      );
     };
     limits.signal?.addEventListener("abort", onAbort, { once: true });
     if (limits.signal?.aborted) {
