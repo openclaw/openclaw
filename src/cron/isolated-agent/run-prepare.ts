@@ -163,6 +163,10 @@ export async function prepareCronRunContext(params: {
     { agentId: requiredAgentId },
     tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
+  const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+    agentId: initialAgentId,
+    abortSignal: input.abortSignal ?? input.signal,
+  });
   const modelOwner = await resolveCronModelSelectionOwner({
     cfg: requestedRuntimeCfg,
     ...(requiredAgentId
@@ -175,13 +179,11 @@ export async function prepareCronRunContext(params: {
       : {}),
   });
   const { agentId, agentDir } = modelOwner;
-  const publishedRuntime = await loadPublishedGatewayReplyDispatchRuntime({
-    agentId,
-    abortSignal: input.abortSignal ?? input.signal,
-  });
   if (
     publishedRuntime &&
-    (publishedRuntime.pluginGeneration.pluginMetadataSnapshot !== modelOwner.metadataSnapshot ||
+    (publishedRuntime.agentId !== agentId ||
+      publishedRuntime.agentDir !== agentDir ||
+      publishedRuntime.pluginGeneration.pluginMetadataSnapshot !== modelOwner.metadataSnapshot ||
       !preparedModelRuntimeConfigsMatch(publishedRuntime.config, modelOwner.config))
   ) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -473,6 +475,35 @@ export async function prepareCronRunContext(params: {
       }
     }
 
+    preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
+      {
+        // Admit the selected runtime before auth/session preparation can publish a replacement.
+        // Every later side effect and embedded execution retains this exact derived generation.
+        config: cfgWithAgentDefaults,
+        agentId,
+        agentDir,
+        workspaceDir,
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
+          const runtime = resolveSessionRuntimeOverrideForProvider({
+            provider: candidate.provider,
+            entry: cronSession.sessionEntry,
+            cfg: cfgWithAgentDefaults,
+          });
+          return runtime
+            ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
+            : { provider: candidate.provider, modelId: candidate.model, agentId };
+        }),
+      },
+      {
+        catalogMode: "static",
+        ...(publishedRuntime
+          ? { pluginGeneration: publishedRuntime.pluginGeneration }
+          : { pluginMetadataSnapshot: modelOwner.metadataSnapshot }),
+        abortSignal: input.abortSignal ?? input.signal,
+      },
+    );
+
     const explicitTimeoutSeconds =
       input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined;
     const timeoutMs = resolveAgentTimeoutMs({
@@ -615,34 +646,6 @@ export async function prepareCronRunContext(params: {
       authProfileId,
       authProfileIdSource: authSelection?.source,
     };
-    preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
-      {
-        // Embedded execution borrows this exact per-agent config projection.
-        // Keep the published generation pinned without dropping cron's defaults.
-        config: cfgWithAgentDefaults,
-        agentId,
-        agentDir,
-        workspaceDir,
-        allowGatewaySubagentBinding: true,
-        runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
-          const runtime = resolveSessionRuntimeOverrideForProvider({
-            provider: candidate.provider,
-            entry: cronSession.sessionEntry,
-            cfg: cfgWithAgentDefaults,
-          });
-          return runtime
-            ? { provider: candidate.provider, modelId: candidate.model, runtime, agentId }
-            : { provider: candidate.provider, modelId: candidate.model, agentId };
-        }),
-      },
-      {
-        catalogMode: "static",
-        ...(publishedRuntime
-          ? { pluginGeneration: publishedRuntime.pluginGeneration }
-          : { pluginMetadataSnapshot: modelOwner.metadataSnapshot }),
-        abortSignal: input.abortSignal ?? input.signal,
-      },
-    );
     const runContinuationSession = usesExactRunSession
       ? createCronRunContinuationSession({
           cronSession,
