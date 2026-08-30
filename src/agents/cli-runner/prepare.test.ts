@@ -4708,6 +4708,7 @@ describe("prepareCliRunContext", () => {
       "utf-8",
     );
     ensureSandboxWorkspaceForSessionMock.mockResolvedValue({
+      backendId: "docker",
       workspaceDir: dir,
       containerWorkdir: "/workspace",
       skillsWorkspaceDir: materializedWorkspace,
@@ -4754,9 +4755,7 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:sandboxed-user",
       workspaceDir: dir,
     });
-    expect(context.systemPrompt).toContain(
-      "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
-    );
+    expect(context.systemPrompt).toContain("/workspace/.openclaw-skills/skills/gog/SKILL.md");
     expect(context.systemPrompt).not.toContain(hostSkillPath);
     expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
     expect(context.systemPromptReport.skills.entries).toEqual([

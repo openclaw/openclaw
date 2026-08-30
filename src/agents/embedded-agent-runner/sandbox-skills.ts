@@ -11,6 +11,7 @@ import type {
   SkillUsagePath,
   SkillEntry,
 } from "../../skills/types.js";
+import { SANDBOX_MATERIALIZED_SKILLS_DIRNAME } from "../sandbox/constants.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -18,7 +19,11 @@ type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
   Partial<
     Pick<
       SandboxContext,
-      "skillsEligibility" | "skillsWorkspaceDir" | "containerWorkdir" | "workspaceAccess"
+      | "backendId"
+      | "skillsEligibility"
+      | "skillsWorkspaceDir"
+      | "containerWorkdir"
+      | "workspaceAccess"
     >
   >;
 
@@ -155,14 +160,18 @@ export function resolveSandboxSkillRuntimeInputs(params: {
 } {
   if (params.sandbox?.enabled === true) {
     const skillsWorkspaceDir = params.sandbox.skillsWorkspaceDir ?? params.skillsAnchorWorkspace;
+    const usesContainerMount =
+      params.sandbox.backendId === "docker" || params.sandbox.backendId === "podman";
     const skillsPromptWorkspaceDir =
       params.sandbox.workspaceAccess === "rw" &&
       params.sandbox.skillsWorkspaceDir &&
       params.sandbox.containerWorkdir
-        ? containerJoin(
-            params.sandbox.containerWorkdir,
-            ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
-          )
+        ? usesContainerMount
+          ? containerJoin(params.sandbox.containerWorkdir, SANDBOX_MATERIALIZED_SKILLS_DIRNAME)
+          : containerJoin(
+              params.sandbox.containerWorkdir,
+              ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
+            )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
     return {
       ...(params.sandbox.skillsEligibility

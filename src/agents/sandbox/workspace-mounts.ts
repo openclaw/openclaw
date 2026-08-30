@@ -7,12 +7,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT, SANDBOX_MATERIALIZED_SKILLS_DIRNAME } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { normalizeContainerPathCore } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
-export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
+export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
 const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbox-skills"] as const;
 
 /** Read-only skill directory mounted from the agent workspace into the sandbox workspace. */
@@ -94,13 +94,11 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
       rootDir: params.agentWorkspaceDir,
     },
     {
-      hostPath: path.join(materializedSkillsWorkspaceDir, "skills"),
-      containerPath: containerJoin(
-        params.workdir,
-        ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS,
-        "skills",
-      ),
-      rootDir: materializedSkillsWorkspaceDir,
+      // Mount the generated workspace directly. A nested target under the
+      // writable workspace lets Docker create an inaccessible host ancestor.
+      hostPath: materializedSkillsWorkspaceDir,
+      containerPath: containerJoin(params.workdir, SANDBOX_MATERIALIZED_SKILLS_DIRNAME),
+      rootDir: path.dirname(materializedSkillsWorkspaceDir),
     },
   ];
 

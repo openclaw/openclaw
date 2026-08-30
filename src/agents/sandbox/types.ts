@@ -124,6 +124,7 @@ export type SandboxContext = {
 };
 
 export type SandboxWorkspaceInfo = {
+  backendId?: SandboxBackendId;
   workspaceDir: string;
   containerWorkdir?: string;
   skillsWorkspaceDir?: string;

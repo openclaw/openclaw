@@ -428,6 +428,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     skillsWorkspaceDir,
   });
   return {
+    backendId: cfg.backend,
     workspaceDir,
     ...(containerWorkdir ? { containerWorkdir } : {}),
     skillsWorkspaceDir,

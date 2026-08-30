@@ -178,31 +178,34 @@ describe("appendWorkspaceMountArgs", () => {
     ]);
   });
 
-  it("overlays materialized sandbox skills read-only when workspaceAccess is rw", () => {
-    const agentWorkspaceDir = makeTempWorkspace();
-    const skillsWorkspaceDir = makeTempWorkspace();
-    const materializedSkillsDir = path.join(skillsWorkspaceDir, "skills");
-    fs.mkdirSync(path.join(materializedSkillsDir, "demo"), { recursive: true });
-    fs.writeFileSync(path.join(materializedSkillsDir, "demo", "SKILL.md"), "# Demo\n");
+  it.each(["/workspace", "/openclaw-skills"])(
+    "overlays materialized sandbox skills below workdir %s",
+    (workdir) => {
+      const agentWorkspaceDir = makeTempWorkspace();
+      const skillsWorkspaceDir = makeTempWorkspace();
+      const materializedSkillsDir = path.join(skillsWorkspaceDir, "skills");
+      fs.mkdirSync(path.join(materializedSkillsDir, "demo"), { recursive: true });
+      fs.writeFileSync(path.join(materializedSkillsDir, "demo", "SKILL.md"), "# Demo\n");
 
-    const args: string[] = [];
-    appendWorkspaceMountArgs({
-      args,
-      workspaceDir: agentWorkspaceDir,
-      agentWorkspaceDir,
-      skillsWorkspaceDir,
-      workdir: "/workspace",
-      workspaceAccess: "rw",
-    });
+      const args: string[] = [];
+      appendWorkspaceMountArgs({
+        args,
+        workspaceDir: agentWorkspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir,
+        workdir,
+        workspaceAccess: "rw",
+      });
 
-    const mounts = args.filter(
-      (arg) => arg.startsWith(agentWorkspaceDir) || arg.startsWith(skillsWorkspaceDir),
-    );
-    expect(mounts).toEqual([
-      `${agentWorkspaceDir}:/workspace:z`,
-      `${materializedSkillsDir}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
-    ]);
-  });
+      const mounts = args.filter(
+        (arg) => arg.startsWith(agentWorkspaceDir) || arg.startsWith(skillsWorkspaceDir),
+      );
+      expect(mounts).toEqual([
+        `${agentWorkspaceDir}:${workdir}:z`,
+        `${skillsWorkspaceDir}:${workdir}/.openclaw-skills:ro,z`,
+      ]);
+    },
+  );
 
   it("does not add a separate synced skill overlay when workspaceAccess is ro", () => {
     const agentWorkspaceDir = makeTempWorkspace();
