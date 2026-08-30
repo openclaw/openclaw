@@ -1546,6 +1546,7 @@
                   "providers/fal",
                   "providers/featherless",
                   "providers/fireworks",
+                  "providers/gandr",
                   "providers/github-copilot",
                   "providers/gmi",
                   "providers/google",
