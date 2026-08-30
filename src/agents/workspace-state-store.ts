@@ -19,6 +19,7 @@ import {
   createWorkspaceStateIdentity,
   resolveWorkspaceStateAliases,
   resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 
@@ -98,7 +99,7 @@ type WorkspaceStateDatabase = Pick<
 
 type WorkspaceStateDatabaseHandle = Pick<ReturnType<typeof openOpenClawStateDatabase>, "db">;
 
-function workspacePathEntryExists(workspaceDir: string): boolean {
+export function workspacePathEntryExists(workspaceDir: string): boolean {
   try {
     fs.lstatSync(path.resolve(resolveUserPath(workspaceDir)));
     return true;
@@ -152,7 +153,11 @@ function resolveWorkspaceIdentityFromDatabase(params: {
     workspacePathEntryExists(params.workspaceDir) &&
     storedIdentity.workspaceKey !== canonicalIdentity.workspaceKey
   ) {
-    throw new Error("workspace path alias points to a different current target");
+    throw new WorkspaceAliasRepointedError({
+      aliasPath: aliases[0]!.workspacePath,
+      storedWorkspacePath: storedIdentity.workspacePath,
+      currentWorkspacePath: canonicalIdentity.workspacePath,
+    });
   }
   const existingAliasKeys = new Set(rows.map((row) => row.alias_key));
   return {
@@ -344,7 +349,11 @@ export function readWorkspaceStateSnapshot(
       workspacePathEntryExists(workspaceDir) &&
       currentCanonicalIdentity.workspaceKey !== initial.resolution.identity.workspaceKey
     ) {
-      throw new Error("workspace path alias points to a different current target");
+      throw new WorkspaceAliasRepointedError({
+        aliasPath: currentAliases[0]!.workspacePath,
+        storedWorkspacePath: initial.resolution.identity.workspacePath,
+        currentWorkspacePath: currentCanonicalIdentity.workspacePath,
+      });
     }
     const snapshot = readSnapshotFromDatabase({
       identity: initial.resolution.identity,

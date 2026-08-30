@@ -42,8 +42,10 @@ vi.mock("../agents/model-selection.js", async () => {
 vi.mock("../agents/timeout.js", () => ({
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
 }));
-vi.mock("../agents/workspace.js", () => ({
+vi.mock("../agents/workspace.js", async (importOriginal) => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/workspace",
+  WorkspaceVanishedError: (await importOriginal<typeof import("../agents/workspace.js")>())
+    .WorkspaceVanishedError,
   ensureAgentWorkspace: vi.fn(async () => ({ dir: path.join(mocks.rootDir, "workspace") })),
 }));
 vi.mock("../channels/model-overrides.js", () => ({
