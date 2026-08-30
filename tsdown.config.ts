@@ -415,6 +415,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     ...runtimeProcessBuildEntries,
     ...runtimeProcessDeclarationEntries,
+    "media/document-extractors.worker": "src/media/document-extractors.worker.ts",
     "system-agent/setup-inference-detection.worker":
       "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",

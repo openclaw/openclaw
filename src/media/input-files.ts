@@ -261,39 +261,42 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined, maxChars
   }
 }
 
-function withInputFileTimeout<T>(params: {
+async function withInputFileTimeout<T>(params: {
   run: (signal?: AbortSignal) => Promise<T>;
   timeoutMs: number;
   label: string;
   signal?: AbortSignal;
 }): Promise<T> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const timeoutController = new AbortController();
-  // A timeout alone preserves the cached in-process extractor. Only caller
-  // cancellation opts PDF work into the terminable worker path.
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, timeoutController.signal])
-    : undefined;
   let timeout: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
+  if (params.signal) {
+    const timeoutController = new AbortController();
     timeout = setTimeout(() => {
-      const error = new Error(`${params.label} timed out after ${timeoutMs}ms`);
-      timeoutController.abort(error);
-      reject(error);
+      timeoutController.abort(new Error(`${params.label} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-  });
-  const task = params.run(signal);
-  return Promise.race([task, timedOut]).finally(() => {
-    if (timeout) {
+    try {
+      // Caller cancellation selects the isolated extractor. Let that owner
+      // finish terminating before this request reports either abort or timeout.
+      return await params.run(AbortSignal.any([params.signal, timeoutController.signal]));
+    } finally {
       clearTimeout(timeout);
     }
+  }
+
+  // A timeout alone preserves the cached in-process extractor and its warm engine.
+  const timedOut = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${params.label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
   });
+  try {
+    return await Promise.race([params.run(), timedOut]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** Validates image bytes and converts HEIC/HEIF to JPEG, keeping the original Buffer otherwise. */
-export async function normalizeInputImageBuffer(params: {
-  buffer: Buffer;
-  mimeType?: string;
 export async function normalizeInputImageBuffer(params: {
   buffer: Buffer;
   mimeType?: string;

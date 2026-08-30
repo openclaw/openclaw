@@ -37,10 +37,6 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
-import {
-  DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
-  isDocumentExtractorCapacityError,
-} from "../plugins/document-extractor-types.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
@@ -598,17 +594,6 @@ export async function handleOpenResponsesHttpRequest(
     }
   } catch (err) {
     if (abortController.signal.aborted) {
-      return true;
-    }
-    if (isDocumentExtractorCapacityError(err)) {
-      res.setHeader("Retry-After", "1");
-      sendJson(res, 503, {
-        error: {
-          message: "Document extraction is temporarily busy; retry shortly.",
-          type: "service_unavailable",
-          code: DOCUMENT_EXTRACTOR_CAPACITY_ERROR_CODE,
-        },
-      });
       return true;
     }
     logWarn(`openresponses: request parsing failed: ${String(err)}`);

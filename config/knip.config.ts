@@ -229,6 +229,8 @@ const rootEntries = [
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/agents/model-provider-auth.worker.ts!",
   "src/agents/prepared-model-catalog.worker.ts!",
+  // Loaded through the stable source/dist URL resolved by document-extractors.runtime.ts.
+  "src/media/document-extractors.worker.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
@@ -301,7 +303,6 @@ const bundledPluginEntries = [
   "auth-presence.ts!",
   "thread-bindings-runtime.ts!",
   "document-extractor.ts!",
-  "document-extractor.worker.ts!",
   "web-content-extractor.ts!",
   "timeouts.ts!",
   "action-runtime.runtime.ts!",
