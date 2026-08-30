@@ -13,8 +13,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
-import { WorkspaceAliasRepointedError } from "./workspace-state-identity.js";
+import {
+  resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
+} from "./workspace-state-identity.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   deleteWorkspaceState,
