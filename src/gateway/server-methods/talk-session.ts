@@ -28,7 +28,7 @@ import {
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
-import { resolveTalkAgentConsultAuthority } from "../talk-client-gateway-control.js";
+import { resolveTalkAgentConsultAuthority } from "../talk-agent-consult-authority.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../talk-handoff.js";
 import {
   cancelTalkRealtimeRelayTurn,

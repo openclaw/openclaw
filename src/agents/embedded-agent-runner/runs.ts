@@ -876,6 +876,13 @@ export type ActiveEmbeddedRunOwner = {
   sessionKey?: string;
   startedAtMs?: number;
   abort: () => boolean;
+  queueMessage: (
+    text: string,
+    options?: Omit<
+      EmbeddedAgentQueueMessageOptions,
+      "toolAuthorityFingerprint" | "pendingInputAuthorityFingerprint"
+    >,
+  ) => Promise<EmbeddedAgentQueueMessageOutcome>;
 };
 
 function projectActiveEmbeddedRunOwner(
@@ -911,6 +918,22 @@ function projectActiveEmbeddedRunOwner(
       } catch {
         return false;
       }
+    },
+    queueMessage: (text, options) => {
+      const fingerprint = normalizeOptionalString(handle.toolAuthorityFingerprint);
+      if (
+        ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) !== handle ||
+        ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) !== handle ||
+        !fingerprint
+      ) {
+        return Promise.resolve(
+          createQueueFailureOutcome(registration.sessionId, "tool_authority_mismatch"),
+        );
+      }
+      return queueEmbeddedAgentMessageWithOutcomeAsync(registration.sessionId, text, {
+        ...options,
+        toolAuthorityFingerprint: fingerprint,
+      });
     },
   };
 }

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ActiveEmbeddedRunOwner } from "../agents/embedded-agent.js";
 import type { RealtimeVoiceBridge } from "../talk/provider-types.js";
 import {
   closeTalkClientGatewayControlSession,
   createTalkClientGatewayControlOwner,
+  createTalkRealtimeRunControlOwner,
 } from "./talk-client-gateway-control.js";
 import { cleanupTalkConnection } from "./talk-session-registry.js";
 
@@ -12,6 +14,15 @@ function deferred<T>() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+function createControlTarget(runId: string): ActiveEmbeddedRunOwner {
+  return {
+    runId,
+    sessionId: `session-${runId}`,
+    abort: vi.fn(() => true),
+    queueMessage: vi.fn(),
+  };
 }
 
 function controlContext(
@@ -29,6 +40,39 @@ function controlContext(
 }
 
 describe("Talk client Gateway control owner", () => {
+  it("waits for a relay target captured during run registration", async () => {
+    const target = createControlTarget("relay");
+    const targetReady = deferred<typeof target | undefined>();
+    const applied = vi.fn();
+    const execute = vi.fn(
+      async (_args: unknown, captured?: Promise<ActiveEmbeddedRunOwner | undefined>) => {
+        applied(await captured);
+        return {
+          ok: true,
+          mode: "cancel" as const,
+          sessionKey: "agent:main:main",
+          active: true,
+          message: "ok",
+          speak: false,
+          show: false,
+          suppress: false,
+        };
+      },
+    );
+    const owner = createTalkRealtimeRunControlOwner({
+      hasActiveRun: () => true,
+      capture: () => targetReady.promise,
+      execute,
+      speak: vi.fn(),
+      warn: vi.fn(),
+    });
+
+    expect(owner.enqueue({ text: "cancel" })).toBe(true);
+    await Promise.resolve();
+    expect(applied).not.toHaveBeenCalled();
+    targetReady.resolve(target);
+    await vi.waitFor(() => expect(applied).toHaveBeenCalledWith(target));
+  });
   it.each(["failed", "incomplete"] as const)(
     "keeps Gateway-controlled browser Talk reusable after a %s response",
     async (status) => {
@@ -280,6 +324,128 @@ describe("Talk client Gateway control owner", () => {
         "call-long",
         expect.objectContaining({ status: "cancelled" }),
       ),
+    );
+    await owner.close();
+  });
+
+  it("captures browser run authority before queued control executes", async () => {
+    let currentTarget = createControlTarget("first");
+    const controlAgentRun = vi.fn(
+      async (_params: unknown, _captured: ActiveEmbeddedRunOwner | undefined) => ({
+        ok: false,
+        mode: "steer" as const,
+        sessionKey: "agent:main:main",
+        active: false,
+        queued: false,
+        reason: "no_active_run" as const,
+        message: "stale target rejected",
+        speak: false,
+        show: true,
+        suppress: false,
+      }),
+    );
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      close: vi.fn(),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(async () => undefined),
+      acknowledgeMark: vi.fn(),
+      isConnected: vi.fn(() => true),
+    } satisfies RealtimeVoiceBridge;
+    const owner = createTalkClientGatewayControlOwner({
+      voiceSessionId: "voice-capture",
+      sessionKey: "agent:main:main",
+      connId: "conn-capture",
+      context: controlContext(),
+      runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      captureAgentRunControl: () => currentTarget,
+      controlAgentRun,
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    });
+    owner.control.bindBridge(bridge);
+    owner.control.onToolCall?.({
+      itemId: "item-control",
+      callId: "call-control",
+      name: "openclaw_agent_control",
+      args: { text: "steer" },
+    });
+    const admittedTarget = currentTarget;
+    currentTarget = createControlTarget("replacement");
+
+    await vi.waitFor(() => expect(controlAgentRun).toHaveBeenCalledTimes(1));
+    expect(controlAgentRun.mock.calls[0]?.[1]).toBe(admittedTarget);
+    await owner.close();
+  });
+
+  it("binds control admitted before run registration to that consult's exact target", async () => {
+    const registration = deferred<void>();
+    const consultResult = deferred<{ text: string }>();
+    const target = createControlTarget("registered");
+    let currentTarget: typeof target | undefined;
+    const controlAgentRun = vi.fn(
+      async (_params: unknown, _captured: ActiveEmbeddedRunOwner | undefined) => ({
+        ok: true,
+        mode: "steer" as const,
+        sessionKey: "agent:main:main",
+        active: true,
+        queued: true,
+        message: "queued",
+        speak: false,
+        show: true,
+        suppress: false,
+      }),
+    );
+    const bridge = {
+      connect: vi.fn(async () => undefined),
+      close: vi.fn(),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(async () => undefined),
+      acknowledgeMark: vi.fn(),
+      isConnected: vi.fn(() => true),
+    } satisfies RealtimeVoiceBridge;
+    const owner = createTalkClientGatewayControlOwner({
+      voiceSessionId: "voice-starting",
+      sessionKey: "agent:main:main",
+      connId: "conn-starting",
+      context: controlContext(),
+      runAgentConsult: async (_args, _signal, onRunControlReady) => {
+        await registration.promise;
+        currentTarget = target;
+        onRunControlReady?.(target);
+        return await consultResult.promise;
+      },
+      captureAgentRunControl: () => currentTarget,
+      controlAgentRun,
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    });
+    owner.control.bindBridge(bridge);
+    owner.control.onToolCall?.({
+      itemId: "item-consult",
+      callId: "call-consult",
+      name: "openclaw_agent_consult",
+      args: { question: "inspect startup" },
+    });
+    owner.control.onToolCall?.({
+      itemId: "item-control",
+      callId: "call-control",
+      name: "openclaw_agent_control",
+      args: { text: "steer" },
+    });
+
+    expect(controlAgentRun).not.toHaveBeenCalled();
+    registration.resolve();
+    await vi.waitFor(() => expect(controlAgentRun).toHaveBeenCalledOnce());
+    expect(controlAgentRun.mock.calls[0]?.[1]).toBe(target);
+
+    consultResult.resolve({ text: "done" });
+    await vi.waitFor(() =>
+      expect(bridge.submitToolResult).toHaveBeenCalledWith("call-consult", { result: "done" }),
     );
     await owner.close();
   });

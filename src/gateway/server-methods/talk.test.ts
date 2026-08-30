@@ -73,6 +73,8 @@ const mocks = vi.hoisted(() => ({
   stopTalkTranscriptionRelaySession: vi.fn(),
   chatSend: vi.fn(),
   controlRealtimeVoiceAgentRun: vi.fn(),
+  injectionTarget: { sessionId: "session-active" },
+  resolveActiveEmbeddedRunOwnerByRunId: vi.fn(),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveRealtimeBootstrapContextInstructions: vi.fn(
@@ -158,6 +160,12 @@ vi.mock("../../talk/provider-internal.js", async (importOriginal) => {
 
 vi.mock("../../talk/agent-run-control.js", () => ({
   controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+  controlOwnedRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+}));
+
+vi.mock("../../agents/embedded-agent-runner/runs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent-runner/runs.js")>()),
+  resolveActiveEmbeddedRunOwnerByRunId: mocks.resolveActiveEmbeddedRunOwnerByRunId,
 }));
 
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => {
@@ -2959,6 +2967,7 @@ describe("talk.client.steer handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveActiveEmbeddedRunOwnerByRunId.mockReturnValue(mocks.injectionTarget);
     mocks.controlRealtimeVoiceAgentRun.mockResolvedValue({
       ok: true,
       mode: "steer",
@@ -2986,11 +2995,14 @@ describe("talk.client.steer handler", () => {
       context: createSteerContext(),
     });
 
-    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      text: "use the safer plan",
-      mode: "steer",
-    });
+    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith(
+      {
+        sessionKey: "agent:main:main",
+        text: "use the safer plan",
+        mode: "steer",
+      },
+      mocks.injectionTarget,
+    );
     expectRespondOk(respond, {
       ok: true,
       mode: "steer",
@@ -3493,17 +3505,22 @@ describe("talk.client.create handler", () => {
       show: true,
       suppress: false,
     });
+    const currentTarget = { ...mocks.injectionTarget, sessionId: "session-main" };
+    mocks.resolveActiveEmbeddedRunOwnerByRunId.mockReturnValue(currentTarget);
     const steerRespond = vi.fn();
     await callTalkHandler("talk.client.steer", {
       params: { sessionKey: "main", text: "Use the safer plan", mode: "steer" },
       respond: steerRespond,
       context,
     });
-    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith({
-      sessionKey: "main",
-      text: "Use the safer plan",
-      mode: "steer",
-    });
+    expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledWith(
+      {
+        sessionKey: "main",
+        text: "Use the safer plan",
+        mode: "steer",
+      },
+      currentTarget,
+    );
     expectRespondOk(steerRespond, { ok: true, mode: "steer" });
 
     release.resolve();

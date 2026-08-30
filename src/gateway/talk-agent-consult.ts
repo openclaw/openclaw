@@ -19,7 +19,7 @@ import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "./server-methods/shared-types.js";
-import { resolveTalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
+import { resolveTalkAgentConsultAuthority } from "./talk-agent-consult-authority.js";
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import { formatForLog } from "./ws-log.js";
 

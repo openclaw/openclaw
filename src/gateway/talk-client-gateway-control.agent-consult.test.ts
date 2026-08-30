@@ -37,16 +37,15 @@ vi.mock("../agents/admitted-run-context.js", () => ({
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
 vi.mock("../agents/embedded-agent.js", () => ({
+  observeEmbeddedAgentMessageInjectionTarget: vi.fn(),
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
 vi.mock("../talk/agent-consult-runtime.js", () => ({
   consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
 }));
 
-import {
-  createTalkClientAgentConsultRunner,
-  type TalkAgentConsultAuthority,
-} from "./talk-client-gateway-control.js";
+import type { TalkAgentConsultAuthority } from "./talk-agent-consult-authority.js";
+import { createTalkClientAgentConsultRunner } from "./talk-client-gateway-control.js";
 
 const config = {} as OpenClawConfig;
 const coreParams = {
@@ -116,6 +115,7 @@ describe("Talk client agent consult admission", () => {
           state: "present",
         },
       },
+      onAdmitted: expect.any(Function),
     });
     expect(mocks.runEmbeddedAgentCore).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -14,7 +14,7 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   parseRealtimeVoiceAgentConsultArgs,
 } from "../../talk/agent-consult-tool.js";
-import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { controlOwnedRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   authorizeClientVoiceConfirmation,
@@ -48,7 +48,7 @@ import {
   readLegacyVoiceBinding,
   rememberLegacyVoiceBinding,
 } from "./talk-client-legacy-voice-bindings.js";
-import { hasOwnedActiveTalkClientRun } from "./talk-client-run-ownership.js";
+import { resolveOwnedActiveTalkClientInjectionTarget } from "./talk-client-run-ownership.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -265,13 +265,12 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateTalkClientSteerParams, "talk.client.steer", respond)) {
       return;
     }
-    if (
-      !hasOwnedActiveTalkClientRun({
-        context,
-        clientConnId: client?.connId,
-        sessionKey: params.sessionKey,
-      })
-    ) {
+    const injectionTarget = resolveOwnedActiveTalkClientInjectionTarget({
+      context,
+      clientConnId: client?.connId,
+      sessionKey: params.sessionKey,
+    });
+    if (!injectionTarget) {
       respond(
         false,
         undefined,
@@ -283,11 +282,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const result = await controlRealtimeVoiceAgentRun({
-        sessionKey: params.sessionKey,
-        text: params.text,
-        mode: params.mode,
-      });
+      const result = await controlOwnedRealtimeVoiceAgentRun(
+        {
+          sessionKey: params.sessionKey,
+          text: params.text,
+          mode: params.mode,
+        },
+        injectionTarget,
+      );
       respond(true, result, undefined);
     } catch (err) {
       respond(

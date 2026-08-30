@@ -12,6 +12,7 @@ scenario:
     - A registered mock realtime provider creates a browser-owned Talk session with consult and control tools through Gateway RPC.
     - A consult tool call starts a real active agent run through the Gateway chat path.
     - Status, steering, and follow-up RPCs observe and queue work to that active run.
+    - A separately authenticated Gateway connection cannot steer or cancel the browser-owned run.
     - Cancellation RPC aborts that same active run from the owning browser connection.
     - Both active-run injections remain observable without increasing backlog, and the completed run returns diagnostics to idle with queue depth zero.
   docsRefs:
@@ -26,7 +27,7 @@ scenario:
     kind: script
     parallelSafe: true
     path: test/e2e/qa-lab/runtime/media-talk-gateway.ts
-    summary: Starts a real Gateway and persistent WebChat client, creates a Talk session, starts an agent consult, and exercises status, steer, follow-up, and cancel RPCs.
+    summary: Starts a real Gateway and two clients, then proves owner control and cross-connection rejection for one active Talk run.
     args:
       - --scenario
       - active-talk-agent-run-status

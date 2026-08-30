@@ -17,6 +17,7 @@ export {
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   waitForEmbeddedAgentRunEnd,
 } from "./embedded-agent-runner/runs.js";
+export type { ActiveEmbeddedRunOwner } from "./embedded-agent-runner/runs.js";
 export type {
   EmbeddedAgentMeta,
   EmbeddedAgentCompactResult,

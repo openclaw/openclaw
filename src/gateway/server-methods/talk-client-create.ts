@@ -13,6 +13,7 @@ import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
+import { controlOwnedRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   appendClientVoiceTranscript,
@@ -37,17 +38,18 @@ import {
   resolveSandboxedSessionCreation,
 } from "../operator-role-policy.js";
 import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
+import { resolveTalkAgentConsultAuthority } from "../talk-agent-consult-authority.js";
 import {
   boundTalkClientRealtimeInitialItems,
   createTalkClientAgentConsultRunner,
   createTalkClientGatewayControlOwner,
-  resolveTalkAgentConsultAuthority,
 } from "../talk-client-gateway-control.js";
 import { formatForLog } from "../ws-log.js";
 import {
   forgetLegacyVoiceBinding,
   rememberLegacyVoiceBinding,
 } from "./talk-client-legacy-voice-bindings.js";
+import { resolveOwnedActiveTalkClientInjectionTarget } from "./talk-client-run-ownership.js";
 import {
   buildRealtimeInstructions,
   buildRealtimeVoiceLaunchOptions,
@@ -242,6 +244,12 @@ export const createTalkClient: GatewayRequestHandler = async ({
         );
         return;
       }
+      const captureAgentRunControl = () =>
+        resolveOwnedActiveTalkClientInjectionTarget({
+          context,
+          clientConnId: ownerConnId,
+          sessionKey,
+        });
       const consultRunner = createTalkClientAgentConsultRunner({
         config: runtimeConfig,
         context,
@@ -251,6 +259,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
         authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes),
         getVoiceSessionId: () => activeVoiceSessionId,
         initialItems,
+        captureRunControl: captureAgentRunControl,
       });
       const gatewayControlOwner = ownsProvider
         ? createTalkClientGatewayControlOwner({
@@ -268,6 +277,10 @@ export const createTalkClient: GatewayRequestHandler = async ({
               }
             },
             runAgentConsult: consultRunner.runArgs,
+            captureAgentRunControl,
+            controlAgentRun: async (controlParams, target) => {
+              return controlOwnedRealtimeVoiceAgentRun(controlParams, target);
+            },
             appendTranscript: ({ entryId, role, text }) =>
               appendClientVoiceTranscript({
                 agentId,

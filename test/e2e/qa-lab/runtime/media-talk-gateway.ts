@@ -16,6 +16,7 @@ import {
 } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { GatewayClient, type GatewayClientOptions } from "../../../../src/gateway/client.js";
+import { generateStoredDeviceIdentity } from "../../../../src/infra/device-identity-store.js";
 import type { DiagnosticStabilitySnapshot } from "../../../../src/logging/diagnostic-stability.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -185,6 +186,7 @@ function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawC
 
 async function connectGatewayClient(params: {
   clientName: GatewayClientName;
+  deviceIdentity?: GatewayClientOptions["deviceIdentity"];
   mode: GatewayClientMode;
   onEvent?: GatewayClientOptions["onEvent"];
   token: string;
@@ -203,6 +205,7 @@ async function connectGatewayClient(params: {
     origin: gatewayUrl.origin,
     token: params.token,
     clientName: params.clientName,
+    ...(params.deviceIdentity !== undefined ? { deviceIdentity: params.deviceIdentity } : {}),
     mode: params.mode,
     role: "operator",
     scopes: [
@@ -210,6 +213,7 @@ async function connectGatewayClient(params: {
       "operator.write",
       "operator.admin",
       "operator.approvals",
+      "operator.talk",
       "operator.talk.secrets",
     ],
     platform: "qa",
@@ -490,6 +494,7 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
   const gatewayOwner = createQaGatewayChild();
   let gateway: QaGatewayChild | undefined;
   let client: GatewayClient | undefined;
+  let foreignClient: GatewayClient | undefined;
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
@@ -545,6 +550,13 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
         `Talk provider did not receive consult/control tools: ${JSON.stringify(tools)}`,
       );
     }
+    foreignClient = await connectGatewayClient({
+      clientName: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+      deviceIdentity: generateStoredDeviceIdentity(),
+      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      token: gateway.token,
+      url: gateway.wsUrl,
+    });
     const consultRequest = client.request("talk.client.toolCall", {
       sessionKey,
       callId: `qa-talk-${randomUUID()}`,
@@ -556,6 +568,19 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
     void consultRequest.catch(() => undefined);
     const steer = await waitForQueuedTalkSteer(client, sessionKey);
     assertControlResult(steer, { mode: "steer", active: true, queued: true });
+    try {
+      await foreignClient.request("talk.client.steer", {
+        sessionKey,
+        text: "cancel",
+        mode: "cancel",
+      });
+      throw new Error("foreign Talk connection unexpectedly controlled the active run");
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      if (!message.includes("active browser-owned Talk run")) {
+        throw error;
+      }
+    }
     await waitForActiveTalkStatus(client, sessionKey);
     const followup = await client.request("talk.client.steer", {
       sessionKey,
@@ -594,8 +619,9 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
         `Talk run did not finish with empty diagnostic backlog: ${JSON.stringify(stateDiagnostics.events)}`,
       );
     }
-    return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
+    return `real Gateway pid=${gateway.pid ?? "unknown"}; persistent WebChat connection completed status, steer, follow-up, cancel RPCs; foreign connection rejected before abort; steeringQueueDepths=${steeringQueueDepths.join(",")}; finalState=${finalState.outcome}; finalQueueDepth=${finalState.queueDepth}`;
   } finally {
+    foreignClient?.stop();
     client?.stop();
     await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();

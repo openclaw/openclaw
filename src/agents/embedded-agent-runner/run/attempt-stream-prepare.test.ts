@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   clearActiveRun: vi.fn(),
   notifyToolActivity: vi.fn(),
   runBeforeFinalizeHook: vi.fn(),
+  resolveActiveRunOwner: vi.fn(),
   setActiveRun: vi.fn(),
   subscribe: vi.fn(),
 }));
@@ -30,6 +31,7 @@ vi.mock("../../embedded-agent-subscribe.js", () => ({
 }));
 vi.mock("../runs.js", () => ({
   clearActiveEmbeddedRun: mocks.clearActiveRun,
+  resolveActiveEmbeddedRunOwnerByRunId: mocks.resolveActiveRunOwner,
   setActiveEmbeddedRun: mocks.setActiveRun,
 }));
 vi.mock("./tool-activity-heartbeat.js", () => ({
@@ -62,6 +64,7 @@ function prepareCatalogExecutor(
     onAttemptAbort?: () => void;
     abortRun?: (isTimeout?: boolean, reason?: unknown) => void;
     markExternalAbort?: () => void;
+    onActiveRunOwner?: (owner: unknown) => void;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -72,6 +75,7 @@ function prepareCatalogExecutor(
       sessionKey: options?.sessionKey ?? "agent:main:main",
       replyOperation: options?.replyOperation,
       onAttemptAbort: options?.onAttemptAbort,
+      onActiveRunOwner: options?.onActiveRunOwner,
     } as never,
     activeSession: {
       agent: {},
@@ -113,6 +117,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     mocks.setActiveRun.mockImplementation((sessionId, handle) =>
       ACTIVE_EMBEDDED_RUNS.set(sessionId, handle),
     );
+    mocks.resolveActiveRunOwner.mockReturnValue(undefined);
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
       runToolLifecycle: vi.fn(async ({ args, execute, onTerminal }) => {
@@ -164,6 +169,17 @@ describe("prepareEmbeddedAttemptStream", () => {
     } finally {
       operation.complete();
     }
+  });
+
+  it("publishes the exact owner only after active registration", () => {
+    const owner = { runId: "run-output-schema", sessionId: "session-output-schema" };
+    const onActiveRunOwner = vi.fn();
+    mocks.resolveActiveRunOwner.mockReturnValue(owner);
+
+    prepareCatalogExecutor([], { onActiveRunOwner });
+
+    expect(mocks.setActiveRun).toHaveBeenCalledOnce();
+    expect(onActiveRunOwner).toHaveBeenCalledWith(owner);
   });
 
   it("uses the persisted assistant entry id and closes steering during revision settlement", async () => {

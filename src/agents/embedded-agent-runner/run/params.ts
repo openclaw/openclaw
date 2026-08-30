@@ -92,6 +92,8 @@ export type RunEmbeddedAgentParams = {
   admittedRunContext?: AdmittedRunContext;
   /** Host-only post-prepare continuation, removed before plugin invocation. */
   preparedRunAdmission?: PreparedAgentRunAdmission;
+  /** Host callback published only after this exact run owns the active registry slots. */
+  onActiveRunOwner?: (owner: import("../runs.js").ActiveEmbeddedRunOwner) => void;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
