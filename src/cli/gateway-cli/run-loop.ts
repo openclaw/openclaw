@@ -139,13 +139,7 @@ export async function runGatewayLoop(params: {
     process.platform,
     { includeLinuxOpenClawGatewayServiceMarker: true },
   );
-  let lock = await acquireGatewayLock({
-    port: params.lockPort,
-    ...(params.startupSignal
-      ? { sleep: async (ms: number) => await sleep(ms, params.startupSignal) }
-      : {}),
-  });
-  params.startupSignal?.throwIfAborted();
+  let lock: Awaited<ReturnType<typeof acquireGatewayLock>> = null;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -977,6 +971,15 @@ export async function runGatewayLoop(params: {
   };
 
   try {
+    // Keep acquisition inside the cleanup owner so an abort on resolution cannot strand the lock.
+    lock = await acquireGatewayLock({
+      port: params.lockPort,
+      ...(params.startupSignal
+        ? { sleep: async (ms: number) => await sleep(ms, params.startupSignal) }
+        : {}),
+    });
+    params.startupSignal?.throwIfAborted();
+
     process.on("SIGTERM", onSigterm);
     process.on("SIGINT", onSigint);
     process.on("SIGUSR1", onSigusr1);
