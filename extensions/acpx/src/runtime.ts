@@ -914,7 +914,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     return delegate;
   }
 
-  private releaseManagedToolsDelegateForSession(sessionKey: string): void {
+  private releaseManagedToolsDelegateForSession(
+    sessionKey: string,
+    delegate: BaseAcpxRuntime,
+  ): void {
     if (!this.managedToolsMcpBridgeEnabled) {
       return;
     }
@@ -922,7 +925,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     if (!normalizedSessionKey) {
       return;
     }
-    this.managedToolsSessionDelegates.delete(normalizedSessionKey);
+    if (this.managedToolsSessionDelegates.get(normalizedSessionKey) === delegate) {
+      this.managedToolsSessionDelegates.delete(normalizedSessionKey);
+    }
   }
 
   private async loadOperationSnapshotForHandle(
@@ -1861,12 +1866,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           discardPersistentState: input.discardPersistentState,
         });
         closeSucceeded = true;
+        this.releaseManagedToolsDelegateForSession(input.handle.sessionKey, delegate);
       } finally {
         await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);
         cleanupSucceeded = true;
-      }
-      if (closeSucceeded) {
-        this.releaseManagedToolsDelegateForSession(input.handle.sessionKey);
       }
       if (closeSucceeded && input.discardPersistentState) {
         this.sessionStore.markFresh(input.handle.sessionKey);

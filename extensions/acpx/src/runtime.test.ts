@@ -2098,6 +2098,57 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:codex:main")).toBe(false);
   });
 
+  it("releases a closed managed delegate when process cleanup fails", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        pid: 900,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(
+      baseStore,
+      {
+        openclawToolsMcpBridgeEnabled: true,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+        mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => [
+            { pid: 900, ppid: 1, command: CODEX_ACP_WRAPPER_COMMAND },
+          ]),
+          killProcess: vi.fn(),
+          sleep: vi.fn(async () => {
+            throw new Error("cleanup failed");
+          }),
+        },
+      },
+    );
+    const exposedRuntime = runtime as unknown as {
+      managedToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
+      resolveManagedToolsDelegateForSession(sessionKey: string): {
+        close: AcpRuntime["close"];
+      };
+    };
+    const scopedDelegate = exposedRuntime.resolveManagedToolsDelegateForSession("agent:codex:main");
+    const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
+
+    await expect(
+      runtime.close({
+        handle: {
+          sessionKey: "agent:codex:main",
+          backend: "acpx",
+          runtimeSessionName: "agent:codex:main",
+        },
+        reason: "closed",
+      }),
+    ).rejects.toThrow("cleanup failed");
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(exposedRuntime.managedToolsSessionDelegates.has("agent:codex:main")).toBe(false);
+  });
+
   it("cleans up OpenClaw-owned ACPX process trees after close", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
