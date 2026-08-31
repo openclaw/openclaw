@@ -256,11 +256,7 @@ describe("clawhub artifacts", () => {
 
   it.each([
     ["legacy archive", "archive", "/api/v1/packages/demo/download"],
-    [
-      "ClawPack artifact",
-      "clawpack",
-      "/api/v1/packages/demo/versions/1.2.3/artifact/download",
-    ],
+    ["ClawPack artifact", "clawpack", "/api/v1/packages/demo/versions/1.2.3/artifact/download"],
   ] as const)("aborts a held %s request with the caller signal", async (_label, artifact, path) => {
     const controller = new AbortController();
     const reason = new Error("Gateway startup interrupted by SIGTERM");
