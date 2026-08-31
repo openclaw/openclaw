@@ -379,7 +379,9 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("runs gateway pre-bootstrap before full-CLI gateway bootstrap", async () => {
+  it("passes CLI options and the startup signal to Gateway pre-bootstrap", async () => {
+    const controller = new AbortController();
+    const uninstallHooks = installGatewayRunRuntimeHooks({ startupSignal: controller.signal });
     prepareGatewayRunBootstrapMock.mockResolvedValueOnce(false);
     const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);
     gatewayRunCommand.setOptionValueWithSource("force", true, "cli");
@@ -400,34 +402,15 @@ describe("registerPreActionHooks", () => {
       });
     } finally {
       gatewayRunCommand.setOptionValueWithSource("force", false, "default");
+      uninstallHooks();
     }
 
     expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
       opts: { force: true, reset: false },
       runtime: runtimeMock,
+      signal: controller.signal,
     });
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-  });
-
-  it("passes the Gateway startup signal to full-CLI pre-bootstrap", async () => {
-    const controller = new AbortController();
-    const uninstallHooks = installGatewayRunRuntimeHooks({ startupSignal: controller.signal });
-    prepareGatewayRunBootstrapMock.mockResolvedValueOnce(false);
-    try {
-      await runPreAction({
-        parseArgv: ["gateway", "run"],
-        processArgv: ["node", "openclaw", "gateway", "run"],
-      });
-
-      expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
-        opts: { force: false, reset: false },
-        runtime: runtimeMock,
-        signal: controller.signal,
-      });
-      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    } finally {
-      uninstallHooks();
-    }
   });
 
   it("passes the gateway config recheck to the state migration boundary", async () => {

@@ -202,39 +202,28 @@ async function recoverGuardedGatewayRunConfig(
   params: GatewayRunGuardParams & { restoreSuspicious: boolean },
 ): Promise<ConfigFileSnapshot | null> {
   const { readConfigFileSnapshot } = await import("../../config/config.js");
+  const { opts, runtime, signal } = params;
   let recoveryAllowed = true;
   const recoveredSnapshot = await readConfigFileSnapshot({
     isolateEnv: true,
     recoverSuspicious: true,
     allowSuspiciousRecovery: (config, current) => {
-      if (params.signal?.aborted) {
+      if (signal?.aborted) {
         recoveryAllowed = false;
         return false;
       }
-      recoveryAllowed = enforceGatewayRunFutureConfigGuard({
-        opts: params.opts,
-        runtime: params.runtime,
-        config: current,
-      });
+      recoveryAllowed = enforceGatewayRunFutureConfigGuard({ opts, runtime, config: current });
       if (recoveryAllowed) {
-        recoveryAllowed = enforceGatewayRunFutureConfigGuard({
-          opts: params.opts,
-          runtime: params.runtime,
-          config,
-        });
+        recoveryAllowed = enforceGatewayRunFutureConfigGuard({ opts, runtime, config });
       }
       return params.restoreSuspicious && recoveryAllowed;
     },
   });
-  if (!recoveryAllowed || params.signal?.aborted) {
+  if (!recoveryAllowed || signal?.aborted) {
     return null;
   }
   // Recovery can select a different config, so enforce the same guard again before migrations.
-  return enforceGatewayRunFutureConfigGuard({
-    opts: params.opts,
-    runtime: params.runtime,
-    snapshot: recoveredSnapshot,
-  })
+  return enforceGatewayRunFutureConfigGuard({ opts, runtime, snapshot: recoveredSnapshot })
     ? recoveredSnapshot
     : null;
 }
