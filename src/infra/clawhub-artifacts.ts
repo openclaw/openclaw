@@ -227,6 +227,7 @@ export async function downloadClawHubPackageArchive(params: {
     search,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
