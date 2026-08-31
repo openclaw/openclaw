@@ -195,7 +195,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         force: resolvedOptions.force === true,
         reset: resolvedOptions.reset === true,
       };
-      const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
+      const shouldBootstrap = await prepareGatewayRunBootstrap({
+        opts,
+        runtime: defaultRuntime,
+        ...(startupSignal ? { signal: startupSignal } : {}),
+      });
       if (!shouldBootstrap) {
         return;
       }

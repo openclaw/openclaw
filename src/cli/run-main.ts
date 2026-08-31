@@ -223,7 +223,11 @@ async function tryRunGatewayRunFastPath(
         wasPreparedGatewayRunCoreStatePristine,
         wasPreparedGatewayRunStatePristine,
       } = await import("./gateway-cli/pre-bootstrap.js");
-      const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
+      const prepared = await prepareGatewayRunBootstrap({
+        opts,
+        runtime: defaultRuntime,
+        ...(startupSignalOwner ? { signal: startupSignalOwner.signal } : {}),
+      });
       if (prepared) {
         skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
         skipPristineCoreStateMigrations = wasPreparedGatewayRunCoreStatePristine();

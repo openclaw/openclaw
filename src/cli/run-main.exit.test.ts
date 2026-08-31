@@ -1046,6 +1046,7 @@ describe("runCli exit behavior", () => {
 
   it("stops suspicious config recovery when Gateway startup is interrupted", async () => {
     const processOnSpy = vi.spyOn(process, "on");
+    const previousExitCode = process.exitCode;
     const currentSnapshot = {
       exists: true,
       valid: true,
@@ -1079,6 +1080,7 @@ describe("runCli exit behavior", () => {
       expect(recoveryAuthorized).toBe(false);
       expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
     } finally {
+      process.exitCode = previousExitCode;
       processOnSpy.mockRestore();
     }
   });

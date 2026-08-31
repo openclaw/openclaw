@@ -12,6 +12,7 @@ import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 type GatewayRunGuardParams = {
   opts: GatewayRunPreBootstrapOptions;
   runtime: RuntimeEnv;
+  signal?: AbortSignal;
 };
 
 type GatewayRunEnvironmentSelection = {
@@ -206,6 +207,10 @@ async function recoverGuardedGatewayRunConfig(
     isolateEnv: true,
     recoverSuspicious: true,
     allowSuspiciousRecovery: (config, current) => {
+      if (params.signal?.aborted) {
+        recoveryAllowed = false;
+        return false;
+      }
       recoveryAllowed = enforceGatewayRunFutureConfigGuard({
         opts: params.opts,
         runtime: params.runtime,
@@ -221,7 +226,7 @@ async function recoverGuardedGatewayRunConfig(
       return params.restoreSuspicious && recoveryAllowed;
     },
   });
-  if (!recoveryAllowed) {
+  if (!recoveryAllowed || params.signal?.aborted) {
     return null;
   }
   // Recovery can select a different config, so enforce the same guard again before migrations.
@@ -378,9 +383,15 @@ async function guardGatewayRunSelectedConfig(
     // It is also this startup's first state-directory write (config-health reads open the shared
     // SQLite store, which quarantines orphaned sidecars), so a live gateway owner refuses here
     // before any mutation instead of after the run loop's lock acquisition.
+    if (params.signal?.aborted) {
+      return false;
+    }
     const { describeLiveGatewayOwnerStartupBlocker } =
       await import("../../commands/doctor-startup-migration-refusal.js");
     const liveOwnerBlocker = await describeLiveGatewayOwnerStartupBlocker(process.env);
+    if (params.signal?.aborted) {
+      return false;
+    }
     if (liveOwnerBlocker) {
       params.runtime.error(liveOwnerBlocker);
       params.runtime.exit(1);

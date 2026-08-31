@@ -4,6 +4,7 @@ import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
+import { installGatewayRunRuntimeHooks } from "../gateway-cli/runtime-hooks.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 import {
@@ -406,6 +407,27 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
     });
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the Gateway startup signal to full-CLI pre-bootstrap", async () => {
+    const controller = new AbortController();
+    const uninstallHooks = installGatewayRunRuntimeHooks({ startupSignal: controller.signal });
+    prepareGatewayRunBootstrapMock.mockResolvedValueOnce(false);
+    try {
+      await runPreAction({
+        parseArgv: ["gateway", "run"],
+        processArgv: ["node", "openclaw", "gateway", "run"],
+      });
+
+      expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
+        opts: { force: false, reset: false },
+        runtime: runtimeMock,
+        signal: controller.signal,
+      });
+      expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    } finally {
+      uninstallHooks();
+    }
   });
 
   it("passes the gateway config recheck to the state migration boundary", async () => {
