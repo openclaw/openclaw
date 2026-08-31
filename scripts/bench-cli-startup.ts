@@ -1233,13 +1233,6 @@ function readBenchmarkComparison(
   };
 }
 
-function readBenchmarkComparisonForTesting(
-  baselinePath: string,
-  candidatePath: string,
-): { comparison: unknown } {
-  return readBenchmarkComparison(baselinePath, candidatePath);
-}
-
 async function main(): Promise<void> {
   validateCliArgs();
   if (hasFlag("--help")) {
@@ -1351,9 +1344,7 @@ export const testing = {
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
-  readBenchmarkComparison: readBenchmarkComparisonForTesting,
   validateCliArgs,
-  writeJsonOutput,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

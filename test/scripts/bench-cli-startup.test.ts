@@ -1,12 +1,21 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+const repoRoot = join(__dirname, "../..");
+
+function runBenchmarkCli(args: string[]) {
+  return spawnSync(process.execPath, ["--import", "tsx", "scripts/bench-cli-startup.ts", ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+}
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -21,14 +30,7 @@ describe("bench-cli-startup", () => {
   it("rejects unknown CLI options before running benchmarks", () => {
     expect(() => testing.validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
 
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--wat"],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
+    const result = runBenchmarkCli(["--wat"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -41,14 +43,7 @@ describe("bench-cli-startup", () => {
     expect(() => testing.validateCliArgs(["--output", "-h"])).toThrow("--output requires a value");
     expect(() => testing.validateCliArgs(["--case", "-h"])).toThrow("--case requires a value");
 
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--output", "-h"],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
+    const result = runBenchmarkCli(["--output", "-h"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -58,14 +53,7 @@ describe("bench-cli-startup", () => {
   });
 
   it("rejects duplicate benchmark cases before running benchmarks", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-cli-startup.ts", "--case", "version", "--case", "version"],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
+    const result = runBenchmarkCli(["--case", "version", "--case", "version"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -79,22 +67,7 @@ describe("bench-cli-startup", () => {
       "--output was provided more than once",
     );
 
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/bench-cli-startup.ts",
-        "--output",
-        "one.json",
-        "--output",
-        "two.json",
-      ],
-      {
-        cwd: join(__dirname, "../.."),
-        encoding: "utf8",
-      },
-    );
+    const result = runBenchmarkCli(["--output", "one.json", "--output", "two.json"]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -148,7 +121,7 @@ describe("bench-cli-startup", () => {
             "--json",
           ],
           {
-            cwd: join(__dirname, "../.."),
+            cwd: repoRoot,
             encoding: "utf8",
             env: {
               ...process.env,
@@ -217,10 +190,7 @@ describe("bench-cli-startup", () => {
       writeFileSync(baselinePath, JSON.stringify(makeReport(100, 50)), "utf8");
       writeFileSync(candidatePath, JSON.stringify(makeReport(125, 60)), "utf8");
 
-      const { comparison } = testing.readBenchmarkComparison(baselinePath, candidatePath);
-      testing.writeJsonOutput(outputPath, comparison);
-      expect(existsSync(outputPath)).toBe(true);
-      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      const comparison = {
         baseline: baselinePath,
         candidate: candidatePath,
         deltas: [
@@ -233,7 +203,21 @@ describe("bench-cli-startup", () => {
             maxRssAvgDeltaPct: 20,
           },
         ],
-      });
+      };
+      const result = runBenchmarkCli([
+        "--compare-baseline",
+        baselinePath,
+        "--compare-candidate",
+        candidatePath,
+        "--output",
+        outputPath,
+        "--json",
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toEqual(comparison);
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual(comparison);
     } finally {
       tempDirs.cleanup();
     }
