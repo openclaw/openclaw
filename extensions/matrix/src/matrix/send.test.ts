@@ -29,7 +29,7 @@ import {
   sendSingleTextMessageMatrix,
   sendTypingMatrix,
 } from "./send.js";
-import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "./send/types.js";
+import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY, MsgType } from "./send/types.js";
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.fn().mockResolvedValue({
@@ -688,6 +688,37 @@ describe("sendMessageMatrix durable delivery", () => {
       ],
     });
     expect(recovered.receipt?.parts[1]).not.toHaveProperty("replyToId");
+  });
+
+  it("sends text-only emote events with the Matrix emote msgtype", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "waves", {
+      client,
+      cfg: {} as never,
+      emote: true,
+    });
+
+    expect(sentContent(sendMessage)).toMatchObject({
+      msgtype: MsgType.Emote,
+      body: "waves",
+    });
+  });
+
+  it("rejects emote sends that include media before loading the media", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await expect(
+      sendMessageMatrix("room:!room:example", "waves", {
+        client,
+        cfg: {} as never,
+        mediaUrl: "photo.png",
+        emote: true,
+      }),
+    ).rejects.toThrow("Matrix emote sends cannot include media");
+
+    expect(loadOutboundMediaFromUrlMock).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
 

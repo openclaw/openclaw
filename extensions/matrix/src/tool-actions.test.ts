@@ -340,6 +340,26 @@ describe("Matrix public message actions", () => {
     });
   });
 
+  it("forwards emote intent to Matrix message sends", async () => {
+    const cfg = { channels: { matrix: { actions: { messages: true } } } } as CoreConfig;
+    await runMatrixAction(
+      "send",
+      {
+        to: "room:!room:example",
+        message: "waves",
+        emote: true,
+      },
+      cfg,
+      { accountId: "ops" },
+    );
+
+    expect(mocks.sendMatrixMessage.mock.lastCall?.[2]).toMatchObject({
+      cfg,
+      accountId: "ops",
+      emote: true,
+    });
+  });
+
   it.each([
     { action: "send", markdown: "    @room" },
     { action: "send", markdown: "    @alice:example.org" },
