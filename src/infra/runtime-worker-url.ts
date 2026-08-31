@@ -24,6 +24,18 @@ export function resolveRuntimeWorkerUrl(params: {
   return new URL(`./${params.sourceWorkerName}${extension}`, params.currentModuleUrl);
 }
 
+/** Registers source-tree TypeScript resolution inside a Worker on supported Node versions. */
+export function resolveRuntimeWorkerExecArgv(url: URL): string[] | undefined {
+  if (!url.pathname.endsWith(".ts")) {
+    return undefined;
+  }
+  // Node 22 can strip the entrypoint, but `--import tsx` does not install tsx's
+  // ESM resolver inside a Worker. Use the supported programmatic registration API.
+  const tsxApiUrl = import.meta.resolve("tsx/esm/api");
+  const registerTsx = `import { register } from ${JSON.stringify(tsxApiUrl)}; register();`;
+  return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
+}
+
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
   // Resolve the preload here: Node resolves bare imports from the child cwd.

@@ -5,7 +5,10 @@ import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -284,16 +287,6 @@ export function publishEncodedSessionTranscriptArchive(params: {
   return archivePath;
 }
 
-function resolveSourceWorkerExecArgv(): string[] {
-  // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
-  // register tsx's ESM resolver inside a Worker. Explicitly register the
-  // supported programmatic API so source-tree .js specifiers map back to .ts.
-  // Built .js workers do not use this development/test-only preload.
-  const tsxApiUrl = import.meta.resolve("tsx/esm/api");
-  const registerTsx = `import { register } from ${JSON.stringify(tsxApiUrl)}; register();`;
-  return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
-}
-
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   diagnostics?: { workerThreadId?: number };
   expectedMessageType: "done" | "published" | "reclaimed";
@@ -307,9 +300,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
   let worker: Worker;
   try {
-    const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
-      ? resolveSourceWorkerExecArgv()
-      : undefined;
+    const sourceWorkerExecArgv = resolveRuntimeWorkerExecArgv(workerUrl);
     worker = new Worker(workerUrl, {
       workerData: params.workerData,
       execArgv: sourceWorkerExecArgv,
