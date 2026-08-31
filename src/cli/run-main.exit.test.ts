@@ -1044,6 +1044,45 @@ describe("runCli exit behavior", () => {
     expect(bootstrapOrder).toBeGreaterThan(recoveryOrder);
   });
 
+  it("stops suspicious config recovery when Gateway startup is interrupted", async () => {
+    const processOnSpy = vi.spyOn(process, "on");
+    const currentSnapshot = {
+      exists: true,
+      valid: true,
+      sourceConfig: { gateway: { mode: "local" } },
+    };
+    let recoveryAuthorized: boolean | undefined;
+    readConfigFileSnapshotMock.mockImplementation(async (options) => {
+      if (options?.recoverSuspicious) {
+        const sigtermHandler = processOnSpy.mock.calls.find(
+          ([event]) => event === "SIGTERM",
+        )?.[1];
+        if (typeof sigtermHandler !== "function") {
+          throw new Error("Gateway startup SIGTERM handler was not registered");
+        }
+        sigtermHandler();
+        recoveryAuthorized = await options.allowSuspiciousRecovery?.(
+          currentSnapshot.sourceConfig,
+          currentSnapshot.sourceConfig,
+        );
+      }
+      return currentSnapshot;
+    });
+
+    try {
+      await runCli(["node", "openclaw", "gateway"]);
+      const hooks = addGatewayRunCommandMock.mock.calls[0]?.[1] as
+        | { beforeRun?: (opts: { force?: boolean }) => Promise<void> }
+        | undefined;
+      await hooks?.beforeRun?.({});
+
+      expect(recoveryAuthorized).toBe(false);
+      expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+    } finally {
+      processOnSpy.mockRestore();
+    }
+  });
+
   it("defers config-drift exit to the migration owner before startup migrations", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       exists: true,
