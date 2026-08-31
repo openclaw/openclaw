@@ -41,6 +41,7 @@ type ConfiguredPluginInstallHealthIssue =
       pluginId: string;
       installPath?: string;
       installSpec?: string;
+      missingDependencies?: string[];
     }
   | {
       kind: "stale-version-bound-runtime";
@@ -63,6 +64,7 @@ function missingRecordedPluginIssueKind(params: {
   pluginId: string;
   staleVersionBoundRuntimePluginIds: ReadonlySet<string>;
   repairablePackageDiagnosticPluginIds: ReadonlySet<string>;
+  missingRequiredDependencyPluginIds: ReadonlySet<string>;
   staleDescriptorPluginIds: ReadonlySet<string>;
 }):
   | "missing-installed-payload"
@@ -72,7 +74,10 @@ function missingRecordedPluginIssueKind(params: {
   if (params.staleVersionBoundRuntimePluginIds.has(params.pluginId)) {
     return "stale-version-bound-runtime";
   }
-  if (params.repairablePackageDiagnosticPluginIds.has(params.pluginId)) {
+  if (
+    params.repairablePackageDiagnosticPluginIds.has(params.pluginId) ||
+    params.missingRequiredDependencyPluginIds.has(params.pluginId)
+  ) {
     return "repairable-installed-plugin";
   }
   if (params.staleDescriptorPluginIds.has(params.pluginId)) {
@@ -98,6 +103,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     configuredPluginIdsWithStaleDescriptors: staleDescriptorPluginIds,
     records,
     updateChannel,
+    installedPluginIdsWithMissingRequiredDependencies: missingRequiredDependenciesByPluginId,
     installedPluginIdsWithRepairablePackageDiagnostics: repairablePackageDiagnosticPluginIds,
     installedPluginIdsWithStaleVersionBoundRuntimePackages: staleVersionBoundRuntimePluginIds,
     installedPluginIdsWithRepairablePackages: repairableInstalledPluginIds,
@@ -150,12 +156,14 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
         repairableInstalledPluginIds.has(pluginId)),
   );
 
+  const missingRequiredDependencyPluginIds = new Set(missingRequiredDependenciesByPluginId.keys());
   for (const pluginId of missingRecordedPluginIds) {
     const record = records[pluginId];
     const kind = missingRecordedPluginIssueKind({
       pluginId,
       staleVersionBoundRuntimePluginIds,
       repairablePackageDiagnosticPluginIds,
+      missingRequiredDependencyPluginIds,
       staleDescriptorPluginIds,
     });
     const installPath = resolveRecordInstallPath(record, env);
@@ -164,6 +172,19 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
         kind,
         pluginId,
         ...(installPath ? { installPath } : {}),
+      });
+      reportedPluginIds.add(pluginId);
+      continue;
+    }
+    if (kind === "repairable-installed-plugin") {
+      const missingDependencies =
+        missingRequiredDependenciesByPluginId.get(pluginId)?.missingDependencies;
+      issues.push({
+        kind,
+        pluginId,
+        ...(installPath ? { installPath } : {}),
+        ...(record?.spec ? { installSpec: record.spec } : {}),
+        ...(missingDependencies?.length ? { missingDependencies } : {}),
       });
       reportedPluginIds.add(pluginId);
       continue;
@@ -330,10 +351,14 @@ export function configuredPluginInstallIssueToHealthFinding(
   issue: ConfiguredPluginInstallHealthIssue,
 ): HealthFinding {
   const detail = CONFIGURED_PLUGIN_INSTALL_ISSUE_DETAILS[issue.kind];
+  const message =
+    issue.kind === "repairable-installed-plugin" && issue.missingDependencies?.length
+      ? `Configured plugin ${issue.pluginId} is installed but required dependencies are missing from its dependency tree: ${issue.missingDependencies.join(", ")}.`
+      : detail.message(issue.pluginId);
   return {
     checkId: CONFIGURED_PLUGIN_INSTALLS_CHECK_ID,
     severity: "warning",
-    message: detail.message(issue.pluginId),
+    message,
     target: issue.pluginId,
     ...("installPath" in issue && issue.installPath ? { path: issue.installPath } : {}),
     fixHint:

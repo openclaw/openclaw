@@ -2,12 +2,14 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { compareOpenClawReleaseVersions } from "../../../infra/npm-registry-spec.js";
 import {
   normalizeUpdateChannel,
   resolveRegistryUpdateChannel,
-  type UpdateChannel,
 } from "../../../infra/update-channels.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "../../../plugins/config-state.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolvePluginInstallDir,
@@ -25,17 +27,20 @@ import {
 } from "../../../plugins/official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+import { buildPluginDependencyStatus } from "../../../plugins/status-dependencies-core.js";
 import { resolveUserPath } from "../../../utils.js";
-import { VERSION } from "../../../version.js";
-import {
-  CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
-  VERSION_BOUND_RUNTIME_PLUGIN_IDS,
-} from "./configured-runtime-plugin-installs.js";
+import { resolveCompatibilityHostVersion } from "../../../version.js";
+import { CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES } from "./configured-runtime-plugin-installs.js";
 import {
   collectConfiguredChannelIds,
   collectConfiguredPluginIds,
   collectEffectiveConfiguredChannelOwnerPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
+import {
+  activePluginMatchesRepairableInstallRecord,
+  collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages,
+  resolveVersionBoundRuntimeNpmSpecForActivePackage,
+} from "./missing-configured-plugin-install.runtime-package.js";
 
 export type DownloadableInstallCandidate = {
   pluginId: string;
@@ -91,9 +96,10 @@ export async function resolveConfiguredPluginInstallContext(params: {
     });
   const records =
     params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
+  const compatibilityHostVersion = resolveCompatibilityHostVersion(params.env);
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
-    currentVersion: VERSION,
+    currentVersion: compatibilityHostVersion,
   });
   const installedPluginIdsWithRepairablePackageDiagnostics =
     collectInstalledPluginIdsWithRepairablePackageDiagnostics({
@@ -105,17 +111,35 @@ export async function resolveConfiguredPluginInstallContext(params: {
       snapshot,
       installRecords: records,
       configuredPluginIds: params.configuredPluginIds,
+      currentVersion: compatibilityHostVersion,
       updateChannel,
+      env: params.env,
+    });
+  const installedPluginIdsWithMissingRequiredDependencies =
+    collectInstalledPluginMissingRequiredDependencies({
+      cfg: params.cfg,
+      snapshot,
+      installRecords: records,
+      env: params.env,
     });
   const installedPluginIdsWithRepairablePackages = new Set([
     ...installedPluginIdsWithRepairablePackageDiagnostics,
+    ...installedPluginIdsWithMissingRequiredDependencies.keys(),
     ...installedPluginIdsWithStaleVersionBoundRuntimePackages,
   ]);
+  // Missing-dependency plugins repair through the persisted-record updater (it
+  // retains the active tree so the installer materializes a fresh generation);
+  // keep them out of the official-replacement route so a mismatched official
+  // candidate cannot suppress that repair.
   const officialReplacementPluginIds = new Set(
     collectOfficialReplacementInstallCandidates({
       cfg: params.cfg,
       env: params.env,
-      repairablePluginIds: installedPluginIdsWithRepairablePackages,
+      repairablePluginIds: new Set(
+        [...installedPluginIdsWithRepairablePackages].filter(
+          (pluginId) => !installedPluginIdsWithMissingRequiredDependencies.has(pluginId),
+        ),
+      ),
       configuredPluginIds: params.configuredPluginIds,
       configuredChannelIds: params.configuredChannelIds,
       configuredChannelOwnerPluginIds,
@@ -129,6 +153,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     configuredPluginIdsWithStaleDescriptors,
     records,
     updateChannel,
+    installedPluginIdsWithMissingRequiredDependencies,
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,
     installedPluginIdsWithRepairablePackages,
@@ -142,9 +167,6 @@ const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "extension entry unreadable",
   "requires compiled runtime output",
 ] as const;
-const OPENCLAW_BETA_COMPANION_VERSION_RE = /^(\d{4}\.[1-9]\d?\.[1-9]\d?)-beta\.[1-9]\d*$/;
-const OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE =
-  /^(\d{4}\.[1-9]\d?\.[1-9]\d?)(?:-beta\.[1-9]\d*)?$/;
 
 function resolveCandidateClawHubSpec(install: PluginPackageInstall): string | undefined {
   const explicit = install.clawhubSpec?.trim();
@@ -453,90 +475,66 @@ function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
   return pluginIds;
 }
 
-function resolveInstalledRuntimePackageVersion(params: {
-  pluginId: string;
-  snapshot: PluginMetadataSnapshot;
-  record: PluginInstallRecord;
-}): string | undefined {
-  const plugin =
-    params.snapshot.byPluginId?.get(params.pluginId) ??
-    params.snapshot.plugins.find((entry) => entry.id === params.pluginId);
-  return normalizeOptionalLowercaseString(
-    params.record.resolvedVersion ??
-      params.record.version ??
-      plugin?.packageVersion ??
-      plugin?.version,
-  );
-}
+type InstalledPluginMissingDependencyState = {
+  missingDependencies: string[];
+  /** Official runtime spec authorized by the active package and durable selector. */
+  versionBoundRuntimeNpmSpec?: string;
+};
 
-function installedRuntimePackageVersionIsStale(params: {
-  installedVersion: string | undefined;
-  currentVersion: string;
-  updateChannel: UpdateChannel;
-}): boolean {
-  if (!params.installedVersion) {
-    return false;
-  }
-  if (
-    params.updateChannel === "beta" &&
-    betaCompanionMatchesCurrentStableVersion({
-      installedVersion: params.installedVersion,
-      currentVersion: params.currentVersion,
-    })
-  ) {
-    return false;
-  }
-  const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
-  return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
-}
-
-function betaCompanionMatchesCurrentStableVersion(params: {
-  installedVersion: string;
-  currentVersion: string;
-}): boolean {
-  const installedBase = OPENCLAW_BETA_COMPANION_VERSION_RE.exec(params.installedVersion)?.[1];
-  const currentBase = OPENCLAW_STABLE_OR_BETA_COMPANION_VERSION_RE.exec(params.currentVersion)?.[1];
-  return Boolean(installedBase && currentBase && installedBase === currentBase);
-}
-
-function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
+/**
+ * Managed installs can end up with a package payload whose declared required
+ * dependencies are absent from the dependency tree (for example an interrupted
+ * npm install); the plugin then loads at startup but dies at import time.
+ * Maps each active, record-backed installed plugin to its missing dependencies
+ * and the package identity discovered from that same canonical root.
+ */
+function collectInstalledPluginMissingRequiredDependencies(params: {
+  cfg: OpenClawConfig;
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
-  configuredPluginIds: ReadonlySet<string>;
-  updateChannel: UpdateChannel;
-}): Set<string> {
-  const pluginIds = new Set<string>();
-  const currentVersion = normalizeOptionalLowercaseString(VERSION);
-  if (!currentVersion) {
-    return pluginIds;
-  }
-  for (const candidate of CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
+  env: NodeJS.ProcessEnv;
+}): Map<string, InstalledPluginMissingDependencyState> {
+  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
+  const missingByPluginId = new Map<string, InstalledPluginMissingDependencyState>();
+  for (const plugin of params.snapshot.plugins) {
+    const record = params.installRecords[plugin.id];
     if (
-      !VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(candidate.pluginId) ||
-      !params.configuredPluginIds.has(candidate.pluginId)
-    ) {
-      continue;
-    }
-    const record = params.installRecords[candidate.pluginId];
-    if (!record) {
-      continue;
-    }
-    const installedVersion = resolveInstalledRuntimePackageVersion({
-      pluginId: candidate.pluginId,
-      snapshot: params.snapshot,
-      record,
-    });
-    if (
-      installedRuntimePackageVersionIsStale({
-        installedVersion,
-        currentVersion,
-        updateChannel: params.updateChannel,
+      !activePluginMatchesRepairableInstallRecord({
+        rootDir: plugin.rootDir,
+        record,
+        env: params.env,
       })
     ) {
-      pluginIds.add(candidate.pluginId);
+      continue;
+    }
+    if (
+      !resolveEffectiveEnableState({
+        id: plugin.id,
+        origin: "global",
+        config: normalizedPluginConfig,
+        rootConfig: params.cfg,
+      }).enabled
+    ) {
+      continue;
+    }
+    const dependencyStatus = buildPluginDependencyStatus({
+      rootDir: plugin.rootDir,
+      dependencies: plugin.packageDependencies,
+      optionalDependencies: plugin.packageOptionalDependencies,
+    });
+    if (dependencyStatus.hasDependencies && !dependencyStatus.requiredInstalled) {
+      const versionBoundRuntimeNpmSpec = resolveVersionBoundRuntimeNpmSpecForActivePackage({
+        pluginId: plugin.id,
+        activePackageName: plugin.packageName,
+        record,
+      });
+      missingByPluginId.set(plugin.id, {
+        missingDependencies: dependencyStatus.missing,
+        ...(versionBoundRuntimeNpmSpec ? { versionBoundRuntimeNpmSpec } : {}),
+      });
     }
   }
-  return pluginIds;
+  return missingByPluginId;
 }
 
 function isConfiguredPluginRepairTarget(params: {

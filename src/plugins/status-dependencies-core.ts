@@ -96,7 +96,9 @@ function findDependencyPackageDir(params: { fromDir: string; name: string }): st
   let current = path.resolve(params.fromDir);
   while (true) {
     const candidate = path.join(current, "node_modules", ...segments);
-    if (fs.existsSync(candidate)) {
+    // A bare directory shell (interrupted npm install) is not an installed
+    // dependency; require the package manifest before treating it as resolved.
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
       return candidate;
     }
     const parent = path.dirname(current);

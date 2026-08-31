@@ -17,6 +17,7 @@ import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import type { PluginNpmInstallArtifactPrecommitHandler } from "./install-types.js";
 import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -101,11 +102,13 @@ export async function updateNpmInstalledPlugins(params: {
   updateChannel?: UpdateChannel;
   officialPluginUpdateChannel?: UpdateChannel;
   coreVersion?: string;
+  versionBoundToCorePluginIds?: ReadonlySet<string>;
   dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  onBeforeNpmPluginArtifactCommit?: PluginNpmInstallArtifactPrecommitHandler;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
@@ -181,6 +184,7 @@ export async function updateNpmInstalledPlugins(params: {
     const npmSpecOverride =
       params.specOverrides?.[pluginId] ??
       (replacementPluginId ? trustedOfficialNpmSpec : undefined);
+    const versionBoundToCore = params.versionBoundToCorePluginIds?.has(pluginId) === true;
     const trustedOfficialClawHubInstall = resolveOfficialClawHubInstall({ pluginId, record });
     const officialNpmSpec = params.syncOfficialPluginInstalls ? trustedOfficialNpmSpec : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
@@ -193,7 +197,9 @@ export async function updateNpmInstalledPlugins(params: {
       (trustedOfficialNpmSpec || trustedOfficialClawHubInstall
         ? params.officialPluginUpdateChannel
         : undefined);
-    const officialNpmPackageName = resolveNpmSpecPackageName(trustedOfficialNpmSpec);
+    const officialNpmPackageName =
+      resolveNpmSpecPackageName(trustedOfficialNpmSpec) ??
+      (versionBoundToCore ? resolveNpmSpecPackageName(npmSpecOverride) : undefined);
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -224,6 +230,7 @@ export async function updateNpmInstalledPlugins(params: {
             updateChannel,
             officialPackageName: officialNpmPackageName,
             coreVersion: params.coreVersion,
+            versionBoundToCore,
           })
         : undefined;
     const clawhubSpecs =
@@ -370,11 +377,6 @@ export async function updateNpmInstalledPlugins(params: {
         return false;
       }
     };
-    const extensionsDir = resolveRecordedExtensionsDir({
-      pluginId,
-      installPath,
-    });
-
     if (
       !params.dryRun &&
       record.source === "npm" &&
@@ -476,36 +478,36 @@ export async function updateNpmInstalledPlugins(params: {
       expectedIntegrity,
       onCapabilityConsent: consentCallbacks.onCapabilityConsent,
     });
-    const runAttempt = () =>
-      runPluginUpdateAttempt(
-        copyPluginInstallTransactionRequest(params, {
-          pluginId,
-          record,
-          config: params.config,
-          dryRun: params.dryRun === true,
-          effectiveSpec,
-          extensionsDir,
-          timeoutMs: params.timeoutMs,
-          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-          onInstallPolicyWarning: params.onInstallPolicyWarning,
-          onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
-          expectedIntegrity,
-          npmSpecs,
-          clawhubSpecs,
-          officialNpmFallbackSpecs,
-          trustedSourceLinkedOfficialInstall,
-          expectedReplacementPluginId: replacementPluginId,
-          getFallbackExpectedIntegrity,
-          installNpmSpecForUpdate,
-          logger,
-          onIntegrityDrift: params.onIntegrityDrift,
-        }),
-      );
     const attempt = await runPluginUpdateWithClawHubLease({
       pluginId,
       clawhubPackage: recordClawHubPackage,
       dryRun: params.dryRun === true,
-      run: runAttempt,
+      run: () =>
+        runPluginUpdateAttempt(
+          copyPluginInstallTransactionRequest(params, {
+            pluginId,
+            record,
+            config: params.config,
+            dryRun: params.dryRun === true,
+            effectiveSpec,
+            extensionsDir: resolveRecordedExtensionsDir({ pluginId, installPath }),
+            timeoutMs: params.timeoutMs,
+            dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+            onInstallPolicyWarning: params.onInstallPolicyWarning,
+            onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+            onBeforeNpmPluginArtifactCommit: params.onBeforeNpmPluginArtifactCommit,
+            expectedIntegrity,
+            npmSpecs,
+            clawhubSpecs,
+            officialNpmFallbackSpecs,
+            trustedSourceLinkedOfficialInstall,
+            expectedReplacementPluginId: replacementPluginId,
+            getFallbackExpectedIntegrity,
+            installNpmSpecForUpdate,
+            logger,
+            onIntegrityDrift: params.onIntegrityDrift,
+          }),
+        ),
     });
     consentCallbacks.rethrowCallbackError();
     if (attempt.kind === "exception") {

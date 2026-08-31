@@ -1012,6 +1012,56 @@ describe("doctor repair sequencing", () => {
     ]);
   });
 
+  it("seeds post-repair metadata from the returned install records", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
+    const workspaceDir = "/tmp/openclaw-doctor-test/workspace";
+    const candidate = {} as OpenClawConfig;
+    const repairedRecords = {
+      demo: {
+        source: "npm" as const,
+        spec: "demo@1.0.0",
+        installPath:
+          "/tmp/openclaw-doctor-test/npm/projects/demo__openclaw-generation__g-fresh/node_modules/demo",
+      },
+    };
+    const refreshedIndex = {
+      installRecords: repairedRecords,
+      plugins: [],
+    };
+    const refreshedSnapshot = {
+      index: refreshedIndex,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as unknown as PluginMetadataSnapshot;
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: ['Repaired broken installed plugin "demo".'],
+      warnings: [],
+      records: repairedRecords,
+      repairedPluginIds: ["demo"],
+      pluginInventoryChanged: true,
+    });
+    mocks.loadInstalledPluginIndex.mockReturnValueOnce(refreshedIndex);
+    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(refreshedSnapshot);
+
+    await runDoctorRepairSequence({
+      state: { cfg: candidate, candidate, pendingChanges: false, fixHints: [] },
+      doctorFixCommand: "openclaw doctor --fix",
+      env,
+    });
+
+    expect(mocks.loadInstalledPluginIndex).toHaveBeenCalledWith({
+      config: candidate,
+      env,
+      installRecords: repairedRecords,
+      workspaceDir,
+    });
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
+      config: candidate,
+      env,
+      index: refreshedIndex,
+      workspaceDir,
+    });
+  });
+
   it("refreshes retained default-workspace metadata after cleanup-only inventory repairs", async () => {
     const workspaceDir = "/tmp/openclaw-doctor-workspace";
     const workspaceProvider = "workspace-provider";
@@ -1035,6 +1085,7 @@ describe("doctor repair sequencing", () => {
         },
       }) as unknown as PluginMetadataSnapshot;
     const refreshedSnapshot = createRefreshedSnapshot(true);
+    const repairedIndex = { plugins: [] };
     const configWideManifestRegistry = {
       plugins: [
         {
@@ -1047,12 +1098,14 @@ describe("doctor repair sequencing", () => {
       diagnostics: [],
     };
     mocks.resolveConfigWidePluginManifestRegistry.mockReturnValue(configWideManifestRegistry);
+    mocks.loadInstalledPluginIndex.mockReturnValueOnce(repairedIndex);
     mocks.loadPluginMetadataSnapshot.mockImplementationOnce((params: { workspaceDir?: string }) =>
       params.workspaceDir === workspaceDir ? refreshedSnapshot : createRefreshedSnapshot(false),
     );
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
       changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
       warnings: [],
+      records: {},
       pluginInventoryChanged: true,
     });
     const { repairStaleAgentModelRefs: repairStaleAgentModelRefsActual } = await vi.importActual<
@@ -1116,6 +1169,7 @@ describe("doctor repair sequencing", () => {
         },
       },
       env: process.env,
+      index: repairedIndex,
       workspaceDir,
     });
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({

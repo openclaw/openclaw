@@ -230,6 +230,9 @@ function writeInstalledNpmPlugin(params: {
   extraDistFiles?: Record<string, string>;
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
+  declaredDependency?: { name: string; version: string };
+  emptyDependency?: { name: string; version: string };
+  declaredMissingOptionalDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   openclaw?: Record<string, unknown>;
   replaceExisting?: boolean;
@@ -245,8 +248,29 @@ function writeInstalledNpmPlugin(params: {
       name: params.packageName,
       version: params.version,
       openclaw: params.openclaw ?? { extensions: ["./dist/index.js"] },
-      ...(params.dependency
-        ? { dependencies: { [params.dependency.name]: params.dependency.version } }
+      ...(params.dependency || params.declaredDependency || params.emptyDependency
+        ? {
+            dependencies: {
+              ...(params.dependency ? { [params.dependency.name]: params.dependency.version } : {}),
+              // Declared in package.json only; materialization is controlled by
+              // the other knobs (absent everywhere = hollow dependency tree,
+              // paired with hoistedDependency = resolvable from the npm root).
+              ...(params.declaredDependency
+                ? { [params.declaredDependency.name]: params.declaredDependency.version }
+                : {}),
+              ...(params.emptyDependency
+                ? { [params.emptyDependency.name]: params.emptyDependency.version }
+                : {}),
+            },
+          }
+        : {}),
+      ...(params.declaredMissingOptionalDependency
+        ? {
+            optionalDependencies: {
+              [params.declaredMissingOptionalDependency.name]:
+                params.declaredMissingOptionalDependency.version,
+            },
+          }
         : {}),
       ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
     }),
@@ -288,6 +312,11 @@ function writeInstalledNpmPlugin(params: {
       "utf-8",
     );
   }
+  if (params.emptyDependency) {
+    fs.mkdirSync(path.join(pluginDir, "node_modules", ...params.emptyDependency.name.split("/")), {
+      recursive: true,
+    });
+  }
   if (params.hoistedDependency) {
     const depDir = path.join(params.npmRoot, "node_modules", params.hoistedDependency.name);
     fs.mkdirSync(depDir, { recursive: true });
@@ -317,6 +346,9 @@ type MockNpmPackage = {
   extraDistFiles?: Record<string, string>;
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
+  declaredDependency?: { name: string; version: string };
+  emptyDependency?: { name: string; version: string };
+  declaredMissingOptionalDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   openclaw?: Record<string, unknown>;
   expectedDependencySpec?: string;
@@ -990,6 +1022,104 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
+  it("rejects npm installs whose required dependencies did not materialize on disk", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/hollow-deps";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "hollow-deps",
+      npmRoot,
+      declaredDependency: { name: "@example/required-runtime", version: "1.0.0" },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    if (result.ok) {
+      throw new Error("expected hollow dependency tree install to fail");
+    }
+    expect(result.error).toContain("@example/required-runtime");
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
+  });
+
+  it("rejects npm installs with empty required dependency directories", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/empty-deps";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "empty-deps",
+      npmRoot,
+      emptyDependency: { name: "@example/required-runtime", version: "1.0.0" },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    if (result.ok) {
+      throw new Error("expected empty required dependency directory to fail");
+    }
+    expect(result.error).toContain("@example/required-runtime");
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
+  });
+
+  it("accepts hoisted required dependencies and ignores missing optional dependencies", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/hoisted-deps";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "hoisted-deps",
+      npmRoot,
+      declaredDependency: { name: "@example/hoisted-runtime", version: "1.0.0" },
+      hoistedDependency: { name: "@example/hoisted-runtime", version: "1.0.0" },
+      declaredMissingOptionalDependency: { name: "@example/optional-native", version: "1.0.0" },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts missing dependencies that are overridden by optionalDependencies", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/optional-override";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "optional-override",
+      npmRoot,
+      declaredDependency: { name: "@example/optional-override-runtime", version: "1.0.0" },
+      declaredMissingOptionalDependency: {
+        name: "@example/optional-override-runtime",
+        version: "999.999.999",
+      },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("keeps lazy imports from a loaded old npm generation available across updates", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
@@ -1162,6 +1292,51 @@ describe("installPluginFromNpmSpec", () => {
     expect(rollback.targetDir).not.toBe(retainedPackageDir);
     await expect(retainedModule.default.runAttempt()).resolves.toEqual({ chunk: "v2" });
     expect(fs.existsSync(path.join(retainedPackageDir, "dist", "run-attempt-v2.js"))).toBe(true);
+  });
+
+  it("removes a fresh retained generation when npm precommit rejects the artifact", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/codex";
+    const legacyPackageDir = resolveTestPluginPackageDir(npmRoot, packageName);
+    const rejectedGenerationRoot = resolveTestPluginGenerationProjectDir({
+      npmRoot,
+      packageName,
+      version: "2.0.0",
+      integrity: "sha512-codex-v2",
+      shasum: "codexv2sha",
+    });
+    fs.mkdirSync(legacyPackageDir, { recursive: true });
+    await markRetainedManagedNpmInstall({
+      packageDir: legacyPackageDir,
+      pluginId: "codex",
+      retainedAt: "2026-04-25T00:00:00.000Z",
+      reason: "test-precommit-rollback",
+    });
+    mockNpmViewAndInstall({
+      spec: `${packageName}@2.0.0`,
+      packageName,
+      version: "2.0.0",
+      pluginId: "codex",
+      npmRoot,
+      integrity: "sha512-codex-v2",
+      shasum: "codexv2sha",
+      expectedDependencySpec: "2.0.0",
+    });
+
+    await expect(
+      installPluginFromNpmSpec({
+        spec: `${packageName}@2.0.0`,
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+        onBeforeNpmPluginArtifactCommit: async () => {
+          throw new Error("reject staged cohort");
+        },
+      }),
+    ).rejects.toThrow("reject staged cohort");
+
+    expect(fs.existsSync(rejectedGenerationRoot)).toBe(false);
+    expect(fs.existsSync(legacyPackageDir)).toBe(true);
+    expect(hasRetainedManagedNpmInstallMarker(legacyPackageDir)).toBe(true);
   });
 
   it("installs into a fresh generation when the legacy npm target is retained", async () => {
@@ -1382,6 +1557,73 @@ describe("installPluginFromNpmSpec", () => {
       false,
     );
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "version-drift-plugin"))).toBe(false);
+  });
+
+  it("rejects exact npm requests when registry metadata resolves another version", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "selector-drift-plugin";
+    const requestedVersion = "2.0.0";
+    const resolvedVersion = "1.0.0";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@${requestedVersion}`,
+      packageName,
+      version: resolvedVersion,
+      pluginId: packageName,
+      npmRoot,
+      expectedDependencySpec: resolvedVersion,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@${requestedVersion}`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(`expected exact version ${requestedVersion}`);
+    expect(result.error).toContain(`metadata resolved ${packageName}@${resolvedVersion}`);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
+  });
+
+  it("reports the canonical package when npm metadata identity drifts", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const requestedPackageName = "identity-diagnostic-plugin";
+    const resolvedPackageName = "evil-identity-plugin";
+    const version = "1.0.0";
+    mockNpmViewAndInstallMany([
+      {
+        spec: `${requestedPackageName}@latest`,
+        packageName: resolvedPackageName,
+        version,
+        npmRoot,
+      },
+      {
+        packageName: requestedPackageName,
+        version,
+        pluginId: requestedPackageName,
+        npmRoot,
+        expectedDependencySpec: version,
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${requestedPackageName}@latest`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain(`expected package ${requestedPackageName}`);
+    expect(result.error).toContain(
+      `metadata resolved ${resolvedPackageName}@${version} with spec ${resolvedPackageName}@${version}`,
+    );
+    expect(result.error).toContain(`payload is ${requestedPackageName}@${version}`);
   });
 
   it("quarantines incomplete integrity metadata and rebuilds the managed project once", async () => {

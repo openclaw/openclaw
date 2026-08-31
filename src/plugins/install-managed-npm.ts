@@ -42,7 +42,10 @@ import {
   type ManagedNpmRootDependencySpecPreparation,
   type ManagedNpmRootPreparedDependency,
 } from "./install-managed-npm-state.js";
-import { verifyInstalledNpmResolution } from "./install-npm-resolution.js";
+import {
+  npmPackageIdentityMatchesResolution,
+  verifyInstalledNpmResolution,
+} from "./install-npm-resolution.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import {
   preflightPluginNpmInstallPolicy,
@@ -73,6 +76,10 @@ import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
+import {
+  buildPluginDependencyStatus,
+  normalizePluginDependencySpecs,
+} from "./status-dependencies-core.js";
 
 export async function installPluginFromManagedNpmRoot(
   params: InstallSafetyOverrides & {
@@ -526,6 +533,42 @@ export async function installPluginFromManagedNpmRoot(
       return {
         ok: false,
         error: `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionVerification.error}`,
+      };
+    }
+
+    if (
+      !npmPackageIdentityMatchesResolution({
+        expectedPackageName: params.packageName,
+        resolution: params.npmResolution,
+        manifest: packageManifestResult.manifest,
+      })
+    ) {
+      const resolvedName = params.npmResolution.name?.trim() || "unknown";
+      const resolvedVersion = params.npmResolution.version?.trim() || "unknown";
+      const resolvedSpec = params.npmResolution.resolvedSpec?.trim() || "unknown";
+      const payloadName = packageManifestResult.manifest?.name?.trim() || "unknown";
+      const payloadVersion = packageManifestResult.manifest?.version?.trim() || "unknown";
+      return {
+        ok: false,
+        error: `npm install staged package identity mismatch: expected package ${params.packageName}; metadata resolved ${resolvedName}@${resolvedVersion} with spec ${resolvedSpec}; payload is ${payloadName}@${payloadVersion}`,
+      };
+    }
+
+    // npm can exit 0 while leaving the plugin's declared required dependencies
+    // unmaterialized (interrupted or cache-corrupted installs); the hollow tree
+    // loads at startup but dies at import time, so reject it while rollback can
+    // still restore the managed root.
+    const installedDependencyStatus = buildPluginDependencyStatus({
+      rootDir: installRoot,
+      ...normalizePluginDependencySpecs({
+        dependencies: packageManifestResult.manifest?.dependencies,
+        optionalDependencies: packageManifestResult.manifest?.optionalDependencies,
+      }),
+    });
+    if (!installedDependencyStatus.requiredInstalled) {
+      return {
+        ok: false,
+        error: `npm install reported success but required dependencies of ${params.packageName} are missing from the installed tree: ${installedDependencyStatus.missing.join(", ")}`,
       };
     }
 
