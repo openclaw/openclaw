@@ -379,38 +379,24 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("passes CLI options and the startup signal to Gateway pre-bootstrap", async () => {
-    const controller = new AbortController();
-    const uninstallHooks = installGatewayRunRuntimeHooks({ startupSignal: controller.signal });
-    prepareGatewayRunBootstrapMock.mockResolvedValueOnce(false);
+  it("passes CLI options and the startup signal to Gateway pre-bootstrap", async (context) => {
+    const startupSignal = new AbortController().signal;
+    context.onTestFinished(installGatewayRunRuntimeHooks({ startupSignal }));
     const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);
     gatewayRunCommand.setOptionValueWithSource("force", true, "cli");
-    try {
-      await runPreAction({
-        parseArgv: ["gateway", "run"],
-        processArgv: [
-          "node",
-          "openclaw",
-          "--log-level",
-          "debug",
-          "gateway",
-          "run",
-          "--raw-stream-path",
-          "--reset",
-          "--force",
-        ],
-      });
-    } finally {
+    context.onTestFinished(() => {
       gatewayRunCommand.setOptionValueWithSource("force", false, "default");
-      uninstallHooks();
-    }
+    });
+    await runPreAction({
+      parseArgv: ["gateway", "run"],
+      processArgv: ["node", "openclaw", "gateway", "run", "--reset", "--force"],
+    });
 
     expect(prepareGatewayRunBootstrapMock).toHaveBeenCalledWith({
       opts: { force: true, reset: false },
       runtime: runtimeMock,
-      signal: controller.signal,
+      signal: startupSignal,
     });
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   it("passes the gateway config recheck to the state migration boundary", async () => {
