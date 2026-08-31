@@ -165,9 +165,7 @@ describe("git install target ownership", () => {
       };
 
       await expect(
-        installPluginFromGitSpec(
-          deferred ? requestDeferredPluginInstall(options) : options,
-        ),
+        installPluginFromGitSpec(deferred ? requestDeferredPluginInstall(options) : options),
       ).rejects.toMatchObject({ name: "AbortError" });
       expect(await git(installed.targetDir, "rev-parse", "HEAD")).toBe(installed.git.commit);
       await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("keep this checkout");
