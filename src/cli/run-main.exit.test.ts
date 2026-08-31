@@ -1055,9 +1055,7 @@ describe("runCli exit behavior", () => {
     let recoveryAuthorized: boolean | undefined;
     readConfigFileSnapshotMock.mockImplementation(async (options) => {
       if (options?.recoverSuspicious) {
-        const sigtermHandler = processOnSpy.mock.calls.find(
-          ([event]) => event === "SIGTERM",
-        )?.[1];
+        const sigtermHandler = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
         if (typeof sigtermHandler !== "function") {
           throw new Error("Gateway startup SIGTERM handler was not registered");
         }
