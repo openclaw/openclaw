@@ -60,9 +60,7 @@ const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.code_mode_only": false,
 };
 
-const CODEX_NO_PROJECT_DOCS_CONFIG: JsonObject = {
-  project_doc_max_bytes: 0,
-};
+const CODEX_NO_PROJECT_DOCS_CONFIG: JsonObject = { project_doc_max_bytes: 0 };
 
 const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
@@ -172,6 +170,7 @@ export function buildThreadStartParams(
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
     disableLoginShell?: boolean;
+    projectDocsHandledByOpenClaw?: boolean;
   },
 ): CodexThreadStartParams {
   const ringZeroActive =
@@ -220,6 +219,7 @@ export function buildThreadStartParams(
         options.restrictedToolSurfaceInheritedMcpServerNames,
       shellEnvironment: options.shellEnvironment,
       disableLoginShell: options.disableLoginShell,
+      projectDocsHandledByOpenClaw: options.projectDocsHandledByOpenClaw,
     }),
     ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
@@ -255,6 +255,7 @@ export function buildThreadResumeParams(
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
     disableLoginShell?: boolean;
+    projectDocsHandledByOpenClaw?: boolean;
     preserveNativeModel?: boolean;
   },
 ): CodexThreadResumeParams {
@@ -315,6 +316,7 @@ export function buildThreadResumeParams(
         options.restrictedToolSurfaceInheritedMcpServerNames,
       shellEnvironment: options.shellEnvironment,
       disableLoginShell: options.disableLoginShell,
+      projectDocsHandledByOpenClaw: options.projectDocsHandledByOpenClaw,
     }),
     developerInstructions:
       options.developerInstructions ??
@@ -427,6 +429,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
     disableLoginShell?: boolean;
+    projectDocsHandledByOpenClaw?: boolean;
   } = {},
 ): JsonObject {
   const ringZeroActive =
@@ -438,7 +441,8 @@ export function buildCodexRuntimeThreadConfigForRun(
   const restrictedTurnDisablesProjectDocs =
     ringZeroActive ||
     messageOnlySourceReply ||
-    (params.pluginHarnessToolPolicyRestricted && params.disableTools);
+    (params.pluginHarnessToolPolicyRestricted && params.disableTools) ||
+    options.projectDocsHandledByOpenClaw === true;
   const configMcpServers = config?.mcp_servers;
   if (restrictedToolSurface && configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
     throw new Error("Codex restricted tool surface received invalid thread mcp_servers config");

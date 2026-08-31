@@ -119,6 +119,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
+      projectDocsHandledByOpenClaw:
+        !context.workspaceBootstrapContext.inheritsAgentWorkspace &&
+        Boolean(context.agentWorkspaceDeveloperInstructions),
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeHookRelayRequired:
         connection.options.nativeHookRelay?.enabled !== false &&

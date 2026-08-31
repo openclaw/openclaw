@@ -70,6 +70,8 @@ export type CodexStartOrResumeThreadParams = {
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
+  /** OpenClaw already supplied the execution workspace AGENTS.md exactly once. */
+  projectDocsHandledByOpenClaw?: boolean;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
   disableLoginShell?: boolean;

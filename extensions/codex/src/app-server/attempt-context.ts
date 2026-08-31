@@ -26,7 +26,6 @@ import type {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
-import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -250,16 +249,9 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
-    const restrictedProjectDocNeedsOpenClawCarrier =
-      params.params.pluginHarnessToolPolicyRestricted === true &&
-      !params.params.disableTools &&
-      !isMessageOnlyCodexSourceReply(params.params) &&
-      params.params.bootstrapContextMode !== "lightweight";
     const threadDeveloperInstructionFiles =
-      injectOpenClawContext &&
-      !params.ringZeroActive &&
-      (inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier)
-        ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
+      injectOpenClawContext && !params.ringZeroActive
+        ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, promptWorkspace)
         : [];
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext
       ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
@@ -720,7 +712,7 @@ function renderCodexWorkspaceBootstrapPromptContext(
     return undefined;
   }
   const lines = [
-    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads project-local AGENTS.md natively. When execution uses another folder, OpenClaw supplies the agent workspace AGENTS.md as thread-level developer instructions. SOUL.md, IDENTITY.md, and USER.md remain turn-scoped collaboration instructions. Those files are not repeated here.",
+    "OpenClaw loaded these user-editable workspace files for the current turn. OpenClaw supplies the agent workspace AGENTS.md once as thread-level developer instructions; when execution uses another folder, Codex may additionally load that distinct project's AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md remain turn-scoped collaboration instructions. Those files are not repeated here.",
     "",
     "# Project Context",
     "",

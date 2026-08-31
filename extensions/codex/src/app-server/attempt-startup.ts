@@ -163,6 +163,7 @@ export async function startCodexAttemptThread(params: {
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
   agentWorkspaceDeveloperInstructions?: string;
+  projectDocsHandledByOpenClaw?: boolean;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
@@ -474,6 +475,7 @@ export async function startCodexAttemptThread(params: {
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+                projectDocsHandledByOpenClaw: params.projectDocsHandledByOpenClaw,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,
                 disableLoginShell: params.disableLoginShell,

@@ -466,6 +466,21 @@ describe("Codex ring-zero thread config", () => {
     });
     expect(disabled.config?.project_doc_max_bytes).toBe(0);
   });
+
+  it("disables native project documents when OpenClaw already supplied them", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    const start = buildThreadStartParams(params, {
+      appServer: createAppServerOptions() as never,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      projectDocsHandledByOpenClaw: true,
+      config: { project_doc_max_bytes: 64_000 },
+    });
+
+    expect(start.config?.project_doc_max_bytes).toBe(0);
+  });
 });
 
 describe("Codex delegation capability", () => {

@@ -436,7 +436,12 @@ async function buildCodexTurnContextForTest(
     memoryToolNames,
     ringZeroActive: false,
   });
-  const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
+  const threadDeveloperInstructions = [
+    testing.buildDeveloperInstructions(params, { dynamicTools }),
+    workspaceBootstrapContext.threadDeveloperInstructions,
+  ]
+    .filter((section): section is string => Boolean(section?.trim()))
+    .join("\n\n");
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -2613,7 +2618,7 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     expect(startParams?.environments).toEqual([]);
-    expect(startParams?.config?.project_doc_max_bytes).toBe(131_072);
+    expect(startParams?.config?.project_doc_max_bytes).toBe(0);
     expect(startParams?.developerInstructions?.split(agentsGuidance)).toHaveLength(2);
     expect(startParams?.config?.["tools.update_plan.enabled"]).toBe(false);
     expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "progress_card", "read"]);
@@ -4100,7 +4105,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(secondInputText).toContain("continue from there");
   });
 
-  it("routes AGENTS.md natively and MEMORY.md through tools", async () => {
+  it("routes AGENTS.md once through developer instructions and MEMORY.md through tools", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
     const soulGuidance = "Soul voice goes here.";
@@ -4134,7 +4139,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadDeveloperInstructions).not.toContain(userProfile);
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
-    expect(threadDeveloperInstructions).not.toContain(agentsGuidance);
+    expect(threadDeveloperInstructions).toContain(agentsGuidance);
     expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
     expect(collaborationInstructions).toContain("request_user_input availability");
     expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
@@ -4200,9 +4205,8 @@ describe("runCodexAppServerAttempt", () => {
     });
     expect(fileStats.get("AGENTS.md")).toMatchObject({
       rawChars: agentsGuidance.length,
-      injectionStatus: "native_unverified",
-      injectedChars: null,
-      truncated: null,
+      injectedChars: agentsGuidance.length,
+      truncated: false,
     });
   });
   it("adds memory recall guidance when dated memory notes exist without root MEMORY.md", async () => {
@@ -4282,11 +4286,12 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as {
-      config?: { instructions?: string };
+      config?: { instructions?: string; project_doc_max_bytes?: number };
       developerInstructions?: string;
     };
     expect(threadStartParams.config?.instructions).toBeUndefined();
-    expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
+    expect(threadStartParams.developerInstructions?.split(agentsGuidance)).toHaveLength(2);
+    expect(threadStartParams.config?.project_doc_max_bytes).toBe(0);
     expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(userProfile);
@@ -4346,6 +4351,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(threadInstructions).toContain(path.join(agentWorkspaceDir, "AGENTS.md"));
     expect(threadInstructions).toContain(agentsGuidance);
     expect(threadInstructions).not.toContain(soulGuidance);
+    expect(
+      (threadStart.params as { config?: { project_doc_max_bytes?: number } }).config
+        ?.project_doc_max_bytes,
+    ).toBe(131_072);
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     if (!turnStart) {
