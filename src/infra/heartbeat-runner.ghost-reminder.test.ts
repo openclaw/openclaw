@@ -804,7 +804,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
 
     expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.InternalTurnSource).toBe("heartbeat");
     expect(calledCtx?.Body).toContain("Gateway restart ok");
     expect(calledCtx?.Body).not.toContain(execCompletion);
     expect(peekSystemEvents(sessionKey)).toEqual([execCompletion]);
