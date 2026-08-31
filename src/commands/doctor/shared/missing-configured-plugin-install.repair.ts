@@ -73,6 +73,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  signal?: AbortSignal;
   /**
    * Optional pre-seeded records. When provided, this map is used instead of
    * the disk-loaded install-record snapshot. Pass the in-memory records
@@ -90,6 +91,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 
@@ -102,6 +104,7 @@ export async function repairMissingPluginInstallsForIds(params: {
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  signal?: AbortSignal;
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
@@ -121,6 +124,7 @@ export async function repairMissingPluginInstallsForIds(params: {
     ),
     ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 
@@ -132,16 +136,19 @@ async function repairMissingPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  signal?: AbortSignal;
 }): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
-  return await withPluginLifecycleLease({ env: params.env }, () =>
-    repairMissingPluginInstallsWithLease(params),
+  return await withPluginLifecycleLease(
+    { env: params.env, ...(params.signal ? { signal: params.signal } : {}) },
+    (lease) => repairMissingPluginInstallsWithLease({ ...params, signal: lease.signal }),
   );
 }
 
 async function repairMissingPluginInstallsWithLease(
   params: Parameters<typeof repairMissingPluginInstalls>[0],
 ): Promise<RepairMissingPluginInstallsResult> {
+  params.signal?.throwIfAborted();
   const env = params.env ?? process.env;
   const {
     knownIds,
@@ -198,6 +205,7 @@ async function repairMissingPluginInstallsWithLease(
   };
 
   for (const [pluginId, record] of Object.entries(records)) {
+    params.signal?.throwIfAborted();
     const bundled = bundledPluginsById.get(pluginId);
     if (!bundled || !recordMatchesBundledPackage(record, bundled)) {
       continue;
@@ -273,6 +281,7 @@ async function repairMissingPluginInstallsWithLease(
         error: (message) => warnings.push(message),
       },
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
@@ -325,6 +334,7 @@ async function repairMissingPluginInstallsWithLease(
         ? new Set([...(params.blockedPluginIds ?? []), ...deferredPluginIds])
         : params.blockedPluginIds,
   })) {
+    params.signal?.throwIfAborted();
     if (bundledPluginsById.has(candidate.pluginId)) {
       continue;
     }
@@ -369,6 +379,7 @@ async function repairMissingPluginInstallsWithLease(
         ? { repairReason: "stale-version-bound-runtime" as const }
         : {}),
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];

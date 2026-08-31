@@ -295,17 +295,21 @@ async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
   persistentRepoDir: string;
   deferCommit?: boolean;
+  signal?: AbortSignal;
   onBeforePublish?: (stagedRepoDir: string) => Promise<void>;
 }): Promise<{ ok: true; transaction?: PluginInstallTransaction } | { ok: false; error: string }> {
+  params.signal?.throwIfAborted();
   let artifactConsentFailure: { error: unknown } | undefined;
   const reviewFinalArtifact = async (stagedRepoDir: string) => {
+    params.signal?.throwIfAborted();
     try {
       await params.onBeforePublish?.(stagedRepoDir);
-      return { ok: true as const };
     } catch (error) {
       artifactConsentFailure = { error };
       throw error;
     }
+    params.signal?.throwIfAborted();
+    return { ok: true as const };
   };
   try {
     if (params.deferCommit) {
@@ -318,6 +322,7 @@ async function replaceManagedGitRepo(params: {
           copyErrorPrefix: "failed to replace managed git plugin repository",
           hasDeps: false,
           depsLogMessage: "",
+          ...(params.signal ? { signal: params.signal } : {}),
           // Deferred publication copies the clone again; review that final copy.
           afterInstall: reviewFinalArtifact,
         }),
@@ -336,6 +341,7 @@ async function replaceManagedGitRepo(params: {
     });
     return { ok: true };
   } catch (err) {
+    params.signal?.throwIfAborted();
     if (artifactConsentFailure) {
       throw artifactConsentFailure.error;
     }
@@ -378,10 +384,12 @@ async function runGitCommand(params: {
   source: ParsedGitPluginSpec;
   cwd?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; stdout: string } | { ok: false; error: string }> {
   const result = await runCommandWithTimeout(params.argv, {
     cwd: params.cwd,
     timeoutMs: params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
+    ...(params.signal ? { signal: params.signal } : {}),
     env: createGitCommandEnv(),
   });
   if (result.code !== 0) {
@@ -444,6 +452,7 @@ export async function installPluginFromGitSpec(
       action: "clone",
       source: parsed,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (!clone.ok) {
       return clone;
@@ -456,6 +465,7 @@ export async function installPluginFromGitSpec(
         source: parsed,
         cwd: repoDir,
         timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
       if (!checkout.ok) {
         return checkout;
@@ -468,6 +478,7 @@ export async function installPluginFromGitSpec(
       source: parsed,
       cwd: repoDir,
       timeoutMs: params.timeoutMs,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (!rev.ok) {
       return rev;
@@ -529,6 +540,7 @@ export async function installPluginFromGitSpec(
             packageLock: true,
             quiet: true,
           }),
+          ...(params.signal ? { signal: params.signal } : {}),
         },
       );
       if (install.code !== 0) {
@@ -550,7 +562,9 @@ export async function installPluginFromGitSpec(
       mode: effectiveMode,
       emitSuccessSecurityEvent: false,
       installPolicyRequest,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     if (!result.ok) {
       return result;
     }
@@ -560,6 +574,7 @@ export async function installPluginFromGitSpec(
         stagedRepoDir: repoDir,
         persistentRepoDir,
         deferCommit: isPluginInstallCommitDeferred(params),
+        ...(params.signal ? { signal: params.signal } : {}),
         onBeforePublish: async (stagedArtifactDir) => {
           await params.onBeforePluginArtifactCommit?.({
             pluginId: result.pluginId,

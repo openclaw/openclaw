@@ -1302,6 +1302,26 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("rethrows installer cancellation instead of recording an update failure", async () => {
+    const { config } = createNpmUpdateFixture({
+      pluginId: "demo",
+      packageName: "@acme/demo",
+      installedVersion: "1.0.0",
+      registryVersion: "1.1.0",
+    });
+    const controller = new AbortController();
+    const abortReason = new Error("Gateway startup interrupted by SIGTERM");
+    installPluginFromNpmSpecMock.mockImplementationOnce(async () => {
+      controller.abort(abortReason);
+      throw abortReason;
+    });
+
+    await expect(updatePlugin(config, "demo", { signal: controller.signal })).rejects.toBe(
+      abortReason,
+    );
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "skips integrity drift checks for unpinned npm specs during dry-run updates",
@@ -1574,6 +1594,36 @@ describe("updateNpmInstalledPlugins", () => {
       expectedPluginId: "acpx",
       expectedIntegrity: "sha512-old",
     });
+  });
+
+  it("stops prerelease metadata fallback when startup is cancelled", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gateway startup interrupted by SIGTERM");
+    const { config } = createNpmUpdateFixture({
+      pluginId: "acpx",
+      packageName: "@openclaw/acpx",
+      installedVersion: "2026.5.2",
+      registryVersion: "2026.5.3-beta.1",
+      registryIntegrity: "sha512-beta",
+      spec: "@openclaw/acpx@2026.5.2",
+      integrity: "sha512-old",
+    });
+    runCommandWithTimeoutMock.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return {
+        code: 0,
+        stdout: JSON.stringify(["2026.5.2", "2026.5.3-beta.1"]),
+        stderr: "",
+      };
+    });
+
+    await expect(
+      updatePlugin(config, "acpx", {
+        syncOfficialPluginInstalls: true,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
   it("keeps integrity drift checks for exact prerelease-only official pins", async () => {

@@ -54,7 +54,9 @@ export async function completeStartupMigrationPreflight(params: {
   startupMigrationLease: StartupMigrationLease | undefined;
   startupMigrationWarnings: readonly string[];
   stateMigrationsAllowed: boolean | undefined;
+  signal?: AbortSignal;
 }): Promise<void> {
+  params.signal?.throwIfAborted();
   if (
     (params.shouldRecordStateCheckpoint || params.shouldRecordStartupCheckpoint) &&
     params.startupMigrationHeartbeatError
@@ -103,11 +105,13 @@ export async function completeStartupMigrationPreflight(params: {
             cfg: params.baseConfig,
             env: process.env,
             ...(params.measure ? { measure: params.measure } : {}),
+            ...(params.signal ? { signal: params.signal } : {}),
           })
         : await refreshStartupPluginQuarantine({
             cfg: params.baseConfig,
             env: process.env,
             ...(params.measure ? { measure: params.measure } : {}),
+            ...(params.signal ? { signal: params.signal } : {}),
           });
       setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
       if (pluginConvergence.blockingDiagnostic) {

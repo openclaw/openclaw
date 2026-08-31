@@ -60,6 +60,7 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sleep as sleepWithSignal } from "../../utils/sleep.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
@@ -508,7 +509,9 @@ async function probeGatewayHealthz(params: {
   port: number;
   timeoutMs?: number;
   tlsFingerprint?: string;
+  signal?: AbortSignal;
 }): Promise<boolean> {
+  params.signal?.throwIfAborted();
   const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS;
   return await new Promise<boolean>((resolve) => {
     let settled = false;
@@ -528,6 +531,7 @@ async function probeGatewayHealthz(params: {
         path: "/healthz",
         method: "GET",
         timeout: timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
         // The probe sends no credentials. Pin the configured certificate below
         // before accepting a self-signed gateway's liveness payload.
         ...(params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
@@ -580,7 +584,7 @@ async function probeGatewayHealthz(params: {
 function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
   const tlsConfig = cfg.gateway?.tls;
   let tlsFingerprint: string | undefined;
-  return async (params: { host: string; port: number }): Promise<boolean> => {
+  return async (params: { host: string; port: number; signal?: AbortSignal }): Promise<boolean> => {
     if (tlsConfig?.enabled !== true) {
       return await probeGatewayHealthz(params);
     }
@@ -590,6 +594,7 @@ function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
           loadGatewayTlsRuntime({ ...tlsConfig, autoGenerate: false }),
         )
         .catch(() => undefined);
+      params.signal?.throwIfAborted();
       tlsFingerprint = gatewayTls?.fingerprintSha256;
     }
     if (!tlsFingerprint) {
@@ -605,12 +610,14 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   port: number;
   healthHost: string;
   log: GatewayRunLogger;
+  startupSignal?: AbortSignal;
   now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
-  probeHealth?: (params: { host: string; port: number }) => Promise<boolean>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  probeHealth?: (params: { host: string; port: number; signal?: AbortSignal }) => Promise<boolean>;
   retryMs?: number;
   timeoutMs?: number;
 }) {
+  params.startupSignal?.throwIfAborted();
   const supervisor = params.supervisor;
   if (!supervisor) {
     await params.startLoop();
@@ -618,18 +625,14 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   }
 
   const now = params.now ?? Date.now;
-  const sleep =
-    params.sleep ??
-    (async (ms: number) =>
-      await new Promise((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = params.sleep ?? sleepWithSignal;
   const probeHealth = params.probeHealth ?? ((probeParams) => probeGatewayHealthz(probeParams));
   const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
   const timeoutMs = params.timeoutMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS;
   const startedAt = now();
 
   for (;;) {
+    params.startupSignal?.throwIfAborted();
     try {
       await params.startLoop();
       return;
@@ -638,7 +641,13 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
         throw err;
       }
 
-      if (await probeHealth({ host: params.healthHost, port: params.port })) {
+      const healthy = await probeHealth({
+        host: params.healthHost,
+        port: params.port,
+        ...(params.startupSignal ? { signal: params.startupSignal } : {}),
+      });
+      params.startupSignal?.throwIfAborted();
+      if (healthy) {
         if (supervisor === "systemd") {
           throw new SupervisedGatewayLockError(
             "gateway already running under systemd; existing gateway is healthy, exiting with code 78 to prevent a systemd Restart=always loop",
@@ -665,7 +674,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       params.log.warn(
         `gateway already running under ${supervisor}; waiting ${waitMs}ms before retrying startup`,
       );
-      await sleep(waitMs);
+      await sleep(waitMs, params.startupSignal);
     }
   }
 }
@@ -730,6 +739,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
 
   const startupTrace = createGatewayCliStartupTrace();
+  const throwIfStartupAborted = () => hooks.startupSignal?.throwIfAborted();
 
   // The heaviest part of gateway startup is loading the server module tree
   // (channels, plugins, HTTP stack, etc.). Start it before the foreground TTY
@@ -759,6 +769,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   };
   const { startGatewayServer } = await loadServerModule();
+  throwIfStartupAborted();
 
   setConsoleTimestampPrefix(true);
 
@@ -774,6 +785,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     await startupTrace.measure("cli.dev-config", () =>
       ensureDevGatewayConfig({ reset: Boolean(opts.reset) }),
     );
+    throwIfStartupAborted();
     if (opts.reset) {
       const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
       if (!(await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime }))) {
@@ -788,6 +800,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       opts,
       startupTrace,
     });
+  throwIfStartupAborted();
   if (
     !enforceGatewayRunFutureConfigGuard({
       opts,
@@ -835,6 +848,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
+  throwIfStartupAborted();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error(formatInvalidPortOption("--port"));
@@ -1187,6 +1201,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       healthHost,
       beginBoot,
       completeBoot,
+      ...(hooks.startupSignal ? { startupSignal: hooks.startupSignal } : {}),
+      ...(hooks.releaseStartupSignalOwner
+        ? { releaseStartupSignalOwner: hooks.releaseStartupSignalOwner }
+        : {}),
       start: async ({ startupStartedAt, requestHotReloadRecovery } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
@@ -1217,9 +1235,16 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       port,
       healthHost,
       log: gatewayLog,
+      ...(hooks.startupSignal ? { startupSignal: hooks.startupSignal } : {}),
       probeHealth: createConfiguredGatewayHealthProbe(cfg),
     });
   } catch (err) {
+    // The CLI-owned startup signal has already recorded the conventional
+    // signal exit code and the run-loop finally block released its lock.
+    // Avoid converting that controlled abort into a generic startup failure.
+    if (hooks.startupSignal?.aborted) {
+      return;
+    }
     if (isGatewayLockError(err)) {
       const errMessage = formatErrorMessage(err);
       defaultRuntime.error(

@@ -389,9 +389,12 @@ export async function installPluginDirectoryIntoExtensions(params: {
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
+  signal?: AbortSignal;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
 }): Promise<InstallPluginResult> {
+  params.signal?.throwIfAborted();
   const runtime = await loadPluginInstallRuntime();
+  params.signal?.throwIfAborted();
   let targetDir = params.targetDir;
   if (!targetDir) {
     const targetDirResult = await resolvePluginInstallTarget({
@@ -405,11 +408,13 @@ export async function installPluginDirectoryIntoExtensions(params: {
     }
     targetDir = targetDirResult.targetDir;
   }
+  params.signal?.throwIfAborted();
   const availability = await ensureInstallTargetAvailableForMode({
     runtime,
     targetPath: targetDir,
     mode: params.mode,
   });
+  params.signal?.throwIfAborted();
   if (!availability.ok) {
     return availability;
   }
@@ -437,8 +442,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
+    ...(params.signal ? { signal: params.signal } : {}),
     afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
+      params.signal?.throwIfAborted();
       if (postInstallResult) {
         return postInstallResult;
       }
@@ -450,6 +457,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
           stagedArtifactDir: installedDir,
           mode: params.mode,
         });
+        params.signal?.throwIfAborted();
       } catch (error) {
         // installPackageDir converts hook failures into results; retain the typed rejection.
         artifactConsentFailure = { error };

@@ -118,6 +118,8 @@ export async function runDoctorConfigPreflight(
     skipPristineStartupStateMigrations?: boolean;
     /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
     doctorOnlyStateMigrations?: boolean;
+    /** Abort process-owned startup work when the Gateway receives SIGINT/SIGTERM. */
+    signal?: AbortSignal;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -133,8 +135,12 @@ export async function runDoctorConfigPreflight(
       env: process.env,
     });
   }
-  const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
-    measureDoctorConfigPreflightStep(name, run, options.measure);
+  const measurePreflightStep = async <T>(name: string, run: () => T | Promise<T>) => {
+    options.signal?.throwIfAborted();
+    const result = await measureDoctorConfigPreflightStep(name, run, options.measure);
+    options.signal?.throwIfAborted();
+    return result;
+  };
   const migrationCheckpointRequired =
     gatewayStartupCheckpointRequired || options.requireStateMigrationCheckpoint === true;
   let migrationCheckpoint = migrationCheckpointRequired
@@ -198,6 +204,7 @@ export async function runDoctorConfigPreflight(
     }
     startupMigrationLease = await migrationCheckpoint.acquireStartupMigrationLeaseWithWait({
       env: startupMigrationEnv,
+      ...(options.signal ? { signal: options.signal } : {}),
     });
     // Another process may have completed the same work between our pre-lease read and acquisition.
     // Refresh every checkpoint input under the lease so only work still missing from state runs.
@@ -692,6 +699,7 @@ export async function runDoctorConfigPreflight(
       startupMigrationLease,
       startupMigrationWarnings,
       stateMigrationsAllowed,
+      ...(options.signal ? { signal: options.signal } : {}),
     });
 
     return {

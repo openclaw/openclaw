@@ -1,21 +1,15 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
   readInstalledPackageManifest,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
-import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
-import {
-  capturePluginCapabilityConsentHandlerErrors,
-  type PluginCapabilityConsentHandler,
-} from "./capability-consent.js";
+import { capturePluginCapabilityConsentHandlerErrors } from "./capability-consent.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
 import {
@@ -59,6 +53,7 @@ import {
   resolveRecordedExtensionsDir,
   withoutPluginInstallRecord,
 } from "./update-config.js";
+import type { UpdateNpmInstalledPluginsParams } from "./update-installed.types.js";
 import {
   expectedIntegrityForNpmFallback,
   expectedIntegrityForNpmUpdate,
@@ -75,8 +70,6 @@ import {
   shouldBypassTrustedOfficialUnchangedNpmCheck,
   shouldSkipUnchangedNpmInstall,
   type PluginUpdateChannelFallback,
-  type PluginUpdateIntegrityDriftParams,
-  type PluginUpdateLogger,
   type PluginUpdateOutcome,
   type PluginUpdateSummary,
 } from "./update-source.js";
@@ -88,26 +81,10 @@ import {
 } from "./update-summary.js";
 import { reconcileUnchangedUpdate } from "./update-unchanged.js";
 
-export async function updateNpmInstalledPlugins(params: {
-  config: OpenClawConfig;
-  logger?: PluginUpdateLogger;
-  pluginIds?: string[];
-  skipIds?: Set<string>;
-  skipDisabledPlugins?: boolean;
-  syncOfficialPluginInstalls?: boolean;
-  disableOnFailure?: boolean;
-  timeoutMs?: number;
-  dryRun?: boolean;
-  updateChannel?: UpdateChannel;
-  officialPluginUpdateChannel?: UpdateChannel;
-  coreVersion?: string;
-  dangerouslyForceUnsafeInstall?: boolean;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  specOverrides?: Record<string, string>;
-  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-  onCapabilityConsent?: PluginCapabilityConsentHandler;
-  packagePluginIds?: Readonly<Record<string, readonly string[]>>;
-}): Promise<PluginUpdateSummary> {
+export async function updateNpmInstalledPlugins(
+  params: UpdateNpmInstalledPluginsParams,
+): Promise<PluginUpdateSummary> {
+  params.signal?.throwIfAborted();
   const logger = params.logger ?? {};
   const consentCallbacks = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   const installs = params.config.plugins?.installs ?? {};
@@ -152,6 +129,7 @@ export async function updateNpmInstalledPlugins(params: {
   };
 
   for (const pluginId of targets) {
+    params.signal?.throwIfAborted();
     if (params.skipIds?.has(pluginId)) {
       recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (already updated).`);
       continue;
@@ -280,7 +258,9 @@ export async function updateNpmInstalledPlugins(params: {
           record,
           timeoutMs: params.timeoutMs,
           trustedSourceLinkedOfficialInstall,
+          ...(params.signal ? { signal: params.signal } : {}),
         });
+        params.signal?.throwIfAborted();
         fallbackExpectedIntegrityLoaded = true;
       }
       return fallbackExpectedIntegrity;
@@ -383,6 +363,7 @@ export async function updateNpmInstalledPlugins(params: {
       const metadataResult = await resolveNpmSpecMetadata({
         spec: effectiveSpec!,
         timeoutMs: params.timeoutMs,
+        ...(params.signal ? { signal: params.signal } : {}),
       });
       if (metadataResult.ok) {
         const bypassTrustedOfficialUnchangedNpmCheck = shouldBypassTrustedOfficialUnchangedNpmCheck(
@@ -397,8 +378,10 @@ export async function updateNpmInstalledPlugins(params: {
               metadata: metadataResult.metadata,
               spec: effectiveSpec!,
               timeoutMs: params.timeoutMs,
+              ...(params.signal ? { signal: params.signal } : {}),
             })
           : undefined;
+        params.signal?.throwIfAborted();
         const expectedIntegrityMetadata =
           trustedPrereleaseFallback?.metadata ?? metadataResult.metadata;
         expectedIntegrity = expectedIntegrityForNpmUpdate({
@@ -437,6 +420,7 @@ export async function updateNpmInstalledPlugins(params: {
             resolution: metadataResult.metadata,
             updateChannel,
             timeoutMs: params.timeoutMs,
+            ...(params.signal ? { signal: params.signal } : {}),
             hasSpecOverride: Boolean(npmSpecOverride),
             hasOfficialNpmSpec: Boolean(officialNpmSpec),
             syncOfficialInstall: Boolean(
@@ -499,6 +483,7 @@ export async function updateNpmInstalledPlugins(params: {
           installNpmSpecForUpdate,
           logger,
           onIntegrityDrift: params.onIntegrityDrift,
+          ...(params.signal ? { signal: params.signal } : {}),
         }),
       );
     const attempt = await runPluginUpdateWithClawHubLease({
@@ -506,7 +491,9 @@ export async function updateNpmInstalledPlugins(params: {
       clawhubPackage: recordClawHubPackage,
       dryRun: params.dryRun === true,
       run: runAttempt,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     consentCallbacks.rethrowCallbackError();
     if (attempt.kind === "exception") {
       if (attempt.error instanceof ManagedPluginLifecycleError && attempt.error.capabilityConsent) {
@@ -616,6 +603,7 @@ export async function updateNpmInstalledPlugins(params: {
           hasOfficialNpmSpec: Boolean(officialNpmSpec),
           updateChannel,
           timeoutMs: params.timeoutMs,
+          ...(params.signal ? { signal: params.signal } : {}),
           channelFallbackSuffix,
           npmChannelFallback,
         }),
