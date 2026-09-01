@@ -16,6 +16,7 @@ import {
   type PreparedWorkspaceSkillMutation,
 } from "../lifecycle/workspace-skill-write.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { validateApplyBody } from "./apply-body-validation.js";
 import { readProposalFrontmatter, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
@@ -231,11 +232,14 @@ export async function applySkillProposalTransition(
         }
       }
 
+      const skillContent = stripProposalFrontmatterForSkill(content);
+      validateApplyBody(skillContent);
+
       const mutation = await prepareWorkspaceSkillMutation({
         skillsRoot,
         skillDir: record.target.skillDir,
         skillFile: record.target.skillFile,
-        content: stripProposalFrontmatterForSkill(content),
+        content: skillContent,
         supportFiles,
         mode: record.kind,
       });

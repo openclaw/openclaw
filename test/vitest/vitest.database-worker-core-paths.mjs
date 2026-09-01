@@ -180,6 +180,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/state-migrations.media-persistence.lifecycle-recovery.test.ts",
   "src/skills/library/resource-read.test.ts",
   "src/skills/library/service.test.ts",
+  "src/skills/workshop/apply-body-validation.test.ts",
   "src/skills/workshop/collection-restore.test.ts",
   "src/skills/workshop/experience-review.apply.test.ts",
   "src/skills/workshop/policy.test.ts",
