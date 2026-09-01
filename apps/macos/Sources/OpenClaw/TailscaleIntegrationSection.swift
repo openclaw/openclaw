@@ -68,6 +68,7 @@ private typealias GatewayTailscaleSettingsSaver = @MainActor @Sendable (
 struct TailscaleIntegrationSection: View {
     let connectionMode: AppState.ConnectionMode
     let isPaused: Bool
+    let isConfigReadOnly: Bool
 
     @Environment(TailscaleService.self) private var tailscaleService
 
@@ -80,9 +81,10 @@ struct TailscaleIntegrationSection: View {
     @State private var statusTimer: Timer?
     @State private var lastAppliedSettings: GatewayTailscaleSettingsSnapshot?
 
-    init(connectionMode: AppState.ConnectionMode, isPaused: Bool) {
+    init(connectionMode: AppState.ConnectionMode, isPaused: Bool, isConfigReadOnly: Bool = false) {
         self.connectionMode = connectionMode
         self.isPaused = isPaused
+        self.isConfigReadOnly = isConfigReadOnly
     }
 
     var body: some View {
@@ -96,14 +98,17 @@ struct TailscaleIntegrationSection: View {
                 self.installButtons
             } else {
                 self.modePicker
+                    .disabled(self.isConfigReadOnly)
                 if self.tailscaleMode != .off {
                     self.accessURLRow
                 }
                 if self.tailscaleMode == .serve {
                     self.serveAuthSection
+                        .disabled(self.isConfigReadOnly)
                 }
                 if self.tailscaleMode == .funnel {
                     self.funnelAuthSection
+                        .disabled(self.isConfigReadOnly)
                 }
             }
 
@@ -277,7 +282,7 @@ struct TailscaleIntegrationSection: View {
     }
 
     private func applySettings() async {
-        guard self.hasLoaded else { return }
+        guard self.hasLoaded, !self.isConfigReadOnly else { return }
         let currentSettings = self.currentSettingsSnapshot()
         let result = await TailscaleIntegrationSection.applySettingsIfChanged(
             currentSettings: currentSettings,

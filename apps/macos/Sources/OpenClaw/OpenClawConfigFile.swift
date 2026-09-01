@@ -4,6 +4,35 @@ import Foundation
 import OpenClawProtocol
 
 enum OpenClawConfigFile {
+    enum ConfigWriteFailure: Equatable {
+        case managedByNix
+        case rejected
+        case serialization
+        case fileSystem
+
+        var message: String {
+            switch self {
+            case .managedByNix:
+                "This configuration is managed by Nix. Edit the Nix source and rebuild instead."
+            case .rejected:
+                "The change was not saved because it would remove protected Gateway settings. Reload the file and try again."
+            case .serialization:
+                "The change could not be encoded as configuration. Reload the file and try again."
+            case .fileSystem:
+                "The configuration file could not be written. Check its permissions and available disk space, then retry."
+            }
+        }
+    }
+
+    enum ConfigWriteResult: Equatable {
+        case success
+        case failure(ConfigWriteFailure)
+
+        var succeeded: Bool {
+            self == .success
+        }
+    }
+
     private struct ConfigReadIdentity: Equatable {
         let path: String
         let data: Data
@@ -73,6 +102,20 @@ enum OpenClawConfigFile {
         }
     }
 
+    static func loadDictResult() -> Result<[String: Any], Error> {
+        self.withFileLock {
+            do {
+                let data = try Data(contentsOf: self.url())
+                guard let root = self.parseConfigData(data) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                return .success(root)
+            } catch {
+                return .failure(error)
+            }
+        }
+    }
+
     @discardableResult
     static func saveDict(
         _ dict: [String: Any],
@@ -80,10 +123,22 @@ enum OpenClawConfigFile {
         allowGatewayAuthMutation: Bool = false)
         -> Bool
     {
+        self.saveDictResult(
+            dict,
+            preserveExistingKeys: preserveExistingKeys,
+            allowGatewayAuthMutation: allowGatewayAuthMutation).succeeded
+    }
+
+    static func saveDictResult(
+        _ dict: [String: Any],
+        preserveExistingKeys: Bool = false,
+        allowGatewayAuthMutation: Bool = false)
+        -> ConfigWriteResult
+    {
         self.withFileLock {
             // Nix mode disables config writes in production, but tests rely on saving temp configs.
             if ProcessInfo.processInfo.isNixMode, !ProcessInfo.processInfo.isRunningTests {
-                return false
+                return .failure(.managedByNix)
             }
             let url = self.url()
             let previousData = try? Data(contentsOf: url)
@@ -104,8 +159,14 @@ enum OpenClawConfigFile {
                 allowGatewayAuthMutation: allowGatewayAuthMutation)
             self.stampMeta(&output)
 
+            let data: Data
             do {
-                let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
+                data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
+            } catch {
+                self.logger.error("config serialization failed: \(error.localizedDescription)")
+                return .failure(.serialization)
+            }
+            do {
                 let nextBytes = data.count
                 let gatewayModeAfter = self.gatewayMode(output)
                 var suspicious = self.configWriteSuspiciousReasons(
@@ -149,7 +210,7 @@ enum OpenClawConfigFile {
                         "blocking": blocking,
                         "rejectedPath": rejectedPath ?? NSNull(),
                     ])
-                    return false
+                    return .failure(.rejected)
                 }
                 try FileManager().createDirectory(
                     at: url.deletingLastPathComponent(),
@@ -185,7 +246,7 @@ enum OpenClawConfigFile {
                     "suspicious": suspicious,
                 ])
                 self.observeConfigRead(data: data, root: output, configURL: url, valid: true)
-                return true
+                return .success
             } catch {
                 self.logger.error("config save failed: \(error.localizedDescription)")
                 self.appendConfigWriteAudit([
@@ -202,7 +263,7 @@ enum OpenClawConfigFile {
                     "suspicious": preservedGatewayAuth ? ["gateway-auth-preserved"] : [],
                     "error": error.localizedDescription,
                 ])
-                return false
+                return .failure(.fileSystem)
             }
         }
     }
