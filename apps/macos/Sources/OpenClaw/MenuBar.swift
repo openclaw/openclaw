@@ -329,7 +329,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let startUpdater: Bool
         if !AppProfile.current.isActive, !launchPlan.isElevationHost {
             switch ApplicationRelocator.handleLaunch() {
-            case .terminating:
+            case .terminating, .installing:
+                // .terminating hands off to an installed copy. .installing is a
+                // background self-install that relaunches from Applications.
+                // Neither path may start services from the transient bundle.
                 return
             case let .continueLaunch(shouldStartUpdater):
                 startUpdater = shouldStartUpdater && launchPlan.allowsUpdater
