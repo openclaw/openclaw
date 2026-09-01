@@ -15,7 +15,9 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -351,7 +353,7 @@ class GatewaySession(
     val endpointStableId: String,
     private val isCurrentImpl: () -> Boolean = { true },
     private val commitIfCurrentImpl: ((block: () -> Unit) -> Boolean)? = null,
-    private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long) -> String,
+    private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long, withEnqueue: (() -> Unit) -> Unit) -> String,
   ) {
     fun isCurrent(): Boolean = isCurrentImpl()
 
@@ -362,11 +364,13 @@ class GatewaySession(
       return true
     }
 
+    /** After transport waiting, [withEnqueue] must enqueue synchronously or throw to reject the request. */
     suspend fun request(
       method: String,
       paramsJson: String?,
       timeoutMs: Long = 15_000,
-    ): String = requestImpl(method, paramsJson, timeoutMs)
+      withEnqueue: (() -> Unit) -> Unit = { it() },
+    ): String = requestImpl(method, paramsJson, timeoutMs, withEnqueue)
   }
 
   private val json =
@@ -807,8 +811,8 @@ class GatewaySession(
             }
           }
         },
-      ) { method, paramsJson, timeoutMs ->
-        val res = requestDetailed(conn, method, paramsJson, timeoutMs)
+      ) { method, paramsJson, timeoutMs, withEnqueue ->
+        val res = requestDetailed(conn, method, paramsJson, timeoutMs, withEnqueue)
         if (!res.ok) {
           throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
         }
@@ -844,6 +848,7 @@ class GatewaySession(
     method: String,
     paramsJson: String?,
     timeoutMs: Long,
+    withEnqueue: (() -> Unit) -> Unit = { it() },
   ): RpcResult {
     val params =
       if (paramsJson.isNullOrBlank()) {
@@ -851,12 +856,17 @@ class GatewaySession(
       } else {
         json.parseToJsonElement(paramsJson)
       }
-    // Readiness and identity are checked after parsing, immediately before enqueue.
-    // A later reconnect can only close this exact socket, never retarget the lease.
-    if (currentConnection !== conn || !conn.isReady()) {
-      throw GatewayRequestNotEnqueued("gateway request lease changed")
-    }
-    val res = conn.request(method, params, timeoutMs)
+    val res =
+      conn.request(method, params, timeoutMs) { enqueue ->
+        // Check after the transport mutex wait, in the same physical -> caller-owner
+        // lock order as hello publication. Only OkHttp's synchronous enqueue is guarded.
+        synchronized(lifecycleLock) {
+          if (currentConnection !== conn || !conn.isReady()) {
+            throw GatewayRequestNotEnqueued("gateway request lease changed")
+          }
+          withEnqueue(enqueue)
+        }
+      }
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
@@ -989,12 +999,13 @@ class GatewaySession(
       method: String,
       params: JsonElement?,
       timeoutMs: Long,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
     ): RpcResponse {
       val id = UUID.randomUUID().toString()
       if (method == "connect") connectRequestId = id
       val deferred = registerPending(id)
       try {
-        sendJson(buildRequestFrame(id = id, method = method, params = params))
+        sendJson(buildRequestFrame(id = id, method = method, params = params), withEnqueue)
         return withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
         throw GatewayRequestOutcomeUnknown("request timeout")
@@ -1163,12 +1174,18 @@ class GatewaySession(
       return deferred
     }
 
-    suspend fun sendJson(obj: JsonObject) {
+    suspend fun sendJson(
+      obj: JsonObject,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
+    ) {
       val jsonString = obj.toString()
       writeLock.withLock {
-        if (socket?.send(jsonString) != true) {
-          // OkHttp returning false means this frame never entered its outgoing queue.
-          throw GatewayRequestNotEnqueued("gateway send failed")
+        currentCoroutineContext().ensureActive()
+        withEnqueue {
+          if (socket?.send(jsonString) != true) {
+            // OkHttp returning false means this frame never entered its outgoing queue.
+            throw GatewayRequestNotEnqueued("gateway send failed")
+          }
         }
       }
     }
@@ -1379,7 +1396,10 @@ class GatewaySession(
       scopes: List<String>,
     ): List<String>? =
       when (role.trim()) {
-        "node" -> emptyList()
+        "node" -> {
+          emptyList()
+        }
+
         // The Gateway bounds setup-code handoff to a closed mobile profile. Persist
         // only the supported full or limited scope set and drop unexpected extras.
         "operator" -> {
@@ -1394,7 +1414,10 @@ class GatewaySession(
             )
           scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
         }
-        else -> null
+
+        else -> {
+          null
+        }
       }
 
     private fun persistBootstrapHandoffToken(
@@ -1551,20 +1574,28 @@ class GatewaySession(
 
       val authJson =
         when {
-          selectedAuth.authToken != null ->
+          selectedAuth.authToken != null -> {
             buildJsonObject {
               put("token", JsonPrimitive(selectedAuth.authToken))
               selectedAuth.authDeviceToken?.let { put("deviceToken", JsonPrimitive(it)) }
             }
-          selectedAuth.authBootstrapToken != null ->
+          }
+
+          selectedAuth.authBootstrapToken != null -> {
             buildJsonObject {
               put("bootstrapToken", JsonPrimitive(selectedAuth.authBootstrapToken))
             }
-          selectedAuth.authPassword != null ->
+          }
+
+          selectedAuth.authPassword != null -> {
             buildJsonObject {
               put("password", JsonPrimitive(selectedAuth.authPassword))
             }
-          else -> null
+          }
+
+          else -> {
+            null
+          }
         }
 
       val connectScopes = resolveConnectScopes(selectedAuth)
@@ -2051,12 +2082,25 @@ class GatewaySession(
     val authBootstrapToken = if (authToken == null) explicitBootstrapToken else null
     val authSource =
       when {
-        authDeviceToken != null || (explicitGatewayToken == null && authToken != null) ->
+        authDeviceToken != null || (explicitGatewayToken == null && authToken != null) -> {
           GatewayConnectAuthSource.DEVICE_TOKEN
-        authToken != null -> GatewayConnectAuthSource.SHARED_TOKEN
-        authBootstrapToken != null -> GatewayConnectAuthSource.BOOTSTRAP_TOKEN
-        explicitPassword != null -> GatewayConnectAuthSource.PASSWORD
-        else -> GatewayConnectAuthSource.NONE
+        }
+
+        authToken != null -> {
+          GatewayConnectAuthSource.SHARED_TOKEN
+        }
+
+        authBootstrapToken != null -> {
+          GatewayConnectAuthSource.BOOTSTRAP_TOKEN
+        }
+
+        explicitPassword != null -> {
+          GatewayConnectAuthSource.PASSWORD
+        }
+
+        else -> {
+          GatewayConnectAuthSource.NONE
+        }
       }
     return SelectedConnectAuth(
       authToken = authToken,
@@ -2142,7 +2186,9 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   if (code == "AUTH_RATE_LIMITED") return true
   when (details?.recommendedNextStep) {
     "wait_then_retry" -> return false
+
     "retry_with_device_token" -> return !pendingDeviceTokenRetry
+
     "update_auth_configuration",
     "update_auth_credentials",
     "review_auth_configuration",
@@ -2160,10 +2206,13 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
     -> true
+
     // The first shared-token mismatch may schedule one trusted stored-device-token retry.
     // Once no retry is pending, keep the terminal recovery action visible until credentials change.
     "AUTH_TOKEN_MISMATCH" -> !pendingDeviceTokenRetry
+
     "PROTOCOL_MISMATCH" -> true
+
     else -> false
   }
 }
@@ -2259,7 +2308,10 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
         else -> null
       }
     }
-    else -> null
+
+    else -> {
+      null
+    }
   }
 
 private fun JsonElement?.asLongOrNull(): Long? =

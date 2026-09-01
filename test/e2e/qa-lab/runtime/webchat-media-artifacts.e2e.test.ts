@@ -8,7 +8,7 @@ import {
   createQaChannelTransport,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import { GatewayClient } from "../../../../src/gateway/client.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -16,6 +16,7 @@ import {
 } from "../../../../src/utils/message-channel.js";
 import { createPlaybackMediaFixture } from "../../../fixtures/media-playback.js";
 import { createSolidPngBuffer, createTinyJpegBuffer } from "../../../helpers/image-fixtures.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const SESSION_KEY = "agent:qa:main";
 const FIXTURES = [
@@ -66,17 +67,22 @@ const MIXED_BATCH = [
   ["bundle.7z", "delivery-failed"],
 ] as const;
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
 let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
 let client: GatewayClient | undefined;
 
 afterEach(async () => {
-  client?.stop();
-  client = undefined;
-  await harness?.stop().catch(() => undefined);
-  harness = undefined;
-  await bus?.stop().catch(() => undefined);
-  bus = undefined;
+  try {
+    await runQaGatewayFixture(
+      async () => client?.stop(),
+      () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
+      () => bus?.stop(),
+    );
+  } finally {
+    client = undefined;
+    gatewayOwner = undefined;
+    bus = undefined;
+  }
 });
 
 async function writeFixtures(workspaceDir: string): Promise<void> {
@@ -202,7 +208,11 @@ function isExpectedFailureBlock(block: unknown, label: string, code: string): bo
   );
 }
 
-async function connectWebchat(url: string, token: string): Promise<GatewayClient> {
+async function connectWebchat(
+  url: string,
+  token: string,
+  onEvent?: (event: { event: string; payload?: unknown }) => void,
+): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     const connecting = new GatewayClient({
       url,
@@ -213,6 +223,7 @@ async function connectWebchat(url: string, token: string): Promise<GatewayClient
       role: "operator",
       scopes: ["operator.read", "operator.write", "operator.admin"],
       platform: "qa",
+      ...(onEvent ? { onEvent } : {}),
       onHelloOk: () => resolve(connecting),
       onConnectError: reject,
       onClose: (code, reason) => reject(new Error(`Gateway closed ${code}: ${reason}`)),
@@ -256,7 +267,8 @@ describe("WebChat managed media artifact matrix", () => {
       const state = createQaBusState();
       const transport = createQaChannelTransport(state);
       bus = await startQaBusServer({ state });
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      const harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
@@ -268,7 +280,11 @@ describe("WebChat managed media artifact matrix", () => {
       });
       await transport.waitReady({ gateway: harness.gateway });
       await writeFixtures(harness.gateway.workspaceDir);
-      client = await connectWebchat(harness.gateway.wsUrl, harness.gateway.token);
+      const events: Array<{ event: string; payload?: unknown }> = [];
+      client = await connectWebchat(harness.gateway.wsUrl, harness.gateway.token, (event) =>
+        events.push(event),
+      );
+      await client.request("sessions.subscribe", {});
       const content = await sendMediaReply(
         client,
         SESSION_KEY,
@@ -353,6 +369,28 @@ describe("WebChat managed media artifact matrix", () => {
       expect(JSON.stringify(mixedContent)).not.toContain("Media failed");
       expect(JSON.stringify(mixedContent)).not.toContain("MEDIA:./");
       const observed = [...accepted, ...rejected];
+      const sessionEvents = events.filter((event) => {
+        if (event.event !== "chat" && event.event !== "session.message") {
+          return false;
+        }
+        const payload = event.payload as { sessionKey?: unknown } | undefined;
+        return payload?.sessionKey === SESSION_KEY;
+      });
+      const userEvents = sessionEvents.filter(
+        (event) =>
+          (event.payload as { message?: { role?: string } } | undefined)?.message?.role === "user",
+      );
+      expect(userEvents).toHaveLength(1);
+      expect(JSON.stringify(userEvents)).toContain("MEDIA:./artifact.json");
+      const displayEvents = sessionEvents.filter((event) => !userEvents.includes(event));
+      expect(
+        displayEvents.some(
+          (event) =>
+            event.event === "session.message" &&
+            (event.payload as { message?: { role?: string } } | undefined)?.message?.role ===
+              "assistant",
+        ),
+      ).toBe(true);
       const verdict = {
         expected: FIXTURES.length,
         observed: observed.filter((entry) => entry.present).length,
@@ -363,7 +401,8 @@ describe("WebChat managed media artifact matrix", () => {
           "file-not-found",
         ),
         mixedBatch: mixedOutcomes,
-        rawMediaVisible: JSON.stringify(content).includes("MEDIA:./"),
+        displayEvents: displayEvents.length,
+        rawMediaVisible: JSON.stringify({ content, displayEvents }).includes("MEDIA:./"),
       };
 
       expect(verdict).toEqual({
@@ -372,8 +411,10 @@ describe("WebChat managed media artifact matrix", () => {
         missing: [],
         missingPath: true,
         mixedBatch: MIXED_BATCH.map(([name, outcome]) => ({ name, outcome, present: true })),
+        displayEvents: expect.any(Number),
         rawMediaVisible: false,
       });
+      expect(verdict.displayEvents).toBeGreaterThan(0);
       console.log(`WEBCHAT_MEDIA_ARTIFACTS_PROOF=${JSON.stringify(verdict)}`);
     },
   );

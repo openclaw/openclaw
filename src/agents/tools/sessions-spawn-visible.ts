@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
@@ -41,19 +42,19 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+        "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
     }),
   ),
-  category: Type.Optional(
+  group: Type.Optional(
     Type.String({
       description:
-        "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
+        "Custom sidebar group for a visible session; a new name creates the group. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
   inheritParentGroup: Type.Optional(
     Type.Boolean({
       description:
-        "Copy the parent session's sidebar group once when creating a visible session without category; later parent and child group changes are independent.",
+        "Copy the parent session's sidebar group once when creating a visible session with group omitted; an explicit group, including blank, wins, and later parent and child group changes are independent.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -118,11 +119,12 @@ export async function maybeSpawnVisibleSession(params: {
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
-  const category = readToolStringParam(params.raw, "category");
+  const group = readToolStringParam(params.raw, "group");
   const inheritParentGroup = params.raw.inheritParentGroup === true;
+  const shouldInheritParentGroup = inheritParentGroup && !Object.hasOwn(params.raw, "group");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
-      ["category", category],
+      ["group", group],
       ["inheritParentGroup", inheritParentGroup],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
@@ -142,6 +144,8 @@ export async function maybeSpawnVisibleSession(params: {
   const modelOverride = normalizeToolModelOverride(readToolStringParam(params.raw, "model"));
   const requestedCwd = readToolStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  // A visible session starts one run; empty attachment fields request no staging.
+  const requestedMode = params.raw.mode === "run" ? undefined : params.raw.mode;
   const unsupported = [
     [
       "runtime",
@@ -158,7 +162,7 @@ export async function maybeSpawnVisibleSession(params: {
       params.raw.thread === true ? true : undefined,
       "visible sessions route to the dashboard, not a channel thread",
     ],
-    ["mode", params.raw.mode, "visible sessions are persistent dashboard sessions"],
+    ["mode", requestedMode, "visible sessions are persistent dashboard sessions"],
     [
       "lightContext",
       params.raw.lightContext === true ? true : undefined,
@@ -166,12 +170,16 @@ export async function maybeSpawnVisibleSession(params: {
     ],
     [
       "attachments",
-      Array.isArray(params.raw.attachments) ? params.raw.attachments : undefined,
+      Array.isArray(params.raw.attachments) && params.raw.attachments.length > 0
+        ? params.raw.attachments
+        : undefined,
       "attachment staging is not wired to the sessions.create path",
     ],
     [
       "attachAs",
-      params.raw.attachAs,
+      isRecord(params.raw.attachAs)
+        ? readToolStringParam(params.raw.attachAs, "mountPath")
+        : params.raw.attachAs,
       "attachment staging is not wired to the sessions.create path",
     ],
   ] as const;
@@ -251,7 +259,11 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
-  const requesterRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey: requesterKey });
+  const requesterRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey: requesterKey,
+    agentId: requesterAgentId,
+  });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg,
     sessionKey: `agent:${targetAgentId}:dashboard:pending`,
@@ -329,8 +341,9 @@ export async function maybeSpawnVisibleSession(params: {
       response = await createGatewayCall("sessions.create", {
         agentId: targetAgentId,
         ...(params.label ? { label: params.label } : {}),
-        ...(category ? { category } : {}),
-        ...(inheritParentGroup ? { inheritParentGroup: true } : {}),
+        // sessions.create persists the group under the legacy wire field `category`.
+        ...(group ? { category: group } : {}),
+        ...(shouldInheritParentGroup ? { inheritParentGroup: true } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,
@@ -410,7 +423,7 @@ export async function maybeSpawnVisibleSession(params: {
         task: params.task,
         taskName: params.taskName,
         agentId: targetAgentId,
-        requesterAgentId: params.options?.requesterAgentIdOverride,
+        requesterAgentId,
         cleanup: "keep",
         label: params.label || undefined,
         runTimeoutSeconds,

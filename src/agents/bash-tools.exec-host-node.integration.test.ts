@@ -1,15 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import { handleInvoke } from "../node-host/invoke.js";
+import type { Deferred } from "../shared/deferred.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock("./tools/gateway.js", () => ({ callGatewayTool: rpc }));
@@ -30,6 +34,7 @@ let invokeCount: number;
 let afterPrepare: () => Promise<void>;
 let request: ExecuteNodeHostCommandParams & { workdir: string };
 let resolveDecision: (result: { decision: string }) => void;
+let decisionEntered: Deferred;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "node-exec-policy" });
   await state.writeConfig({});
@@ -52,6 +57,7 @@ beforeEach(async () => {
   const decision = new Promise<{ decision: string }>((resolve) => {
     resolveDecision = resolve;
   });
+  decisionEntered = createDeferred();
   rpc.mockReset().mockImplementation(async (method, _options, params) => {
     if (method === "exec.approvals.node.get") {
       return readExecApprovalsSnapshot();
@@ -60,6 +66,7 @@ beforeEach(async () => {
       return { id: params.id, expiresAtMs: Date.now() + 60000 };
     }
     if (method === "exec.approval.waitDecision") {
+      decisionEntered.resolve();
       return await decision;
     }
     if (method !== "node.invoke") {
@@ -103,6 +110,87 @@ afterEach(async () => {
   await state.cleanup();
 });
 
+it("prepares managed GitHub exec with the node's own sanitized environment", async () => {
+  const environment = withEnv(
+    { GH_TOKEN: "gateway-token", GITHUB_TOKEN: "gateway-fallback", GATEWAY_ONLY: "private" },
+    () =>
+      resolvePreparedExecEnvironment({
+        execParams: { command: request.command },
+        host: "node",
+        defaultPathPrepend: [],
+        credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+        localIdentityEnv: {
+          GH_CONFIG_DIR: "/gateway/managed-gh",
+          GIT_AUTHOR_NAME: "Gateway Author",
+        },
+        managedLocalIdentity: true,
+        warnings: [],
+      }),
+  );
+  await withEnvAsync(
+    {
+      GH_TOKEN: "node-token",
+      GITHUB_TOKEN: "node-fallback",
+      GH_CONFIG_DIR: "/node/native-gh",
+      GIT_AUTHOR_NAME: "Node Author",
+      GATEWAY_ONLY: undefined,
+    },
+    async () => {
+      const result = await executeNodeHostCommand({
+        ...request,
+        ...environment,
+        command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write(JSON.stringify([process.env.GH_TOKEN, process.env.GITHUB_TOKEN, process.env.GH_CONFIG_DIR, process.env.GIT_AUTHOR_NAME, process.env.GATEWAY_ONLY]))'`,
+      });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        aggregated: JSON.stringify([null, null, "/node/native-gh", "Node Author", null]),
+      });
+    },
+  );
+  expect(invokeCount).toBe(1);
+});
+
+it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
+  "rejects explicit %s overrides at both node boundaries even when empty",
+  async (key) => {
+    for (const value of ["", "explicit-token"]) {
+      for (const source of ["env", "pluginEnv"] as const) {
+        expect(() =>
+          resolvePreparedExecEnvironment({
+            execParams: {
+              command: request.command,
+              ...(source === "env" ? { env: { [key]: value } } : {}),
+            },
+            ...(source === "pluginEnv" ? { pluginEnv: { [key]: value } } : {}),
+            host: "node",
+            defaultPathPrepend: [],
+            credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+            managedLocalIdentity: true,
+            warnings: [],
+          }),
+        ).toThrow(`Environment variable '${key}' is forbidden`);
+      }
+      for (const command of ["system.run.prepare", "system.run"]) {
+        await expect(
+          rpc(
+            "node.invoke",
+            {},
+            {
+              command,
+              params: {
+                command: [process.execPath, "--version"],
+                security: "full",
+                ask: "off",
+                env: { [key]: value },
+              },
+            },
+          ),
+        ).rejects.toThrow(`blocked override keys: ${key}`);
+      }
+    }
+  },
+);
+
 it("denies caller allowlist/off misses before dispatch to a permissive node", async () => {
   await expect(executeNodeHostCommand({ ...request, security: "allowlist" })).rejects.toThrow(
     "allowlist",
@@ -121,9 +209,8 @@ it.each(["allow-once", "allow-always"])(
     }).finally(() => {
       completed = true;
     });
-    await vi.waitFor(() =>
-      expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-    );
+    await Promise.race([decisionEntered.promise, result]);
+    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
     expect(completed).toBe(false);
     resolveDecision({ decision });
     expect((await result).details).toMatchObject({
@@ -137,9 +224,8 @@ it.each(["allow-once", "allow-always"])(
 it("prompts for target ask=always even when the caller is full/off", async () => {
   setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "always" } } });
   const result = executeNodeHostCommand(request);
-  await vi.waitFor(() =>
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-  );
+  await Promise.race([decisionEntered.promise, result]);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   expect(invokeCount).toBe(0);
   resolveDecision({ decision: "allow-once" });
   expect((await result).details.status).toBe("completed");
@@ -172,20 +258,26 @@ it("reports target policy denial as not executed", async () => {
 
 it("does not dispatch a late approval after cancellation", async () => {
   const controller = new AbortController();
+  const reason = new Error("originating turn closed");
   const execution = executeNodeHostCommand({
     ...request,
     security: "allowlist",
     ask: "on-miss",
     signal: controller.signal,
   });
-  const rejected = expect(execution).rejects.toThrow();
-  await vi.waitFor(() =>
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-  );
-  controller.abort(new Error("originating turn closed"));
-  resolveDecision({ decision: "allow-once" });
-  await rejected;
-  expect(invokeCount).toBe(0);
+  const drained = execution.catch(() => undefined);
+  try {
+    await Promise.race([decisionEntered.promise, execution]);
+    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
+    controller.abort(reason);
+    resolveDecision({ decision: "allow-once" });
+    await expect(execution).rejects.toBe(reason);
+    expect(invokeCount).toBe(0);
+  } finally {
+    controller.abort(reason);
+    resolveDecision({ decision: "deny" });
+    await drained;
+  }
 });
 
 it("preserves a target deny introduced while approval was pending", async () => {
@@ -194,9 +286,8 @@ it("preserves a target deny introduced while approval was pending", async () => 
     security: "allowlist",
     ask: "on-miss",
   });
-  await vi.waitFor(() =>
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-  );
+  await Promise.race([decisionEntered.promise, execution]);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
   resolveDecision({ decision: "allow-once" });
   expect((await execution).details).toMatchObject({
@@ -322,9 +413,8 @@ it("refuses a cwd replaced by a symlink after approval preparation", async () =>
   const moved = path.join(request.workdir, "moved");
   await fs.mkdir(approved);
   const execution = executeNodeHostCommand({ ...request, workdir: approved, ask: "always" });
-  await vi.waitFor(() =>
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true),
-  );
+  await Promise.race([decisionEntered.promise, execution]);
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   await fs.rename(approved, moved);
   await fs.symlink(moved, approved, "dir");
   resolveDecision({ decision: "allow-once" });
