@@ -19,6 +19,10 @@ import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-mo
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
+import {
+  WorkspaceAliasRepointedError,
+  WorkspaceVanishedError,
+} from "../../agents/workspace-state-identity.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
@@ -540,18 +544,41 @@ export async function getReplyFromConfig(
       })
     : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
 
-  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-    useFastTestBootstrap
-      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-      : await ensureAgentWorkspace({
-          dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-          provisioning: await (
-            await import("../../agents/acp-workspace-provisioning.js")
-          ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
-        }),
-  );
+  let workspace: Awaited<ReturnType<typeof ensureAgentWorkspace>>;
+  try {
+    workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
+      useFastTestBootstrap
+        ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+        : await ensureAgentWorkspace({
+            dir: workspaceDirRaw,
+            ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+            skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+            provisioning: await (
+              await import("../../agents/acp-workspace-provisioning.js")
+            ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
+          }),
+    );
+  } catch (error) {
+    // Permanent workspace state failures cannot heal through ingress retries.
+    // Return a visible terminal reply; heartbeat logging owns heartbeat failures.
+    // Channel senders get fixed repair text only: the error messages embed
+    // absolute host paths, which must never reach a chat.
+    if (opts?.isHeartbeat !== true && error instanceof WorkspaceAliasRepointedError) {
+      typing.cleanup();
+      logVerbose(`workspace alias repointed; replying with repair notice: ${error.message}`);
+      return {
+        text: "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor` and confirm the rebind, or `openclaw doctor --fix --force`.",
+      };
+    }
+    if (opts?.isHeartbeat !== true && error instanceof WorkspaceVanishedError) {
+      typing.cleanup();
+      logVerbose(`workspace vanished; replying with repair notice: ${error.message}`);
+      return {
+        text: "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore it, or run a full OpenClaw reset if the removal was intentional.",
+      };
+    }
+    throw error;
+  }
   const workspaceDir = workspace.dir;
 
   if (

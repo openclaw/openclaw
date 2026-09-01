@@ -649,6 +649,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     See [/concepts/agent-workspace](/concepts/agent-workspace) for a full guide to workspace structure and git backup (recommended private GitHub or GitLab).
 
   </Accordion>
+  <Accordion title="20. Repointed workspace aliases">
+    When a configured workspace path is a symlink that now resolves to a different target than the one that owns its stored setup state (for example after moving the workspace to another disk and re-linking the old path), the runtime fails closed and inbound messages for that workspace fail until the alias is repaired.
+
+    Doctor detects this and can rebind the stored state to the current target without touching workspace files. Generated template hashes provide corroborating evidence, but they do not prove workspace identity. Confirm the repair in an interactive `openclaw doctor` run, or use `openclaw doctor --fix --force` for a non-interactive repair. Doctor refuses to merge when the new target already owns workspace state or another configured agent still uses the old target.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Related

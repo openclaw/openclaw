@@ -13,7 +13,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
+import {
+  resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
+} from "./workspace-state-identity.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   deleteWorkspaceState,
@@ -338,6 +341,7 @@ describe("workspace state store", () => {
     fs.unlinkSync(alias);
     fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
 
+    expect(() => readWorkspaceStateSnapshot(alias)).toThrow(WorkspaceAliasRepointedError);
     expect(() => readWorkspaceStateSnapshot(alias)).toThrow(/different current target/u);
   });
 

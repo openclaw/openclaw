@@ -19,6 +19,7 @@ import {
   createWorkspaceStateIdentity,
   resolveWorkspaceStateAliases,
   resolveWorkspaceStateIdentity,
+  WorkspaceAliasRepointedError,
   type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 
@@ -43,6 +44,10 @@ export function isSafeWorkspaceAttestationFilename(filename: string): boolean {
     !filename.startsWith(".") &&
     !WINDOWS_RESERVED_DEVICE_STEMS.test(filename.split(".")[0] ?? "")
   );
+}
+
+export function isValidWorkspaceAttestationHash(filename: string, sha256: string): boolean {
+  return isSafeWorkspaceAttestationFilename(filename) && SHA256_HEX_PATTERN.test(sha256);
 }
 
 function isCanonicalIsoTimestamp(value: string): boolean {
@@ -98,7 +103,7 @@ type WorkspaceStateDatabase = Pick<
 
 type WorkspaceStateDatabaseHandle = Pick<ReturnType<typeof openOpenClawStateDatabase>, "db">;
 
-function workspacePathEntryExists(workspaceDir: string): boolean {
+export function workspacePathEntryExists(workspaceDir: string): boolean {
   try {
     fs.lstatSync(path.resolve(resolveUserPath(workspaceDir)));
     return true;
@@ -152,7 +157,11 @@ function resolveWorkspaceIdentityFromDatabase(params: {
     workspacePathEntryExists(params.workspaceDir) &&
     storedIdentity.workspaceKey !== canonicalIdentity.workspaceKey
   ) {
-    throw new Error("workspace path alias points to a different current target");
+    throw new WorkspaceAliasRepointedError({
+      aliasPath: aliases[0]!.workspacePath,
+      storedWorkspacePath: storedIdentity.workspacePath,
+      currentWorkspacePath: canonicalIdentity.workspacePath,
+    });
   }
   const existingAliasKeys = new Set(rows.map((row) => row.alias_key));
   return {
@@ -203,6 +212,15 @@ function registerWorkspacePathAliases(params: {
   }
 }
 
+export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
+  database: WorkspaceStateDatabaseHandle;
+  aliases: readonly WorkspaceStateIdentity[];
+  identity: WorkspaceStateIdentity;
+  updatedAtMs: number;
+}): void {
+  registerWorkspacePathAliases(params);
+}
+
 export function registerWorkspaceStateAliasesInTransaction(params: {
   database: WorkspaceStateDatabaseHandle;
   workspaceDirs: readonly string[];
@@ -215,7 +233,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
       aliases.set(alias.workspaceKey, alias);
     }
   }
-  registerWorkspacePathAliases({
+  registerWorkspaceStateAliasIdentitiesInTransaction({
     database: params.database,
     identity: params.identity,
     aliases: [...aliases.values()],
@@ -267,10 +285,7 @@ function readSnapshotFromDatabase(params: {
     for (const row of hashRows) {
       // Validate names structurally rather than against today's bootstrap set:
       // retiring a seeded file must not make an existing attestation unreadable.
-      if (
-        !isSafeWorkspaceAttestationFilename(row.filename) ||
-        !SHA256_HEX_PATTERN.test(row.sha256)
-      ) {
+      if (!isValidWorkspaceAttestationHash(row.filename, row.sha256)) {
         throw new Error("workspace attestation hash row is invalid");
       }
       generatedHashes.set(row.filename, row.sha256);
@@ -343,7 +358,11 @@ export function readWorkspaceStateSnapshot(
       workspacePathEntryExists(workspaceDir) &&
       currentCanonicalIdentity.workspaceKey !== initial.resolution.identity.workspaceKey
     ) {
-      throw new Error("workspace path alias points to a different current target");
+      throw new WorkspaceAliasRepointedError({
+        aliasPath: currentAliases[0]!.workspacePath,
+        storedWorkspacePath: initial.resolution.identity.workspacePath,
+        currentWorkspacePath: currentCanonicalIdentity.workspacePath,
+      });
     }
     const snapshot = readSnapshotFromDatabase({
       identity: initial.resolution.identity,
