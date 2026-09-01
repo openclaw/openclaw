@@ -1,6 +1,7 @@
 import type {
   WorkboardBoardSummary,
   WorkboardCard,
+  WorkboardLink,
   WorkboardPriority,
   WorkboardStatus,
   WorkboardTemplateId,
@@ -55,6 +56,15 @@ export type WorkboardDispatchSummary = {
 };
 
 export type WorkboardRefreshSource = "initial" | "manual" | "live";
+
+export type WorkboardCardRemoval = {
+  cardId: string;
+  card?: WorkboardCard;
+  incomingLinks: Array<{
+    cardId: string;
+    links: WorkboardLink[];
+  }>;
+};
 
 export type WorkboardHealthKey =
   | "running"
@@ -138,6 +148,7 @@ export type WorkboardUiState = {
   bulkDialog: WorkboardBulkDialog | null;
   bulkSaving: boolean;
   bulkResult: { completed: number; total: number } | null;
+  pendingCardRemovals: Map<string, WorkboardCardRemoval>;
   draggedCardId: string | null;
   dragOverStatus: WorkboardStatus | null;
   dragBeforeCardId: string | null;

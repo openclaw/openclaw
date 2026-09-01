@@ -2,14 +2,20 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   changedDraftPayload,
+  applyPendingCardRemovals,
+  applyReferenceUpdatesToPendingCardRemovals,
+  captureCardRemoval,
+  discardPendingLinksToCard,
   draftPayload,
   planWorkboardCardDrop,
   rebaseWorkboardDraft,
   removeCardAndReferences,
   replaceCard,
+  restoreCardRemoval,
   resetDraftState,
   selectedWorkboardBoardParams,
   setWorkboardCards,
+  isActiveWorkboardCard,
 } from "./card-state.ts";
 import { loadWorkboard } from "./loading.ts";
 import { formatError } from "./normalization-utils.ts";
@@ -26,10 +32,12 @@ import {
 } from "./runtime.ts";
 import { applyTaskSummariesToState, listWorkboardTasks } from "./task-links.ts";
 import type {
+  WorkboardBulkDialog,
   WorkboardCard,
   WorkboardDeleteResult,
   WorkboardDispatchSummary,
   WorkboardStatus,
+  WorkboardUiState,
 } from "./types.ts";
 
 function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
@@ -43,6 +51,152 @@ function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
     reclaimed: countArray("reclaimed"),
     orchestrated: countArray("orchestrated"),
   };
+}
+
+function cloneBulkDialog(dialog: WorkboardBulkDialog | null): WorkboardBulkDialog | null {
+  return dialog
+    ? { ...dialog, cardIds: [...dialog.cardIds], observedCards: [...dialog.observedCards] }
+    : null;
+}
+
+function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && [...left].every((id) => right.has(id));
+}
+
+type DeleteInteractionState = {
+  selectedCardIds: Set<string>;
+  bulkDialog: WorkboardBulkDialog | null;
+  pendingCardIds: Set<string>;
+  userChanged: boolean;
+};
+
+const deleteInteractions = new WeakMap<WorkboardUiState, DeleteInteractionState>();
+
+function projectDeleteSelection(
+  state: WorkboardUiState,
+  interaction: DeleteInteractionState,
+): Set<string> {
+  const selectableIds = new Set(state.cards.filter(isActiveWorkboardCard).map((card) => card.id));
+  return new Set(
+    [...interaction.selectedCardIds].filter(
+      (cardId) => selectableIds.has(cardId) && !interaction.pendingCardIds.has(cardId),
+    ),
+  );
+}
+
+function projectDeleteBulkDialog(
+  state: WorkboardUiState,
+  interaction: DeleteInteractionState,
+): WorkboardBulkDialog | null {
+  const dialog = cloneBulkDialog(interaction.bulkDialog);
+  if (!dialog) {
+    return null;
+  }
+  const selectedCardIds = projectDeleteSelection(state, interaction);
+  dialog.cardIds = dialog.cardIds.filter(
+    (cardId) => selectedCardIds.has(cardId) && !interaction.pendingCardIds.has(cardId),
+  );
+  dialog.observedCards = state.cards.filter((card) => dialog.cardIds.includes(card.id));
+  return dialog.cardIds.length ? dialog : null;
+}
+
+function sameBulkDialogProjection(
+  left: WorkboardBulkDialog | null,
+  right: WorkboardBulkDialog | null,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  return (
+    left.kind === right.kind &&
+    left.cardIds.length === right.cardIds.length &&
+    left.cardIds.every((id, index) => id === right.cardIds[index]) &&
+    (left.kind !== "edit" ||
+      (right.kind === "edit" &&
+        left.priority === right.priority &&
+        left.agentId === right.agentId &&
+        left.labels === right.labels &&
+        left.labelMode === right.labelMode))
+  );
+}
+
+function observeDeleteInteraction(
+  state: WorkboardUiState,
+  interaction: DeleteInteractionState,
+): boolean {
+  const unchanged =
+    !interaction.userChanged &&
+    sameStringSet(state.selectedCardIds, projectDeleteSelection(state, interaction)) &&
+    sameBulkDialogProjection(state.bulkDialog, projectDeleteBulkDialog(state, interaction));
+  if (!unchanged) {
+    interaction.userChanged = true;
+  }
+  return unchanged;
+}
+
+function beginDeleteInteraction(state: WorkboardUiState, cardId: string): DeleteInteractionState {
+  let interaction = deleteInteractions.get(state);
+  if (!interaction) {
+    interaction = {
+      selectedCardIds: new Set(state.selectedCardIds),
+      bulkDialog: cloneBulkDialog(state.bulkDialog),
+      pendingCardIds: new Set(),
+      userChanged: false,
+    };
+    deleteInteractions.set(state, interaction);
+  } else {
+    observeDeleteInteraction(state, interaction);
+  }
+  interaction.pendingCardIds.add(cardId);
+  return interaction;
+}
+
+function restoreDeleteInteraction(state: WorkboardUiState, interaction: DeleteInteractionState) {
+  const selectedCardIds = projectDeleteSelection(state, interaction);
+  state.selectedCardIds.clear();
+  for (const cardId of selectedCardIds) {
+    state.selectedCardIds.add(cardId);
+  }
+  state.bulkDialog = projectDeleteBulkDialog(state, interaction);
+}
+
+function completeDeleteInteraction(state: WorkboardUiState, cardId: string) {
+  const interaction = deleteInteractions.get(state);
+  if (!interaction) {
+    return;
+  }
+  observeDeleteInteraction(state, interaction);
+  interaction.pendingCardIds.delete(cardId);
+  interaction.selectedCardIds.delete(cardId);
+  if (interaction.bulkDialog) {
+    interaction.bulkDialog.cardIds = interaction.bulkDialog.cardIds.filter(
+      (pendingCardId) => pendingCardId !== cardId,
+    );
+    interaction.bulkDialog.observedCards = interaction.bulkDialog.observedCards.filter(
+      (card) => card.id !== cardId,
+    );
+    if (!interaction.bulkDialog.cardIds.length) {
+      interaction.bulkDialog = null;
+    }
+  }
+  if (!interaction.pendingCardIds.size) {
+    deleteInteractions.delete(state);
+  }
+}
+
+function rejectDeleteInteraction(state: WorkboardUiState, cardId: string) {
+  const interaction = deleteInteractions.get(state);
+  if (!interaction) {
+    return;
+  }
+  const unchanged = observeDeleteInteraction(state, interaction);
+  interaction.pendingCardIds.delete(cardId);
+  if (unchanged) {
+    restoreDeleteInteraction(state, interaction);
+  }
+  if (!interaction.pendingCardIds.size) {
+    deleteInteractions.delete(state);
+  }
 }
 
 export async function saveWorkboardCardDraft(params: {
@@ -341,6 +495,10 @@ export async function deleteWorkboardCard(params: {
   invalidateWorkboardLoads(params.host);
   state.busyCardIds.add(params.cardId);
   state.error = null;
+  beginDeleteInteraction(state, params.cardId);
+  const removal = captureCardRemoval(state.cards, params.cardId, state.pendingCardRemovals);
+  state.pendingCardRemovals.set(params.cardId, removal);
+  setWorkboardCards(state, applyPendingCardRemovals(state.cards, state.pendingCardRemovals));
   params.requestUpdate?.();
   try {
     const result = await params.client.request<WorkboardDeleteResult>("workboard.cards.delete", {
@@ -352,6 +510,10 @@ export async function deleteWorkboardCard(params: {
     const referenceUpdates = new Map(
       (result.referenceUpdates ?? []).map((receipt) => [receipt.id, receipt]),
     );
+    applyReferenceUpdatesToPendingCardRemovals(
+      state.pendingCardRemovals,
+      result.referenceUpdates ?? [],
+    );
     const remaining = removeCardAndReferences(state.cards, params.cardId);
     for (const [index, card] of remaining.entries()) {
       const receipt = referenceUpdates.get(card.id);
@@ -359,10 +521,27 @@ export async function deleteWorkboardCard(params: {
         remaining[index] = { ...card, updatedAt: receipt.updatedAt };
       }
     }
-    setWorkboardCards(state, remaining);
+    // Invalidate any list read that overlapped the delete before removing the
+    // tombstone, so an older payload cannot resurrect the acknowledged card.
+    invalidateWorkboardLoads(params.host);
+    state.pendingCardRemovals.delete(params.cardId);
+    discardPendingLinksToCard(state.pendingCardRemovals, params.cardId);
+    setWorkboardCards(state, applyPendingCardRemovals(remaining, state.pendingCardRemovals));
+    completeDeleteInteraction(state, params.cardId);
     return result;
   } catch (error) {
+    const rollback = state.pendingCardRemovals.get(params.cardId) ?? removal;
+    state.pendingCardRemovals.delete(params.cardId);
+    setWorkboardCards(
+      state,
+      applyPendingCardRemovals(
+        restoreCardRemoval(state.cards, rollback, state.pendingCardRemovals),
+        state.pendingCardRemovals,
+      ),
+    );
     reconcileCardConflict(state, error);
+    setWorkboardCards(state, applyPendingCardRemovals(state.cards, state.pendingCardRemovals));
+    rejectDeleteInteraction(state, params.cardId);
     state.error = formatError(error);
     return false;
   } finally {
@@ -439,7 +618,7 @@ export async function dispatchWorkboard(params: {
     );
     const payload = await params.client.request("workboard.cards.list", {});
     const normalized = normalizeCardsPayload(payload);
-    setWorkboardCards(state, normalized.cards);
+    setWorkboardCards(state, applyPendingCardRemovals(normalized.cards, state.pendingCardRemovals));
     state.statuses = normalized.statuses;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
     state.tasksByCardId = new Map();
