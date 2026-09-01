@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -22,17 +23,16 @@ import type {
   ChatQueueItem,
   ChatStreamSegment,
 } from "../../../lib/chat/chat-types.ts";
-import {
-  buildCompanionQuestionPrefill,
-  buildMoreDetailsCompanionQuestion,
-} from "../../../lib/chat/companion-question.ts";
+import { buildCompanionQuestionPrefill } from "../../../lib/chat/companion-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
+import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { RunOutputUsage } from "../tool-stream-contract.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
@@ -46,6 +46,7 @@ import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-s
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 
 export type ChatThreadState = {
+  turnRecapWatch: TurnRecapWatch | null;
   searchOpen: boolean;
   searchQuery: string;
   searchFocusPending: boolean;
@@ -71,6 +72,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
+  gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
@@ -86,7 +88,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   streamStartedAt: number | null;
   /** Browser-local active run identity, retained across transient disconnects. */
   runId?: string | null;
-  runOutputTokens?: number | null;
+  runUsageById?: ReadonlyMap<string, RunOutputUsage>;
   runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
   pendingInputs?: ChatPendingInputsPage["items"];
@@ -144,7 +146,6 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  onCompanionQuestion?: (question: string) => void;
   onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   modelSetupRequired?: boolean;
@@ -161,12 +162,12 @@ type TranscriptInteractionProps = Pick<
   | "onRewindMessage"
   | "onForkMessage"
   | "onFocusComposer"
-  | "onCompanionQuestion"
   | "onCompanionPrefill"
 >;
 
 function createTranscriptState(): ChatThreadState {
   return {
+    turnRecapWatch: null,
     searchOpen: false,
     searchQuery: "",
     searchFocusPending: false,
@@ -407,21 +408,10 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
 
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
-  if (
-    event.button !== 0 ||
-    event.ctrlKey ||
-    typeof props.onCompanionQuestion !== "function" ||
-    typeof props.onCompanionPrefill !== "function"
-  ) {
+  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionPrefill !== "function") {
     return;
   }
   handleChatSelectionPointerUp(event, {
-    onMoreDetails: (selection) => {
-      const question = buildMoreDetailsCompanionQuestion(selection);
-      if (question) {
-        props.onCompanionQuestion?.(question);
-      }
-    },
     onAskSideChat: (selection) => {
       const question = buildCompanionQuestionPrefill(selection);
       if (question) {

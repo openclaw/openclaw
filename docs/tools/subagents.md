@@ -337,9 +337,7 @@ waiting.
 
 Automatic continuation is specific to the plugin runtime API above. Ordinary
 follow-ups through routes not tracked as sub-agent runs neither continue the
-paused run nor announce its requester. Explicit `subagents` steering is
-different: it deliberately replaces the yielded run and continues the same
-child session.
+paused run nor announce its requester.
 
 Among plugin runtime follow-ups, continuation applies to those that use default
 delivery. A follow-up that supplies its own requester or completion-delivery
@@ -463,6 +461,9 @@ remain spawnable while inheriting defaults.
 - Configured run timeouts do **not** auto-archive; they only stop the run. The session remains until auto-archive.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
+
+The `subagent_ended` plugin hook is best-effort. Hook execution or plugin runtime
+loading failures are logged and do not abort sub-agent cleanup.
 
 ## Nested sub-agents
 
