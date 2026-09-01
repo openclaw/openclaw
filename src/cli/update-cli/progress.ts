@@ -96,6 +96,12 @@ function inferUpdateFailureHints(result: UpdateRunResult): string[] {
       "Install the missing package manager manually, then rerun the update command.",
     ];
   }
+  if (result.reason === "ambiguous-release-remote") {
+    return [
+      "This stable/beta checkout has multiple Git remotes but no configured main remote, so the updater stopped without choosing one.",
+      "From the checkout root, set the canonical release remote, then rerun the update: git config branch.main.remote <canonical-remote>",
+    ];
+  }
   if (result.mode !== "npm") {
     return [];
   }

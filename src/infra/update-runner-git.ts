@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -25,6 +26,7 @@ import {
   resolveInstallEnv,
   shouldInstallWithoutScriptsOnWindows,
 } from "./update-runner-git-commands.js";
+import { prepareStableGitFetch } from "./update-runner-git-fetch.js";
 import { runGitDevPreflight } from "./update-runner-git-preflight.js";
 import { rebuildRolledBackGitRuntime } from "./update-runner-git-recovery.js";
 import {
@@ -49,6 +51,15 @@ async function readBuiltGatewayBuildId(gitRoot: string): Promise<string | null> 
   } catch {
     return null;
   }
+}
+
+function parseRemoteTagNames(stdout: string): string[] {
+  return normalizeStringEntries(
+    stdout.split("\n").map((line) => {
+      const ref = line.trim().split(/\s+/u).at(1) ?? "";
+      return ref.startsWith("refs/tags/v") ? ref.slice("refs/tags/".length) : "";
+    }),
+  );
 }
 
 export async function updateGitCheckout(params: {
@@ -83,9 +94,7 @@ export async function updateGitCheckout(params: {
   const devTarget = channel === "dev" ? opts.devTarget : undefined;
   const hasDevTarget = devTarget !== undefined;
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
-  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
-  let stepIndex = 0;
   const step = (
     name: string,
     argv: string[],
@@ -99,8 +108,6 @@ export async function updateGitCheckout(params: {
     timeoutMs,
     env,
     progress: opts.progress,
-    stepIndex: stepIndex++,
-    totalSteps,
     results: steps,
   });
 
@@ -144,8 +151,6 @@ export async function updateGitCheckout(params: {
       argv,
       cwd: gitRoot,
       timeoutMs,
-      stepIndex: 0,
-      totalSteps: 1,
       results: steps,
     });
     return result.exitCode === 0;
@@ -160,8 +165,6 @@ export async function updateGitCheckout(params: {
       argv: ["git", "-C", gitRoot, "rev-parse", "HEAD"],
       cwd: gitRoot,
       timeoutMs,
-      stepIndex: 0,
-      totalSteps: 1,
       results: steps,
     });
     const verified = result.exitCode === 0 && result.stdoutTail?.trim() === beforeSha;
@@ -283,12 +286,20 @@ export async function updateGitCheckout(params: {
     return buildError("dirty", "skipped");
   }
 
+  // Configured pruneTags must not turn this branch refresh into deletion of operator-local tags.
+  // Explicit tag refspecs are excluded from the preliminary refresh and fetched only when selected.
+  const fetchAllBranchesArgv = [
+    "git",
+    "-C",
+    gitRoot,
+    "fetch",
+    "--all",
+    "--prune",
+    "--no-prune-tags",
+    "--no-tags",
+  ];
   if (channel === "dev") {
-    const fetchFailure = await runRequiredStep(
-      "git fetch",
-      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
-      "fetch-failed",
-    );
+    const fetchFailure = await runRequiredStep("git fetch", fetchAllBranchesArgv, "fetch-failed");
     if (fetchFailure) {
       return fetchFailure;
     }
@@ -373,8 +384,6 @@ export async function updateGitCheckout(params: {
             argv: ["git", "-C", gitRoot, "rebase", "--abort"],
             cwd: gitRoot,
             timeoutMs,
-            stepIndex: 0,
-            totalSteps: 1,
             results: steps,
           });
           return await rollbackError("rebase-failed");
@@ -382,17 +391,110 @@ export async function updateGitCheckout(params: {
       }
     }
   } else {
-    const fetchFailure = await runRequiredStep(
-      "git fetch",
-      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
-      "fetch-failed",
-    );
-    if (fetchFailure) {
-      return fetchFailure;
+    const stableFetch = await prepareStableGitFetch({
+      gitRoot,
+      timeoutMs,
+      runCommand,
+      progress: opts.progress,
+      steps,
+      fetchAllArgv: fetchAllBranchesArgv,
+    });
+    if (stableFetch.reason) {
+      return buildError(stableFetch.reason);
     }
-    const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
+    let remotes = stableFetch.remotes;
+    if (!remotes) {
+      const remoteStep = await runStep(
+        step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
+      );
+      if (remoteStep.exitCode !== 0) {
+        return buildError("fetch-failed");
+      }
+      remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
+    }
+    const mainRemoteStep = await runStep({
+      ...step(
+        "git config main remote",
+        ["git", "-C", gitRoot, "config", "--get", `branch.${DEV_BRANCH}.remote`],
+        gitRoot,
+      ),
+      runCommand: async (argv, options) => {
+        const result = await runCommand(argv, options);
+        return result.code === 1 ? { ...result, code: 0 } : result;
+      },
+    });
+    if (mainRemoteStep.exitCode !== 0) {
+      return buildError("fetch-failed");
+    }
+    const configuredMainRemote = mainRemoteStep.stdoutTail?.trim() ?? "";
+    const configuredReleaseRemote = configuredMainRemote === "." ? "" : configuredMainRemote;
+    const releaseRemote = configuredReleaseRemote
+      ? remotes.includes(configuredReleaseRemote)
+        ? configuredReleaseRemote
+        : null
+      : remotes.length === 1
+        ? (remotes.at(0) ?? null)
+        : remotes.includes("origin")
+          ? "origin"
+          : null;
+    if (!releaseRemote) {
+      return buildError(
+        !configuredReleaseRemote && remotes.length > 1
+          ? "ambiguous-release-remote"
+          : "fetch-failed",
+      );
+    }
+    let remoteTagsOutput = "";
+    const remoteTagsStep = await runStep({
+      ...step(
+        `git ls-remote ${releaseRemote} tags`,
+        [
+          "git",
+          "-C",
+          gitRoot,
+          "ls-remote",
+          "--tags",
+          "--refs",
+          "--sort=-v:refname",
+          "--",
+          releaseRemote,
+          "v*",
+        ],
+        gitRoot,
+      ),
+      runCommand: async (argv, options) => {
+        const result = await runCommand(argv, options);
+        remoteTagsOutput = result.stdout;
+        return result;
+      },
+    });
+    if (remoteTagsStep.exitCode !== 0) {
+      return buildError("fetch-failed");
+    }
+    const tag = resolveChannelTag(parseRemoteTagNames(remoteTagsOutput), channel);
     if (!tag) {
       return buildError("no-release-tag");
+    }
+    // Only the selected release from the main branch's source remote may update the shared tag.
+    // Configured pruning must not delete unrelated operator-local tags.
+    const tagFetchFailure = await runRequiredStep(
+      `git fetch ${releaseRemote} ${tag}`,
+      [
+        "git",
+        "-C",
+        gitRoot,
+        "fetch",
+        "--no-prune",
+        "--no-tags",
+        "--refmap=",
+        "--",
+        releaseRemote,
+        `+refs/tags/${tag}:refs/tags/${tag}`,
+      ],
+      "fetch-failed",
+    );
+    if (tagFetchFailure) {
+      return tagFetchFailure;
     }
     await prepareMutation(tag);
     const failure = await runRequiredStep(
@@ -539,8 +641,6 @@ export async function updateGitCheckout(params: {
         cwd: gitRoot,
         timeoutMs,
         env: manager.env,
-        stepIndex: 0,
-        totalSteps: 1,
         results: steps,
       });
       if (repairStep.exitCode !== 0) {
