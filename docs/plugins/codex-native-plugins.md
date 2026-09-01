@@ -105,6 +105,7 @@ exact marketplace-qualified identity:
 ```text
 /codex plugins available
 /codex plugins install security-review@company-tools
+/codex plugins status security-review@company-tools
 ```
 
 Codex discovers repository marketplaces from
@@ -227,6 +228,41 @@ from `plugins.entries.codex.config.codexPlugins.plugins`.
 can discover repository-local plugins without enabling them. The owner-scoped
 `codex_plugins` model tool is also read-only: it can recommend an exact install
 command but cannot install, enable, or add a marketplace.
+
+`status` without a target opens a picker of explicitly configured plugins for
+an owner or `operator.admin`. The picker reads local OpenClaw configuration
+only and offers discovery when no plugins are configured.
+
+`status <configured-plugin> [page]` requires the same authority. It
+shows bundle installation, marketplace restrictions, Codex enablement, and
+shared OpenClaw app access separately. The OpenClaw setting controls app access
+for new conversations; it does not install or enable the Codex bundle.
+
+App results show at most five apps per page. A ChatGPT app-page link requires
+confirmed hosted-app runtime support, an available plugin under its catalog
+policy, and matching authorized metadata from `app/read`. A plugin's app
+declaration or setup URL alone does not establish that access. OpenClaw app
+access can be disabled while an eligible ChatGPT page remains available;
+opening that page does not enable OpenClaw app access. Plugins without hosted
+apps receive no ChatGPT connection or setup guidance. Status does not assess
+their skills or native MCP server readiness.
+
+The selected agent, auth profile, conversation workspace, and account email/plan
+are shown when available. ChatGPT workspace identity remains unknown when
+Codex does not report it; use the same account and workspace in the browser
+when opening an eligible hosted app page.
+
+Status reads existing Codex snapshots without forcing a hosted-tool refresh,
+changing configuration, or replacing a conversation. Only a read against the
+bound thread can report that an app is callable in that thread's runtime
+snapshot. An absent snapshot is unknown; it does not prove that an app is
+disconnected or needs a new connection. Snapshot freshness and live connection
+status remain unknown; installation and metadata alone do not prove a successful
+tool call. After completing hosted setup, recheck in Codex, then use `/new` or
+`/reset` and inspect status again. Existing conversations keep their admitted app
+policy after browser setup or OpenClaw app-access changes. Unsupported methods,
+restrictions, and failed reads show a recovery action instead of reporting
+readiness.
 
 `install`, `enable`, and `disable` require the owner or a gateway client with
 the `operator.admin` scope. OpenClaw's reserved `/codex` command is dispatched

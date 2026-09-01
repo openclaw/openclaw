@@ -1,125 +1,15 @@
 // Codex tests cover command plugins management plugin behavior.
-import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import type { v2 } from "./app-server/protocol.js";
+import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import {
-  handleCodexPluginsSubcommand,
-  type CodexPluginsConfigBlock,
-  type CodexPluginsManagementIO,
-} from "./command-plugins-management.js";
-
-type CodexPluginConfigEntry = NonNullable<CodexPluginsConfigBlock["plugins"]>[string];
-type CodexPluginsManagementRuntime = NonNullable<
-  Parameters<typeof handleCodexPluginsSubcommand>[3]
->;
-
-function inMemoryIO(
-  initial: Record<string, CodexPluginConfigEntry> = {},
-  options: { enabled?: boolean } = { enabled: true },
-): CodexPluginsManagementIO & {
-  current: () => Record<string, CodexPluginConfigEntry>;
-  currentConfig: () => CodexPluginsConfigBlock;
-} {
-  const store: CodexPluginsConfigBlock = {
-    enabled: options.enabled,
-    plugins: structuredClone(initial),
-  };
-  return {
-    current: () => structuredClone(store.plugins ?? {}),
-    currentConfig: () => structuredClone(store),
-    readConfig: () => Promise.resolve(structuredClone(store)),
-    mutate: async (update) => {
-      update(store);
-    },
-  };
-}
-
-const fakeCtx: PluginCommandContext = {
-  args: "",
-  config: {},
-  channel: "test",
-  isAuthorizedSender: true,
-  senderIsOwner: true,
-  commandBody: "/codex plugins",
-  requestConversationBinding: async () => ({ status: "error", message: "unused" }),
-  detachConversationBinding: async () => ({ removed: false }),
-  getCurrentConversationBinding: async () => null,
-};
-
-function buttonCommands(result: PluginCommandResult): string[] {
-  const block = result.presentation?.blocks.find((candidate) => candidate.type === "buttons");
-  if (!block || block.type !== "buttons") {
-    throw new Error("expected button presentation");
-  }
-  return block.buttons.map((button) =>
-    button.action?.type === "command" ? button.action.command : "",
-  );
-}
-
-function pluginSummary(
-  name: string,
-  marketplace: string,
-  overrides: Partial<v2.PluginSummary> = {},
-) {
-  return {
-    id: `${name}@${marketplace}`,
-    name,
-    installed: false,
-    enabled: false,
-    installPolicy: "AVAILABLE",
-    authPolicy: "ON_USE",
-    ...(overrides.remotePluginId ? { mustShowInstallationInterstitial: false } : {}),
-    interface: { shortDescription: "Security review <@team> *instructions*" },
-    ...overrides,
-  } satisfies v2.PluginSummary;
-}
-
-function pluginRuntime(params?: {
-  marketplace?: string;
-  marketplacePath?: string;
-  pluginName?: string;
-  remotePluginId?: string;
-  mustShowInstallationInterstitial?: boolean | null;
-  installed?: boolean;
-  enabled?: boolean;
-  install?: CodexPluginsManagementRuntime["install"];
-  refresh?: CodexPluginsManagementRuntime["refresh"];
-}) {
-  const marketplace = params?.marketplace ?? "company-tools";
-  const pluginName = params?.pluginName ?? "security-review";
-  const listed = {
-    marketplaces: [
-      {
-        name: marketplace,
-        ...(params?.marketplacePath ? { path: params.marketplacePath } : {}),
-        plugins: [
-          pluginSummary(pluginName, marketplace, {
-            ...(params?.remotePluginId
-              ? {
-                  remotePluginId: params.remotePluginId,
-                  ...(params.mustShowInstallationInterstitial !== undefined
-                    ? {
-                        mustShowInstallationInterstitial: params.mustShowInstallationInterstitial,
-                      }
-                    : {}),
-                }
-              : {}),
-            ...(params?.installed ? { installed: true } : {}),
-            ...(params?.enabled ? { enabled: true } : {}),
-          }),
-        ],
-      },
-    ],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  } satisfies v2.PluginListResponse;
-  return {
-    workspaceDir: vi.fn(async () => "/repo/company"),
-    list: vi.fn(async () => listed),
-    install: params?.install ?? vi.fn(async () => ({ authPolicy: "ON_USE", appsNeedingAuth: [] })),
-    ...(params?.refresh ? { refresh: params.refresh } : {}),
-  } satisfies CodexPluginsManagementRuntime;
-}
+  buttonCommands,
+  fakeCtx,
+  inMemoryIO,
+  pluginRuntime,
+  pluginSummary,
+  type CodexPluginsManagementRuntime,
+} from "./command-plugins-management.test-support.js";
 
 describe("Codex /codex plugins subcommand", () => {
   it("lists a configured plugin with its enabled marker and explains the underlying file", async () => {
@@ -162,6 +52,7 @@ describe("Codex /codex plugins subcommand", () => {
     expect(buttonCommands(result)).toEqual([
       "/codex plugins list",
       "/codex plugins available",
+      "/codex plugins status",
       "/codex plugins enable",
       "/codex plugins disable",
       "/codex plugins help",
@@ -298,37 +189,41 @@ describe("Codex /codex plugins subcommand", () => {
     expect(result.text).not.toContain("*instructions*");
   });
 
-  it("installs local plugins from their exact marketplace path and enables only the selected plugin", async () => {
-    const io = inMemoryIO({}, { enabled: false });
-    const runtime = pluginRuntime({
-      marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
-    });
+  it.each(["security-review", "security-review.v2"])(
+    "installs local %s from its exact marketplace path and enables only the selected plugin",
+    async (pluginName) => {
+      const io = inMemoryIO({}, { enabled: false });
+      const runtime = pluginRuntime({
+        pluginName,
+        marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+      });
 
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
+      const result = await handleCodexPluginsSubcommand(
+        fakeCtx,
+        ["install", `${pluginName}@company-tools`],
+        io,
+        runtime,
+      );
 
-    expect(runtime.install).toHaveBeenCalledWith({
-      marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
-      pluginName: "security-review",
-    });
-    expect(io.currentConfig()).toEqual({
-      enabled: true,
-      plugins: {
-        "security-review@company-tools": {
-          enabled: true,
-          marketplaceName: "company-tools",
-          pluginName: "security-review",
+      expect(runtime.install).toHaveBeenCalledWith({
+        marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+        pluginName,
+      });
+      expect(io.currentConfig()).toEqual({
+        enabled: true,
+        plugins: {
+          [`${pluginName}@company-tools`]: {
+            enabled: true,
+            marketplaceName: "company-tools",
+            pluginName,
+          },
         },
-      },
-    });
-    expect(io.currentConfig()).not.toHaveProperty("allow_all_plugins");
-    expect(result.text).toContain("bundle was installed in Codex");
-    expect(result.text).toContain("Takes effect on your next message.");
-  });
+      });
+      expect(io.currentConfig()).not.toHaveProperty("allow_all_plugins");
+      expect(result.text).toContain("bundle was installed in Codex");
+      expect(result.text).toContain("Takes effect on your next message.");
+    },
+  );
 
   it("installs remote plugins with their opaque remote identity and preserves exact summary ids", async () => {
     const io = inMemoryIO();
@@ -934,6 +829,37 @@ describe("Codex /codex plugins subcommand", () => {
       buttons: [{ label: "Open GitHub in ChatGPT", action: { type: "url", url: installUrl } }],
     });
     expect(io.current()["security-review@company-tools"]?.enabled).toBe(true);
+  });
+
+  it("keeps the completed installation but withholds a setup URL when current app access cannot be confirmed", async () => {
+    const io = inMemoryIO();
+    const runtime = pluginRuntime({
+      marketplacePath: "/repo/marketplace.json",
+      setupAllowed: false,
+      install: vi.fn(async () => ({
+        authPolicy: "ON_INSTALL",
+        appsNeedingAuth: [
+          {
+            id: "github",
+            name: "GitHub",
+            description: null,
+            installUrl: "https://chatgpt.com/apps/github/connector_github",
+            category: null,
+          },
+        ],
+      })),
+    });
+    const result = await handleCodexPluginsSubcommand(
+      fakeCtx,
+      ["install", "security-review@company-tools"],
+      io,
+      runtime,
+    );
+    expect(result.text).toContain("setup permissions could not be confirmed");
+    expect(result.text).toContain("/codex plugins status security-review@company-tools");
+    expect(result.text).not.toContain("https://chatgpt.com/apps/");
+    expect(io.current()["security-review@company-tools"]?.enabled).toBe(true);
+    expect(runtime.install).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the returned hosted origin and URL punctuation in setup links", async () => {
