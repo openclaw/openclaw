@@ -1,8 +1,55 @@
 import { vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronJob } from "../../cron/types.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
+
+export function callerClient(
+  agentId: string,
+  accountId?: string,
+  sessionKey?: string,
+  currentJobId?: string,
+  currentJobExpiresAtMs = Date.now() + 60_000,
+): GatewayClient {
+  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
+  return {
+    connect: {} as GatewayClient["connect"],
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId,
+        sessionKey: sessionKey ?? `agent:${agentId}:main`,
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance,
+          lifecycleGeneration: "test-generation",
+          claimId: "test-claim",
+        },
+        ...(accountId ? { turnSourceAccountId: accountId } : {}),
+        ...(currentJobId
+          ? {
+              cronSelfManagementContext: {
+                jobId: currentJobId,
+                expiresAtMs: currentJobExpiresAtMs,
+              },
+            }
+          : {}),
+      },
+    },
+  };
+}
+
+export function callerClientWithCronCreatorAuthority(
+  grant: CronCreatorAuthorityGrant,
+): GatewayClient {
+  const client = callerClient("ops");
+  client.internal!.agentRuntimeIdentity!.cronToolsAllowCapture = "final-executable-surface";
+  client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant = grant;
+  return client;
+}
 
 export function createCronTestContext(
   currentJobs: CronJob | CronJob[] | undefined,

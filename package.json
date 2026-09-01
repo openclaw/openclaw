@@ -2125,6 +2125,8 @@
     "test:live:cache": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import ./scripts/tsx.mjs scripts/check-live-cache.ts",
     "test:live:codex-harness": "node --import ./scripts/tsx.mjs scripts/test-live.mts --codex-harness -- src/gateway/gateway-codex-harness.live.test.ts",
     "test:live:system-agent-rescue-channel": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL=1 -- node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/system-agent/rescue-channel.live.test.ts",
+    "test:live:cron-list": "node --import ./scripts/tsx.mjs scripts/proof-cron-list-live.ts",
+    "test:live:cron-list:role": "node --import ./scripts/tsx.mjs scripts/proof-cron-list-role-live.ts",
     "test:live:gateway-profiles": "node --import ./scripts/tsx.mjs scripts/test-live.mts -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:media": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts",
     "test:live:media:image": "node --import ./scripts/tsx.mjs test/e2e/qa-lab/media/hosted-media-provider-live.ts image",

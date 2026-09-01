@@ -19,7 +19,6 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
@@ -34,12 +33,8 @@ import { resolveCronJobBoundSessionKeys } from "../../cron/job-session-bindings.
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
-import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronUpdateOptions } from "../../cron/service/state.js";
-import {
-  isInvalidCronSessionTargetIdError,
-  resolveCronSessionTargetSessionKey,
-} from "../../cron/session-target.js";
+import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import {
   isInvalidCronTaskRunJobIdError,
@@ -66,10 +61,9 @@ import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../cron-creator-authority-grant.js";
-import { authorizeGatewaySessionCreation, operatorSessionCap } from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { createSessionListEntryFilter } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
@@ -92,10 +86,15 @@ import {
 } from "./cron-input-validation.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
 import { compactCronListJob } from "./cron-list-projection.js";
+import {
+  applyCronListVisibility,
+  cronJobIsVisible,
+  resolveCronSessionVisibility,
+  type CronListPageResult,
+} from "./cron-list-visibility.js";
 import { cronRunLogPageFilters, filterCronRunLogJobsByAgent } from "./cron-run-log-filters.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type {
-  GatewayClient,
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
@@ -234,46 +233,6 @@ function respondCronJobNotFound(
         details: { code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND, jobId },
       },
     ),
-  );
-}
-
-type CronSessionVisibility = (sessionKey: string, agentId?: string) => boolean;
-
-function resolveCronSessionVisibility(
-  client: GatewayClient | null,
-  cfg: OpenClawConfig,
-): CronSessionVisibility | undefined {
-  const identity = client?.internal?.agentRuntimeIdentity;
-  if (identity && getCronManagementAuthority(identity)) {
-    return undefined;
-  }
-  if (operatorSessionCap(client, cfg) !== "none") {
-    return undefined;
-  }
-  const entryFilter = createSessionListEntryFilter({ client, cfg });
-  if (!entryFilter) {
-    return undefined;
-  }
-  return (sessionKey, agentId) => {
-    const loaded = loadGatewaySessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined);
-    return loaded.entry !== undefined && entryFilter(loaded.canonicalKey, loaded.entry);
-  };
-}
-
-function cronJobIsVisible(
-  job: CronJob,
-  visibility: CronSessionVisibility | undefined,
-  defaultAgentId: string | undefined,
-): boolean {
-  if (!visibility) {
-    return true;
-  }
-  const sessionKey =
-    job.owner?.sessionKey ??
-    resolveCronSessionTargetSessionKey(job.sessionTarget) ??
-    job.sessionKey;
-  return Boolean(
-    sessionKey && visibility(sessionKey, job.owner?.agentId ?? job.agentId ?? defaultAgentId),
   );
 }
 
@@ -502,7 +461,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       let page: CronListPageResult;
       const finishPage = diagnostics?.startSourcePage();
       try {
-        page = await context.cron.listPage(listOptions, matchesJob);
+        page = applyCronListVisibility(await context.cron.listPage(listOptions, matchesJob), {
+          callerScoped: Boolean(callerScope),
+          roleRestricted: Boolean(cronVisibility),
+        });
       } finally {
         finishPage?.();
       }
