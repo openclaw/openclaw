@@ -188,6 +188,8 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
+LIST SCOPE: In an agent session, list results are restricted to automations visible to the calling agent. Inaccessible automations are omitted; total, pagination, and snapshotRevision describe this restricted view, not the complete Gateway inventory. Operator/admin views can be complete.
+
 ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with timing; use nextOffset for the next page) | get jobId (full schedule, payload, and delivery details) | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
 Authenticated Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns have a restricted inventory; use a fresh admin Control UI turn or the Automations page for cross-session management.
