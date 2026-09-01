@@ -126,24 +126,6 @@ function isOfficialFirecrawlEndpoint(url: URL): boolean {
   return url.protocol === "https:" && ALLOWED_FIRECRAWL_HOSTS.has(url.hostname);
 }
 
-async function firecrawlEndpointTargetsPrivateNetwork(
-  url: URL,
-  lookupFn?: LookupFn,
-): Promise<boolean> {
-  if (isBlockedHostnameOrIp(url.hostname)) {
-    return true;
-  }
-  try {
-    const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
-      lookupFn,
-      policy: { allowPrivateNetwork: true },
-    });
-    return pinned.addresses.every((address) => isPrivateIpAddress(address));
-  } catch {
-    return false;
-  }
-}
-
 async function validateFirecrawlBaseUrl(
   baseUrl: string,
   lookupFn?: LookupFn,
@@ -162,8 +144,21 @@ async function validateFirecrawlBaseUrl(
     return "strict";
   }
 
-  const isPrivateTarget = await firecrawlEndpointTargetsPrivateNetwork(url, lookupFn);
-  if (isPrivateTarget) {
+  if (isBlockedHostnameOrIp(url.hostname)) {
+    return "selfHosted";
+  }
+  // The allow-private-network policy skips every private-network check inside
+  // the resolver, so a failure there can only be a hostname-resolution failure —
+  // never a resolvable public endpoint. Report it as one instead of falling
+  // back to the private-network policy message.
+  const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
+    lookupFn,
+    policy: { allowPrivateNetwork: true },
+  }).catch((reason: unknown) => {
+    const cause = reason instanceof Error ? reason.message : String(reason);
+    throw new Error(`Unable to resolve Firecrawl baseUrl host: ${url.hostname} (${cause})`);
+  });
+  if (pinned.addresses.every((address) => isPrivateIpAddress(address))) {
     return "selfHosted";
   }
   if (url.protocol === "http:") {

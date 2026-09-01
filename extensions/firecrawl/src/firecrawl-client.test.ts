@@ -1,6 +1,7 @@
 // Firecrawl tests cover firecrawl client behavior — URL safety,
 // scrape payload parsing, and search-item extraction.
 import { expectDefined } from "@openclaw/normalization-core";
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 let firecrawlClient: typeof import("./firecrawl-client.js").testing;
@@ -834,5 +835,41 @@ describe("parseFirecrawlScrapePayload", () => {
     });
 
     expect(result.title).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveEndpoint self-hosted classification
+// ---------------------------------------------------------------------------
+describe("resolveEndpoint self-hosted classification", () => {
+  const publicLookup: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
+  const privateLookup: LookupFn = async () => [{ address: "192.168.8.19", family: 4 }];
+
+  it("reports an unresolvable self-hosted host as a DNS failure, not a policy violation", async () => {
+    const unresolvable: LookupFn = async () => {
+      throw new Error("getaddrinfo ENOTFOUND firecrawl.lan");
+    };
+    await expect(
+      firecrawlClient.resolveEndpoint("http://firecrawl.lan:3002", "/v2/scrape", unresolvable),
+    ).rejects.toThrow("Unable to resolve Firecrawl baseUrl host: firecrawl.lan");
+  });
+
+  it("reports an empty DNS answer as a resolution failure", async () => {
+    const empty: LookupFn = async () => [];
+    await expect(
+      firecrawlClient.resolveEndpoint("http://raspberrypi:3002", "/v2/scrape", empty),
+    ).rejects.toThrow("Unable to resolve Firecrawl baseUrl host: raspberrypi");
+  });
+
+  it("keeps the public-endpoint rejection for a resolvable public host", async () => {
+    await expect(
+      firecrawlClient.resolveEndpoint("https://attacker.example", "/v2/search", publicLookup),
+    ).rejects.toThrow("Firecrawl custom baseUrl must target a private or internal");
+  });
+
+  it("classifies a host that resolves to a private address as self-hosted", async () => {
+    await expect(
+      firecrawlClient.resolveEndpoint("http://firecrawl.lan:3002", "/v2/scrape", privateLookup),
+    ).resolves.toEqual({ url: "http://firecrawl.lan:3002/v2/scrape", mode: "selfHosted" });
   });
 });
