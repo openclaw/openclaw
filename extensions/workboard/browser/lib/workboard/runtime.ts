@@ -347,6 +347,7 @@ function createDefaultState(): WorkboardUiState {
     detailCardId: null,
     detailCommentBody: "",
     busyCardIds: new Set(),
+    pendingCardRemovalIds: new Set(),
     draggedCardId: null,
     capturingSessionKeys: new Set(),
   };

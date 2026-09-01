@@ -219,6 +219,7 @@ export async function deleteWorkboardCard(params: {
   state.busyCardIds.add(params.cardId);
   state.error = null;
   const removal = captureCardRemoval(state.cards, params.cardId);
+  state.pendingCardRemovalIds.add(params.cardId);
   state.cards = removeCardAndReferences(state.cards, params.cardId);
   params.requestUpdate?.();
   try {
@@ -228,6 +229,7 @@ export async function deleteWorkboardCard(params: {
     state.cards = restoreCardRemoval(state.cards, removal);
     state.error = formatError(error);
   } finally {
+    state.pendingCardRemovalIds.delete(params.cardId);
     state.busyCardIds.delete(params.cardId);
     params.requestUpdate?.();
   }
