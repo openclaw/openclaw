@@ -15,7 +15,7 @@ import {
   makeCronSessionEntry,
   resolveAgentConfigMock,
   resolveAllowedModelRefMock,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveCronSessionMock,
   resolveThinkingDefaultMock,
   resolveSupportedThinkingLevelMock,
@@ -61,9 +61,12 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      normalization: "applied",
     });
     resolveAgentConfigMock.mockReturnValue(undefined);
     resolveCronSessionMock.mockReturnValue(

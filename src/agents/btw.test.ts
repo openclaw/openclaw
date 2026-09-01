@@ -8,7 +8,7 @@ import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-m
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,

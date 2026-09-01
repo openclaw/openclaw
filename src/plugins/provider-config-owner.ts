@@ -44,6 +44,21 @@ export function resolveProviderConfigApiOwnerHint(params: {
   return api;
 }
 
+/** Combines explicit runtime ownership with a custom provider's native API owner. */
+export function resolveProviderRuntimeOwnerRefs(params: {
+  provider: string;
+  providerOwner?: string;
+  config?: OpenClawConfig;
+}): string[] {
+  return [
+    ...new Set(
+      [params.providerOwner, resolveProviderConfigApiOwnerHint(params)].filter(
+        (owner): owner is string => Boolean(owner),
+      ),
+    ),
+  ];
+}
+
 function providerConfigDeclaresModel(
   providerConfig: { models?: readonly { id?: string }[] } | undefined,
   model: string,

@@ -1,5 +1,4 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 
@@ -33,11 +32,8 @@ function modelConfigKey(provider?: string, model?: string): string {
   if (!modelId) {
     return providerId;
   }
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
-    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
-  )
-    ? modelId
-    : `${providerId}/${modelId}`;
+  // This is an already resolved pair; the model ID may itself start with its provider.
+  return `${providerId}/${modelId}`;
 }
 
 export function resolveFastModeModelParams(params: {

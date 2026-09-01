@@ -273,6 +273,7 @@ async function runEmbeddedAgentInternal(
         cfg: config,
         agentId: requestedWorkspaceResolution.agentId,
         manifestPlugins: pluginMetadataSnapshot,
+        allowPluginNormalization: false,
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",

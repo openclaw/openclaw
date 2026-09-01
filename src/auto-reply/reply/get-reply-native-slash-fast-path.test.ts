@@ -51,25 +51,26 @@ type NativeSlashFastReplyParams = Parameters<typeof maybeResolveNativeSlashComma
 type NativeSlashFastReplyDefaultKey =
   | "agentDir"
   | "agentCfg"
-  | "defaultProvider"
-  | "defaultModel"
+  | "defaultSelection"
   | "aliasIndex"
-  | "provider"
-  | "model"
+  | "selection"
   | "workspaceDir";
 
 function runTestNativeSlashFastReply(
   overrides: Omit<NativeSlashFastReplyParams, NativeSlashFastReplyDefaultKey> &
     Partial<Pick<NativeSlashFastReplyParams, NativeSlashFastReplyDefaultKey>>,
 ) {
+  const defaultSelection = {
+    ref: { provider: "openai", model: "gpt-5.5" },
+    normalization: "applied" as const,
+    routeResolution: "raw" as const,
+  };
   return maybeResolveNativeSlashCommandFastReply({
     agentDir: "/tmp/agent",
     agentCfg: undefined,
-    defaultProvider: "openai",
-    defaultModel: "gpt-5.5",
+    defaultSelection,
     aliasIndex: { byKey: new Map(), byAlias: new Map() },
-    provider: "openai",
-    model: "gpt-5.5",
+    selection: defaultSelection,
     workspaceDir: "/tmp/workspace",
     ...overrides,
   });

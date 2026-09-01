@@ -5,7 +5,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveCronPayloadOutcomeMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
@@ -31,7 +31,10 @@ describe.sequential("CronService silent failure alerts", () => {
     >("./isolated-agent/helpers.js");
     resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
     const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: modelRef,
+      normalization: "applied",
+    });
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],

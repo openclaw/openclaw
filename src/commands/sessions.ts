@@ -215,10 +215,13 @@ function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: st
   }).path;
 }
 
-function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "displayModelRef" | "runtimeLabel"> {
-  const { displayModelRef, runtimeLabel, ...jsonRow } = row;
+function toJsonSessionRow(
+  row: SessionRow,
+): Omit<SessionRow, "displayModelRef" | "runtimeLabel" | "modelOverrideRouteResolution"> {
+  const { displayModelRef, runtimeLabel, modelOverrideRouteResolution, ...jsonRow } = row;
   void displayModelRef;
   void runtimeLabel;
+  void modelOverrideRouteResolution;
   return jsonRow;
 }
 

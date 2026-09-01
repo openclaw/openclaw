@@ -32,7 +32,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.j
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import { prepareModelRunCapabilities } from "../model-catalog-lookup.js";
-import { modelKey, resolveThinkingDefault } from "../model-selection.js";
+import { resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
@@ -56,7 +56,6 @@ import {
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import { createCommandCompactionAccounting } from "./compaction-accounting.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
-import { normalizeAgentCommandModelRef } from "./model-ref.js";
 import type { EmbeddedModelSelection } from "./model-selection.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import { loadAttemptExecutionRuntime, type AgentAttemptResult } from "./runtime-loaders.js";
@@ -442,7 +441,7 @@ export async function runEmbeddedAgentAttempt(params: {
               cfg,
               catalog: runtimeCatalog,
               defaultProvider,
-              defaultModel,
+              defaultModel: { provider: defaultProvider, model: defaultModel },
               agentId: sessionAgentId,
               allowManifestNormalization: true,
               allowPluginNormalization: true,
@@ -610,13 +609,8 @@ export async function runEmbeddedAgentAttempt(params: {
           await deferredLifecycle.complete();
           throw new Error(retryLimitMessage, { cause: err });
         }
-        const switchRef = normalizeAgentCommandModelRef(
-          cfg,
-          err.provider,
-          err.model,
-          modelManifestContext,
-        );
-        if (!visibilityPolicy.allowsKey(modelKey(switchRef.provider, switchRef.model))) {
+        const switchRef = { provider: err.provider, model: err.model };
+        if (!visibilityPolicy.allows(switchRef)) {
           log.info(
             `Live session model switch in subagent run ${runId}: ` +
               `rejected ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} (not in allowlist)`,

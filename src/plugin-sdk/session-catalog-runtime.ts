@@ -1,4 +1,5 @@
 // Private runtime helpers for active registered session catalogs.
+export { resolveDefaultModelSelectionForAgent } from "../agents/model-selection-config.js";
 export { buildControlUiCatalogSessionUrl } from "../../packages/session-url-contract/src/index.js";
 export {
   buildControlUiCatalogSharePath,

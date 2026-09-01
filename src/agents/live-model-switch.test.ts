@@ -3,7 +3,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   resolveDefaultModelForAgentMock: vi.fn(),
-  resolvePersistedSelectedModelRefMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
@@ -19,11 +18,9 @@ vi.mock("./model-selection.js", async () => {
   const actual =
     await vi.importActual<typeof import("./model-selection.js")>("./model-selection.js");
   return {
-    normalizeStoredOverrideModel: actual.normalizeStoredOverrideModel,
+    ...actual,
     resolveDefaultModelForAgent: (...args: unknown[]) =>
       state.resolveDefaultModelForAgentMock(...args),
-    resolvePersistedSelectedModelRef: (...args: unknown[]) =>
-      state.resolvePersistedSelectedModelRefMock(...args),
   };
 });
 
@@ -88,50 +85,6 @@ describe("live model switch", () => {
     state.resolveDefaultModelForAgentMock
       .mockReset()
       .mockReturnValue({ provider: "anthropic", model: "claude-opus-4-6" });
-    state.resolvePersistedSelectedModelRefMock
-      .mockReset()
-      .mockImplementation(
-        (params: {
-          defaultProvider: string;
-          runtimeProvider?: string;
-          runtimeModel?: string;
-          overrideProvider?: string;
-          overrideModel?: string;
-        }) => {
-          const defaultProvider = params.defaultProvider.trim();
-          const overrideProvider = params.overrideProvider?.trim();
-          const overrideModel = params.overrideModel?.trim();
-          if (overrideModel) {
-            if (overrideProvider) {
-              return { provider: overrideProvider, model: overrideModel };
-            }
-            const slash = overrideModel.indexOf("/");
-            if (slash <= 0 || slash === overrideModel.length - 1) {
-              return { provider: defaultProvider, model: overrideModel };
-            }
-            return {
-              provider: overrideModel.slice(0, slash),
-              model: overrideModel.slice(slash + 1),
-            };
-          }
-          const runtimeProvider = params.runtimeProvider?.trim();
-          const runtimeModel = params.runtimeModel?.trim();
-          if (runtimeModel) {
-            if (runtimeProvider) {
-              return { provider: runtimeProvider, model: runtimeModel };
-            }
-            const slash = runtimeModel.indexOf("/");
-            if (slash <= 0 || slash === runtimeModel.length - 1) {
-              return { provider: defaultProvider, model: runtimeModel };
-            }
-            return {
-              provider: runtimeModel.slice(0, slash),
-              model: runtimeModel.slice(slash + 1),
-            };
-          }
-          return null;
-        },
-      );
     state.loadSessionStoreMock.mockReset().mockReturnValue({});
     state.resolveStorePathMock.mockReset().mockReturnValue("/tmp/session-store.json");
     state.updateSessionStoreMock
@@ -282,36 +235,41 @@ describe("live model switch", () => {
     });
   });
 
-  it("strips duplicated provider prefixes from persisted overrides", () => {
-    expect(
-      resolvePendingSelection({
-        providerOverride: "openai",
-        modelOverride: "openai/gpt-5.4",
-      }),
-    ).toEqual({
-      provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-  });
-
-  it("routes normalized overrides back through persisted ref resolution", () => {
-    // Normalization strips duplicate provider prefixes before handing the
-    // choice to the shared persisted-ref resolver.
-    resolvePendingSelection({
-      providerOverride: "z-ai",
-      modelOverride: "z-ai/deepseek-chat",
-    });
-
-    expect(state.resolvePersistedSelectedModelRefMock).toHaveBeenCalledWith({
-      defaultProvider: "anthropic",
-      runtimeProvider: undefined,
-      runtimeModel: undefined,
-      overrideProvider: "z-ai",
-      overrideModel: "deepseek-chat",
-    });
-  });
+  it.each([
+    { provider: "openai", model: "openai/gpt-5.4", provenance: {}, expected: "gpt-5.4" },
+    { provider: "custom", model: "custom/model", provenance: {}, expected: "model" },
+    {
+      provider: "custom",
+      model: "custom/model",
+      provenance: { modelOverrideRouteResolution: "resolved" },
+      expected: "custom/model",
+    },
+    {
+      provider: "custom",
+      model: "custom/model",
+      provenance: {
+        modelOverrideFallbackOriginProvider: "other",
+        modelOverrideFallbackOriginModel: "primary",
+      },
+      expected: "custom/model",
+    },
+  ])(
+    "resolves persisted $provider/$model with $provenance",
+    ({ provider, model, provenance, expected }) => {
+      expect(
+        resolvePendingSelection({
+          providerOverride: provider,
+          modelOverride: model,
+          ...provenance,
+        }),
+      ).toEqual({
+        provider,
+        model: expected,
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      });
+    },
+  );
 
   it("does not import the broad embedded-agent barrel on module load", async () => {
     await loadModule();
@@ -529,13 +487,17 @@ describe("live model switch", () => {
       agentId: "reply",
     };
 
-    it("clears the pending flag when the run executed the persisted selection", async () => {
+    it.each([
+      { provider: "claude-cli", model: "claude-opus-4-6" },
+      { provider: "custom", model: "custom/model" },
+    ])("clears the pending flag after executing $provider/$model", async ({ provider, model }) => {
       // CLI harness runs never pass the embedded attempt-recovery clear; the
       // post-run consolidation is what stops /status reporting a stale switch.
       const sessionEntry = {
         liveModelSwitchPending: true,
-        providerOverride: "claude-cli",
-        modelOverride: "claude-opus-4-6",
+        providerOverride: provider,
+        modelOverride: model,
+        modelOverrideRouteResolution: "resolved",
       };
       state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
 
@@ -543,31 +505,43 @@ describe("live model switch", () => {
 
       await consolidateLiveModelSwitchAfterRun({
         ...consolidateParams,
-        providerUsed: "claude-cli",
-        modelUsed: "claude-opus-4-6",
+        providerUsed: provider,
+        modelUsed: model,
       });
 
       expect(sessionEntry).not.toHaveProperty("liveModelSwitchPending");
     });
 
-    it("keeps the pending flag when the run executed a different model", async () => {
-      const sessionEntry = {
-        liveModelSwitchPending: true,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.5",
-      };
-      state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
-
-      const { consolidateLiveModelSwitchAfterRun } = await loadModule();
-
-      await consolidateLiveModelSwitchAfterRun({
-        ...consolidateParams,
+    it.each([
+      {
+        provider: "openai",
+        model: "gpt-5.5",
         providerUsed: "anthropic",
         modelUsed: "claude-opus-4-6",
-      });
+      },
+      { provider: "custom", model: "custom/model", providerUsed: "custom", modelUsed: "model" },
+    ])(
+      "keeps the pending $provider/$model flag after executing $providerUsed/$modelUsed",
+      async ({ provider, model, providerUsed, modelUsed }) => {
+        const sessionEntry = {
+          liveModelSwitchPending: true,
+          providerOverride: provider,
+          modelOverride: model,
+          modelOverrideRouteResolution: "resolved",
+        };
+        state.loadSessionStoreMock.mockReturnValue({ main: sessionEntry });
 
-      expect(sessionEntry.liveModelSwitchPending).toBe(true);
-    });
+        const { consolidateLiveModelSwitchAfterRun } = await loadModule();
+
+        await consolidateLiveModelSwitchAfterRun({
+          ...consolidateParams,
+          providerUsed,
+          modelUsed,
+        });
+
+        expect(sessionEntry.liveModelSwitchPending).toBe(true);
+      },
+    );
 
     it("clears via the openai runtime promotion when providers differ only by alias", async () => {
       const sessionEntry = {

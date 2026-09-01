@@ -41,7 +41,7 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
   }
   const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
   const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
-  const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
+  const { getModelRefStatus, resolveConfiguredModelSelection, resolveHooksGmailModel } =
     await import("../agents/model-selection.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
   const hooksModelRef = resolveHooksGmailModel({ cfg: ctx.cfg, defaultProvider: DEFAULT_PROVIDER });
@@ -49,10 +49,11 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     note(`- hooks.gmail.model "${ctx.cfg.hooks.gmail.model}" could not be resolved`, "Hooks");
     return;
   }
-  const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+  const defaultSelection = resolveConfiguredModelSelection({
     cfg: ctx.cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
   const catalog = await loadPreparedModelCatalog({
     config: ctx.cfg,
@@ -63,8 +64,8 @@ export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise
     cfg: ctx.cfg,
     catalog,
     ref: hooksModelRef,
-    defaultProvider,
-    defaultModel,
+    defaultProvider: defaultSelection.ref.provider,
+    defaultModel: defaultSelection,
   });
   const warnings: string[] = [];
   if (!status.allowed) {

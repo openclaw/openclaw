@@ -1,8 +1,9 @@
-// Covers direct model directive authorization and upgrade-era repair guidance.
 import { describe, expect, it } from "vitest";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+// Covers direct model directive authorization and upgrade-era repair guidance.
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
 import { resolveModelDirectiveSelection } from "./model-selection-directive.js";
 import { createModelSelectionState } from "./model-selection.js";
 
@@ -35,6 +36,44 @@ function resolveDirective(params: { cfg: OpenClawConfig; raw: string; agentId?: 
 }
 
 describe("resolveModelDirectiveSelection", () => {
+  it("preserves the exact model id and alias when a restricted selection uses fuzzy matching", () => {
+    const { result } = resolveDirective({
+      raw: "model",
+      cfg: {
+        agents: {
+          defaults: {
+            models: { "custom/custom/model": { alias: "nested" } },
+            modelPolicy: { allow: ["custom/custom/model"] },
+          },
+        },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://custom.example/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "custom/model",
+                  name: "Nested",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(result.selection).toEqual({
+      provider: "custom",
+      model: "custom/model",
+      alias: "nested",
+      isDefault: false,
+    });
+  });
+
   it.each([
     {
       allow: ["fixture-route/namespace/*"],
@@ -93,13 +132,16 @@ describe("resolveModelDirectiveSelection", () => {
         agents: { defaults: { model: "anthropic/claude-sonnet-4-6", modelPolicy } },
       };
       const entries = [{ provider: "anthropic", id: "claude-sonnet-4-6", name: "Sonnet" }];
+      const defaultSelection: ReplyModelSelection = {
+        ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+        normalization: "applied",
+        routeResolution: "raw",
+      };
       const state = await createModelSelectionState({
         cfg,
         agentCfg: cfg.agents?.defaults,
-        defaultProvider: "anthropic",
-        defaultModel: "claude-sonnet-4-6",
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
+        defaultSelection,
+        selection: defaultSelection,
         hasModelDirective: true,
         preparedModelCatalog: { entries, routeVariants: entries },
       });

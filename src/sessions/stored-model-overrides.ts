@@ -1,44 +1,43 @@
 // Resolves persisted per-session model choices across child and parent sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelFallbackRouteResolution } from "../agents/model-fallback.types.js";
-import {
-  normalizeStoredOverrideModel,
-  resolvePersistedOverrideModelRef,
-} from "../agents/model-selection-persisted.js";
+import { resolvePersistedOverrideModelRef } from "../agents/model-selection-persisted.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import {
   hasSessionActiveAutoModelFallback,
   resolveSessionModelOverrideRouteResolution,
 } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
-  provider?: string;
+  provider: string;
   model: string;
   source: "session" | "parent";
-  routeResolution: ModelFallbackRouteResolution;
+  // The returned pair is normalized; only raw storage permits legacy alias matching.
+  sourceRouteResolution: ModelFallbackRouteResolution;
 };
 
 function resolveStoredOverrideFromEntry(params: {
   entry?: SessionEntry;
   defaultProvider: string;
+  cfg?: OpenClawConfig;
   source: StoredModelOverride["source"];
 }): StoredModelOverride | null {
-  const normalized = normalizeStoredOverrideModel({
-    providerOverride: params.entry?.providerOverride,
-    modelOverride: params.entry?.modelOverride,
-  });
+  const routeResolution = resolveSessionModelOverrideRouteResolution(params.entry);
   const ref = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
-    overrideProvider: normalized.providerOverride,
-    overrideModel: normalized.modelOverride,
+    cfg: params.cfg,
+    overrideProvider: params.entry?.providerOverride,
+    overrideModel: params.entry?.modelOverride,
+    routeResolution,
   });
   return ref
     ? {
         ...ref,
         source: params.source,
-        routeResolution: resolveSessionModelOverrideRouteResolution(params.entry),
+        sourceRouteResolution: routeResolution,
       }
     : null;
 }
@@ -47,10 +46,12 @@ function resolveStoredOverrideFromEntry(params: {
 export function resolveDirectStoredModelOverride(params: {
   sessionEntry?: SessionEntry;
   defaultProvider: string;
+  cfg?: OpenClawConfig;
 }): StoredModelOverride | null {
   return resolveStoredOverrideFromEntry({
     entry: params.sessionEntry,
     defaultProvider: params.defaultProvider,
+    cfg: params.cfg,
     source: "session",
   });
 }
@@ -78,10 +79,12 @@ export function resolveStoredModelOverride(params: {
   sessionKey?: string;
   parentSessionKey?: string;
   defaultProvider: string;
+  cfg?: OpenClawConfig;
 }): StoredModelOverride | null {
   const direct = resolveDirectStoredModelOverride({
     sessionEntry: params.sessionEntry,
     defaultProvider: params.defaultProvider,
+    cfg: params.cfg,
   });
   if (direct) {
     return direct;
@@ -100,6 +103,7 @@ export function resolveStoredModelOverride(params: {
   return resolveStoredOverrideFromEntry({
     entry: parentEntry,
     defaultProvider: params.defaultProvider,
+    cfg: params.cfg,
     source: "parent",
   });
 }

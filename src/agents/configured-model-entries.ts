@@ -1,4 +1,4 @@
-/** Projects effective configured model refs, aliases, and role tags for one agent. */
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -6,7 +6,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { type ModelManifestNormalizationContext, modelKey } from "./model-ref-shared.js";
+import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import {
   buildModelAliasIndex,
@@ -57,8 +57,8 @@ export function resolveConfiguredModelEntries(
 
   const addEntry = (ref: { provider: string; model: string }, tag: string) => {
     const canonicalRef = params.canonicalizeRef?.(ref) ?? ref;
-    const key = modelKey(canonicalRef.provider, canonicalRef.model);
-    const originalKey = modelKey(ref.provider, ref.model);
+    const key = buildModelCatalogRef(canonicalRef.provider, canonicalRef.model);
+    const originalKey = buildModelCatalogRef(ref.provider, ref.model);
     const existing = entriesByKey.get(key);
     const aliases = [
       ...(existing?.aliases ?? []),

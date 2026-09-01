@@ -13,7 +13,7 @@ import {
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
-import { resolveAgentDir, resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
+import { resolveAgentDir } from "./bot-handlers.agent.runtime.js";
 import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
@@ -527,7 +527,7 @@ async function handleTelegramModelCallback(params: {
     const providerData = await telegramDeps.buildModelsProviderData(runtimeCfg, session.agentId);
     return { sessionState: session, modelData: providerData };
   });
-  const { byProvider, providers, modelNames, resolvedDefault: activeResolvedDefault } = modelData;
+  const { byProvider, providers, modelNames, resolvedDefault } = modelData;
   const providerInfos: ProviderInfo[] = providers.map((provider) => ({
     id: provider,
     count: byProvider.get(provider)?.size ?? 0,
@@ -573,7 +573,7 @@ async function handleTelegramModelCallback(params: {
     const totalPages = calculateTotalPages(models.length);
     const safePage = Math.max(1, Math.min(page, totalPages));
     const currentModel =
-      sessionState.model || `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+      sessionState.model || `${resolvedDefault.provider}/${resolvedDefault.model}`;
     const buttons = buildModelsKeyboard({
       provider,
       models,
@@ -618,10 +618,6 @@ async function handleTelegramModelCallback(params: {
 
   try {
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
-      agentId: sessionState.agentId,
-    });
-    const resolvedDefault = resolveDefaultModelForAgent({
-      cfg: runtimeCfg,
       agentId: sessionState.agentId,
     });
     const isDefaultSelection =

@@ -184,8 +184,11 @@ async function resetMessageHookTestState() {
   });
   mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
   vi.mocked(resolveDefaultModelMock).mockReturnValue({
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
+    defaultSelection: {
+      ref: { provider: "openai", model: "gpt-4o-mini" },
+      normalization: "applied",
+      routeResolution: "raw",
+    },
     aliasIndex: emptyAliasIndex(),
   });
   vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
@@ -234,6 +237,7 @@ async function runLocalPathSelfServeCase(params: {
   );
   mocks.resolveReplyDirectives.mockResolvedValueOnce(
     createGetReplyContinueDirectivesResult({
+      defaultRef: { provider: "openai", model: "gpt-4o-mini" },
       body: ctx.BodyForAgent ?? "read the document",
       abortKey: ctx.SessionKey ?? "agent:main:main",
       from: ctx.From ?? "webchat:operator",
@@ -657,8 +661,11 @@ describe("getReplyFromConfig message hooks", () => {
       attachmentIndex: 0,
     } as const;
     vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
+      defaultSelection: {
+        ref: { provider: "anthropic", model: "claude-opus-4-6" },
+        normalization: "applied",
+        routeResolution: "raw",
+      },
       aliasIndex: emptyAliasIndex(),
     });
     mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
@@ -698,6 +705,7 @@ describe("getReplyFromConfig message hooks", () => {
     });
     mocks.resolveReplyDirectives.mockResolvedValueOnce(
       createGetReplyContinueDirectivesResult({
+        defaultRef: { provider: "anthropic", model: "claude-opus-4-6" },
         body: enrichedBody,
         abortKey: "agent:main:webchat:direct:user",
         from: "webchat:user",
@@ -745,8 +753,9 @@ describe("getReplyFromConfig message hooks", () => {
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
-        provider: "anthropic",
-        model: "claude-opus-4-6",
+        selection: expect.objectContaining({
+          ref: { provider: "anthropic", model: "claude-opus-4-6" },
+        }),
       }),
     );
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();

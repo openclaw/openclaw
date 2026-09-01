@@ -1,7 +1,55 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveStoredModelOverride } from "./stored-model-overrides.js";
 
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => ({
+    configFingerprint: "stored-model-overrides",
+    ...createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "stored-model-normalizer",
+          modelIdNormalization: {
+            providers: {
+              custom: { aliases: { middle: "final", final: "replayed" } },
+            },
+          },
+        },
+      ],
+    }),
+  }),
+}));
+
 describe("resolveStoredModelOverride", () => {
+  it.each(["session", "parent"] as const)(
+    "preserves resolved literal and static identities from %s",
+    (source) => {
+      for (const model of ["custom/model", "middle"]) {
+        const entry: SessionEntry = {
+          sessionId: "selected",
+          updatedAt: 1,
+          providerOverride: "custom",
+          modelOverride: model,
+          modelOverrideRouteResolution: "resolved",
+        };
+        expect(
+          resolveStoredModelOverride({
+            defaultProvider: "custom",
+            ...(source === "session"
+              ? { sessionEntry: entry }
+              : {
+                  sessionKey: "child",
+                  parentSessionKey: "parent",
+                  sessionStore: { parent: entry },
+                }),
+          }),
+        ).toEqual({ provider: "custom", model, source, sourceRouteResolution: "resolved" });
+      }
+    },
+  );
+
   it("recovers resolved provenance for legacy auto-fallback overrides", () => {
     expect(
       resolveStoredModelOverride({
@@ -16,7 +64,7 @@ describe("resolveStoredModelOverride", () => {
           modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
         },
       }),
-    ).toMatchObject({ routeResolution: "resolved" });
+    ).toMatchObject({ sourceRouteResolution: "resolved" });
   });
 
   it("loads parent overrides without requiring a whole session store", () => {
@@ -41,7 +89,7 @@ describe("resolveStoredModelOverride", () => {
       provider: "anthropic",
       model: "claude-sonnet-4-7",
       source: "parent",
-      routeResolution: "raw",
+      sourceRouteResolution: "raw",
     });
     expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
   });
@@ -85,7 +133,7 @@ describe("resolveStoredModelOverride", () => {
       provider: "google-vertex",
       model: "gemini-fallback",
       source: "parent",
-      routeResolution: "raw",
+      sourceRouteResolution: "raw",
     });
   });
 
@@ -108,7 +156,7 @@ describe("resolveStoredModelOverride", () => {
       provider: "anthropic",
       model: "claude-sonnet-4-6",
       source: "parent",
-      routeResolution: "raw",
+      sourceRouteResolution: "raw",
     });
   });
 });

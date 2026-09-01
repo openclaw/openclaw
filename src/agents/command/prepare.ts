@@ -36,7 +36,11 @@ import {
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
-import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
+import {
+  buildConfiguredModelCatalog,
+  resolveConfiguredModelSelection,
+  completeModelRefSelection,
+} from "../model-selection.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
@@ -279,19 +283,27 @@ export async function prepareAgentCommandExecution(
   const modelManifestContext = {
     manifestPlugins: manifestMetadataSnapshot ?? [],
   } satisfies ModelManifestNormalizationContext;
-  const configuredModel = resolveConfiguredModelRef({
-    cfg,
-    agentId: sessionAgentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: pluginsEnabled,
-    ...modelManifestContext,
-  });
   const configuredThinkingCatalog = buildConfiguredModelCatalog({
     cfg,
     workspaceDir,
     ...modelManifestContext,
   });
+  const configuredModel = completeModelRefSelection(
+    resolveConfiguredModelSelection({
+      cfg,
+      agentId: sessionAgentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      allowPluginNormalization: false,
+      ...modelManifestContext,
+    }),
+    {
+      cfg,
+      configuredCatalog: configuredThinkingCatalog,
+      allowPluginNormalization: pluginsEnabled,
+      ...modelManifestContext,
+    },
+  );
   const configuredThinkingRuntime = resolveEffectiveAgentRuntime({
     cfg,
     provider: configuredModel.provider,
@@ -414,6 +426,7 @@ export async function prepareAgentCommandExecution(
       transcriptBody,
       cfg,
       configuredThinkingCatalog,
+      configuredModel,
       normalizedSpawned,
       agentCfg,
       thinkOverride,

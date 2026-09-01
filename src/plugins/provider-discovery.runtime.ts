@@ -14,7 +14,7 @@ import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-modul
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
 

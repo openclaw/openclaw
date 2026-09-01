@@ -8,7 +8,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
+import type {
+  ModelManifestNormalizationContext,
+  ModelRef,
+  ModelRefSelection,
+} from "./model-ref-shared.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import {
   createModelVisibilityPolicyWithFallbacks,
@@ -20,12 +24,18 @@ export const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
   allowPluginNormalization: true,
 } as const;
 
-function resolveAdditionalConfiguredModelRefs(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-}): string[] {
+function resolveAdditionalConfiguredModelRefs(
+  params: Pick<ModelVisibilityPolicyParams, "cfg" | "agentId" | "defaultModel">,
+): string[] {
   const defaults = params.cfg.agents?.defaults;
   const agent = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
+  // A configured selection already carries the effective primary into policy.defaultRef.
+  // Raw strings and plain pairs can name another model, so they still retain configured primaries.
+  const preparedPrimary =
+    typeof params.defaultModel === "object" && "normalization" in params.defaultModel
+      ? (resolveAgentModelPrimaryValue(agent?.model) ??
+        resolveAgentModelPrimaryValue(defaults?.model))
+      : undefined;
   return [
     resolveAgentModelPrimaryValue(defaults?.model),
     ...resolveAgentModelFallbackValues(defaults?.model),
@@ -38,19 +48,28 @@ function resolveAdditionalConfiguredModelRefs(params: {
     ...resolveAgentModelFallbackValues(defaults?.imageModel),
     resolveAgentModelPrimaryValue(defaults?.pdfModel),
     ...resolveAgentModelFallbackValues(defaults?.pdfModel),
-  ].filter((ref): ref is string => typeof ref === "string");
+  ].filter((ref): ref is string => typeof ref === "string" && ref !== preparedPrimary);
 }
 
+type ModelVisibilityPolicyParams = {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  defaultProvider: string;
+  // Producer selections represent this cfg/agent's configured default; plain refs may be pins.
+  defaultModel?: string | ModelRef | ModelRefSelection;
+  agentId?: string;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
+} & ModelManifestNormalizationContext;
+
 export function createModelVisibilityPolicy(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    defaultProvider: string;
-    defaultModel?: string;
-    agentId?: string;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
+  params: ModelVisibilityPolicyParams & { defaultModel: ModelRef | ModelRefSelection },
+): ModelVisibilityPolicy & { defaultRef: ModelRef };
+export function createModelVisibilityPolicy(
+  params: ModelVisibilityPolicyParams,
+): ModelVisibilityPolicy;
+export function createModelVisibilityPolicy(
+  params: ModelVisibilityPolicyParams,
 ): ModelVisibilityPolicy {
   return createModelVisibilityPolicyWithFallbacks({
     cfg: params.cfg,

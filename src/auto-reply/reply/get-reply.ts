@@ -3,8 +3,6 @@ import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
 import {
-  hasLegacyAutoFallbackWithoutOrigin,
-  resolveAutoFallbackPrimaryProbe,
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -39,7 +37,6 @@ import {
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   sessionDeliveryChannel,
@@ -50,20 +47,15 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
-import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
+import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
-import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   initFastReplySessionState,
-  buildFastReplyCommandContext,
-  shouldHandleFastReplyTextCommands,
-  shouldUseReplyFastDirectiveExecution,
   resolveGetReplyConfig,
   shouldUseReplyFastTestBootstrap,
-  shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
@@ -79,7 +71,7 @@ import {
   hasInboundMediaForUnderstanding,
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
-import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
+import { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
@@ -92,7 +84,6 @@ import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js"
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
-import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
@@ -337,12 +328,6 @@ export async function getReplyFromConfig(
       configOverride,
     }),
   );
-  const useFastTestRuntime = resolverTiming.measureSync("reply.resolve_fast_test_runtime", () =>
-    shouldUseReplyFastTestRuntime({
-      cfg,
-      isFastTestEnv,
-    }),
-  );
   const inboundMediaWasAlreadyStaged = hasStagedMediaFacts(ctx.media);
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
@@ -430,7 +415,7 @@ export async function getReplyFromConfig(
     normalizeThinkLevel(agentEntry?.thinkingDefault) ??
     normalizeThinkLevel(agentCfg?.thinkingDefault);
   const sessionCfg = cfg.session;
-  const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
+  const { defaultSelection, aliasIndex } = resolverTiming.measureSync(
     "reply.resolve_default_model",
     () =>
       resolveDefaultModel({
@@ -438,8 +423,8 @@ export async function getReplyFromConfig(
         agentId,
       }),
   );
-  let provider = defaultProvider;
-  let model = defaultModel;
+  const { provider: defaultProvider } = defaultSelection.ref;
+  let selectedModel = defaultSelection;
   let hasResolvedHeartbeatModelOverride = false;
   if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
@@ -458,8 +443,11 @@ export async function getReplyFromConfig(
         })
       : null;
     if (heartbeatRef) {
-      provider = heartbeatRef.ref.provider;
-      model = heartbeatRef.ref.model;
+      selectedModel = {
+        ref: heartbeatRef.ref,
+        normalization: "applied",
+        routeResolution: "resolved",
+      };
       hasResolvedHeartbeatModelOverride = true;
     }
   }
@@ -506,11 +494,9 @@ export async function getReplyFromConfig(
         agentDir,
         agentCfg,
         commandAuthorized: finalized.CommandAuthorized,
-        defaultProvider,
-        defaultModel,
+        defaultSelection,
         aliasIndex,
-        provider,
-        model,
+        selection: selectedModel,
         workspaceDir: workspaceDirForNativeCommand,
         typing,
         opts: optsWithSkillFilter,
@@ -595,7 +581,7 @@ export async function getReplyFromConfig(
           agentId,
           agentDir,
           workspaceDir,
-          activeModel: { provider, model },
+          activeModel: selectedModel.ref,
           // Cache and classify now; the final provider and owner policy are
           // resolved later, immediately before the embedded turn starts.
           selfServeLocalPaths: false,
@@ -714,8 +700,7 @@ export async function getReplyFromConfig(
   if (sessionModelSelectionLocked && hasResolvedHeartbeatModelOverride) {
     // Heartbeat routing is turn-local. A native harness lock owns the durable
     // model selection, so heartbeat.model must not retarget its AppServer turn.
-    provider = defaultProvider;
-    model = defaultModel;
+    selectedModel = defaultSelection;
     hasResolvedHeartbeatModelOverride = false;
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
@@ -794,8 +779,7 @@ export async function getReplyFromConfig(
         sessionStore,
         sessionKey,
         storePath,
-        defaultProvider,
-        defaultModel,
+        defaultSelection,
         aliasIndex,
       });
     } catch (error) {
@@ -847,167 +831,15 @@ export async function getReplyFromConfig(
           aliasIndex,
         })
       : null;
-  const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
-  const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
-  const hasSessionModelOverride = Boolean(
-    normalizeOptionalString(sessionEntry.modelOverride) ||
-    normalizeOptionalString(sessionEntry.providerOverride),
-  );
-  const storedModelOverride = resolveStoredModelOverride({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey:
-      sessionEntry.parentSessionKey ??
-      sessionCtx.ModelParentSessionKey ??
-      sessionCtx.ParentSessionKey,
-    defaultProvider,
-  });
-  const staleHeartbeatAutoFallbackOverride =
-    !sessionModelSelectionLocked &&
-    isStaleHeartbeatAutoFallbackOverride({
-      isHeartbeat: opts?.isHeartbeat === true,
-      hasResolvedHeartbeatModelOverride,
-      sessionEntry,
-      storedOverride: storedModelOverride,
-      defaultProvider,
-      defaultModel,
-      primaryProvider,
-      primaryModel,
-    });
-  const staleLegacyAutoFallbackWithoutOrigin =
-    !sessionModelSelectionLocked &&
-    storedModelOverride?.source === "session" &&
-    hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
-  if (
-    storedModelOverride?.model &&
-    !hasResolvedHeartbeatModelOverride &&
-    !staleHeartbeatAutoFallbackOverride &&
-    !staleLegacyAutoFallbackWithoutOrigin
-  ) {
-    provider = storedModelOverride.provider ?? defaultProvider;
-    model = storedModelOverride.model;
-  }
-  const canApplyAutoFallbackPrimaryProbe =
-    !sessionModelSelectionLocked &&
-    !hasResolvedHeartbeatModelOverride &&
-    !staleHeartbeatAutoFallbackOverride;
-  const autoFallbackPrimaryProbe = canApplyAutoFallbackPrimaryProbe
-    ? resolveAutoFallbackPrimaryProbe({
-        entry: sessionEntry,
-        sessionKey,
-        primaryProvider,
-        primaryModel,
-      })
-    : undefined;
-  const hasEffectiveStoredModelOverride =
-    Boolean(storedModelOverride || hasSessionModelOverride) &&
-    !staleHeartbeatAutoFallbackOverride &&
-    !staleLegacyAutoFallbackWithoutOrigin;
-  if (
-    !hasResolvedHeartbeatModelOverride &&
-    !hasEffectiveStoredModelOverride &&
-    resolvedChannelModelOverride
-  ) {
-    provider = resolvedChannelModelOverride.ref.provider;
-    model = resolvedChannelModelOverride.ref.model;
-  }
-
-  if (
-    shouldUseReplyFastDirectiveExecution({
-      isFastTestBootstrap: useFastTestRuntime,
-      isGroup,
-      isHeartbeat: opts?.isHeartbeat === true,
-      resetTriggered,
-      triggerBodyNormalized,
-    })
-  ) {
-    const fastCommand = buildFastReplyCommandContext({
-      ctx: finalized,
-      cfg,
-      agentId,
-      sessionKey,
-      isGroup,
-      triggerBodyNormalized,
-      commandAuthorized,
-    });
-    if (
-      enableLocalPathSelfServe &&
-      canSelfServeLocalPaths({
-        ctx: sessionCtx,
-        cfg,
-        agentId,
-        agentDir,
-        sessionKey,
-        workspaceDir,
-        provider: autoFallbackPrimaryProbe?.provider ?? provider,
-        model: autoFallbackPrimaryProbe?.model ?? model,
-        opts: resolvedOpts,
-        senderIsOwner: fastCommand.senderIsOwner,
-        spawnedBy: normalizeOptionalString(sessionEntry.spawnedBy),
-        stagedPathsAvailable: false,
-      })
-    ) {
-      enableLocalPathSelfServe([finalized, sessionCtx]);
-    }
-    logResolverTiming("milestone", "before_fast_directive_prepared_reply");
-    const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
-      runPreparedReply({
-        ctx,
-        sessionCtx,
-        cfg,
-        agentId,
-        agentDir,
-        agentCfg,
-        sessionCfg,
-        commandAuthorized,
-        command: fastCommand,
-        commandSource: finalized.commandText,
-        allowTextCommands: shouldHandleFastReplyTextCommands({
-          cfg,
-          commandSource: finalized.CommandSource,
-        }),
-        directives: clearInlineDirectives(finalized.commandText),
-        defaultActivation: "always",
-        resolvedThinkLevel: undefined,
-        resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
-        resolvedReasoningLevel: "off",
-        resolvedElevatedLevel: "off",
-        execOverrides: undefined,
-        elevatedEnabled: false,
-        elevatedAllowed: false,
-        blockStreamingEnabled: false,
-        blockReplyChunking: undefined,
-        resolvedBlockStreamingBreak: "text_end",
-        modelState: createFastTestModelSelectionState({
-          agentCfg,
-          provider: autoFallbackPrimaryProbe?.provider ?? provider,
-          model: autoFallbackPrimaryProbe?.model ?? model,
-        }),
-        provider: autoFallbackPrimaryProbe?.provider ?? provider,
-        model: autoFallbackPrimaryProbe?.model ?? model,
-        perMessageQueueMode: undefined,
-        perMessageQueueOptions: undefined,
-        typing,
-        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-        defaultModel,
-        timeoutMs,
-        isNewSession,
-        resetTriggered,
-        systemSent,
-        sessionEntry,
-        sessionEntryHandle,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        workspaceDir,
-        abortedLastRun,
-        autoFallbackPrimaryProbe,
-      }),
-    );
-    logResolverTiming("completed", "fast_directive_prepared_reply");
-    return fastReplyResult;
+  const primarySelection: typeof defaultSelection = resolvedChannelModelOverride
+    ? {
+        ref: resolvedChannelModelOverride.ref,
+        normalization: "applied",
+        routeResolution: "resolved",
+      }
+    : defaultSelection;
+  if (!hasResolvedHeartbeatModelOverride) {
+    selectedModel = primarySelection;
   }
 
   const directiveResult = await traceGetReplyPhase("reply.resolve_directives", () =>
@@ -1029,13 +861,10 @@ export async function getReplyFromConfig(
       triggerBodyNormalized,
       resetTriggered,
       commandAuthorized,
-      defaultProvider,
-      defaultModel,
-      primaryProvider,
-      primaryModel,
+      defaultSelection,
+      primarySelection,
       aliasIndex,
-      provider,
-      model,
+      selection: selectedModel,
       hasResolvedHeartbeatModelOverride,
       typing,
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
@@ -1066,8 +895,8 @@ export async function getReplyFromConfig(
     blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
-    provider: resolvedProvider,
-    model: resolvedModel,
+    provider,
+    model,
     requestedRouteResolution,
     modelState,
     contextTokens,
@@ -1078,8 +907,6 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   let { directives, cleanedBody, resolvedThinkLevel, resolvedReasoningLevel } =
     directiveResult.result;
-  provider = resolvedProvider;
-  model = resolvedModel;
 
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
@@ -1179,7 +1006,7 @@ export async function getReplyFromConfig(
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
-    : autoFallbackPrimaryProbe;
+    : modelState.resolveAutoFallbackPrimaryProbe();
   const runProvider = runAutoFallbackPrimaryProbe?.provider ?? provider;
   const runModel = runAutoFallbackPrimaryProbe?.model ?? model;
   let runModelState = modelState;
@@ -1197,12 +1024,13 @@ export async function getReplyFromConfig(
           sessionCtx.ModelParentSessionKey ??
           sessionCtx.ParentSessionKey,
         storePath,
-        defaultProvider,
-        defaultModel,
-        primaryProvider,
-        primaryModel,
-        provider: runProvider,
-        model: runModel,
+        defaultSelection: modelState.defaultSelection,
+        primarySelection: modelState.primarySelection,
+        selection: {
+          ref: { provider: runProvider, model: runModel },
+          normalization: "applied",
+          routeResolution: "resolved",
+        },
         hasModelDirective: false,
         skipStoredModelOverride: true,
         hasResolvedHeartbeatModelOverride,
@@ -1341,7 +1169,7 @@ export async function getReplyFromConfig(
       perMessageQueueOptions,
       typing,
       opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
-      defaultModel,
+      defaultModel: modelState.defaultSelection.ref.model,
       timeoutMs,
       isNewSession,
       resetTriggered,

@@ -29,6 +29,32 @@ function createPolicy(cfg: OpenClawConfig, agentId?: string) {
 }
 
 describe("explicit model visibility policy", () => {
+  it("preserves selected catalog identities and rejects a different provider-prefixed id", () => {
+    const catalog = [
+      { provider: "custom", id: "model", name: "Plain" },
+      { provider: "custom", id: "custom/model", name: "Nested" },
+    ];
+    const unrestricted = createModelVisibilityPolicy({
+      cfg: {},
+      catalog,
+      defaultProvider: "custom",
+    });
+    expect(unrestricted.resolveSelection({ provider: "custom", model: "custom/model" })).toEqual({
+      provider: "custom",
+      model: "custom/model",
+    });
+    const restricted = createModelVisibilityPolicy({
+      cfg: { agents: { defaults: { modelPolicy: { allow: ["custom/model"] } } } },
+      catalog,
+      defaultProvider: "custom",
+    });
+    expect(restricted.allows({ provider: "custom", model: "custom/model" })).toBe(false);
+    expect(restricted.resolveSelection({ provider: "custom", model: "custom/model" })).toEqual({
+      provider: "custom",
+      model: "model",
+    });
+  });
+
   it("tracks every exact configured picker ref independently of the allow policy", () => {
     const cfg = {
       agents: {

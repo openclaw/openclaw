@@ -145,7 +145,10 @@ const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async () => []),
   findModelCatalogEntry: vi.fn(() => ({ contextTokens: 200_000 })),
   getModelRefStatus: vi.fn(() => ({ allowed: true, inCatalog: true, key: "openai/gpt-5.5" })),
-  resolveConfiguredModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  resolveConfiguredModelSelection: vi.fn(() => ({
+    ref: { provider: "openai", model: "gpt-5.5" },
+    normalization: "applied",
+  })),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
   resolveHooksGmailModel: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
   modelKey: vi.fn((provider: string, model: string) => `${provider}/${model}`),
@@ -478,7 +481,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 
 vi.mock("../agents/model-selection.js", () => ({
   getModelRefStatus: mocks.getModelRefStatus,
-  resolveConfiguredModelRef: mocks.resolveConfiguredModelRef,
+  resolveConfiguredModelSelection: mocks.resolveConfiguredModelSelection,
   resolveDefaultModelForAgent: mocks.resolveDefaultModelForAgent,
   resolveHooksGmailModel: mocks.resolveHooksGmailModel,
   modelKey: mocks.modelKey,
@@ -797,9 +800,10 @@ describe("doctor health contributions", () => {
       inCatalog: true,
       key: "openai/gpt-5.5",
     });
-    mocks.resolveConfiguredModelRef
-      .mockReset()
-      .mockReturnValue({ provider: "openai", model: "gpt-5.5" });
+    mocks.resolveConfiguredModelSelection.mockReset().mockReturnValue({
+      ref: { provider: "openai", model: "gpt-5.5" },
+      normalization: "applied",
+    });
     mocks.resolveDefaultModelForAgent
       .mockReset()
       .mockReturnValue({ provider: "openai", model: "gpt-5.5" });

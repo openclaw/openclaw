@@ -6,19 +6,33 @@ import {
   getPreparedModelRuntimeTestApi,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../config/plugin-auto-enable.test-helpers.js";
+import { collectConfiguredAgentModelProviderIds } from "../plugins/gateway-startup-plugin-providers.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
+import {
+  resolveAgentRuntimePluginLoadPlan,
+  resolveAgentRuntimePluginSelections,
+} from "./harness/runtime-plugin-load-plan.js";
+import { normalizeModelRef } from "./model-ref-shared.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -27,6 +41,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import type { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 let state: OpenClawTestState;
@@ -42,6 +57,122 @@ describe("prepared reply dispatch runtime", () => {
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
     ).resolves.toBeUndefined();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it.each(["provider-a", "provider-d"])("rebinds %s compaction", async (previousProvider) => {
+    mocks.configuredAgentIds = ["default"];
+    mocks.configuredWorkspaces.set("default", state.workspaceDir);
+    const configFor = (provider: string) => ({
+      agents: {
+        defaults: {
+          model: "provider-a/model",
+          compaction: { model: "summary" },
+          models: { [`${provider}/model`]: { alias: "summary" } },
+        },
+      },
+    });
+    const requestedConfig = configFor(previousProvider);
+    const ownedConfig = configFor("provider-b");
+    const manifestRegistry = makeRegistry(
+      ["provider-a", "provider-b", "provider-c", "provider-d"].map((id) => ({
+        id,
+        origin: "bundled" as const,
+        channels: [],
+        providers: [id],
+      })),
+    );
+    for (const manifest of manifestRegistry.plugins) {
+      manifest.activation = { onStartup: false };
+      manifest.modelCatalog = {
+        providers: { [manifest.id]: { api: "openai-completions", models: [{ id: "model" }] } },
+      };
+    }
+    expect(collectConfiguredAgentModelProviderIds(ownedConfig, manifestRegistry)).not.toContain(
+      "provider-b",
+    );
+    const normalizeCompaction = vi.fn<NonNullable<ProviderPlugin["normalizeModelId"]>>(
+      ({ modelId }) => `wire-${modelId}`,
+    );
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+      (params: Parameters<typeof loadAgentRuntimePluginRegistryHandle>[0]) => {
+        const registry = createEmptyPluginRegistry();
+        // The base omits deferred providers; only the real load plan can add them.
+        const plan = resolveAgentRuntimePluginLoadPlan({
+          config: params.config,
+          workspaceDir: params.workspaceDir ?? state.workspaceDir,
+          basePluginIds: params.basePluginIds ?? ["provider-a"],
+          selections: resolveAgentRuntimePluginSelections(params.config, params.selections ?? []),
+          metadataSnapshot: params.metadataSnapshot,
+        });
+        for (const id of plan.pluginIds ?? []) {
+          registry.plugins.push(createPluginRecord({ id, origin: "bundled", providerIds: [id] }));
+          registry.providers.push({
+            pluginId: id,
+            source: "test",
+            provider: {
+              id,
+              label: id,
+              auth: [],
+              ...(id === "provider-b" ? { normalizeModelId: normalizeCompaction } : {}),
+            },
+          });
+        }
+        return registry;
+      },
+    );
+    const resolveMetadata = vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot");
+    const requestWorkspaceDir = path.join(state.workspaceDir, "request");
+    const requestedSelections = [
+      { provider: "provider-a", modelId: "request-model", runtime: "openclaw" },
+      { provider: "provider-c", modelId: "fallback-model", runtime: "openclaw" },
+    ];
+    let lease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>> | undefined;
+    try {
+      for (const config of [requestedConfig, ownedConfig]) {
+        const metadataSnapshot = createPluginMetadataSnapshot({
+          config,
+          manifestRegistry,
+          workspaceDir: state.workspaceDir,
+        });
+        resolveMetadata.mockReturnValue(metadataSnapshot);
+        await refreshPreparedModelRuntimeSnapshots(config, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+          pluginMetadataSnapshot: metadataSnapshot,
+        });
+      }
+      lease = await acquireAgentRunPreparedModelRuntime(
+        {
+          agentId: "default",
+          agentDir: state.agentDir("default"),
+          workspaceDir: requestWorkspaceDir,
+          config: requestedConfig,
+          runtimePluginSelections: requestedSelections,
+        },
+        { catalogMode: "static" },
+      );
+      expect(lease.snapshot.config).toBe(ownedConfig);
+      expect(lease.snapshot.workspaceDir).toBe(requestWorkspaceDir);
+      const snapshot = lease.snapshot;
+      expect
+        .soft(
+          withPluginRuntimeGenerationScope(snapshot, () =>
+            normalizeModelRef("provider-b", "model", {
+              manifestPlugins: snapshot.metadataSnapshot,
+            }),
+          ),
+        )
+        .toEqual({ provider: "provider-b", model: "wire-model" });
+      expect
+        .soft(snapshot.pluginRegistry?.providers.map(({ provider }) => provider.id).toSorted())
+        .toEqual(["provider-a", "provider-b", "provider-c"]);
+      expect
+        .soft(mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.at(-1)?.[0]?.selections)
+        .toEqual(expect.arrayContaining(requestedSelections));
+    } finally {
+      lease?.release();
+      resolveMetadata.mockRestore();
+    }
   });
 
   it("carries newly selected provider auth into a derived generation and its refresh", async () => {

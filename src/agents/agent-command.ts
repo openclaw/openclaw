@@ -487,6 +487,7 @@ async function agentCommandInternal(
             manifestMetadataSnapshot,
             modelManifestContext,
             configuredThinkingCatalog,
+            defaultModel: prepared.configuredModel,
             requestedThinkLevel,
             thinkOverride,
             thinkOnce,

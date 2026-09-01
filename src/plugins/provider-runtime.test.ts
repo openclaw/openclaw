@@ -1640,7 +1640,10 @@ describe("provider-runtime", () => {
         label: "Google",
         hookAliases: ["google-vertex"],
         auth: [],
-        normalizeModelId: ({ modelId }) => modelId.replace("flash-lite-preview", "flash-lite"),
+        normalizeModelId: ({ modelId }) =>
+          modelId.includes("flash-lite-preview")
+            ? modelId.replace("flash-lite-preview", "flash-lite")
+            : undefined,
       },
     ]);
 
@@ -1654,6 +1657,23 @@ describe("provider-runtime", () => {
       }),
     ).toBe("gemini-3.1-flash-lite");
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+    expect(
+      normalizeProviderModelIdWithPlugin({
+        provider: "google-vertex",
+        plugins: [
+          {
+            modelIdNormalization: {
+              providers: {
+                "google-vertex": {
+                  aliases: { legacy: "manifest-model", "manifest-model": "reapplied-model" },
+                },
+              },
+            },
+          },
+        ],
+        context: { provider: "google-vertex", modelId: "legacy" },
+      }),
+    ).toBe("manifest-model");
   });
 
   it("resolves config hooks through hook-only aliases without changing provider surfaces", () => {

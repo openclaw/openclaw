@@ -105,34 +105,37 @@ describe("prepared model runtime scoped refresh", () => {
     },
   );
 
-  it("falls back to full refresh when an out-of-scope owner dependency changes", async () => {
-    mocks.configuredAgentIds = ["pro", "free"];
-    const initialConfig = {
-      agents: {
-        defaults: { model: "openai/gpt-5.6" },
-        entries: { pro: {}, free: {} },
-      },
-    } satisfies OpenClawConfig;
-    const nextConfig = {
-      agents: {
-        defaults: { model: "openai/gpt-5.5" },
-        entries: { pro: {}, free: {} },
-      },
-    } satisfies OpenClawConfig;
-    const buildCounts: number[] = [];
+  it.each([{ model: "openai/gpt-5.5" }, { compaction: { model: "custom/compact-b" } }])(
+    "falls back to full refresh when an out-of-scope dependency changes: %j",
+    async (defaults) => {
+      mocks.configuredAgentIds = ["pro", "free"];
+      const initialConfig = {
+        agents: {
+          defaults: { model: "openai/gpt-5.6", compaction: { model: "custom/compact-a" } },
+          entries: { pro: {}, free: {} },
+        },
+      } satisfies OpenClawConfig;
+      const nextConfig = {
+        agents: {
+          defaults: { ...initialConfig.agents.defaults, ...defaults },
+          entries: { pro: {}, free: {} },
+        },
+      } satisfies OpenClawConfig;
+      const buildCounts: number[] = [];
 
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, {
-      gatewayLifecycle: true,
-      onBuildStats: (stats) => buildCounts.push(stats.agentCount),
-    });
-    await refreshPreparedModelRuntimeSnapshots(nextConfig, {
-      gatewayLifecycle: true,
-      agentIds: new Set(["pro"]),
-      onBuildStats: (stats) => buildCounts.push(stats.agentCount),
-    });
+      await refreshPreparedModelRuntimeSnapshots(initialConfig, {
+        gatewayLifecycle: true,
+        onBuildStats: (stats) => buildCounts.push(stats.agentCount),
+      });
+      await refreshPreparedModelRuntimeSnapshots(nextConfig, {
+        gatewayLifecycle: true,
+        agentIds: new Set(["pro"]),
+        onBuildStats: (stats) => buildCounts.push(stats.agentCount),
+      });
 
-    expect(buildCounts).toEqual([2, 2]);
-  });
+      expect(buildCounts).toEqual([2, 2]);
+    },
+  );
 
   it("builds only a newly added non-default agent", async () => {
     mocks.configuredAgentIds = ["free"];

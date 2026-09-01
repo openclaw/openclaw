@@ -92,12 +92,19 @@ describe("sessionsCommand", () => {
       { key: "agent:main:東京", model: "gemini-3-flash-preview" },
       { key: "agent:main:e\u0301", model: "gpt-5.6-sol" },
       { key: "agent:main:👩‍💻", model: "claude-sonnet-4-6" },
+      {
+        key: "agent:main:literal",
+        model: "custom/model",
+        providerOverride: "custom",
+        modelOverride: "custom/model",
+        modelOverrideRouteResolution: "resolved" as const,
+      },
     ];
     const store = await writeStore(
       Object.fromEntries(
-        entries.map(({ key, model }, index) => [
+        entries.map(({ key, ...entry }, index) => [
           key,
-          { sessionId: `row-${index}`, updatedAt: Date.now(), model, systemSent: true },
+          { sessionId: `row-${index}`, updatedAt: Date.now(), ...entry, systemSent: true },
         ]),
       ),
     );

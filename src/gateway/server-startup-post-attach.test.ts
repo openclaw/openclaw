@@ -9,9 +9,12 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type { PluginHookGatewayContext, PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginServiceContext } from "../plugins/types.js";
 import {
   GatewayDrainingError,
@@ -62,9 +65,9 @@ const hoisted = vi.hoisted(() => {
     failed: 0,
   }));
   const isCliProvider = vi.fn(() => false);
-  const resolveConfiguredModelRef = vi.fn(() => ({
-    provider: "openai",
-    model: "gpt-5.4",
+  const resolveConfiguredModelSelection = vi.fn(() => ({
+    ref: { provider: "openai", model: "gpt-5.4" },
+    normalization: "applied" as const,
   }));
   const resolveHooksGmailModel = vi.fn<() => { provider: string; model: string } | null>(
     () => null,
@@ -115,7 +118,7 @@ const hoisted = vi.hoisted(() => {
     getAcpRuntimeBackend,
     reconcilePendingSessionIdentities,
     isCliProvider,
-    resolveConfiguredModelRef,
+    resolveConfiguredModelSelection,
     resolveHooksGmailModel,
     loadFullModelCatalog,
     loadModelCatalog,
@@ -221,7 +224,7 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
 vi.mock("../agents/model-selection.js", () => ({
   getModelRefStatus: hoisted.getModelRefStatus,
   isCliProvider: hoisted.isCliProvider,
-  resolveConfiguredModelRef: hoisted.resolveConfiguredModelRef,
+  resolveConfiguredModelSelection: hoisted.resolveConfiguredModelSelection,
   resolveHooksGmailModel: hoisted.resolveHooksGmailModel,
 }));
 
@@ -499,7 +502,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.reconcilePendingSessionIdentities.mockClear();
     hoisted.isCliProvider.mockReset();
     hoisted.isCliProvider.mockReturnValue(false);
-    hoisted.resolveConfiguredModelRef.mockClear();
+    hoisted.resolveConfiguredModelSelection.mockClear();
     hoisted.resolveHooksGmailModel.mockReset();
     hoisted.resolveHooksGmailModel.mockReturnValue(null);
     hoisted.loadFullModelCatalog.mockClear();
@@ -1489,71 +1492,138 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(events).toEqual(["startup-loaded-start", "startup-loaded-end", "sidecars"]);
   });
 
-  it("adopts a winning plugin generation without publishing stale deferred startup state", async () => {
-    const startupRegistry = {
-      plugins: [{ id: "startup", status: "loaded" }],
-      typedHooks: [],
-    } as never;
-    const winningRegistry = {
-      plugins: [{ id: "replacement", status: "loaded" }],
-      typedHooks: [],
-    } as never;
-    let startupClaimCurrent = true;
-    let releasePluginLoad: (() => void) | undefined;
-    const pluginLoadReady = new Promise<void>((resolve) => {
-      releasePluginLoad = resolve;
-    });
-    const pluginRuntimeClaim = {
-      isCurrent: () => startupClaimCurrent,
-      waitForUnblocked: async () => true,
-      publish: (publish: () => void) => {
-        if (!startupClaimCurrent) {
-          return false;
-        }
-        publish();
-        return true;
-      },
-    };
-    const onStartupPluginsLoaded = vi.fn();
-    const onPluginServices = vi.fn();
-    const onSidecarsReady = vi.fn();
-    const unlockStartupMethods = vi.fn();
-    const startGatewaySidecarsCandidate = vi.fn(
-      async (params: Parameters<typeof startGatewaySidecarsImpl>[0]) => {
-        expect(params.pluginRegistry).toBe(winningRegistry);
-        expect(params.shouldStartPluginServices?.()).toBe(false);
-        return { pluginServices: null, postReadySidecars: [] };
-      },
-    );
-    const loadStartupPlugins = vi.fn(async () => {
-      await pluginLoadReady;
-      return { pluginRegistry: startupRegistry, gatewayMethods: ["startup.method"] };
-    });
+  it.each([
+    { runtimeNormalizer: true, expectedModel: "manifest-model-runtime" },
+    { runtimeNormalizer: false, expectedModel: "manifest-model" },
+  ])(
+    "adopts a winning generation without stale startup state (runtime normalizer=$runtimeNormalizer)",
+    async ({ runtimeNormalizer, expectedModel }) => {
+      const { logGatewayStartup } =
+        await vi.importActual<typeof import("./server-startup-log.js")>("./server-startup-log.js");
+      const startupMetadata = createPluginMetadataSnapshotFixture();
+      const winningMetadata = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "replacement",
+            providers: ["fixture"],
+            modelIdNormalization: {
+              providers: {
+                fixture: {
+                  aliases: { requested: "manifest-model", "manifest-model": "reapplied-model" },
+                },
+              },
+            },
+          },
+        ],
+      });
+      const staleNormalizer = vi.fn(() => "stale-model");
+      const normalizeModelId = vi.fn(({ modelId }: { modelId: string }) => `${modelId}-runtime`);
+      const provider = { id: "fixture", label: "Fixture", auth: [] };
+      const startupRegistry = createEmptyPluginRegistry();
+      startupRegistry.plugins.push(createPluginRecord({ id: "startup" }));
+      startupRegistry.providers.push({
+        pluginId: "startup",
+        provider: { ...provider, normalizeModelId: staleNormalizer },
+        source: "test",
+      });
+      const winningRegistry = createEmptyPluginRegistry();
+      winningRegistry.plugins.push(createPluginRecord({ id: "replacement" }));
+      if (runtimeNormalizer) {
+        winningRegistry.providers.push({
+          pluginId: "replacement",
+          provider: { ...provider, normalizeModelId },
+          source: "test",
+        });
+      }
+      const startupConfig = {
+        agents: { defaults: { model: "fixture/stale", thinkingDefault: "off" as const } },
+      };
+      const winningConfig = {
+        agents: { defaults: { model: "fixture/requested", thinkingDefault: "off" as const } },
+      };
+      const log = { info: vi.fn(), warn: vi.fn() };
+      let startupClaimCurrent = true;
+      let releasePluginLoad: (() => void) | undefined;
+      const pluginLoadReady = new Promise<void>((resolve) => {
+        releasePluginLoad = resolve;
+      });
+      const pluginRuntimeClaim = {
+        isCurrent: () => startupClaimCurrent,
+        waitForUnblocked: async () => true,
+        publish: (publish: () => void) => {
+          if (!startupClaimCurrent) {
+            return false;
+          }
+          publish();
+          return true;
+        },
+      };
+      const onStartupPluginsLoaded = vi.fn();
+      const onPluginServices = vi.fn();
+      const onSidecarsReady = vi.fn();
+      const unlockStartupMethods = vi.fn();
+      const startGatewaySidecarsCandidate = vi.fn(
+        async (params: Parameters<typeof startGatewaySidecarsImpl>[0]) => {
+          expect(params.cfg).toBe(winningConfig);
+          expect(params.pluginMetadataSnapshot).toBe(winningMetadata);
+          expect(params.pluginRegistry).toBe(winningRegistry);
+          expect(params.shouldStartPluginServices?.()).toBe(false);
+          return { pluginServices: null, postReadySidecars: [] };
+        },
+      );
+      const loadStartupPlugins = vi.fn(async () => {
+        await pluginLoadReady;
+        return { pluginRegistry: startupRegistry, gatewayMethods: ["startup.method"] };
+      });
 
-    const runtime = await startGatewayPostAttachRuntime(
-      createPostAttachParams({
-        sidecarStartup: "defer",
-        loadStartupPlugins,
-        onStartupPluginsLoaded,
-        onPluginServices,
-        onSidecarsReady,
-        unlockStartupMethods,
-        pluginRuntimeClaim,
-        getCurrentPluginRegistry: () => winningRegistry,
-      }),
-      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsCandidate }),
-    );
-    await waitForGatewayTestState(() => expect(loadStartupPlugins).toHaveBeenCalledOnce());
-    startupClaimCurrent = false;
-    releasePluginLoad?.();
-    await expect(runtime.startupSettled).resolves.toBeUndefined();
+      const runtime = await withPluginRuntimeGenerationScope(
+        { metadataSnapshot: startupMetadata, pluginRegistry: startupRegistry },
+        () =>
+          startGatewayPostAttachRuntime(
+            createPostAttachParams({
+              sidecarStartup: "defer",
+              cfgAtStart: startupConfig,
+              gatewayPluginConfigAtStart: startupConfig,
+              activationSourceConfig: startupConfig,
+              getConfig: () => winningConfig,
+              pluginMetadataSnapshot: startupMetadata,
+              pluginRegistry: startupRegistry,
+              loadStartupPlugins,
+              onStartupPluginsLoaded,
+              onPluginServices,
+              onSidecarsReady,
+              unlockStartupMethods,
+              pluginRuntimeClaim,
+              getCurrentPluginRegistry: () => winningRegistry,
+              getCurrentPluginMetadataSnapshot: () => winningMetadata,
+              log,
+            }),
+            createPostAttachRuntimeDeps({
+              startGatewaySidecars: startGatewaySidecarsCandidate,
+              logGatewayStartup,
+            }),
+          ),
+      );
+      await waitForGatewayTestState(() => expect(loadStartupPlugins).toHaveBeenCalledOnce());
+      startupClaimCurrent = false;
+      releasePluginLoad?.();
+      await expect(runtime.startupSettled).resolves.toBeUndefined();
 
-    expect(onStartupPluginsLoaded).not.toHaveBeenCalled();
-    expect(startGatewaySidecarsCandidate).toHaveBeenCalledOnce();
-    expect(onPluginServices).not.toHaveBeenCalled();
-    expect(unlockStartupMethods).toHaveBeenCalledOnce();
-    expect(onSidecarsReady).toHaveBeenCalledOnce();
-  });
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining(`agent model: fixture/${expectedModel} (`),
+        expect.any(Object),
+      );
+      expect(staleNormalizer).not.toHaveBeenCalled();
+      expect(normalizeModelId.mock.calls).toEqual(
+        runtimeNormalizer ? [[{ provider: "fixture", modelId: "manifest-model" }]] : [],
+      );
+      expect(onStartupPluginsLoaded).not.toHaveBeenCalled();
+      expect(startGatewaySidecarsCandidate).toHaveBeenCalledOnce();
+      expect(onPluginServices).not.toHaveBeenCalled();
+      expect(unlockStartupMethods).toHaveBeenCalledOnce();
+      expect(onSidecarsReady).toHaveBeenCalledOnce();
+    },
+  );
 
   it("waits for sidecars by default before returning", async () => {
     let resumeSidecars: (() => void) | undefined;
@@ -3983,7 +4053,9 @@ function createPostAttachRuntimeDeps(
 }
 
 function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): PostAttachParams {
-  return {
+  const metadataSnapshot =
+    overrides.pluginMetadataSnapshot ?? createPluginMetadataSnapshotFixture();
+  const params: PostAttachParams = {
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
     getConfig: () => ({ hooks: { internal: { enabled: false } } }) as never,
@@ -3998,7 +4070,9 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     controlUiBasePath: "/",
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
     activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
-    pluginManifestRecords: [],
+    pluginMetadataSnapshot: metadataSnapshot,
+    getCurrentPluginRegistry: () => params.pluginRegistry,
+    getCurrentPluginMetadataSnapshot: () => metadataSnapshot,
     pluginRegistry: {
       plugins: [
         { id: "beta", status: "loaded" },
@@ -4035,5 +4109,6 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       stopTrackedSidecars(publishedGatewayLifetimeSidecars),
     ...overrides,
   };
+  return params;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

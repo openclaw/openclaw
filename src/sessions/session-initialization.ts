@@ -7,7 +7,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 /** Creation-only authority. Copied fields never identify an initializer to the host. */

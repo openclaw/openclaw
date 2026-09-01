@@ -276,14 +276,6 @@ describe("embedded model resolution consistency", () => {
         routeResolution: "resolved",
       },
     ]);
-    expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledWith({
-      provider: "custom-provider",
-      plugins: manifestPlugins,
-      context: {
-        provider: "custom-provider",
-        modelId: "modern-model",
-      },
-    });
   });
 
   it("resolves the same undated configured model for chat and manual compaction", async () => {

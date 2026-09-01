@@ -18,9 +18,14 @@ import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-con
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import {
   resolveModelCatalogScope,
-  resolveProviderConfigApiOwnerHint,
+  resolveProviderRuntimeOwnerRefs,
 } from "./provider-config-owner.js";
-import { matchesProviderPluginRef } from "./provider-registry-shared.js";
+import {
+  findProviderRuntimePluginInRegistry,
+  listProviderRuntimePluginsInRegistry,
+  matchesProviderPluginRef,
+  matchesProviderRuntimePlugin,
+} from "./provider-registry-shared.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProvidersCore } from "./providers.runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -28,7 +33,7 @@ import {
   getPluginRegistryState,
 } from "./runtime-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -113,11 +118,6 @@ function resolveProviderRuntimePluginCacheKey(
   });
 }
 
-function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(providerId);
-  return Boolean(normalized) && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
-}
-
 function resolveProviderRuntimeLookupModelId(
   params: ProviderRuntimePluginLookupParams & { context?: { modelId?: unknown } },
 ): string | undefined {
@@ -187,30 +187,6 @@ function findProviderRuntimePluginInLoadedRegistries(params: {
     return activePlugin;
   }
   return undefined;
-}
-
-function findProviderRuntimePluginInRegistry(params: {
-  registry: PluginRegistry;
-  provider: string;
-  ownerRefs: readonly string[];
-}): ProviderPlugin | undefined {
-  return listProviderRuntimePluginsInRegistry(params.registry).find((plugin) => {
-    if (params.ownerRefs.length > 0) {
-      return (
-        matchesProviderLiteralId(plugin, params.provider) ||
-        params.ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
-      );
-    }
-    return matchesProviderPluginRef(plugin, params.provider);
-  });
-}
-
-function listProviderRuntimePluginsInRegistry(
-  registry: PluginRegistry,
-): Array<ProviderPlugin & { pluginId: string }> {
-  return registry.providers.map((entry) =>
-    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
-  );
 }
 
 function hasConfiguredModelProvider(params: {
@@ -287,11 +263,7 @@ export function resolveProviderRuntimePlugin(
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
   const lookup = { ...params, workspaceDir, env };
-  const apiOwnerHint = resolveProviderConfigApiOwnerHint({
-    provider: params.provider,
-    config: params.config,
-  });
-  const ownerRefs = [...new Set([params.providerOwner, apiOwnerHint].filter(Boolean))] as string[];
+  const ownerRefs = resolveProviderRuntimeOwnerRefs(params);
   const providerRefs = [params.provider, ...ownerRefs];
   const loadedPlugin = findProviderRuntimePluginInLoadedRegistries({
     lookup,
@@ -329,15 +301,7 @@ export function resolveProviderRuntimePlugin(
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
         pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-      }).find((plugin) => {
-        if (ownerRefs.length > 0) {
-          return (
-            matchesProviderLiteralId(plugin, params.provider) ||
-            ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
-          );
-        }
-        return matchesProviderPluginRef(plugin, params.provider);
-      }) ?? null
+      }).find((plugin) => matchesProviderRuntimePlugin(plugin, params.provider, ownerRefs)) ?? null
     );
   };
   const plugin = cacheConfig
@@ -364,14 +328,9 @@ export function resolveProviderRuntimePlugin(
 export function resolveLoadedProviderRuntimePlugin(
   params: ProviderRuntimePluginLookupParams,
 ): ProviderPlugin | undefined {
-  const apiOwnerHint = resolveProviderConfigApiOwnerHint({
-    provider: params.provider,
-    config: params.config,
-  });
-  const ownerRefs = [...new Set([params.providerOwner, apiOwnerHint].filter(Boolean))] as string[];
   return findProviderRuntimePluginInLoadedRegistries({
     lookup: params,
-    ownerRefs,
+    ownerRefs: resolveProviderRuntimeOwnerRefs(params),
   });
 }
 

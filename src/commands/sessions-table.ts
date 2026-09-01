@@ -7,6 +7,7 @@ import { splitGraphemes } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { SessionActor } from "../config/sessions/session-entry-provenance.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -54,6 +55,7 @@ export type SessionDisplayRow = {
   modelProvider?: string;
   providerOverride?: string;
   modelOverride?: string;
+  modelOverrideRouteResolution?: ReturnType<typeof resolveSessionModelOverrideRouteResolution>;
   contextTokens?: number;
   runtimePolicySessionKey?: string;
 };
@@ -102,6 +104,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     modelProvider: entry?.modelProvider,
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
+    modelOverrideRouteResolution: resolveSessionModelOverrideRouteResolution(entry),
     contextTokens: entry?.contextTokens,
   };
 }

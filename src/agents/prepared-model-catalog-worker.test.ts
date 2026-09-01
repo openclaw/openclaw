@@ -48,6 +48,7 @@ describe("prepared model catalog worker input", () => {
           workspaceDir: "/tmp/workspace",
           loadRuntimePlugins: true,
           runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+          compactionPluginSelections: [{ provider: "compaction", modelId: "summary" }],
         },
         env: {},
         authStore,
@@ -84,6 +85,9 @@ describe("prepared model catalog worker input", () => {
     expect(cloned.authStore.lastGood).toEqual(authStore.lastGood);
     expect(cloned.input.runtimePluginSelections).toEqual([
       { provider: "selected", modelId: "model" },
+    ]);
+    expect(cloned.input.compactionPluginSelections).toEqual([
+      { provider: "compaction", modelId: "summary" },
     ]);
     expect(cloned.input).not.toHaveProperty("inheritedAuthDir");
     expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");

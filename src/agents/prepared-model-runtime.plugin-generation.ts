@@ -9,6 +9,7 @@ import {
   resolveAgentRuntimePluginSelections,
 } from "./harness/runtime-plugin-load-plan.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
+import { getPreparedModelRuntimePluginSelections } from "./prepared-model-runtime.plugin-selections.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
@@ -27,7 +28,8 @@ export function preparedPluginGenerationSupportsSelections(
   generation: PreparedModelRuntimePluginGeneration,
   input: PreparedModelRuntimeInput,
 ): boolean {
-  if (!input.runtimePluginSelections) {
+  const selections = getPreparedModelRuntimePluginSelections(input);
+  if (!selections) {
     return true;
   }
   const registry = generation.pluginRegistry;
@@ -39,7 +41,7 @@ export function preparedPluginGenerationSupportsSelections(
     workspaceDir:
       generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
     basePluginIds: listRuntimePluginIdsFromRegistry(registry),
-    selections: resolveAgentRuntimePluginSelections(input.config, input.runtimePluginSelections),
+    selections: resolveAgentRuntimePluginSelections(input.config, selections),
     metadataSnapshot: generation.pluginMetadataSnapshot,
   });
   return registryContainsRuntimePluginIds(registry, plan.pluginIds);

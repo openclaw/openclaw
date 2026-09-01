@@ -7,7 +7,11 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
+import type {
+  ModelManifestNormalizationContext,
+  ModelRef,
+  ModelRefSelection,
+} from "./model-ref-shared.js";
 import {
   buildModelAliasIndex,
   getModelRefStatus,
@@ -16,9 +20,11 @@ import {
 
 export {
   buildModelAliasIndex,
+  completeModelRefSelection,
+  buildConfiguredModelCatalog,
   getModelRefStatus,
   normalizeModelSelection,
-  resolveConfiguredModelRef,
+  resolveConfiguredModelSelection,
   resolveHooksGmailModel,
   resolveModelAliasFromPair,
   resolveModelRefFromString,
@@ -45,7 +51,7 @@ export function resolveAllowedModelRefCore(
     catalog: ModelCatalogEntry[];
     raw: string;
     defaultProvider: string;
-    defaultModel?: string;
+    defaultModel?: string | ModelRef | ModelRefSelection;
     agentId?: string;
   } & ModelManifestNormalizationContext,
 ):

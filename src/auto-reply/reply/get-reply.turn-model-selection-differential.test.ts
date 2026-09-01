@@ -6,6 +6,7 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -26,6 +27,7 @@ import {
   type TurnModelSelectionPath,
   type TurnModelSelectionVerdict,
 } from "../../test-utils/turn-model-selection-differential.js";
+import type { resolveReplyDirectives } from "./get-reply-directives.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
   buildGetReplyCtx,
@@ -36,6 +38,15 @@ import {
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
+
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => createPluginMetadataSnapshotFixture(),
+}));
+
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: vi.fn(() => undefined),
+}));
 
 const mocks = vi.hoisted(() => ({
   handleInlineActions: vi.fn(),
@@ -49,6 +60,7 @@ registerGetReplyRuntimeOverrides(mocks);
 let state: OpenClawTestState;
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let createModelSelectionState: typeof import("./model-selection.js").createModelSelectionState;
 let resolveAgentWorkspaceDirMock: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let resolveChannelModelOverrideMock: typeof import("../../channels/model-overrides.js").resolveChannelModelOverride;
@@ -138,6 +150,7 @@ async function observeReplySelection(params: {
 
 beforeAll(async () => {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ createModelSelectionState } = await import("./model-selection.js"));
   ({ resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock } =
     await import("../../agents/agent-scope.js"));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
@@ -167,33 +180,43 @@ beforeEach(async () => {
     actualModelSelection.resolveModelRefFromString,
   );
   vi.mocked(resolveDefaultModelMock).mockReturnValue({
-    defaultProvider: TURN_MODEL_DEFAULT_REF.provider,
-    defaultModel: TURN_MODEL_DEFAULT_REF.model,
+    defaultSelection: {
+      ref: { provider: TURN_MODEL_DEFAULT_REF.provider, model: TURN_MODEL_DEFAULT_REF.model },
+      normalization: "applied",
+      routeResolution: "raw",
+    },
     aliasIndex: actualModelSelection.buildModelAliasIndex({
       cfg: {},
       defaultProvider: TURN_MODEL_DEFAULT_REF.provider,
     }),
   });
-  mocks.resolveReplyDirectives.mockImplementation(async (input: unknown) => {
-    const params = input as {
-      provider: string;
-      model: string;
-      sessionKey: string;
-      triggerBodyNormalized: string;
-    };
-    return createGetReplyContinueDirectivesResult({
-      body: params.triggerBodyNormalized,
-      abortKey: params.sessionKey,
-      from: "sender",
-      to: "target",
-      senderId: "sender",
-      commandSource: "text",
-      senderIsOwner: true,
-      resetHookTriggered: false,
-      provider: params.provider,
-      model: params.model,
-    });
-  });
+  mocks.resolveReplyDirectives.mockImplementation(
+    async (params: Parameters<typeof resolveReplyDirectives>[0]) => {
+      const modelState = await createModelSelectionState({
+        ...params,
+        hasModelDirective: false,
+        parentSessionKey:
+          params.sessionEntry.parentSessionKey ??
+          params.ctx.ModelParentSessionKey ??
+          params.ctx.ParentSessionKey,
+        isHeartbeat: params.opts?.isHeartbeat === true,
+      });
+      return createGetReplyContinueDirectivesResult({
+        defaultRef: modelState.defaultSelection.ref,
+        modelState,
+        body: params.triggerBodyNormalized,
+        abortKey: params.sessionKey,
+        from: "sender",
+        to: "target",
+        senderId: "sender",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+        provider: modelState.provider,
+        model: modelState.model,
+      });
+    },
+  );
   mocks.handleInlineActions.mockImplementation(async (input: unknown) => {
     const params = input as { directives?: unknown; cleanedBody?: string };
     return {

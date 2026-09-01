@@ -14,8 +14,9 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveSelectedAgentHarnessRuntime } from "./harness/runtime-plugin-load-plan.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { resolveCompactionModelSelection } from "./model-selection-compaction.js";
 import {
-  resolveDefaultModelForAgent,
+  resolveDefaultModelSelectionForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "./model-selection-config.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
@@ -30,6 +31,7 @@ import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
+import { getPreparedModelRuntimePluginSelections } from "./prepared-model-runtime.plugin-selections.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -276,6 +278,7 @@ export function normalizePreparedModelRuntimeInput(
   input: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeInput {
   const {
+    compactionPluginSelections: _compactionPluginSelections,
     inheritedAuthDir: _inheritedAuthDir,
     readOnly,
     runtimePluginSelections: _runtimePluginSelections,
@@ -288,17 +291,41 @@ export function normalizePreparedModelRuntimeInput(
   );
   const workspaceDir = normalizeOptionalDir(input.workspaceDir);
   const env = input.env ? Object.freeze({ ...input.env }) : undefined;
-  const runtimePluginSelections = input.runtimePluginSelections
-    ? Object.freeze(
-        [...input.runtimePluginSelections]
-          .map((selection) => {
-            const runtime = resolveSelectedAgentHarnessRuntime(selection, input.config);
-            const { agentId: _agentId, ...normalized } = selection;
-            return Object.freeze({ ...normalized, runtime });
-          })
-          .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
-      )
-    : undefined;
+  const normalizeSelections = (selections: PreparedModelRuntimeInput["runtimePluginSelections"]) =>
+    selections
+      ? Object.freeze(
+          [...selections]
+            .map((selection) => {
+              const runtime = resolveSelectedAgentHarnessRuntime(selection, input.config);
+              const { agentId: _agentId, ...normalized } = selection;
+              return Object.freeze({ ...normalized, runtime });
+            })
+            .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+        )
+      : undefined;
+  const runtimePluginSelections = normalizeSelections(input.runtimePluginSelections);
+  // Derived owners belong to this config generation, not to the request. Recompute
+  // them after a rebind so an old compaction provider cannot leak into the new lease.
+  const compactionPluginSelections =
+    !readOnly && input.config.agents?.defaults?.compaction?.model?.trim()
+      ? normalizeSelections(
+          (input.runtimePluginSelections ?? []).flatMap((selection) => {
+            if (!selection.provider.trim() || !selection.modelId.trim()) {
+              return [];
+            }
+            const target = resolveCompactionModelSelection({
+              config: input.config,
+              provider: selection.provider,
+              modelId: selection.modelId,
+              allowPluginNormalization: false,
+              manifestPlugins: [],
+            });
+            return target.provider && target.model
+              ? [{ provider: target.provider, modelId: target.model, agentId: input.agentId }]
+              : [];
+          }),
+        )
+      : undefined;
   return {
     ...rest,
     agentDir: path.resolve(input.agentDir),
@@ -309,6 +336,7 @@ export function normalizePreparedModelRuntimeInput(
     ...(env ? { env } : {}),
     ...(input.allowGatewaySubagentBinding === true ? { allowGatewaySubagentBinding: true } : {}),
     ...(runtimePluginSelections?.length ? { runtimePluginSelections } : {}),
+    ...(compactionPluginSelections?.length ? { compactionPluginSelections } : {}),
   };
 }
 
@@ -331,7 +359,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     workspaceDir: input.workspaceDir,
     env: environmentFingerprint(input.env),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
-    runtimePluginSelections: input.runtimePluginSelections,
+    runtimePluginSelections: getPreparedModelRuntimePluginSelections(input),
     config: input.readOnly ? hashRuntimeConfigValue(input.config) : undefined,
   });
 }
@@ -367,8 +395,8 @@ export function resolvePublishedOwner(
       (input.allowGatewaySubagentBinding === undefined ||
         owner.input.allowGatewaySubagentBinding === input.allowGatewaySubagentBinding) &&
       (input.runtimePluginSelections === undefined ||
-        JSON.stringify(owner.input.runtimePluginSelections) ===
-          JSON.stringify(input.runtimePluginSelections)) &&
+        JSON.stringify(getPreparedModelRuntimePluginSelections(owner.input)) ===
+          JSON.stringify(getPreparedModelRuntimePluginSelections(input))) &&
       (input.env === undefined ||
         owner.environmentFingerprint === environmentFingerprint(input.env)) &&
       (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
@@ -391,7 +419,8 @@ export function hasSameLifecycleInput(
     environmentFingerprint(left.env) === environmentFingerprint(right.env) &&
     left.preserveWorkspaceDirOnRefresh === right.preserveWorkspaceDirOnRefresh &&
     left.allowGatewaySubagentBinding === right.allowGatewaySubagentBinding &&
-    JSON.stringify(left.runtimePluginSelections) === JSON.stringify(right.runtimePluginSelections)
+    JSON.stringify(getPreparedModelRuntimePluginSelections(left)) ===
+      JSON.stringify(getPreparedModelRuntimePluginSelections(right))
   );
 }
 
@@ -441,7 +470,10 @@ function resolveConfiguredRuntimePluginSelections(
   config: OpenClawConfig,
   agentId: string,
 ): PreparedModelRuntimeInput["runtimePluginSelections"] {
-  const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const configured = resolveDefaultModelSelectionForAgent({
+    cfg: config,
+    agentId,
+  });
   const subagentModel = resolveSubagentConfiguredModelSelection({
     cfg: config,
     agentId,
@@ -451,8 +483,10 @@ function resolveConfiguredRuntimePluginSelections(
     cfg: config,
     agentId,
     manifestPlugins: [],
-    provider: configured.provider || DEFAULT_PROVIDER,
-    model: configured.model || DEFAULT_MODEL,
+    allowPluginNormalization: false,
+    provider: configured.ref.provider || DEFAULT_PROVIDER,
+    model: configured.ref.model || DEFAULT_MODEL,
+    requestedModelNormalization: configured.normalization,
     requestedRouteResolution: "resolved",
     // Session policy can narrow either configured chain after admission waits. Prepare
     // their owners once so nested execution never expands an already frozen generation.

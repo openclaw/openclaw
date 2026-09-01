@@ -97,6 +97,8 @@ export type PreparedModelRuntimeInput = {
   env?: NodeJS.ProcessEnv;
   allowGatewaySubagentBinding?: boolean;
   runtimePluginSelections?: readonly AgentHarnessPluginSelection[];
+  /** Derived during normalization; rebuilt from the current config on every admission rebind. */
+  compactionPluginSelections?: readonly AgentHarnessPluginSelection[];
   config: OpenClawConfig;
 };
 

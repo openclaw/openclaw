@@ -23,7 +23,7 @@ import {
   resolveAgentConfigMock,
   resolveAgentModelFallbacksOverrideMock,
   resolveAllowedModelRefMock,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveCronSessionMock,
   resolveSupportedThinkingLevelMock,
   resolveEffectiveAgentRuntimeMock,
@@ -134,9 +134,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     resetRunCronIsolatedAgentTurnHarness();
 
     // Agent default model is Opus (anthropic)
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      normalization: "applied",
     });
 
     // Cron payload model override resolves to gemini
@@ -799,9 +802,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     resolveAgentConfigMock.mockReturnValue({
       model: "deepseek/deepseek-v4-pro",
     });
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "deepseek",
-      model: "deepseek-v4-pro",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+      },
+      normalization: "applied",
     });
 
     const captured = captureModelFallbackRun("deepseek", "deepseek-v4-pro");
@@ -835,9 +841,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     resolveAgentConfigMock.mockReturnValue({
       model: "deepseek/deepseek-v4-pro",
     });
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "deepseek",
-      model: "deepseek-v4-pro",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+      },
+      normalization: "applied",
     });
 
     const captured = captureModelFallbackRun("deepseek", "deepseek-v4-pro");
@@ -871,9 +880,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       model: "anthropic/claude-sonnet-4-6",
     });
     resolveAgentModelFallbacksOverrideMock.mockReturnValue([]);
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+      normalization: "applied",
     });
 
     const captured = captureModelFallbackRun("anthropic", "claude-sonnet-4-6");
@@ -907,9 +919,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       model: "deepseek/deepseek-v4-pro",
     });
     resolveAgentModelFallbacksOverrideMock.mockReturnValue([]);
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "deepseek",
-      model: "deepseek-v4-pro",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+      },
+      normalization: "applied",
     });
     resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
       if (raw === "openai/gpt-5.4") {

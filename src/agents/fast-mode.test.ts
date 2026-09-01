@@ -1,7 +1,7 @@
 // Verifies fast-mode precedence across session, agent, and model defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { formatFastModeAutoLabel } from "../shared/fast-mode.js";
+import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import {
   formatFastModeAutoProgressText,
   formatFastModeCommandOptions,
@@ -160,6 +160,7 @@ describe("resolveFastModeState", () => {
     expect(state.mode).toBe("auto");
     expect(state.source).toBe("session");
     expect(state.fastAutoOnSeconds).toBe(30);
+    expect(resolveFastModeModelAutoOnSeconds({ cfg, model: "openai/gpt-5.5" })).toBe(30);
   });
 
   it.each([
@@ -187,72 +188,64 @@ describe("resolveFastModeState", () => {
     expect(state.fastAutoOnSeconds).toBe(15);
   });
 
-  it("uses model config when the runtime passes a provider-qualified model ref", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { params: { fastMode: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openai",
-      model: "openai/gpt-5.5",
-    });
-
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("config");
-  });
-
-  it("uses canonical provider/model config for slash-containing model ids", () => {
-    // OpenRouter-style models can contain slashes, so matching must build the
-    // canonical provider/model key instead of splitting on the first slash.
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openrouter/anthropic/claude-sonnet-4-6": { params: { fastMode: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const state = resolveFastModeState({
-      cfg,
+  it.each([
+    { provider: "openai", model: "gpt-5.5", mode: true, fastAutoOnSeconds: 15 },
+    { provider: "openai", model: "openai/gpt-5.5", mode: "auto", fastAutoOnSeconds: 45 },
+    {
       provider: "openrouter",
       model: "anthropic/claude-sonnet-4-6",
-    });
-
-    expect(state.enabled).toBe(true);
-    expect(state.source).toBe("config");
-  });
-
-  it("does not use another provider's slash-containing model config", () => {
-    // Provider qualification prevents a model-id substring from borrowing
-    // another provider's fast-mode setting.
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { params: { fastMode: true } },
+      mode: true,
+      fastAutoOnSeconds: 30,
+    },
+  ] as const)(
+    "uses the exact $provider/$model config",
+    ({ provider, model, mode, fastAutoOnSeconds }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { params: { fastMode: true, fastAutoOnSeconds: 15 } },
+              "openai/openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 45 } },
+              "openrouter/anthropic/claude-sonnet-4-6": {
+                params: { fastMode: true, fastAutoOnSeconds: 30 },
+              },
+            },
           },
         },
-      },
-    } as OpenClawConfig;
+      } as OpenClawConfig;
 
-    const state = resolveFastModeState({
-      cfg,
-      provider: "openrouter",
-      model: "anthropic/claude-sonnet-4-6",
-    });
+      expect(resolveFastModeState({ cfg, provider, model })).toEqual({
+        mode,
+        enabled: true,
+        source: "config",
+        fastAutoOnSeconds,
+      });
+    },
+  );
 
-    expect(state.enabled).toBe(false);
-    expect(state.source).toBe("default");
-  });
+  it.each(["anthropic", "openrouter"])(
+    "does not borrow a shorter %s model config",
+    (modelProvider) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              [`${modelProvider}/claude-sonnet-4-6`]: { params: { fastMode: true } },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const state = resolveFastModeState({
+        cfg,
+        provider: "openrouter",
+        model: `${modelProvider}/claude-sonnet-4-6`,
+      });
+
+      expect(state.enabled).toBe(false);
+      expect(state.source).toBe("default");
+    },
+  );
 
   it("defaults to off when unset", () => {
     const state = resolveFastModeState({

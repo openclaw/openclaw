@@ -29,6 +29,21 @@ function applyModelDefaults(
 }
 
 describe("applyModelDefaults", () => {
+  it("keeps literal provider-prefixed model refs distinct in selections and settings", () => {
+    const models = {
+      "custom/model": { alias: "plain", params: { temperature: 0.1 } },
+      "custom/custom/model": { alias: "nested", params: { temperature: 0.9 } },
+    };
+    const model = { primary: "custom/custom/model", fallbacks: ["custom/model"] };
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model, models }, list: [{ id: "worker", model, models }] },
+    };
+
+    const resolved = applyModelDefaults(cfg);
+    expect(resolved.agents?.defaults).toMatchObject({ model, models });
+    expect(resolved.agents?.list?.[0]).toMatchObject({ model, models });
+  });
+
   beforeEach(() => {
     providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockReset();
     providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockImplementation(

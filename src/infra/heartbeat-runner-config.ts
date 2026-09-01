@@ -115,10 +115,11 @@ function resolveHeartbeatModelRef(params: {
   heartbeat?: HeartbeatConfig;
   entry?: SessionEntry;
 }): ModelRef {
-  const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
+  const { defaultSelection, aliasIndex } = resolveDefaultModel({
     cfg: params.cfg,
     agentId: params.agentId,
   });
+  const { provider: defaultProvider, model: defaultModel } = defaultSelection.ref;
   const heartbeatRaw =
     normalizeOptionalString(params.heartbeat?.model) ??
     normalizeOptionalString(params.cfg.agents?.defaults?.heartbeat?.model) ??

@@ -1,7 +1,16 @@
 // Shares provider registry normalization helpers across plugin paths.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import type { ProviderPlugin } from "./provider-plugin.types.js";
+
+// Shared matching needs provider entries, not the Gateway registry's type graph.
+type ProviderRuntimeRegistry = {
+  providers: ReadonlyArray<{ pluginId: string; provider: ProviderPlugin }>;
+};
 
 /** Normalizes provider ids used by capability-provider registries. */
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
@@ -21,6 +30,39 @@ export function matchesProviderPluginRef(
         (alias) => normalizeProviderId(alias) === normalized,
       )),
   );
+}
+
+/** Explicit API ownership suppresses unrelated aliases, while preserving literal provider ids. */
+export function matchesProviderRuntimePlugin(
+  plugin: ProviderPlugin,
+  provider: string,
+  ownerRefs: readonly string[],
+): boolean {
+  if (ownerRefs.length > 0) {
+    const normalized = normalizeLowercaseStringOrEmpty(provider);
+    return (
+      (Boolean(normalized) && normalizeLowercaseStringOrEmpty(plugin.id) === normalized) ||
+      ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
+    );
+  }
+  return matchesProviderPluginRef(plugin, provider);
+}
+
+export function listProviderRuntimePluginsInRegistry(
+  registry: ProviderRuntimeRegistry,
+): Array<ProviderPlugin & { pluginId: string }> {
+  return registry.providers.map((entry) => ({ ...entry.provider, pluginId: entry.pluginId }));
+}
+
+export function findProviderRuntimePluginInRegistry(params: {
+  registry: ProviderRuntimeRegistry;
+  provider: string;
+  ownerRefs: readonly string[];
+}): ProviderPlugin | undefined {
+  const entry = params.registry.providers.find(({ provider }) =>
+    matchesProviderRuntimePlugin(provider, params.provider, params.ownerRefs),
+  );
+  return entry ? { ...entry.provider, pluginId: entry.pluginId } : undefined;
 }
 
 /** Preserves ordered alias overrides, including aliases of replaced canonical entries. */

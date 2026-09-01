@@ -5,11 +5,16 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
+import { getPreparedModelRuntimePluginSelections } from "./prepared-model-runtime.plugin-selections.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 type PreparedPluginContextInput = Pick<
   PreparedModelRuntimeInput,
-  "config" | "workspaceDir" | "loadRuntimePlugins" | "runtimePluginSelections"
+  | "config"
+  | "workspaceDir"
+  | "loadRuntimePlugins"
+  | "runtimePluginSelections"
+  | "compactionPluginSelections"
 >;
 
 const emptyPluginDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
@@ -22,6 +27,7 @@ export function prepareOwnedPluginLoadContext(
   preparedMetadataSnapshot?: PluginMetadataSnapshot,
   preferBuiltPluginArtifacts = false,
 ): PluginMetadataSnapshot {
+  const selections = getPreparedModelRuntimePluginSelections(input);
   const metadataSnapshot =
     preparedMetadataSnapshot ??
     resolvePluginMetadataSnapshot({
@@ -30,12 +36,12 @@ export function prepareOwnedPluginLoadContext(
       ...(input.workspaceDir
         ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
         : {}),
-      ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
+      ...(input.loadRuntimePlugins && selections && input.workspaceDir
         ? {
             pluginIdScope: createAgentRuntimeMetadataPluginIdScope({
               config: input.config,
               workspaceDir: input.workspaceDir,
-              selections: input.runtimePluginSelections,
+              selections,
             }),
           }
         : {}),

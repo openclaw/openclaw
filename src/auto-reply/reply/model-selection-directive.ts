@@ -1,8 +1,7 @@
-// Normalizes model selection directives into provider and model ids.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { modelKey } from "../../agents/model-ref-shared.js";
 import {
   type ModelAliasIndex,
   resolveModelRefFromString,
@@ -12,7 +11,6 @@ import {
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-export { modelKey };
 export type { ModelAliasIndex };
 
 /** Resolved model choice from a `/model` directive. */
@@ -131,7 +129,7 @@ function scoreFuzzyMatch(params: {
   const providerLower = normalizeLowercaseStringOrEmpty(provider);
   const modelLower = normalizeLowercaseStringOrEmpty(model);
   const haystack = `${providerLower}/${modelLower}`;
-  const key = modelKey(provider, model);
+  const key = buildModelCatalogRef(provider, model);
 
   const scoreFragment = (
     value: string,
@@ -236,7 +234,7 @@ export function resolveModelDirectiveSelection(params: {
       cfg: params.cfg ?? {},
       catalog: [],
       defaultProvider,
-      defaultModel,
+      defaultModel: { provider: defaultProvider, model: defaultModel },
       agentId: params.agentId,
     });
 
@@ -244,7 +242,7 @@ export function resolveModelDirectiveSelection(params: {
   const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
 
   const pickAliasForKey = (provider: string, model: string): string | undefined =>
-    aliasIndex.byKey.get(modelKey(provider, model))?.[0];
+    aliasIndex.byKey.get(buildModelCatalogRef(provider, model))?.[0];
 
   const buildSelection = (provider: string, model: string): ModelDirectiveSelection => {
     const alias = pickAliasForKey(provider, model);
@@ -299,7 +297,7 @@ export function resolveModelDirectiveSelection(params: {
         });
       }
       for (const match of aliasMatches) {
-        const key = modelKey(match.provider, match.model);
+        const key = buildModelCatalogRef(match.provider, match.model);
         if (!policy.allowsKey(key)) {
           continue;
         }
@@ -377,7 +375,7 @@ export function resolveModelDirectiveSelection(params: {
     };
   }
 
-  const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
+  const resolvedKey = buildModelCatalogRef(resolved.ref.provider, resolved.ref.model);
   const explicitSelection = {
     selection: {
       provider: resolved.ref.provider,

@@ -3,6 +3,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   resolveModelRefFromString,
+  completeModelRefSelection,
+  buildConfiguredModelCatalog,
   resolveThinkingDefaultWithRuntimeCatalogCore,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
@@ -38,6 +40,10 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { stripStructuralPrefixes } from "./mentions.js";
+import {
+  resolveRuntimeNormalization,
+  type ReplyModelSelection,
+} from "./model-runtime-normalization.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
 import type { createTypingController } from "./typing.js";
@@ -134,11 +140,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   agentDir: string;
   agentCfg: AgentDefaults;
   commandAuthorized: boolean;
-  defaultProvider: string;
-  defaultModel: string;
+  defaultSelection: ReplyModelSelection;
   aliasIndex: ModelAliasIndex;
-  provider: string;
-  model: string;
+  selection: ReplyModelSelection;
   workspaceDir: string;
   typing: ReturnType<typeof createTypingController>;
   opts?: GetReplyOptions;
@@ -206,9 +210,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
     const canApplyStoredModel =
-      params.provider === params.defaultProvider && params.model === params.defaultModel;
+      params.selection.ref.provider === params.defaultSelection.ref.provider &&
+      params.selection.ref.model === params.defaultSelection.ref.model;
     const storedModelOverride = canApplyStoredModel
       ? resolveStoredModelOverride({
+          cfg: params.cfg,
           sessionEntry: targetSessionEntry,
           sessionStore: sessionState.sessionStore,
           sessionKey: sessionState.sessionKey,
@@ -216,7 +222,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
             targetSessionEntry?.parentSessionKey ??
             params.ctx.ModelParentSessionKey ??
             params.ctx.ParentSessionKey,
-          defaultProvider: params.defaultProvider,
+          defaultProvider: params.defaultSelection.ref.provider,
         })
       : null;
     const canApplyChannelModel =
@@ -258,27 +264,49 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     const resolvedChannelModel = channelModelOverride
       ? resolveModelRefFromString({
           raw: channelModelOverride.model,
-          defaultProvider: params.defaultProvider,
+          defaultProvider: params.defaultSelection.ref.provider,
           aliasIndex: params.aliasIndex,
         })
       : null;
     const resolvedInheritedModel =
       storedModelOverride?.source === "parent"
         ? (resolveModelRefFromString({
-            raw: `${storedModelOverride.provider ?? params.defaultProvider}/${storedModelOverride.model}`,
-            defaultProvider: params.defaultProvider,
+            raw: `${storedModelOverride.provider ?? params.defaultSelection.ref.provider}/${storedModelOverride.model}`,
+            defaultProvider: params.defaultSelection.ref.provider,
             aliasIndex: params.aliasIndex,
           })?.ref ?? {
-            provider: storedModelOverride.provider ?? params.defaultProvider,
+            provider: storedModelOverride.provider ?? params.defaultSelection.ref.provider,
             model: storedModelOverride.model,
           })
         : null;
+    // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
+    const thinkingCatalog = await loadPreparedModelCatalog({
+      config: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      readOnly: true,
+    });
+    const normalization = {
+      ...resolveRuntimeNormalization(params.cfg),
+      allowPluginNormalization: false,
+    };
+    const selectedRef = completeModelRefSelection(params.selection, {
+      cfg: params.cfg,
+      ...normalization,
+      configuredCatalog: buildConfiguredModelCatalog({
+        cfg: params.cfg,
+        manifestPlugins: normalization.manifestPlugins,
+      }),
+    });
     // Native status returns before normal channel routing; select once before
     // preparing model-bound thinking, runtime, auth, context, or fast-mode facts.
     const statusProvider =
-      resolvedInheritedModel?.provider ?? resolvedChannelModel?.ref.provider ?? params.provider;
+      resolvedInheritedModel?.provider ??
+      resolvedChannelModel?.ref.provider ??
+      selectedRef.provider;
     const statusModel =
-      resolvedInheritedModel?.model ?? resolvedChannelModel?.ref.model ?? params.model;
+      resolvedInheritedModel?.model ?? resolvedChannelModel?.ref.model ?? selectedRef.model;
     let resolvedDefaultThinkingLevel: ThinkLevel | undefined;
     const resolveDefaultThinkingLevel = async () => {
       resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({
@@ -292,14 +320,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       return resolvedDefaultThinkingLevel;
     };
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
-    // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
-    const thinkingCatalog = await loadPreparedModelCatalog({
-      config: params.cfg,
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      readOnly: true,
-    });
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,
@@ -381,12 +401,12 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         blockReplyChunking: undefined,
         resolvedBlockStreamingBreak: "text_end",
         resolveDefaultThinkingLevel: async () => undefined,
-        provider: params.provider,
-        model: params.model,
+        provider: params.selection.ref.provider,
+        model: params.selection.ref.model,
         contextTokens: resolveContextTokens({
           cfg: params.cfg,
-          provider: params.provider,
-          model: params.model,
+          provider: params.selection.ref.provider,
+          model: params.selection.ref.model,
         }),
         isGroup: sessionState.isGroup,
         loadSkillCommands: loadNativeSkillCommands,
@@ -425,11 +445,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
     commandAuthorized: params.commandAuthorized,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
+    defaultSelection: params.defaultSelection,
     aliasIndex: params.aliasIndex,
-    provider: params.provider,
-    model: params.model,
+    selection: params.selection,
     hasResolvedHeartbeatModelOverride: false,
     typing: params.typing,
     opts: params.opts,

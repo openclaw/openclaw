@@ -51,7 +51,7 @@ import {
   isCliProvider,
   modelKey,
   normalizeProviderId,
-  resolveConfiguredModelRef,
+  resolveConfiguredModelSelection,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
@@ -416,7 +416,7 @@ export async function modelsStatusCommand(
     // defaults: the canonical resolvers merge per-agent model rows themselves, so
     // the synthetic route resolved a bare per-agent alias against global defaults
     // and reported a different provider than runtime selects.
-    const resolved = resolveConfiguredModelRef({
+    const defaultSelection = resolveConfiguredModelSelection({
       cfg,
       agentId,
       defaultProvider: DEFAULT_PROVIDER,
@@ -424,6 +424,7 @@ export async function modelsStatusCommand(
       ...DISPLAY_MODEL_PARSE_OPTIONS,
     });
 
+    const resolved = defaultSelection.ref;
     const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
     const rawModel = agentModelPrimary ?? rawDefaultsModel;
     const resolvedLabel = modelKey(resolved.provider, resolved.model);
@@ -626,7 +627,7 @@ export async function modelsStatusCommand(
       cfg,
       catalog: catalog.entries,
       defaultProvider: resolved.provider,
-      defaultModel: resolved.model,
+      defaultModel: defaultSelection,
       agentId: workspaceAgentId,
       ...DISPLAY_MODEL_PARSE_OPTIONS,
     });

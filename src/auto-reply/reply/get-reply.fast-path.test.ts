@@ -21,7 +21,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { handleGoalCommand } from "./commands-goal.js";
-import { buildFastReplyCommandContext, initFastReplySessionState } from "./get-reply-fast-path.js";
+import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
   markCompleteReplyConfig,
   withFastReplyConfig,
@@ -115,8 +115,6 @@ function requireDirectiveParams() {
     | {
         sessionKey?: string;
         workspaceDir?: string;
-        provider?: string;
-        model?: string;
       }
     | undefined;
   if (!directiveParams) {
@@ -207,8 +205,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     mocks.resolveReplyDirectives.mockReset();
     vi.mocked(resolveDefaultModelMock).mockReset();
     vi.mocked(resolveDefaultModelMock).mockReturnValue({
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
+      defaultSelection: {
+        ref: { provider: "openai", model: "gpt-4o-mini" },
+        normalization: "applied",
+        routeResolution: "raw",
+      },
       aliasIndex: emptyAliasIndex(),
     });
     vi.mocked(resolveModelRefFromStringMock).mockReset();
@@ -256,10 +257,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
-    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
-    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-    const preparedReplyParams = requirePreparedReplyParams();
-    expect(preparedReplyParams.cfg).toBe(cfg);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0].cfg).toBe(cfg);
   });
 
   it("still merges partial config overrides against getRuntimeConfig()", async () => {
@@ -335,20 +334,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result).toEqual({ text: MODEL_SELECTION_LOCKED_RESET_MESSAGE });
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
-  });
-
-  it("marks configs through withFastReplyConfig()", async () => {
-    const cfg = withFastReplyConfig({
-      agents: { defaults: { workspace: state.workspaceDir } },
-      session: { store: isolatedStorePath },
-    } satisfies OpenClawConfig);
-
-    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
-      text: "ok",
-    });
-    expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
-    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
-    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
   });
 
   it("clears stale ack-only heartbeat pending delivery before running heartbeat", async () => {
@@ -468,8 +453,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       session: { store: isolatedStorePath },
     } as OpenClawConfig);
     vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
+      defaultSelection: {
+        ref: { provider: "openai", model: "gpt-5.5" },
+        normalization: "applied",
+        routeResolution: "raw",
+      },
       aliasIndex: emptyAliasIndex(),
     });
 
@@ -528,8 +516,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       session: { store: isolatedStorePath },
     } as OpenClawConfig);
     vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
+      defaultSelection: {
+        ref: { provider: "openai", model: "gpt-5.5" },
+        normalization: "applied",
+        routeResolution: "raw",
+      },
       aliasIndex: emptyAliasIndex(),
     });
 
@@ -586,8 +577,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       session: { store: storePath },
     } as OpenClawConfig);
     vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
+      defaultSelection: {
+        ref: { provider: "openai", model: "gpt-5.5" },
+        normalization: "applied",
+        routeResolution: "raw",
+      },
       aliasIndex: emptyAliasIndex(),
     });
 
@@ -698,6 +692,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     const continuationPrompt = `Pursue this goal exactly as written from this JSON string: "\\/status"`;
     const continueDirectives = async (params: unknown) =>
       createGetReplyContinueDirectivesResult({
+        defaultRef: { provider: "openai", model: "gpt-4o-mini" },
         body: (params as { triggerBodyNormalized: string }).triggerBodyNormalized,
         abortKey: targetSessionKey,
         from: "telegram:user:42",
@@ -981,48 +976,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.initialSessionEntry?.responseUsage).toBe("tokens");
     expect(result.initialSessionEntry).not.toBe(result.sessionEntry);
   });
-  it("maps explicit gateway origin into command context", () => {
-    const command = buildFastReplyCommandContext({
-      ctx: buildGetReplyCtx({
-        Provider: "internal",
-        Surface: "internal",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        From: undefined,
-        To: undefined,
-        SenderId: "gateway-client",
-      }),
-      cfg: {} as OpenClawConfig,
-      sessionKey: "main",
-      isGroup: false,
-      triggerBodyNormalized: "/codex bind",
-      commandAuthorized: true,
-    });
-
-    expect(command.channel).toBe("slack");
-    expect(command.channelId).toBe("slack");
-    expect(command.from).toBe("gateway-client");
-    expect(command.to).toBe("user:U123");
-  });
-
-  it("preserves multiline slash skill payloads in fast command context", () => {
-    const body = "/skill demo_skill first line\nsecond line";
-    const command = buildFastReplyCommandContext({
-      ctx: buildGetReplyCtx({
-        Body: body,
-        RawBody: body,
-        CommandBody: body,
-      }),
-      cfg: {} as OpenClawConfig,
-      sessionKey: "main",
-      isGroup: false,
-      triggerBodyNormalized: body,
-      commandAuthorized: true,
-    });
-
-    expect(command.commandBodyNormalized).toBe("/skill demo_skill first line\nsecond line");
-  });
-
   it("keeps the existing session for /reset newline soft during fast bootstrap", async () => {
     const storePath = isolatedStorePath;
     const sessionKey = "agent:main:telegram:123";

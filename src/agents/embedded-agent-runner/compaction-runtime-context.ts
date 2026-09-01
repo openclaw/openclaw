@@ -11,13 +11,9 @@ import {
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
-import { splitTrailingAuthProfile } from "../model-ref-profile.js";
-import {
-  buildModelAliasIndex,
-  inferUniqueProviderFromConfiguredModels,
-  listModelAliasCandidates,
-} from "../model-selection-shared.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import type { ModelRef } from "../model-ref-shared.js";
+import { resolveCompactionModelSelection } from "../model-selection-compaction.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -57,6 +53,7 @@ type EmbeddedCompactionRuntimeContextParams = Omit<
   senderId?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  resolvedTarget?: ModelRef;
   harnessRuntime?: string | null;
   activeProcessSessions?: ActiveProcessSessionReference[];
 };
@@ -95,151 +92,58 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   );
 }
 
-/**
- * Resolve the effective compaction target from config, falling back to the
- * caller-supplied provider/model and optionally applying runtime defaults.
- */
-export function resolveEmbeddedCompactionTarget(params: {
-  config?: OpenClawConfig;
-  provider?: string | null;
-  modelId?: string | null;
-  authProfileId?: string | null;
-  harnessRuntime?: string | null;
-  modelSelectionLocked?: boolean;
-  defaultProvider?: string;
-  defaultModel?: string;
-}): {
+export function resolveCompactionTargetRuntime(params: {
   provider: string | undefined;
+  authProfileId?: string;
+  harnessRuntime?: string | null;
+  config?: OpenClawConfig;
+}): {
   runtimeProvider?: string;
   contextProvider?: string;
-  nativeHarnessCompaction?: boolean;
-  model: string | undefined;
-  authProfileId: string | undefined;
+  nativeHarnessCompaction?: true;
 } {
+  if (!params.provider) {
+    return {};
+  }
+  const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(params.harnessRuntime);
+  // Compaction follows the concrete session or prepared-plan owner. Provider
+  // defaults choose new runs; they cannot move an existing transcript.
+  const useNativeHarnessRuntime =
+    selectedHarnessRuntime !== undefined &&
+    selectedHarnessRuntime !== "openclaw" &&
+    !isDefaultAgentRuntimeId(selectedHarnessRuntime);
+  const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
+    provider: params.provider,
+    harnessRuntime: useNativeHarnessRuntime ? selectedHarnessRuntime : "openclaw",
+    authProfileId: params.authProfileId,
+    config: params.config,
+  });
+  const routedRuntimeProvider = runtimeProvider === params.provider ? undefined : runtimeProvider;
+  return {
+    runtimeProvider: routedRuntimeProvider,
+    contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
+    ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
+  };
+}
+
+/** Binds credentials and the retained harness after compaction model selection. */
+export function resolveEmbeddedCompactionTarget(
+  params: Parameters<typeof resolveCompactionModelSelection>[0] & {
+    authProfileId?: string | null;
+    harnessRuntime?: string | null;
+  },
+) {
+  const target = resolveCompactionModelSelection(params);
   const provider = params.provider?.trim() || params.defaultProvider;
-  const model = params.modelId?.trim() || params.defaultModel;
-  // A locked session's creating model owns every transcript read, including
-  // summaries. Compaction-specific model overrides would cross that boundary.
-  const override = params.modelSelectionLocked
-    ? undefined
-    : params.config?.agents?.defaults?.compaction?.model?.trim();
-  const resolveTargetProviders = (
-    targetProvider: string | undefined,
-    authProfileId: string | undefined,
-  ) => {
-    if (!targetProvider) {
-      return {};
-    }
-    const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(params.harnessRuntime);
-    // Compaction follows the concrete session or prepared-plan owner. Provider
-    // defaults choose new runs; they cannot move an existing transcript.
-    const useNativeHarnessRuntime =
-      selectedHarnessRuntime !== undefined &&
-      selectedHarnessRuntime !== "openclaw" &&
-      !isDefaultAgentRuntimeId(selectedHarnessRuntime);
-    const harnessRuntime = useNativeHarnessRuntime ? selectedHarnessRuntime : "openclaw";
-    const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
-      provider: targetProvider,
-      harnessRuntime: harnessRuntime ?? undefined,
-      authProfileId,
-      config: params.config,
-    });
-    const routedRuntimeProvider = runtimeProvider === targetProvider ? undefined : runtimeProvider;
-    return {
-      runtimeProvider: routedRuntimeProvider,
-      contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
-      ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
-    };
+  // A provider switch cannot inherit credentials selected for the session's
+  // original provider; all target paths share that boundary.
+  const authProfileId =
+    target.provider !== provider ? undefined : (params.authProfileId ?? undefined);
+  return {
+    ...target,
+    ...resolveCompactionTargetRuntime({ ...params, provider: target.provider, authProfileId }),
+    authProfileId,
   };
-  const assembleTarget = (targetProvider: string | undefined, targetModel: string | undefined) => {
-    // A provider switch cannot inherit credentials selected for the session's
-    // original provider; all target paths share that boundary.
-    const authProfileId =
-      targetProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: targetProvider,
-      ...resolveTargetProviders(targetProvider, authProfileId),
-      model: targetModel,
-      authProfileId,
-    };
-  };
-  if (!override) {
-    return assembleTarget(provider, model);
-  }
-  const slashIdx = override.indexOf("/");
-  if (slashIdx > 0) {
-    const overrideProvider = override.slice(0, slashIdx).trim();
-    const overrideModel = override.slice(slashIdx + 1).trim() || params.defaultModel;
-    return assembleTarget(overrideProvider, overrideModel);
-  }
-  const config = params.config ?? {};
-  const currentProvider = provider?.trim();
-  if (
-    currentProvider &&
-    hasBareConfiguredModelForProvider({
-      cfg: config,
-      provider: currentProvider,
-      model: override,
-    })
-  ) {
-    return assembleTarget(currentProvider, override);
-  }
-  const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
-    cfg: config,
-    model: override,
-    allowManifestNormalization: false,
-  });
-  if (inferredLiteralProvider) {
-    return assembleTarget(inferredLiteralProvider, override);
-  }
-  const defaultProvider = provider || DEFAULT_PROVIDER;
-  const aliasKey = normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model);
-  // Unrelated aliases must not cold-load provider runtime for a literal override.
-  const alias = listModelAliasCandidates(config).some(
-    ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
-  )
-    ? buildModelAliasIndex({ cfg: config, defaultProvider }).byAlias.get(aliasKey)
-    : undefined;
-  if (alias) {
-    return assembleTarget(alias.ref.provider, alias.ref.model);
-  }
-  return assembleTarget(provider, override);
-}
-
-function normalizeCompactionConfigKey(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-function hasBareConfiguredModelForProvider(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): boolean {
-  const providerKey = normalizeCompactionConfigKey(params.provider);
-  const modelKey = normalizeCompactionConfigKey(params.model);
-  if (!providerKey || !modelKey || params.model.includes("/")) {
-    return false;
-  }
-  for (const rawRef of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
-    const slashIdx = rawRef.indexOf("/");
-    if (slashIdx <= 0 || rawRef.endsWith("/*")) {
-      continue;
-    }
-    const rawProvider = rawRef.slice(0, slashIdx);
-    const rawModel = rawRef.slice(slashIdx + 1);
-    if (
-      normalizeCompactionConfigKey(rawProvider) === providerKey &&
-      normalizeCompactionConfigKey(rawModel) === modelKey
-    ) {
-      return true;
-    }
-  }
-  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(([key]) => {
-    return normalizeCompactionConfigKey(key) === providerKey;
-  })?.[1];
-  return (configuredProvider?.models ?? []).some((entry) => {
-    return normalizeCompactionConfigKey(entry?.id ?? "") === modelKey;
-  });
 }
 
 /** Resolves the concrete harness already bound to this exact compaction target. */
@@ -305,14 +209,26 @@ export function resolveCompactionContextTokenBudget(params: {
 export function buildEmbeddedCompactionRuntimeContext(
   params: EmbeddedCompactionRuntimeContextParams,
 ) {
-  const resolved = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    harnessRuntime: params.harnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
-  });
+  // Prepared compaction already owns its model identity. Re-reading its alias
+  // would replay normalization; only the final auth and harness still need binding.
+  const resolved = params.resolvedTarget
+    ? {
+        ...params.resolvedTarget,
+        authProfileId: params.authProfileId ?? undefined,
+        ...resolveCompactionTargetRuntime({
+          ...params,
+          provider: params.resolvedTarget.provider,
+          authProfileId: params.authProfileId ?? undefined,
+        }),
+      }
+    : resolveEmbeddedCompactionTarget({
+        config: params.config,
+        provider: params.provider,
+        modelId: params.modelId,
+        authProfileId: params.authProfileId,
+        harnessRuntime: params.harnessRuntime,
+        modelSelectionLocked: params.modelSelectionLocked,
+      });
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const runtimeAuthPlan =
     params.runtimeAuthPlan &&

@@ -18,6 +18,7 @@ import {
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -107,6 +108,11 @@ async function resolveModelDirective(params: {
   const surface = params.surface ?? "whatsapp";
   const sessionKey = "agent:main:whatsapp:+2000";
   const sessionEntry = createSessionEntry();
+  const selection: ReplyModelSelection = {
+    ref: { provider: "anthropic", model: "claude-opus-4-6" },
+    normalization: "applied",
+    routeResolution: "raw",
+  };
   const sessionCtx = {
     Body: agentText,
     BodyStripped: agentText,
@@ -142,11 +148,9 @@ async function resolveModelDirective(params: {
     triggerBodyNormalized: body,
     resetTriggered: false,
     commandAuthorized: authorized,
-    defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-6",
+    defaultSelection: selection,
     aliasIndex: createAliasIndex(),
-    provider: "anthropic",
-    model: "claude-opus-4-6",
+    selection,
     hasResolvedHeartbeatModelOverride: false,
     typing: makeTypingController(),
   });

@@ -12,7 +12,7 @@ import {
   makeCronSessionEntry,
   resolveAgentConfigMock,
   resolveAllowedModelRefMock,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveSessionAuthSelectionMock,
@@ -94,9 +94,12 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     resetRunCronIsolatedAgentTurnHarness();
 
     // Agent default model is Opus
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      normalization: "applied",
     });
 
     // Cron payload model override resolves to Sonnet
@@ -194,9 +197,12 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
   });
 
   it("passes a configured model auth profile separately into cron auth selection", async () => {
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "openai",
-      model: "gpt-5.6-luna",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      },
+      normalization: "applied",
     });
     runWithModelFallbackMock.mockResolvedValueOnce(
       makeSuccessfulRunResult({

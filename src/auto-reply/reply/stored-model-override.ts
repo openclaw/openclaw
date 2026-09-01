@@ -1,59 +1,37 @@
 // Normalizes stored reply models and detects stale heartbeat fallback pins.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { resolveCliRuntimeCanonicalProvider } from "../../agents/cli-backends.js";
-import {
-  normalizeStoredOverrideModel,
-  resolvePersistedOverrideModelRef,
-} from "../../agents/model-selection-persisted.js";
-import { modelKey, normalizeModelRef } from "../../agents/model-selection.js";
-import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection-persisted.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { StoredModelOverride } from "../../sessions/stored-model-overrides.js";
-import type { RuntimeModelNormalization } from "./model-runtime-normalization.js";
 
-/** Normalizes a stored model ref, resolving runtime aliases only for CLI-bound sessions. */
-export function normalizeStoredRuntimeModelRef(
+/** Resolves CLI-bound provider aliases without rewriting the prepared stored model. */
+export function resolveStoredRuntimeModelRef(
   provider: string,
   model: string,
   cfg?: OpenClawConfig,
   sessionEntry?: SessionEntry,
-  normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 ) {
-  const normalized = normalizeModelRef(provider, model, normalization);
-  const hasCliSessionBinding =
-    sessionEntry?.cliSessionBindings?.[normalized.provider] !== undefined;
+  const hasCliSessionBinding = sessionEntry?.cliSessionBindings?.[provider] !== undefined;
   const canonicalProvider =
     cfg && hasCliSessionBinding
       ? resolveCliRuntimeCanonicalProvider({
-          runtime: normalized.provider,
+          runtime: provider,
           config: cfg,
           includeSetupRegistry: true,
         })
       : undefined;
-  return canonicalProvider ? { ...normalized, provider: canonicalProvider } : normalized;
+  return { provider: canonicalProvider ?? provider, model };
 }
 
-function resolveModelRefKey(params: {
-  defaultProvider: string;
-  overrideProvider?: string;
-  overrideModel?: string;
-}): string | null {
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: params.overrideProvider,
-    modelOverride: params.overrideModel,
-  });
-  const ref = resolvePersistedOverrideModelRef({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: normalizedOverride.providerOverride,
-    overrideModel: normalizedOverride.modelOverride,
-  });
-  if (!ref) {
-    return null;
-  }
-  const normalizedRef = normalizeModelRef(ref.provider, ref.model);
-  return modelKey(normalizedRef.provider, normalizedRef.model);
+function resolveModelRefKey(
+  params: Parameters<typeof resolvePersistedOverrideModelRef>[0],
+): string | null {
+  const ref = resolvePersistedOverrideModelRef(params);
+  return ref ? buildModelCatalogRef(ref.provider, ref.model) : null;
 }
 
 /** Detects heartbeat auto-fallback overrides that no longer match the primary model. */
@@ -87,6 +65,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   }
 
   const primaryKey = resolveModelRefKey({
+    routeResolution: "resolved",
     defaultProvider: params.defaultProvider,
     overrideProvider: params.primaryProvider ?? params.defaultProvider,
     overrideModel: params.primaryModel ?? params.defaultModel,
@@ -96,6 +75,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   }
 
   const originKey = resolveModelRefKey({
+    routeResolution: "resolved",
     defaultProvider: params.defaultProvider,
     overrideProvider: entry.modelOverrideFallbackOriginProvider,
     overrideModel: entry.modelOverrideFallbackOriginModel,
@@ -113,6 +93,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   }
 
   const storedOverrideKey = resolveModelRefKey({
+    routeResolution: "resolved",
     defaultProvider: params.defaultProvider,
     overrideProvider: params.storedOverride.provider,
     overrideModel: params.storedOverride.model,

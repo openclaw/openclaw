@@ -54,8 +54,11 @@ vi.mock("./command-auth.js", () => ({
 }));
 vi.mock("./reply/directive-handling.defaults.js", () => ({
   resolveDefaultModel: vi.fn(() => ({
-    defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-6",
+    defaultSelection: {
+      ref: { provider: "anthropic", model: "claude-opus-4-6" },
+      normalization: "applied",
+      routeResolution: "raw",
+    },
     aliasIndex: new Map(),
   })),
 }));

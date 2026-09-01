@@ -15,7 +15,7 @@ import {
   mockRunCronFallbackPassthrough,
   patchSessionEntryMock,
   resolveAgentConfigMock,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveCliRuntimeExecutionProviderMock,
   resolveEffectiveAgentRuntimeMock,
   resolveAgentModelFallbacksOverrideMock,
@@ -229,9 +229,12 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     resolveCliRuntimeExecutionProviderMock.mockImplementation(
       ({ provider }: { provider: string }) => (provider === "anthropic" ? "claude-cli" : undefined),
     );
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      normalization: "applied",
     });
     runCliAgentMock.mockImplementation(async (request) => {
       request.userTurnTranscriptRecorder?.markBlocked();

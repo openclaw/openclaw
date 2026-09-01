@@ -28,6 +28,11 @@ export type ModelRef = {
   model: string;
 };
 
+export type ModelRefSelection = {
+  ref: ModelRef;
+  normalization: "applied" | "pending";
+};
+
 export type ModelManifestNormalizationContext = {
   manifestPlugins?: ManifestModelIdNormalizationSource;
 };
@@ -133,7 +138,8 @@ function normalizeProviderModelId(
   return (
     normalizeProviderModelIdWithRuntime({
       provider,
-      ...(options?.manifestPlugins ? { plugins: options.manifestPlugins } : {}),
+      // Static normalization already applied policy; a hook miss must not apply it twice.
+      plugins: [],
       context: {
         provider,
         modelId: staticModelId,

@@ -4,7 +4,7 @@ import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveCronSessionMock,
   resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -57,9 +57,9 @@ describe("isolated cron auth selection isNewSession (#62783)", () => {
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "openrouter",
-      model: "moonshotai/kimi-k2.5",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: { provider: "openrouter", model: "moonshotai/kimi-k2.5" },
+      normalization: "applied",
     });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({

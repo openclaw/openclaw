@@ -1,8 +1,13 @@
 // Shared get-reply test fixtures for sessions, directives, and mocked runtimes.
 import { expect, vi, type Mock } from "vitest";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedRuntimeMsgContext, MsgContext } from "../templating.js";
 import type { ReasoningLevel, ThinkLevel } from "../thinking.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
+import type { createModelSelectionState } from "./model-selection.js";
 
 export function buildGetReplyCtx(overrides: Partial<MsgContext> = {}): FinalizedRuntimeMsgContext {
   return finalizeInboundContext({
@@ -94,7 +99,52 @@ export function registerGetReplyBaselineBypass(): void {
   });
 }
 
+/** Builds an explicit prepared owner result for directive reducer tests. */
+export function createModelSelectionStateFixture(params: {
+  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  provider: string;
+  model: string;
+}): Awaited<ReturnType<typeof createModelSelectionState>> {
+  const selection: ReplyModelSelection = {
+    ref: { provider: params.provider, model: params.model },
+    normalization: "applied",
+    routeResolution: "resolved",
+  };
+  return {
+    defaultSelection: selection,
+    primarySelection: selection,
+    resolveAutoFallbackPrimaryProbe: () => undefined,
+    provider: params.provider,
+    model: params.model,
+    requestedRouteResolution: "resolved",
+    modelPolicy: createModelVisibilityPolicy({
+      cfg: { agents: { defaults: params.agentCfg } },
+      catalog: [],
+      defaultProvider: params.provider,
+      defaultModel: { provider: params.provider, model: params.model },
+    }),
+    allowedModelKeys: new Set<string>(),
+    allowedModelCatalog: [],
+    policyAliasIndex: { byAlias: new Map(), byKey: new Map() },
+    resetModelOverride: false,
+    resetModelOverrideRef: undefined,
+    resetModelOverrideReason: undefined,
+    modelPolicyConfigPath: undefined,
+    modelPolicyRepairConfigPath: undefined,
+    resolveThinkingCatalog: async () => [],
+    resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
+    hasConfiguredThinkingDefault: params.agentCfg?.thinkingDefault !== undefined,
+    resolveDefaultReasoningLevel: async () => "off",
+    needsModelCatalog: false,
+    modelContextWindow: undefined,
+    modelContextTokens: undefined,
+  };
+}
+
 export function createGetReplyContinueDirectivesResult(params: {
+  defaultRef: ModelRef;
+  primaryRef?: ModelRef;
+  modelState?: Awaited<ReturnType<typeof createModelSelectionState>>;
   body: string;
   abortKey: string;
   from: string;
@@ -108,6 +158,11 @@ export function createGetReplyContinueDirectivesResult(params: {
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel?: ReasoningLevel;
 }) {
+  const defaultSelection = {
+    ref: params.defaultRef,
+    normalization: "applied" as const,
+    routeResolution: "resolved" as const,
+  };
   return {
     kind: "continue" as const,
     result: {
@@ -145,7 +200,13 @@ export function createGetReplyContinueDirectivesResult(params: {
       resolvedBlockStreamingBreak: undefined,
       provider: params.provider ?? "openai",
       model: params.model ?? "gpt-4o-mini",
-      modelState: {
+      requestedRouteResolution: params.modelState?.requestedRouteResolution ?? "resolved",
+      modelState: params.modelState ?? {
+        defaultSelection,
+        primarySelection: params.primaryRef
+          ? { ...defaultSelection, ref: params.primaryRef }
+          : defaultSelection,
+        resolveAutoFallbackPrimaryProbe: () => undefined,
         resolveDefaultThinkingLevel: async () => undefined,
         resolveThinkingCatalog: async () => [],
       },

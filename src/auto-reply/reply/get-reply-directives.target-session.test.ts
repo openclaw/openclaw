@@ -1,4 +1,3 @@
-/** Tests directive handling for target-session command turns. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
@@ -9,7 +8,21 @@ import {
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
+/** Tests directive handling for target-session command turns. */
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+// These fixtures enter the owner with static policy already applied; route resolution
+// remains separate so runtime hooks are still exercised by ordinary selections.
+function preparedSelection(
+  provider: string,
+  model: string,
+  routeResolution: ReplyModelSelection["routeResolution"] = "raw",
+): ReplyModelSelection {
+  return { ref: { provider, model }, normalization: "applied", routeResolution };
+}
+
+const completedDefault = preparedSelection("openai", "gpt-4o-mini", "resolved");
 
 const mocks = vi.hoisted(() => ({
   createModelSelectionState: vi.fn(),
@@ -98,6 +111,8 @@ async function resolveHelloWithModelDefaults(params: {
     mocks.createModelSelectionState.mockRejectedValueOnce(params.modelError);
   } else {
     mocks.createModelSelectionState.mockResolvedValueOnce({
+      defaultSelection: completedDefault,
+      primarySelection: completedDefault,
       provider: params.selectedProvider ?? "openai",
       model: params.selectedModel ?? "gpt-4o-mini",
       allowedModelKeys: new Set<string>(),
@@ -110,6 +125,7 @@ async function resolveHelloWithModelDefaults(params: {
   }
   const typing = makeTypingController();
 
+  const defaultSelection = preparedSelection("openai", "gpt-4o-mini");
   const result = await resolveReplyDirectives({
     ctx: buildTestCtx({
       Body: params.body ?? "hello",
@@ -142,11 +158,9 @@ async function resolveHelloWithModelDefaults(params: {
     triggerBodyNormalized: "hello",
     resetTriggered: false,
     commandAuthorized: params.commandAuthorized ?? false,
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
+    defaultSelection,
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: params.provider ?? "openai",
-    model: params.model ?? "gpt-4o-mini",
+    selection: preparedSelection(params.provider ?? "openai", params.model ?? "gpt-4o-mini", "raw"),
     hasOneTurnModelOverride: params.hasOneTurnModelOverride,
     hasResolvedHeartbeatModelOverride: false,
     typing,
@@ -238,17 +252,12 @@ vi.mock("./get-reply-exec-overrides.js", () => ({
   resolveReplyExecOverrides: (...args: unknown[]) => mocks.resolveReplyExecOverrides(...args),
 }));
 
-vi.mock("./get-reply-fast-path.js", () => ({
-  shouldUseReplyFastTestRuntime: vi.fn(() => false),
-}));
-
 vi.mock("./groups.js", () => ({
   defaultGroupActivation: vi.fn(() => "always"),
   resolveGroupRequireMention: vi.fn(async () => false),
 }));
 
 vi.mock("./model-selection.js", () => ({
-  createFastTestModelSelectionState: vi.fn(),
   createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
   resolveContextTokens: vi.fn(() => 4096),
 }));
@@ -273,6 +282,8 @@ describe("resolveReplyDirectives", () => {
 
     mocks.listAgentEntries.mockReturnValue([]);
     mocks.createModelSelectionState.mockResolvedValue({
+      defaultSelection: completedDefault,
+      primarySelection: completedDefault,
       provider: "openai",
       model: "gpt-4o-mini",
       allowedModelKeys: new Set<string>(),
@@ -308,8 +319,8 @@ describe("resolveReplyDirectives", () => {
     });
 
     const modelSelectionInput = mockCallInput(mocks.createModelSelectionState);
-    expect(modelSelectionInput.provider).toBe("openai");
-    expect(modelSelectionInput.model).toBe("gpt-4o-mini");
+    expect(modelSelectionInput).toHaveProperty("selection.ref.provider", "openai");
+    expect(modelSelectionInput).toHaveProperty("selection.ref.model", "gpt-4o-mini");
     expect(modelSelectionInput.hasOneTurnModelOverride).toBe(true);
   });
 
@@ -540,6 +551,7 @@ describe("resolveReplyDirectives", () => {
       parentSessionKey: "target-parent",
     });
 
+    const defaultSelection = preparedSelection("openai", "gpt-4o-mini");
     const result = await resolveReplyDirectives({
       ctx: buildTestCtx({
         Body: "hello",
@@ -573,11 +585,9 @@ describe("resolveReplyDirectives", () => {
       triggerBodyNormalized: "hello",
       resetTriggered: false,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
+      defaultSelection,
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
+      selection: defaultSelection,
       hasResolvedHeartbeatModelOverride: false,
       typing: {
         onReplyStart: async () => {},
@@ -618,6 +628,7 @@ describe("resolveReplyDirectives", () => {
       },
     });
 
+    const defaultSelection = preparedSelection("openai", "gpt-4o-mini");
     const result = await resolveReplyDirectives({
       ctx: buildTestCtx({
         Body: "/trace on",
@@ -652,11 +663,9 @@ describe("resolveReplyDirectives", () => {
       triggerBodyNormalized: "/trace on",
       resetTriggered: false,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
+      defaultSelection,
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
+      selection: defaultSelection,
       hasResolvedHeartbeatModelOverride: false,
       typing: makeTypingController(),
       opts: undefined,
@@ -862,6 +871,7 @@ describe("resolveReplyDirectives", () => {
       Surface: "slack",
     } as TemplateContext;
 
+    const defaultSelection = preparedSelection("openai", "gpt-4o-mini");
     const result = await resolveReplyDirectives({
       ctx: buildTestCtx({
         Body: "new session",
@@ -894,11 +904,9 @@ describe("resolveReplyDirectives", () => {
       triggerBodyNormalized: "new session",
       resetTriggered: true,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
+      defaultSelection,
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
+      selection: defaultSelection,
       hasResolvedHeartbeatModelOverride: false,
       typing: makeTypingController(),
       opts: undefined,
@@ -936,6 +944,7 @@ describe("resolveReplyDirectives", () => {
       Surface: "slack",
     } as TemplateContext;
 
+    const defaultSelection = preparedSelection("openai", "gpt-4o-mini");
     const directResult = await resolveReplyDirectives({
       ctx: buildTestCtx({
         Body: "new session",
@@ -960,11 +969,9 @@ describe("resolveReplyDirectives", () => {
       triggerBodyNormalized: "new session",
       resetTriggered: true,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o-mini",
+      defaultSelection,
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-4o-mini",
+      selection: defaultSelection,
       hasResolvedHeartbeatModelOverride: false,
       typing: makeTypingController(),
     });

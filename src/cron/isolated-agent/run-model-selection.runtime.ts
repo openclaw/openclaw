@@ -12,6 +12,8 @@ export {
   getModelRefStatus,
   normalizeModelSelection,
   resolveAllowedModelRefCore,
-  resolveConfiguredModelRef,
+  resolveConfiguredModelSelection,
+  completeModelRefSelection,
+  buildConfiguredModelCatalog,
   resolveHooksGmailModel,
 } from "../../agents/model-selection-resolve.js";

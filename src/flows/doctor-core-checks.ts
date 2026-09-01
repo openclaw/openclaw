@@ -475,7 +475,7 @@ const hooksModelCheck: HealthCheck = {
     }
     const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
     const { loadPreparedModelCatalog } = await import("../agents/prepared-model-catalog.js");
-    const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
+    const { getModelRefStatus, resolveConfiguredModelSelection, resolveHooksGmailModel } =
       await import("../agents/model-selection.js");
     const hooksModelRef = resolveHooksGmailModel({
       cfg: ctx.cfg,
@@ -491,10 +491,11 @@ const hooksModelCheck: HealthCheck = {
         },
       ];
     }
-    const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+    const defaultSelection = resolveConfiguredModelSelection({
       cfg: ctx.cfg,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
+      allowPluginNormalization: false,
     });
     const catalog = await loadPreparedModelCatalog({
       config: ctx.cfg,
@@ -505,8 +506,8 @@ const hooksModelCheck: HealthCheck = {
       cfg: ctx.cfg,
       catalog,
       ref: hooksModelRef,
-      defaultProvider,
-      defaultModel,
+      defaultProvider: defaultSelection.ref.provider,
+      defaultModel: defaultSelection,
     });
     const findings: HealthFinding[] = [];
     if (!status.allowed) {

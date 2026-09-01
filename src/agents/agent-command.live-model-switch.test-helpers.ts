@@ -1,6 +1,7 @@
 import type { InternalSessionEntry } from "../config/sessions.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { ModelRef } from "./model-ref-shared.js";
 
 export type CommandSessionEntryFixture = Partial<InternalSessionEntry> & {
   channel?: string;
@@ -94,7 +95,7 @@ type ModelSelectionParams = {
   cfg?: unknown;
   catalog?: ModelCatalogEntry[];
   defaultProvider: string;
-  defaultModel?: string;
+  defaultModel?: string | ModelRef;
 };
 
 export const normalizeTestProviderId = (provider: string) => provider.trim().toLowerCase();
@@ -169,7 +170,11 @@ export function buildTestAllowedModelSet({
       ?.defaults?.models ?? {};
   const allowedKeys = new Set(Object.keys(modelMap));
   if (defaultModel) {
-    allowedKeys.add(`${defaultProvider}/${defaultModel}`);
+    const ref =
+      typeof defaultModel === "string"
+        ? { provider: defaultProvider, model: defaultModel }
+        : defaultModel;
+    allowedKeys.add(`${ref.provider}/${ref.model}`);
   }
   const allowedCatalog = [...(catalog ?? []), ...buildTestConfiguredModelCatalog(cfg)];
   if (Object.keys(modelMap).length === 0) {

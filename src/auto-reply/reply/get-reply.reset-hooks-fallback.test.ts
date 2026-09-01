@@ -35,6 +35,7 @@ async function loadGetReplyRuntimeForTest() {
 
 function createContinueDirectivesResult(resetHookTriggered: boolean) {
   return createGetReplyContinueDirectivesResult({
+    defaultRef: { provider: "openai", model: "gpt-4o-mini" },
     body: "/new",
     abortKey: "telegram:slash:123",
     from: "telegram:123",

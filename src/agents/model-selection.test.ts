@@ -9,7 +9,7 @@ import {
   getModelRefStatus as getNarrowModelRefStatus,
   resolveAllowedModelRefCore as resolveNarrowAllowedModelRef,
 } from "./model-selection-resolve.js";
-import { isModelKeyAllowedBySet } from "./model-selection-shared.js";
+import { dedupeModelCatalogEntries, isModelKeyAllowedBySet } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
@@ -26,6 +26,7 @@ import {
   resolvePersistedSelectedModelRef,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveConfiguredModelSelection,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
@@ -254,6 +255,202 @@ function createConfiguredModelRefConfig(params: {
     ...(params.providers ? { models: { providers: params.providers } } : {}),
   } as unknown as OpenClawConfig;
 }
+
+describe("exact configured model identity", () => {
+  const manifestPlugins = [
+    {
+      modelIdNormalization: {
+        providers: { custom: { aliases: { legacy: "middle", middle: "final" } } },
+      },
+    },
+  ];
+
+  function config(api?: string) {
+    return createConfiguredModelRefConfig({
+      primary: "custom/custom/model",
+      modelEntries: {
+        "custom/model": { alias: "plain", params: { thinking: "low" } },
+        "custom/custom/model": { alias: "nested", params: { thinking: "high" } },
+      },
+      providers: {
+        custom: {
+          baseUrl: "https://custom.example/v1",
+          api,
+          models: ["model", "custom/model"].map((id) => ({
+            id,
+            name: id,
+            api: "openai-completions",
+          })),
+        },
+      },
+    });
+  }
+
+  it.each([undefined, "openai-completions"])(
+    "preserves a literal id with provider API %s",
+    (api) => {
+      expect(
+        resolveConfiguredModelRef({
+          cfg: config(api),
+          defaultProvider: "custom",
+          defaultModel: "model",
+        }),
+      ).toEqual({ provider: "custom", model: "custom/model" });
+    },
+  );
+
+  it("keeps alias ownership and catalog rows separate for distinct ids", () => {
+    const cfg = config("openai-completions");
+    const aliases = buildModelAliasIndex({ cfg, defaultProvider: "custom" });
+    expect([...aliases.byAlias].map(([alias, entry]) => [alias, entry.ref.model])).toEqual([
+      ["plain", "model"],
+      ["nested", "custom/model"],
+    ]);
+    const catalog = buildConfiguredModelCatalog({ cfg });
+    expect(dedupeModelCatalogEntries([...catalog, ...catalog]).map((entry) => entry.id)).toEqual([
+      "model",
+      "custom/model",
+    ]);
+  });
+
+  it.each(["raw", "resolved", "configured fallback"])(
+    "normalizes a %s default once for selection and policy",
+    (input) => {
+      const cfg = createConfiguredModelRefConfig({
+        primary: input === "configured fallback" ? undefined : "custom/legacy",
+        modelEntries: { "custom/allowed": {} },
+        providers: { custom: { api: "openai-completions", models: [{ id: "legacy" }] } },
+      });
+      const catalog = buildConfiguredModelCatalog({ cfg, manifestPlugins });
+      expect(catalog.map((entry) => entry.id)).toEqual(["middle"]);
+      const selected = resolveConfiguredModelSelection({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "unavailable",
+        allowPluginNormalization: false,
+        manifestPlugins,
+      });
+      expect(selected.ref).toEqual({
+        provider: "custom",
+        model: input === "configured fallback" ? "legacy" : "middle",
+      });
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog,
+        defaultProvider: selected.ref.provider,
+        defaultModel:
+          input === "raw" ? "custom/legacy" : input === "resolved" ? selected.ref : selected,
+        allowManifestNormalization: true,
+        allowPluginNormalization: false,
+        manifestPlugins,
+      });
+      expect(policy.defaultRef).toEqual({ provider: "custom", model: "middle" });
+      expect([...policy.allowedKeys]).toEqual(["custom/allowed", "custom/middle"]);
+      expect([...policy.retainedKeys]).toEqual(["custom/middle"]);
+    },
+  );
+
+  it("preserves a literal configured fallback without executing a provider hook", () => {
+    providerModelNormalizationMock.normalizeProviderModelIdWithRuntime.mockClear();
+    const cfg = createConfiguredModelRefConfig({
+      providers: { custom: { models: [{ id: "custom/model" }] } },
+    });
+    const input = {
+      cfg,
+      defaultProvider: "missing",
+      defaultModel: "missing",
+      manifestPlugins: [],
+    };
+    expect(resolveConfiguredModelRef(input)).toEqual({ provider: "custom", model: "custom/model" });
+    const selected = resolveConfiguredModelSelection(input);
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: [],
+      defaultProvider: selected.ref.provider,
+      defaultModel: selected,
+      manifestPlugins: [],
+      allowPluginNormalization: true,
+    });
+    expect(policy.defaultRef).toEqual({ provider: "custom", model: "custom/model" });
+    expect(
+      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+    ).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [undefined, false],
+    [undefined, true],
+    ["legacy", false],
+    ["legacy", true],
+  ] as const)(
+    "normalizes pending input %s with manifest policy enabled=%s",
+    (primary, allowManifestNormalization) => {
+      const cfg = createConfiguredModelRefConfig({ primary });
+      const input = {
+        cfg,
+        defaultProvider: "custom",
+        defaultModel: "legacy",
+        allowManifestNormalization,
+        allowPluginNormalization: false,
+        manifestPlugins,
+      };
+      expect(resolveConfiguredModelRef(input)).toEqual({ provider: "custom", model: "legacy" });
+      const policy = createModelVisibilityPolicy({
+        ...input,
+        catalog: [],
+        defaultModel: resolveConfiguredModelSelection(input),
+      });
+      expect(policy.defaultRef).toEqual({
+        provider: "custom",
+        model: allowManifestNormalization ? "middle" : "legacy",
+      });
+    },
+  );
+
+  it("reads thinking settings for the exact model id", () => {
+    expect(
+      resolveThinkingDefault({ cfg: config(), provider: "custom", model: "custom/model" }),
+    ).toBe("high");
+  });
+
+  it("does not authorize a shorter model through a resolved literal default", async () => {
+    const base = config("openai-completions");
+    const cfg: OpenClawConfig = {
+      ...base,
+      agents: {
+        defaults: {
+          ...base.agents?.defaults,
+          modelPolicy: { allow: ["custom/custom/model"] },
+        },
+      },
+    };
+    const selected = resolveConfiguredModelRef({
+      cfg,
+      defaultProvider: "custom",
+      defaultModel: "model",
+    });
+    const policy = createModelVisibilityPolicy({
+      cfg,
+      catalog: buildConfiguredModelCatalog({ cfg }),
+      defaultProvider: selected.provider,
+      defaultModel: selected,
+    });
+    const { resolveModelDirectiveSelection } =
+      await import("../auto-reply/reply/model-selection-directive.js");
+    const override = resolveModelDirectiveSelection({
+      cfg,
+      raw: "custom/model",
+      defaultProvider: selected.provider,
+      defaultModel: selected.model,
+      aliasIndex: buildModelAliasIndex({ cfg, defaultProvider: selected.provider }),
+      allowedModelKeys: policy.allowedKeys,
+    });
+    expect(override).toEqual({
+      selection: { ...selected, alias: "nested", isDefault: true },
+    });
+    expect([...policy.allowedKeys]).toEqual(["custom/custom/model"]);
+  });
+});
 
 function createSubagentSelectionConfig(params: {
   defaultPrimary?: string;
@@ -1552,6 +1749,24 @@ describe("model-selection", () => {
   });
 
   describe("resolveAllowedModelRef", () => {
+    it.each(["opus-4.6", "anthropic/opus-4.6"])(
+      "accepts a raw SDK default %s through built-in alias normalization",
+      (defaultModel) => {
+        expect(
+          resolveAllowedModelRef({
+            cfg: EXPLICIT_ALLOWLIST_CONFIG,
+            catalog: ANTHROPIC_OPUS_CATALOG,
+            raw: "anthropic/claude-opus-4-6",
+            defaultProvider: "anthropic",
+            defaultModel,
+          }),
+        ).toEqual({
+          key: "anthropic/claude-opus-4-6",
+          ref: { provider: "anthropic", model: "claude-opus-4-6" },
+        });
+      },
+    );
+
     it.each([
       {
         name: "keeps deprecated catalog refs selectable",

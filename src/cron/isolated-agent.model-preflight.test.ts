@@ -6,7 +6,7 @@ import {
   makeCronSession,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveCronSessionMock,
   resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -19,9 +19,9 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 describe("runCronIsolatedAgentTurn model provider preflight", () => {
   beforeEach(() => {
     resetRunCronIsolatedAgentTurnHarness();
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "ollama",
-      model: "qwen3:32b",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: { provider: "ollama", model: "qwen3:32b" },
+      normalization: "applied",
     });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({

@@ -1,4 +1,4 @@
-// Handles model directives and persists provider/model selections.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -14,7 +14,6 @@ import {
 import {
   type ModelAliasIndex,
   buildConfiguredModelCatalog,
-  modelKey,
   normalizeProviderId,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
@@ -154,7 +153,7 @@ function pushUniqueCatalogEntry(params: {
   if (!provider || !id) {
     return;
   }
-  const key = modelKey(provider, id);
+  const key = buildModelCatalogRef(provider, id);
   if (params.keys.has(key)) {
     return;
   }
@@ -228,7 +227,7 @@ function buildModelPickerCatalog(params: {
   for (const entry of params.allowedModelCatalog.filter((candidate) =>
     isModelKeyAllowedBySet(
       params.allowedModelKeys,
-      modelKey(candidate.provider, candidate.id ?? ""),
+      buildModelCatalogRef(candidate.provider, candidate.id ?? ""),
     ),
   )) {
     push({
@@ -253,8 +252,8 @@ function buildModelPickerCatalog(params: {
     }
     const catalogEntry = params.allowedModelCatalog.find(
       (entry) =>
-        modelKey(entry.provider, entry.id ?? "") ===
-        modelKey(resolved.ref.provider, resolved.ref.model),
+        buildModelCatalogRef(entry.provider, entry.id ?? "") ===
+        buildModelCatalogRef(resolved.ref.provider, resolved.ref.model),
     );
     push(
       catalogEntry
@@ -272,7 +271,7 @@ function buildModelPickerCatalog(params: {
     resolvedDefault.model &&
     isModelKeyAllowedBySet(
       params.allowedModelKeys,
-      modelKey(resolvedDefault.provider, resolvedDefault.model),
+      buildModelCatalogRef(resolvedDefault.provider, resolvedDefault.model),
     )
   ) {
     push({
@@ -292,7 +291,7 @@ function filterMissingAuthNestedProviderDuplicates(params: {
 }): ModelPickerCatalogEntry[] {
   const configuredKeys = new Set(
     buildConfiguredModelCatalog({ cfg: params.cfg }).map((entry) =>
-      modelKey(entry.provider, entry.id),
+      buildModelCatalogRef(entry.provider, entry.id),
     ),
   );
   const wrapperKeys = new Set<string>();
@@ -308,7 +307,7 @@ function filterMissingAuthNestedProviderDuplicates(params: {
     if (!nestedProvider || !nestedModel || nestedProvider === wrapperProvider) {
       continue;
     }
-    wrapperKeys.add(modelKey(nestedProvider, nestedModel));
+    wrapperKeys.add(buildModelCatalogRef(nestedProvider, nestedModel));
   }
   if (wrapperKeys.size === 0) {
     return params.entries;
@@ -317,7 +316,7 @@ function filterMissingAuthNestedProviderDuplicates(params: {
   return params.entries.filter((entry) => {
     const provider = normalizeProviderId(entry.provider);
     const id = normalizeOptionalString(entry.id) ?? "";
-    const key = modelKey(provider, id);
+    const key = buildModelCatalogRef(provider, id);
     if (configuredKeys.has(key)) {
       return true;
     }

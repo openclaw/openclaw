@@ -1,11 +1,11 @@
 // Resolves persisted session model metadata without loading Gateway projections.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
-  normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
@@ -21,6 +21,8 @@ type SessionModelEntry =
       | "modelOverride"
       | "providerOverride"
       | "modelOverrideRouteResolution"
+      | "modelOverrideFallbackOriginProvider"
+      | "modelOverrideFallbackOriginModel"
     >;
 
 export function resolveSessionModelRef(
@@ -29,22 +31,17 @@ export function resolveSessionModelRef(
   agentId?: string,
   options?: { allowPluginNormalization?: boolean },
 ): { provider: string; model: string } {
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: entry?.providerOverride,
-    modelOverride: entry?.modelOverride,
-  });
-  if (normalizedOverride.providerOverride && normalizedOverride.modelOverride) {
-    // Resolved overrides were canonicalized by their producer. Re-running plugin hooks here
-    // can cold-load provider runtime and transform the same persisted identity twice.
-    const allowPluginNormalization =
-      entry?.modelOverrideRouteResolution === "resolved"
-        ? false
-        : options?.allowPluginNormalization;
+  const overrideProvider = normalizeOptionalString(entry?.providerOverride);
+  const overrideModel = normalizeOptionalString(entry?.modelOverride);
+  const routeResolution = resolveSessionModelOverrideRouteResolution(entry);
+  if (overrideProvider && overrideModel) {
     return resolvePersistedSelectedModelRef({
-      defaultProvider: normalizedOverride.providerOverride,
-      overrideProvider: normalizedOverride.providerOverride,
-      overrideModel: normalizedOverride.modelOverride,
-      allowPluginNormalization,
+      cfg,
+      defaultProvider: overrideProvider,
+      overrideProvider,
+      overrideModel,
+      routeResolution,
+      allowPluginNormalization: options?.allowPluginNormalization,
     })!;
   }
   const runtimeProvider = normalizeOptionalString(entry?.modelProvider);
@@ -64,14 +61,16 @@ export function resolveSessionModelRef(
       });
 
   const persisted = resolvePersistedSelectedModelRef({
+    cfg,
+    routeResolution,
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
     // Runtime fields record the previous run. Agent-scoped selection must use
     // current config or an explicit override; legacy callers without an agent
     // still use the persisted pair as their fallback selection context.
     runtimeProvider: agentId ? undefined : runtimeProvider,
     runtimeModel: agentId ? undefined : runtimeModel,
-    overrideProvider: normalizedOverride.providerOverride,
-    overrideModel: normalizedOverride.modelOverride,
+    overrideProvider,
+    overrideModel,
     allowPluginNormalization: options?.allowPluginNormalization,
   });
   return persisted ?? resolved;

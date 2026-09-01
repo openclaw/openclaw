@@ -1,8 +1,10 @@
 /** Prepared plugin metadata handoff for runtime model normalization. */
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
+import type { ModelRefSelection } from "../../agents/model-ref-shared.js";
 import {
   findNormalizedProviderKey,
-  modelKey,
   normalizeModelRef,
   normalizeProviderId,
 } from "../../agents/model-selection.js";
@@ -15,6 +17,10 @@ import {
   loadManifestMetadataSnapshot,
 } from "../../plugins/manifest-contract-eligibility.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
+
+export type ReplyModelSelection = ModelRefSelection & {
+  routeResolution: ModelFallbackRouteResolution;
+};
 
 export type RuntimeModelNormalization = NonNullable<Parameters<typeof normalizeModelRef>[2]>;
 
@@ -43,8 +49,10 @@ export function findSelectedCatalogEntry(params: {
   model: string;
 }): ModelCatalogEntry | undefined {
   const normalizedProvider = normalizeProviderId(params.provider);
-  const selectedKey = modelKey(normalizedProvider, params.model);
-  return params.catalog?.find((entry) => modelKey(entry.provider, entry.id) === selectedKey);
+  const selectedKey = buildModelCatalogRef(normalizedProvider, params.model);
+  return params.catalog?.find(
+    (entry) => buildModelCatalogRef(entry.provider, entry.id) === selectedKey,
+  );
 }
 
 /** Provider identity comes from authored routes or prepared/plugin metadata, not model inventory. */
@@ -129,10 +137,10 @@ export function mergePreparedConfiguredCatalog(params: {
     return params.configured;
   }
   const preparedByKey = new Map(
-    params.prepared.map((entry) => [modelKey(entry.provider, entry.id), entry]),
+    params.prepared.map((entry) => [buildModelCatalogRef(entry.provider, entry.id), entry]),
   );
   return params.configured.map((entry) => {
-    const prepared = preparedByKey.get(modelKey(entry.provider, entry.id));
+    const prepared = preparedByKey.get(buildModelCatalogRef(entry.provider, entry.id));
     // The prepared row owns runtime capabilities; the configured row limits
     // visibility and retains any authored metadata absent from that snapshot.
     return prepared ? { ...entry, ...prepared } : entry;

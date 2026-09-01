@@ -29,7 +29,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-state.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
@@ -308,7 +308,10 @@ function setup(
       storePath: "runtime-sessions.json",
     })),
     acquireRuntimeLease,
-    resolveDefaultModel: vi.fn(() => ({ provider: PROVIDER, model: MODEL })),
+    resolveDefaultModel: vi.fn(() => ({
+      ref: { provider: PROVIDER, model: MODEL },
+      normalization: "applied" as const,
+    })),
     resolveSessionAuthSelection: resolveAuthSelection,
     resolveModel,
     prepareModel,

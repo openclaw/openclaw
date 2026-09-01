@@ -12,6 +12,7 @@ import {
   getActivePluginRuntimeSubagentMode,
 } from "../plugins/runtime.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import { getPreparedModelRuntimePluginSelections } from "./prepared-model-runtime.plugin-selections.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
@@ -48,10 +49,9 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     // Normalization already resolves each model to its runtime. The workspace
     // registry depends on provider/runtime ownership, not the model id itself.
-    runtimePluginSelections: input.runtimePluginSelections?.map(({ provider, runtime }) => ({
-      provider,
-      runtime,
-    })),
+    runtimePluginSelections: getPreparedModelRuntimePluginSelections(input)?.map(
+      ({ provider, runtime }) => ({ provider, runtime }),
+    ),
   });
 }
 
@@ -124,9 +124,10 @@ export function prepareWorkspacePluginRegistries(
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
 } {
+  const selections = getPreparedModelRuntimePluginSelections(input);
   // Read-only catalog owners stay runtime-free. Executable probes opt in to provider runtime,
   // while non-core harness probes carry the exact selected plugin generation.
-  if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
+  if (input.readOnly && !input.loadRuntimePlugins && !selections) {
     return {};
   }
   const inboundPluginRegistry = input.readOnly
@@ -134,7 +135,7 @@ export function prepareWorkspacePluginRegistries(
     : (reusableGeneration?.inboundPluginRegistry ?? loadInboundRegistry?.(input, metadataSnapshot));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   const runtimePluginRegistry =
-    input.runtimePluginSelections || !baseRegistry
+    selections || !baseRegistry
       ? loadAgentRuntimePluginRegistryHandle({
           ...(input.loadRuntimePlugins
             ? { basePluginIds: [] }
@@ -150,7 +151,7 @@ export function prepareWorkspacePluginRegistries(
           ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
           metadataSnapshot,
           ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
-          selections: input.runtimePluginSelections,
+          selections,
         })
       : baseRegistry;
   return {

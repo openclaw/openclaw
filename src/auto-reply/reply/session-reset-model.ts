@@ -1,4 +1,4 @@
-/** Applies model override tokens embedded in reset/new command text. */
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -16,9 +16,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { isKnownModelSelectionProvider } from "./model-runtime-normalization.js";
 import {
-  modelKey,
+  isKnownModelSelectionProvider,
+  resolveRuntimeNormalization,
+  type ReplyModelSelection,
+} from "./model-runtime-normalization.js";
+import {
   resolveModelDirectiveSelection,
   type ModelAliasIndex,
   type ModelDirectiveSelection,
@@ -125,8 +128,7 @@ export async function applyResetModelOverride(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
-  defaultProvider: string;
-  defaultModel: string;
+  defaultSelection: ReplyModelSelection;
   aliasIndex: ModelAliasIndex;
   modelCatalog?: ModelCatalogEntry[];
 }): Promise<ResetModelResult> {
@@ -152,13 +154,19 @@ export async function applyResetModelOverride(params: {
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     }));
+  const normalization = {
+    ...resolveRuntimeNormalization(params.cfg),
+    allowPluginNormalization: false,
+  };
   const modelPolicy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
+    defaultProvider: params.defaultSelection.ref.provider,
+    defaultModel: params.defaultSelection,
     agentId: params.agentId,
+    ...normalization,
   });
+  const defaultRef = modelPolicy.defaultRef;
   const allowedModelKeys = modelPolicy.allowedKeys;
   const providers = new Set([...allowedModelKeys].map((key) => key.split("/", 1)[0]));
   const resolveSelection = (raw: string, explicitRef = false) => {
@@ -166,7 +174,7 @@ export async function applyResetModelOverride(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       raw,
-      defaultProvider: params.defaultProvider,
+      defaultProvider: defaultRef.provider,
       aliasIndex: params.aliasIndex,
     });
     if (!parsed) {
@@ -175,7 +183,7 @@ export async function applyResetModelOverride(params: {
     const exact =
       explicitRef ||
       parsed.alias ||
-      allowedModelKeys.has(modelKey(parsed.ref.provider, parsed.ref.model));
+      allowedModelKeys.has(buildModelCatalogRef(parsed.ref.provider, parsed.ref.model));
     if (
       (exact && !modelPolicy.allows(parsed.ref)) ||
       (!exact && !providers.has(normalizeProviderId(raw)) && raw.length < 6)
@@ -184,8 +192,8 @@ export async function applyResetModelOverride(params: {
     }
     const resolved = resolveModelDirectiveSelection({
       raw,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
+      defaultProvider: defaultRef.provider,
+      defaultModel: defaultRef.model,
       aliasIndex: params.aliasIndex,
       allowedModelKeys,
       modelPolicy,
@@ -195,7 +203,7 @@ export async function applyResetModelOverride(params: {
     // Bare text needs a finite hint match; explicit refs and configured aliases
     // use policy independently of inventory. Neither can invent a provider.
     return resolved &&
-      (exact || allowedModelKeys.has(modelKey(resolved.provider, resolved.model))) &&
+      (exact || allowedModelKeys.has(buildModelCatalogRef(resolved.provider, resolved.model))) &&
       isKnownModelSelectionProvider({ cfg: params.cfg, catalog, provider: resolved.provider })
       ? resolved
       : undefined;
@@ -236,7 +244,7 @@ export async function applyResetModelOverride(params: {
     agentDir:
       params.agentDir ??
       resolveAgentDir(params.cfg, params.agentId ?? resolveDefaultAgentId(params.cfg)),
-    defaultProvider: params.defaultProvider,
+    defaultProvider: defaultRef.provider,
     selection,
     sessionEntry: params.sessionEntry,
     sessionEntryHandle: params.sessionEntryHandle,

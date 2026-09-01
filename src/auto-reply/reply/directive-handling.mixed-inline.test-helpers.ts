@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { parseInlineSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { createModelSelectionStateFixture } from "./get-reply.test-fixtures.js";
 
 export function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return { sessionId: "session-1", updatedAt: 1, ...overrides };
@@ -45,9 +46,13 @@ export async function applyMixedDirectives(params: {
   const allowedModels = params.allowedModels ?? [];
   const aliasIndex = params.aliasIndex ?? { byAlias: new Map(), byKey: new Map() };
   const modelState: Parameters<typeof applyInlineDirectiveOverrides>[0]["modelState"] = {
+    ...createModelSelectionStateFixture({
+      agentCfg: cfg.agents?.defaults,
+      provider: params.defaultProvider ?? provider,
+      model: params.defaultModel ?? model,
+    }),
     provider,
     model,
-    requestedRouteResolution: "resolved",
     modelPolicy: createModelVisibilityPolicy({
       cfg,
       catalog: allowedModels,
@@ -58,11 +63,8 @@ export async function applyMixedDirectives(params: {
     allowedModelKeys: new Set(allowedModels.map((entry) => `${entry.provider}/${entry.id}`)),
     allowedModelCatalog: allowedModels,
     policyAliasIndex: aliasIndex,
-    resetModelOverride: false,
     resolveThinkingCatalog: async () => allowedModels,
     resolveDefaultThinkingLevel: async () => "off",
-    resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
   };
   const typing = {
     onReplyStart: async () => {},

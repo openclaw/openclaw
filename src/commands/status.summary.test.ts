@@ -95,19 +95,6 @@ vi.mock("../status/summary.runtime.js", () => ({
       model: "gpt-5.5",
     })),
     resolveSessionRuntime: vi.fn(() => ({ id: "openclaw", label: "OpenClaw Default" })),
-    resolveStatusModelLookupRef: vi.fn(({ provider, model }) =>
-      typeof model === "string" && model.length > 0
-        ? {
-            provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
-            model,
-          }
-        : null,
-    ),
-    resolveStatusModelComparisonLabel: vi.fn(({ provider, model }) =>
-      typeof model === "string" && model.length > 0
-        ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
-        : null,
-    ),
     resolveAuthoredModelContextTokens: vi.fn(() => undefined),
     resolveContextTokensForModel: vi.fn(() => 200_000),
     waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
@@ -990,31 +977,9 @@ describe("getStatusSummary", () => {
     });
     vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
       provider: "anthropic",
-      model: "opus",
+      model: "claude-opus-4-8",
+      displayModel: "opus",
     });
-    vi.mocked(statusSummaryRuntime.resolveStatusModelComparisonLabel).mockImplementation(
-      ({ provider, model }) => {
-        if (provider === "anthropic" && model === "opus") {
-          return "anthropic/claude-opus-4-8";
-        }
-        return typeof model === "string" && model.length > 0
-          ? `${typeof provider === "string" && provider.length > 0 ? provider : "openai"}/${model}`
-          : null;
-      },
-    );
-    vi.mocked(statusSummaryRuntime.resolveStatusModelLookupRef).mockImplementation(
-      ({ provider, model }) => {
-        if (provider === "anthropic" && model === "opus") {
-          return { provider: "anthropic", model: "claude-opus-4-8" };
-        }
-        return typeof model === "string" && model.length > 0
-          ? {
-              provider: typeof provider === "string" && provider.length > 0 ? provider : "openai",
-              model,
-            }
-          : null;
-      },
-    );
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {

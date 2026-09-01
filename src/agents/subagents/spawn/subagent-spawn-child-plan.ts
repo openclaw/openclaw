@@ -9,7 +9,7 @@ import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import {
   findNormalizedProviderValue,
   resolveAllowedModelRef,
-  resolveDefaultModelForAgent,
+  resolveDefaultModelSelectionForAgent,
 } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
@@ -65,9 +65,9 @@ async function resolveSpawnModelError(params: {
   if (!requestedModel && !params.request.outputSchema) {
     return undefined;
   }
-  const defaults = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
+  const defaultSelection = resolveDefaultModelSelectionForAgent({ cfg, agentId: targetAgentId });
   const selected = splitModelRef(params.resolvedModel);
-  const provider = selected.provider ?? defaults.provider;
+  const provider = selected.provider ?? defaultSelection.ref.provider;
   let catalog: ModelCatalogEntry[];
   try {
     catalog = await getSubagentSpawnDeps().loadPreparedModelCatalog({
@@ -83,7 +83,7 @@ async function resolveSpawnModelError(params: {
   }
 
   if (!requestedModel) {
-    const model = selected.model ?? defaults.model;
+    const model = selected.model ?? defaultSelection.ref.model;
     const entry = model && findModelCatalogEntry(catalog, { provider, modelId: model });
     return entry && !supportsModelTools(entry)
       ? `sessions_spawn outputSchema requires a tool-capable target model; "${provider}/${model}" declares compat.supportsTools=false.`
@@ -92,8 +92,8 @@ async function resolveSpawnModelError(params: {
   const selection = {
     cfg,
     catalog,
-    defaultProvider: defaults.provider,
-    defaultModel: defaults.model,
+    defaultProvider: defaultSelection.ref.provider,
+    defaultModel: defaultSelection,
     agentId: targetAgentId,
   };
   const resolved = resolveAllowedModelRef({

@@ -1,9 +1,9 @@
+import { resolveSessionModelOverrideRouteResolution } from "../../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import { resolveFastModeState } from "../../fast-mode.js";
 import {
-  normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "../../model-selection.js";
@@ -48,16 +48,14 @@ export function readRequesterThinkingLevel(params: {
     agentId: params.requesterAgentId,
   });
   if (entry) {
-    const normalizedOverride = normalizeStoredOverrideModel({
-      providerOverride: entry.providerOverride,
-      modelOverride: entry.modelOverride,
-    });
     const persistedModel = resolvePersistedSelectedModelRef({
+      cfg: params.cfg,
+      routeResolution: resolveSessionModelOverrideRouteResolution(entry),
       defaultProvider: defaultModel.provider,
       runtimeProvider: entry.modelProvider,
       runtimeModel: entry.model,
-      overrideProvider: normalizedOverride.providerOverride,
-      overrideModel: normalizedOverride.modelOverride,
+      overrideProvider: entry.providerOverride,
+      overrideModel: entry.modelOverride,
     });
     if (persistedModel) {
       return resolveThinkingDefault({
@@ -98,19 +96,15 @@ export function readRequesterFastMode(params: {
     cfg: params.cfg,
     agentId: params.requesterAgentId,
   });
-  const normalizedOverride = entry
-    ? normalizeStoredOverrideModel({
-        providerOverride: entry.providerOverride,
-        modelOverride: entry.modelOverride,
-      })
-    : {};
   const selectedModel = entry
     ? resolvePersistedSelectedModelRef({
+        cfg: params.cfg,
+        routeResolution: resolveSessionModelOverrideRouteResolution(entry),
         defaultProvider: defaultModel.provider,
         runtimeProvider: entry.modelProvider,
         runtimeModel: entry.model,
-        overrideProvider: normalizedOverride.providerOverride,
-        overrideModel: normalizedOverride.modelOverride,
+        overrideProvider: entry.providerOverride,
+        overrideModel: entry.modelOverride,
       })
     : undefined;
   return resolveFastModeState({

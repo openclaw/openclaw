@@ -185,10 +185,11 @@ describe("prepared model runtime owner selection", () => {
       });
       const lease = await acquireReadOnlyPreparedModelRuntime(
         {
-          config: {},
+          config: { agents: { defaults: { compaction: { model: "compaction/summary" } } } },
           agentDir: state.agentDir("isolated-probe-agent"),
           workspaceDir: state.workspaceDir,
           loadRuntimePlugins: true,
+          runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
         },
         undefined,
         catalogMode,
@@ -200,6 +201,9 @@ describe("prepared model runtime owner selection", () => {
         expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(
           catalogMode === "static" ? 0 : 1,
         );
+        expect(
+          mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map((call) => call[0].selections),
+        ).toEqual([[expect.objectContaining({ provider: "selected", modelId: "model" })]]);
       } finally {
         lease.release();
       }

@@ -2,30 +2,25 @@
 import {
   buildModelAliasIndex,
   type ModelAliasIndex,
-  resolveDefaultModelForAgent,
+  resolveDefaultModelSelectionForAgent,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
 
 /** Resolve default provider/model plus alias index for directive parsing. */
 export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: string }): {
-  defaultProvider: string;
-  defaultModel: string;
+  defaultSelection: ReplyModelSelection;
   aliasIndex: ModelAliasIndex;
 } {
-  const mainModel = resolveDefaultModelForAgent({
+  const mainModel = resolveDefaultModelSelectionForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
-    // Default-model lookup is on every reply; plugin runtime normalization can
-    // cold-load plugins, so keep this to static/configured model aliases here.
-    allowPluginNormalization: false,
   });
-  const defaultProvider = mainModel.provider;
-  const defaultModel = mainModel.model;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
-    defaultProvider,
+    defaultProvider: mainModel.ref.provider,
     agentId: params.agentId,
     allowPluginNormalization: false,
   });
-  return { defaultProvider, defaultModel, aliasIndex };
+  return { defaultSelection: { ...mainModel, routeResolution: "raw" }, aliasIndex };
 }

@@ -119,6 +119,9 @@ export function createPreparedModelCatalogWorkerInput(params: {
     ...(source.runtimePluginSelections
       ? { runtimePluginSelections: source.runtimePluginSelections }
       : {}),
+    ...(source.compactionPluginSelections
+      ? { compactionPluginSelections: source.compactionPluginSelections }
+      : {}),
     config: source.config,
   };
   // Capture the authored pair now; structured cloning cannot carry process-local Ref provenance.

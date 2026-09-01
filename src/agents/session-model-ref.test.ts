@@ -12,6 +12,37 @@ function modelConfig(primary: string, models?: Record<string, object>): OpenClaw
 }
 
 describe("resolveSessionModelRef", () => {
+  test("uses exact configured ids to disambiguate raw provider-prefixed overrides", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://custom.example/v1",
+            models: [
+              {
+                id: "custom/model",
+                name: "Nested",
+                api: "openai-completions",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1024,
+              },
+            ],
+          },
+        },
+      },
+    };
+    expect(
+      resolveSessionModelRef(
+        cfg,
+        { providerOverride: "custom", modelOverride: "custom/model" },
+        "main",
+        { allowPluginNormalization: false },
+      ),
+    ).toEqual({ provider: "custom", model: "custom/model" });
+  });
+
   test("prefers a complete explicit override over runtime identity and current defaults", () => {
     const resolved = resolveSessionModelRef(
       modelConfig("anthropic/claude-opus-4-6"),

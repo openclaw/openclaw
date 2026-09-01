@@ -1,6 +1,5 @@
 import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import { modelKey } from "../agents/model-selection.js";
 import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
@@ -47,7 +46,12 @@ export type SessionModelSelectionRequest = {
   runtime: { kind: "unchanged" } | { kind: "clear" } | { kind: "set"; runtime: string };
 };
 
-export type ApplySessionModelSelectionParams = {
+export type ApplySessionModelSelectionParams<
+  Policy extends Pick<ModelVisibilityPolicy, "allows"> = Omit<
+    ModelVisibilityPolicy,
+    "defaultRef" | "exactModelRefs" | "configuredModelRefs"
+  > & { exactModelRefs: readonly string[] },
+> = {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
@@ -59,7 +63,7 @@ export type ApplySessionModelSelectionParams = {
   defaultModel: string;
   currentProvider: string;
   currentModel: string;
-  modelPolicy?: ModelVisibilityPolicy;
+  modelPolicy?: Policy;
   modelCatalog: readonly ModelCatalogEntry[];
   thinkingCatalog?: readonly ModelCatalogEntry[];
   canPersistStickyModelSelection?: boolean;
@@ -147,8 +151,15 @@ function rejectNotAllowed(provider: string, model: string): ApplySessionModelSel
 }
 
 /** Applies one validated picker selection to the authoritative live session. */
-export async function applySessionModelSelection(
+export function applySessionModelSelection<Policy extends Pick<ModelVisibilityPolicy, "allows">>(
+  params: ApplySessionModelSelectionParams<Policy>,
+): Promise<ApplySessionModelSelectionResult>;
+// SDK consumers reflect the last overload; keep its published policy shape.
+export function applySessionModelSelection(
   params: ApplySessionModelSelectionParams,
+): Promise<ApplySessionModelSelectionResult>;
+export async function applySessionModelSelection(
+  params: ApplySessionModelSelectionParams<Pick<ModelVisibilityPolicy, "allows">>,
 ): Promise<ApplySessionModelSelectionResult> {
   const startingStoreEntry = params.sessionStore[params.sessionKey];
   const startingEntry = params.storePath
@@ -159,14 +170,13 @@ export async function applySessionModelSelection(
     return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
   }
 
-  const normalizedModelKey = modelKey(params.request.provider, params.request.model);
   const policy =
     params.modelPolicy ??
     createModelVisibilityPolicy({
       cfg: params.cfg,
       catalog: [...params.modelCatalog],
       defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
+      defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
       agentId: params.agentId,
     });
   if (!policy.allows(params.request)) {
@@ -174,7 +184,9 @@ export async function applySessionModelSelection(
   }
   const request: SessionModelSelectionRequest = {
     ...params.request,
-    isDefault: normalizedModelKey === modelKey(params.defaultProvider, params.defaultModel),
+    isDefault:
+      params.request.provider === params.defaultProvider &&
+      params.request.model === params.defaultModel,
   };
 
   const prepared = await prepareModelSelectionRuntime({

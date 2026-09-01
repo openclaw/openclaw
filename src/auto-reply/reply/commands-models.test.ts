@@ -120,7 +120,6 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
   createProviderAuthChecker: modelProviderAuthMocks.createProviderAuthChecker,
   hasAuthForModelProvider: ({ provider }: { provider: string }) =>
     modelProviderAuthMocks.authenticatedProviders.has(provider),
-  getCurrentProviderAuthState: () => null,
   clearCurrentProviderAuthState: () => undefined,
 }));
 
@@ -379,21 +378,44 @@ describe("handleModelsCommand", () => {
     expect(params).not.toHaveProperty("metadataSnapshot");
   });
 
-  it("loads the selected agent lifecycle catalog", async () => {
+  it("scopes the catalog and configured browse refs to the selected agent", async () => {
+    pluginMetadataMocks.getCurrent.mockReturnValue(createPluginMetadataSnapshotFixture());
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([]);
+    modelProviderAuthMocks.authenticatedProviders = new Set();
     const cfg = {
       agents: {
-        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        defaults: {
+          model: { primary: "fixture/Global", fallbacks: ["fixture/Fallback"] },
+          imageModel: { primary: "image", fallbacks: ["fixture/ImageFallback"] },
+          utilityModel: "fixture/Utility",
+          pdfModel: "fixture/Pdf",
+          models: { "fixture/Policy": { alias: "shared" } },
+          modelPolicy: { allow: ["shared"] },
+        },
         list: [
           {
             id: "worker",
             agentDir: "/tmp/models-worker-agent",
             workspace: "/tmp/models-worker-workspace",
+            model: { primary: "fixture/Agent" },
+            models: {
+              "fixture/HiddenPolicy": { alias: "shared" },
+              "fixture/Image": { alias: "image" },
+              "fixture/Metadata": {},
+            },
+            utilityModel: "fixture/AgentUtility",
           },
         ],
       },
     } as OpenClawConfig;
 
-    await buildPreparedModelsProviderData(cfg, "worker");
+    const data = await buildPreparedModelsProviderData(cfg, "worker");
+
+    expect(data.byProvider).toEqual(
+      new Map([
+        ["fixture", new Set(["Policy", "Agent", "Global", "Fallback", "Image", "ImageFallback"])],
+      ]),
+    );
 
     expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -528,6 +550,70 @@ describe("handleModelsCommand", () => {
     expect(data.byProvider.get("custom")).toEqual(new Set(["modern"]));
     expect(pluginMetadataMocks.getCurrent).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { primary: "legacy", configuredModel: undefined, model: "runtime-middle", hooks: ["middle"] },
+    {
+      primary: "openai/legacy",
+      configuredModel: undefined,
+      model: "runtime-middle",
+      hooks: ["middle"],
+    },
+    { primary: undefined, configuredModel: "legacy", model: "middle", hooks: [] },
+    { primary: undefined, configuredModel: "openai/literal", model: "openai/literal", hooks: [] },
+  ])(
+    "completes the admitted browse default once: %j",
+    async ({ primary, configuredModel, model, hooks }) => {
+      pluginMetadataMocks.getCurrent.mockReturnValue(
+        createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "browse-normalizer",
+              modelIdNormalization: {
+                providers: { openai: { aliases: { legacy: "middle", middle: "final" } } },
+              },
+            },
+          ],
+        }),
+      );
+      normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ context }) =>
+        context.modelId === "middle"
+          ? "runtime-middle"
+          : context.modelId === "runtime-middle"
+            ? "replayed"
+            : undefined,
+      );
+      modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+        { provider: "openai", id: model, name: model },
+      ]);
+      const cfg = {
+        agents: { defaults: { ...(primary ? { model: { primary } } : {}) } },
+        ...(configuredModel
+          ? {
+              models: {
+                providers: {
+                  openai: {
+                    baseUrl: "https://fixture.invalid/v1",
+                    api: "openai-completions",
+                    models: [{ id: configuredModel, name: configuredModel }],
+                  },
+                },
+              },
+            }
+          : {}),
+      } as OpenClawConfig;
+
+      const data = await buildPreparedModelsProviderData(cfg);
+
+      expect(data.resolvedDefault).toEqual({ provider: "openai", model });
+      expect(data.byProvider.get("openai")).toEqual(new Set([model]));
+      expect(
+        normalizeProviderModelIdWithRuntimeMock.mock.calls
+          .filter(([params]) => params.provider === "openai")
+          .map(([params]) => params.context.modelId),
+      ).toEqual(hooks);
+    },
+  );
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([

@@ -7,7 +7,7 @@ import * as currentPluginMetadata from "../plugins/current-plugin-metadata-snaps
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";

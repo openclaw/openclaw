@@ -1,4 +1,4 @@
-// Model picker flow lets users select provider models for config defaults.
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig, resolveDefaultAgentDir } from "../agents/agent-scope.js";
@@ -15,16 +15,18 @@ import {
   createProviderAuthChecker,
   type ProviderModelAuthChecker,
 } from "../agents/model-provider-auth.js";
-import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
+import {
+  formatLiteralProviderPrefixedModelRef,
+  type ModelRefSelection,
+} from "../agents/model-ref-shared.js";
 import { createModelPickerVisibleProviderPredicate } from "../agents/model-runtime-aliases.js";
 import {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   type ModelAliasIndex,
-  modelKey,
-  normalizeModelRef,
   normalizeProviderId,
   resolveConfiguredModelRef,
+  resolveConfiguredModelSelection,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { openAIModelCatalogRoutePolicy } from "../agents/openai-model-routes.js";
@@ -243,7 +245,7 @@ async function resolvePickerLogicalCatalog(params: {
   catalog: ModelCatalogEntry[];
   routeVariants: readonly ModelCatalogEntry[];
   defaultProvider: string;
-  defaultModel?: string;
+  defaultModel?: ModelRefSelection;
   agentId?: string;
   workspaceDir?: string;
   view?: "default" | "configured" | "all";
@@ -330,7 +332,7 @@ function resolveFallbackModelKey(params: {
   if (!resolved) {
     return undefined;
   }
-  return modelKey(resolved.ref.provider, resolved.ref.model);
+  return buildModelCatalogRef(resolved.ref.provider, resolved.ref.model);
 }
 
 function resolveFallbackModelKeys(params: {
@@ -443,8 +445,8 @@ async function resolveLiteralPrefixProviderIds(params: {
 }
 
 function modelCatalogEntryKey(entry: { provider: string; id: string }): string {
-  const normalizedRef = normalizeModelRef(entry.provider, entry.id);
-  return modelKey(normalizedRef.provider, normalizedRef.model);
+  // Catalog producers own normalization; replay would rewrite IDs or discover runtime hooks.
+  return buildModelCatalogRef(entry.provider, entry.id);
 }
 
 async function addModelSelectOption(params: {
@@ -465,12 +467,11 @@ async function addModelSelectOption(params: {
   isVisibleProvider: (provider: string) => boolean;
   resolveModelRouteRuntime: ModelRouteRuntimeResolver;
 }) {
-  const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
   const key = modelCatalogEntryKey(params.entry);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
-    !params.isVisibleProvider(normalizedRef.provider)
+    !params.isVisibleProvider(params.entry.provider)
   ) {
     return;
   }
@@ -489,8 +490,8 @@ async function addModelSelectOption(params: {
     hints.push(`alias: ${aliases.join(", ")}`);
   }
   const routeHint = resolveModelRouteHint({
-    provider: normalizedRef.provider,
-    modelId: normalizedRef.model,
+    provider: params.entry.provider,
+    modelId: params.entry.id,
     api: params.entry.api,
     baseUrl: params.entry.baseUrl,
     resolveModelRouteRuntime: params.resolveModelRouteRuntime,
@@ -499,8 +500,8 @@ async function addModelSelectOption(params: {
     hints.push(routeHint);
   }
   if (
-    !(await params.hasAuth(normalizedRef.provider, {
-      modelId: normalizedRef.model,
+    !(await params.hasAuth(params.entry.provider, {
+      modelId: params.entry.id,
       api: params.entry.api,
       baseUrl: params.entry.baseUrl,
     }))
@@ -508,8 +509,8 @@ async function addModelSelectOption(params: {
     return;
   }
   const label = formatModelRefLabel({
-    provider: normalizedRef.provider,
-    model: normalizedRef.model,
+    provider: params.entry.provider,
+    model: params.entry.id,
     key,
     literalPrefixProviders: params.literalPrefixProviders,
   });
@@ -824,14 +825,14 @@ export async function promptDefaultModel(
     : undefined;
   const providerScopedCatalog = Boolean(browseCatalogOnDemand && preferredProvider);
   const configuredRaw = resolveConfiguredModelRaw(pickerConfig);
-  const useStaticModelNormalization = !loadCatalog || browseCatalogOnDemand;
-  const resolved = resolveConfiguredModelRef({
+  const defaultSelection = resolveConfiguredModelSelection({
     cfg: pickerConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: useStaticModelNormalization ? false : undefined,
+    allowPluginNormalization: false,
   });
-  const resolvedKey = modelKey(resolved.provider, resolved.model);
+  const resolved = defaultSelection.ref;
+  const resolvedKey = buildModelCatalogRef(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
   let literalPrefixProvidersCache: Set<string> | undefined;
   const resolveCachedLiteralPrefixProviders = async () => {
@@ -999,7 +1000,7 @@ export async function promptDefaultModel(
     catalog,
     routeVariants: catalogSnapshot.routeVariants,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolved.model,
+    defaultModel: defaultSelection,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(ignoreAllowlist ? { view: "all" as const } : {}),
     hasAuth,
@@ -1188,12 +1189,14 @@ export async function promptModelAllowlist(params: {
   const preferredProvider = preferredProviderRaw
     ? normalizeProviderId(preferredProviderRaw)
     : undefined;
-  const resolved = resolveConfiguredModelRef({
+  const defaultSelection = resolveConfiguredModelSelection({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
-  const resolvedKey = modelKey(resolved.provider, resolved.model);
+  const resolved = defaultSelection.ref;
+  const resolvedKey = buildModelCatalogRef(resolved.provider, resolved.model);
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -1336,12 +1339,10 @@ export async function promptModelAllowlist(params: {
     const deprecatedStaticKeys = new Set(
       loadProviderStaticCatalogRows()
         .filter((entry) => entry.status === "deprecated")
-        .map((entry) => modelKey(entry.provider, entry.id)),
+        .map(modelCatalogEntryKey),
     );
     if (deprecatedStaticKeys.size > 0) {
-      catalog = catalog.filter(
-        (entry) => !deprecatedStaticKeys.has(modelKey(entry.provider, entry.id)),
-      );
+      catalog = catalog.filter((entry) => !deprecatedStaticKeys.has(modelCatalogEntryKey(entry)));
     }
   }
   if (preferredProvider) {
@@ -1349,17 +1350,15 @@ export async function promptModelAllowlist(params: {
       (entry) => matchesPreferredProvider?.(entry.provider) === true,
     );
     if (providerScopedCatalogLoaded && configuredCatalog.length > 0) {
-      const staticKeys = new Set(
-        loadProviderStaticCatalogRows().map((entry) => modelKey(entry.provider, entry.id)),
-      );
+      const staticKeys = new Set(loadProviderStaticCatalogRows().map(modelCatalogEntryKey));
       configuredCatalog = configuredCatalog.filter(
-        (entry) => !staticKeys.has(modelKey(entry.provider, entry.id)),
+        (entry) => !staticKeys.has(modelCatalogEntryKey(entry)),
       );
     }
-    const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
+    const catalogKeys = new Set(catalog.map(modelCatalogEntryKey));
     const mergedCatalog = [...catalog];
     for (const entry of configuredCatalog) {
-      const key = modelKey(entry.provider, entry.id);
+      const key = modelCatalogEntryKey(entry);
       if (catalogKeys.has(key)) {
         continue;
       }
@@ -1373,7 +1372,7 @@ export async function promptModelAllowlist(params: {
     catalog,
     routeVariants: catalogSnapshot.routeVariants,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolved.model,
+    defaultModel: defaultSelection,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     view: "all",
     hasAuth,
@@ -1415,7 +1414,7 @@ export async function promptModelAllowlist(params: {
   const seen = new Set<string>();
   const allowedCatalog = (
     allowedKeySet
-      ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
+      ? catalog.filter((entry) => allowedKeySet.has(modelCatalogEntryKey(entry)))
       : catalog
   ).filter((entry) => isVisibleProvider(entry.provider));
   const filteredCatalog =
@@ -1436,10 +1435,7 @@ export async function promptModelAllowlist(params: {
   const scopeKeys = allowedKeySet
     ? allowedKeys
     : preferredProvider
-      ? normalizeModelKeys([
-          ...filteredCatalog.map((entry) => modelKey(entry.provider, entry.id)),
-          ...scopedConfiguredKeys,
-        ])
+      ? normalizeModelKeys([...filteredCatalog.map(modelCatalogEntryKey), ...scopedConfiguredKeys])
       : undefined;
   const scopeKeySet = scopeKeys ? new Set(scopeKeys) : null;
   const selectableInitialSeeds =
@@ -1547,7 +1543,7 @@ export function applyModelAllowlist(
       aliasIndex,
     });
     return Boolean(
-      resolved && scopeKeySet?.has(modelKey(resolved.ref.provider, resolved.ref.model)),
+      resolved && scopeKeySet?.has(buildModelCatalogRef(resolved.ref.provider, resolved.ref.model)),
     );
   };
   if (normalized.length === 0) {
@@ -1652,7 +1648,7 @@ export function applyModelFallbacksFromSelection(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const resolvedKey = modelKey(resolved.provider, resolved.model);
+  const resolvedKey = buildModelCatalogRef(resolved.provider, resolved.model);
   const includesResolvedPrimary = normalized.includes(resolvedKey);
   if (!includesResolvedPrimary && !scopeKeySet) {
     return cfg;

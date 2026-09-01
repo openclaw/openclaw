@@ -1,7 +1,7 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveAllowedModelRef,
-  resolveDefaultModelForAgent,
+  resolveDefaultModelSelectionForAgent,
 } from "../../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,7 +23,7 @@ export function resolveAgentCatalogCreateTarget(
   params: RuntimeSessionCatalogCreateTargetParams,
 ): SessionCatalogCreateTarget | undefined {
   const agentId = params.requestedAgentId ?? resolveDefaultAgentId(params.config);
-  const defaultModel = resolveDefaultModelForAgent({ cfg: params.config, agentId });
+  const defaultModel = resolveDefaultModelSelectionForAgent({ cfg: params.config, agentId });
   for (const modelId of params.modelIds) {
     if (
       resolveEffectiveAgentRuntime({
@@ -40,8 +40,8 @@ export function resolveAgentCatalogCreateTarget(
       cfg: params.config,
       catalog: [],
       raw: model,
-      defaultProvider: defaultModel.provider,
-      defaultModel: defaultModel.model,
+      defaultProvider: defaultModel.ref.provider,
+      defaultModel,
       agentId,
     });
     if (!("error" in allowed)) {

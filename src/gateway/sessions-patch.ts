@@ -1,5 +1,6 @@
 // Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -19,9 +20,13 @@ import {
 } from "../agents/harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import type { ModelRefSelection, ModelRef } from "../agents/model-ref-shared.js";
 import {
-  resolveAllowedModelRef,
-  resolveDefaultModelForAgent,
+  createModelVisibilityPolicyWithFallbacks,
+  resolveAllowedModelRefFromAliasIndex,
+} from "../agents/model-selection-shared.js";
+import {
+  resolveDefaultModelSelectionForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
@@ -91,20 +96,46 @@ export function resolveSessionPatchModelSelection(params: {
   agentId: string;
   catalog: ModelCatalogEntry[];
   raw: string;
-  defaultProvider: string;
-  defaultModel: string;
+  defaultSelection: ModelRefSelection;
   subagentModelHint?: string;
 }):
-  | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
+  | {
+      ok: true;
+      provider: string;
+      model: string;
+      profile?: string;
+      isDefault: boolean;
+      defaultRef: ModelRef;
+    }
   | { ok: false; error: string } {
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
-  const resolved = resolveAllowedModelRef({
+  const policyParams = {
+    cfg: params.cfg,
+    catalog: params.catalog,
+    agentId: params.agentId,
+    defaultProvider: params.defaultSelection.ref.provider,
+    fallbackModels: [],
+  };
+  const defaultPolicy = createModelVisibilityPolicyWithFallbacks({
+    ...policyParams,
+    defaultModel: params.defaultSelection,
+  });
+  const policy = params.subagentModelHint
+    ? createModelVisibilityPolicyWithFallbacks({
+        ...policyParams,
+        defaultModel: params.subagentModelHint,
+      })
+    : defaultPolicy;
+  const resolved = resolveAllowedModelRefFromAliasIndex({
     cfg: params.cfg,
     agentId: params.agentId,
-    catalog: params.catalog,
     raw: modelWithoutProfile,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.subagentModelHint ?? params.defaultModel,
+    defaultProvider: policyParams.defaultProvider,
+    aliasIndex: policy.selectionAliasIndex,
+    getStatus: (ref) => ({
+      key: buildModelCatalogRef(ref.provider, ref.model),
+      allowed: policy.allows(ref),
+    }),
   });
   if ("error" in resolved) {
     return { ok: false, error: resolved.error };
@@ -114,9 +145,10 @@ export function resolveSessionPatchModelSelection(params: {
     provider: resolved.ref.provider,
     model: resolved.ref.model,
     ...(profile ? { profile } : {}),
+    defaultRef: defaultPolicy.defaultRef,
     isDefault:
-      resolved.ref.provider === params.defaultProvider &&
-      resolved.ref.model === params.defaultModel,
+      resolved.ref.provider === defaultPolicy.defaultRef.provider &&
+      resolved.ref.model === defaultPolicy.defaultRef.model,
   };
 }
 
@@ -170,7 +202,8 @@ export async function projectSessionsPatchEntry(params: {
   const sessionAgentId = normalizeAgentId(
     params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
   );
-  const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  const defaultSelection = resolveDefaultModelSelectionForAgent({ cfg, agentId: sessionAgentId });
+  const resolvedDefault = defaultSelection.ref;
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
@@ -504,8 +537,7 @@ export async function projectSessionsPatchEntry(params: {
         agentId: sessionAgentId,
         catalog,
         raw: trimmed,
-        defaultProvider: resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
+        defaultSelection,
         subagentModelHint,
       });
       if (!resolved.ok) {

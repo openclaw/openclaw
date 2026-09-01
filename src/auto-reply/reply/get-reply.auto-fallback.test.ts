@@ -5,7 +5,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ThinkLevel } from "../thinking.js";
+import type { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
   buildGetReplyCtx,
@@ -16,6 +18,15 @@ import {
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => createPluginMetadataSnapshotFixture(),
+}));
+
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: vi.fn(() => undefined),
+}));
+
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
   handleInlineActions: vi.fn(),
@@ -25,14 +36,23 @@ const mocks = vi.hoisted(() => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let createModelSelectionState: typeof import("./model-selection.js").createModelSelectionState;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ createModelSelectionState } = await import("./model-selection.js"));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
+  const modelSelection = await import("../../agents/model-selection.js");
+  const actualModelSelection = await vi.importActual<
+    typeof import("../../agents/model-selection.js")
+  >("../../agents/model-selection.js");
+  vi.mocked(modelSelection.resolveModelRefFromString).mockImplementation(
+    actualModelSelection.resolveModelRefFromString,
+  );
 }
 
 function emptyAliasIndex() {
@@ -170,21 +190,34 @@ function mockFallbackDirectiveResult(params: {
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel?: "off" | "on";
 }) {
-  mocks.resolveReplyDirectives.mockImplementation(async () =>
-    createGetReplyContinueDirectivesResult({
-      body: "hello",
-      abortKey: params.sessionKey,
-      from: "telegram:user:42",
-      to: "telegram:123",
-      senderId: "telegram:user:42",
-      commandSource: "text",
-      senderIsOwner: true,
-      resetHookTriggered: false,
-      provider: "anthropic",
-      model: "claude-fallback",
-      resolvedThinkLevel: params.resolvedThinkLevel,
-      resolvedReasoningLevel: params.resolvedReasoningLevel,
-    }),
+  mocks.resolveReplyDirectives.mockImplementation(
+    async (input: Parameters<typeof resolveReplyDirectives>[0]) => {
+      const modelState = await createModelSelectionState({
+        ...input,
+        hasModelDirective: false,
+        parentSessionKey:
+          input.sessionEntry.parentSessionKey ??
+          input.ctx.ModelParentSessionKey ??
+          input.ctx.ParentSessionKey,
+        isHeartbeat: input.opts?.isHeartbeat === true,
+      });
+      return createGetReplyContinueDirectivesResult({
+        defaultRef: modelState.defaultSelection.ref,
+        modelState,
+        body: "hello",
+        abortKey: params.sessionKey,
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "telegram:user:42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+        provider: modelState.provider,
+        model: modelState.model,
+        resolvedThinkLevel: params.resolvedThinkLevel,
+        resolvedReasoningLevel: params.resolvedReasoningLevel,
+      });
+    },
   );
 }
 
@@ -203,8 +236,11 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     vi.mocked(runPreparedReplyMock).mockReset();
 
     vi.mocked(resolveDefaultModelMock).mockReturnValue({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
+      defaultSelection: {
+        ref: { provider: "openai", model: "gpt-5.5" },
+        normalization: "applied",
+        routeResolution: "raw",
+      },
       aliasIndex: emptyAliasIndex(),
     });
     mocks.handleInlineActions.mockImplementation(async (params: unknown) => ({
@@ -245,9 +281,13 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
 
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
     expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
+      hasResolvedHeartbeatModelOverride: false,
+    });
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]).toMatchObject({
       provider: "anthropic",
       model: "claude-fallback",
-      hasResolvedHeartbeatModelOverride: false,
+      autoFallbackPrimaryProbe: undefined,
     });
   });
 

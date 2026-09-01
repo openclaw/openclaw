@@ -20,6 +20,7 @@ import type {
   ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -29,6 +30,7 @@ import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
+import type { ModelRef } from "../model-ref-shared.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -323,15 +325,24 @@ async function compactEmbeddedAgentSessionImpl(
           workspaceDir: resolvedWorkspaceDir,
         })
       : null;
-  const preparedParams = placementSandbox ? { ...params, sandbox: placementSandbox } : params;
+  const plannedParams = placementSandbox ? { ...params, sandbox: placementSandbox } : params;
+  const manifestPlugins =
+    getCurrentPluginMetadataSnapshot({
+      config: params.config ?? {},
+      workspaceDir: resolvedWorkspaceDir,
+      env: process.env,
+      allowWorkspaceScopedSnapshot: true,
+    }) ?? [];
   const runtimeSelection = resolveCompactionRuntimeSelection({
-    ...preparedParams,
-    modelId: preparedParams.model,
-    boundHarnessRuntime: preparedParams.agentHarnessId,
-    preparedRuntimePlan: preparedParams.runtimePlan,
+    ...plannedParams,
+    modelId: plannedParams.model,
+    boundHarnessRuntime: plannedParams.agentHarnessId,
+    preparedRuntimePlan: plannedParams.runtimePlan,
+    manifestPlugins,
+    allowPluginNormalization: false,
     selectedHarnessRuntime:
-      preparedParams.modelSelectionLocked === true
-        ? normalizeOptionalAgentRuntimeId(preparedParams.agentHarnessId)
+      plannedParams.modelSelectionLocked === true
+        ? normalizeOptionalAgentRuntimeId(plannedParams.agentHarnessId)
         : undefined,
   });
   if (params.abortSignal?.aborted) {
@@ -369,10 +380,17 @@ async function compactEmbeddedAgentSessionImpl(
       },
     ],
   });
+  const preparedModelRuntime = lease.snapshot;
+  // Admission may advance config and agent storage while retaining the requested workspace.
+  const preparedParams = {
+    ...plannedParams,
+    config: preparedModelRuntime.config,
+    agentDir: preparedModelRuntime.agentDir,
+  };
   const run = async () => {
     ensureContextEnginesInitialized();
-    const contextEngine = await resolveContextEngine(params.config, {
-      agentDir,
+    const contextEngine = await resolveContextEngine(preparedParams.config, {
+      agentDir: preparedParams.agentDir,
       workspaceDir: resolvedWorkspaceDir,
     });
     let disposeContextEngineOnExit = true;
@@ -384,9 +402,9 @@ async function compactEmbeddedAgentSessionImpl(
         expectedEntry,
         host,
         contextEngine,
-        agentDir,
+        preparedParams.agentDir,
         resolvedWorkspaceDir,
-        lease.snapshot,
+        preparedModelRuntime,
         contextEngineSessionKey,
         () => {
           disposeContextEngineOnExit = false;
@@ -399,7 +417,7 @@ async function compactEmbeddedAgentSessionImpl(
     }
   };
   try {
-    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
+    return await withPluginRuntimeGenerationScope(preparedModelRuntime, run);
   } finally {
     lease.release();
   }
@@ -445,6 +463,7 @@ async function compactResolvedContextEngine(
     modelId: params.model,
     boundHarnessRuntime: params.agentHarnessId,
     preparedRuntimePlan: params.runtimePlan,
+    manifestPlugins: preparedModelRuntime.metadataSnapshot,
     selectedHarnessRuntime: params.modelSelectionLocked === true ? lockedHarnessRuntime : undefined,
   });
   const lockedNativeHarness =
@@ -552,6 +571,7 @@ async function compactResolvedContextEngine(
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params: preparedParams,
     agentDir,
+    resolvedTarget: { provider: ceProvider, model: ceModelId },
     harnessRuntime: preparedHarnessRuntime,
     contextEngineSessionKey,
     contextTokenBudget,
@@ -658,6 +678,7 @@ async function compactResolvedContextEngine(
 
 function buildCompactionContextEngineRuntimeContext(params: {
   params: CompactEmbeddedAgentSessionParams;
+  resolvedTarget: ModelRef;
   agentDir: string;
   contextEngineSessionKey?: string;
   harnessRuntime?: string;
@@ -671,7 +692,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
     ...buildEmbeddedCompactionRuntimeContext({
       ...params.params,
       agentDir: params.agentDir,
-      modelId: params.params.model,
+      resolvedTarget: params.resolvedTarget,
       harnessRuntime: params.harnessRuntime,
     }),
     ...resolveContextEngineCapabilities({

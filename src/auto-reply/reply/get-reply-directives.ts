@@ -4,16 +4,14 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -51,13 +49,9 @@ import {
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
-import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
-import {
-  createFastTestModelSelectionState,
-  createModelSelectionState,
-  resolveContextTokens,
-} from "./model-selection.js";
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import type { TypingController } from "./typing.js";
@@ -77,24 +71,6 @@ function loadCommandsRegistry() {
 
 function loadSkillCommands() {
   return skillCommandsLoader.load();
-}
-
-function canUseFastExplicitModelDirective(params: {
-  directives: InlineDirectives;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
-}): boolean {
-  const raw = normalizeOptionalString(params.directives.rawModelDirective);
-  if (!raw || /^[0-9]+$/.test(raw)) {
-    return false;
-  }
-  return Boolean(
-    resolveModelRefFromString({
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex: params.aliasIndex,
-    }),
-  );
 }
 
 type ReplyDirectiveContinuation = {
@@ -165,13 +141,10 @@ export async function resolveReplyDirectives(params: {
   triggerBodyNormalized: string;
   resetTriggered: boolean;
   commandAuthorized: boolean;
-  defaultProvider: string;
-  defaultModel: string;
-  primaryProvider?: string;
-  primaryModel?: string;
+  defaultSelection: ReplyModelSelection;
+  primarySelection?: ReplyModelSelection;
   aliasIndex: ModelAliasIndex;
-  provider: string;
-  model: string;
+  selection: ReplyModelSelection;
   hasOneTurnModelOverride?: boolean;
   skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
@@ -198,12 +171,8 @@ export async function resolveReplyDirectives(params: {
     triggerBodyNormalized,
     resetTriggered,
     commandAuthorized,
-    defaultProvider,
-    defaultModel,
-    primaryProvider,
-    primaryModel,
-    provider: initialProvider,
-    model: initialModel,
+    defaultSelection,
+    primarySelection,
     hasOneTurnModelOverride,
     skipStoredModelOverride,
     hasResolvedHeartbeatModelOverride,
@@ -215,8 +184,6 @@ export async function resolveReplyDirectives(params: {
     (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
   );
   const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
-  let provider = initialProvider;
-  let model = initialModel;
 
   const commandText = sessionCtx.commandText;
   const command = buildCommandContext({
@@ -441,57 +408,28 @@ export async function resolveReplyDirectives(params: {
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider, sessionCtx.AccountId)
     : undefined;
-  const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
-    cfg,
-    isFastTestEnv: isFastTestRuntimeEnv(),
-  });
-
-  const useFastModelSelection =
-    useFastReplyRuntime &&
-    !hasResolvedHeartbeatModelOverride &&
-    !(agentCfg?.models && Object.keys(agentCfg.models).length > 0) &&
-    !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
-    !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
-    (!directives.hasModelDirective ||
-      canUseFastExplicitModelDirective({
-        directives,
-        defaultProvider,
-        aliasIndex: params.aliasIndex,
-      }));
-
   let modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   try {
-    modelState = useFastModelSelection
-      ? createFastTestModelSelectionState({
-          agentCfg,
-          provider,
-          model,
-        })
-      : await createModelSelectionState({
-          cfg,
-          agentId,
-          agentCfg,
-          sessionEntry: targetSessionEntry,
-          sessionStore,
-          sessionKey,
-          parentSessionKey:
-            targetSessionEntry?.parentSessionKey ??
-            ctx.ModelParentSessionKey ??
-            ctx.ParentSessionKey,
-          storePath,
-          defaultProvider,
-          defaultModel,
-          primaryProvider,
-          primaryModel,
-          provider,
-          model,
-          hasModelDirective: directives.hasModelDirective,
-          hasOneTurnModelOverride,
-          skipStoredModelOverride,
-          hasResolvedHeartbeatModelOverride,
-          isHeartbeat: opts?.isHeartbeat === true,
-          preparedModelCatalog: params.preparedModelCatalog,
-        });
+    modelState = await createModelSelectionState({
+      cfg,
+      agentId,
+      agentCfg,
+      sessionEntry: targetSessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey:
+        targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
+      storePath,
+      defaultSelection,
+      primarySelection,
+      selection: params.selection,
+      hasModelDirective: directives.hasModelDirective,
+      hasOneTurnModelOverride,
+      skipStoredModelOverride,
+      hasResolvedHeartbeatModelOverride,
+      isHeartbeat: opts?.isHeartbeat === true,
+      preparedModelCatalog: params.preparedModelCatalog,
+    });
   } catch (error) {
     if (error instanceof ModelSelectionLockedError) {
       typing.cleanup();
@@ -503,18 +441,15 @@ export async function resolveReplyDirectives(params: {
     typing.cleanup();
     return { kind: "reply", reply: { text: error.message, isError: true } };
   }
-  provider = modelState.provider;
-  model = modelState.model;
+  let { provider, model } = modelState;
 
-  let contextTokens = useFastReplyRuntime
-    ? DEFAULT_CONTEXT_TOKENS
-    : resolveContextTokens({
-        cfg,
-        provider,
-        model,
-        modelContextWindow: modelState.modelContextWindow,
-        modelContextTokens: modelState.modelContextTokens,
-      });
+  let contextTokens = resolveContextTokens({
+    cfg,
+    provider,
+    model,
+    modelContextWindow: modelState.modelContextWindow,
+    modelContextTokens: modelState.modelContextTokens,
+  });
 
   const initialModelLabel = `${provider}/${model}`;
   const formatModelSwitchEvent = (label: string, alias?: string) =>
@@ -550,8 +485,8 @@ export async function resolveReplyDirectives(params: {
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
-    defaultProvider,
-    defaultModel,
+    defaultProvider: modelState.defaultSelection.ref.provider,
+    defaultModel: modelState.defaultSelection.ref.model,
     aliasIndex: params.aliasIndex,
     provider,
     model,

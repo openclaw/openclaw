@@ -531,6 +531,10 @@ export async function prepareGatewayServerBootstrap(input: {
       env: process.env,
       workspaceDir: defaultWorkspaceDir,
     });
+  // Invalid reads stop during config validation; startup must publish an owned metadata snapshot.
+  if (!currentPluginMetadataSnapshot) {
+    throw new Error("Gateway startup config did not provide plugin metadata");
+  }
   if (!existingPluginMetadataSnapshot) {
     setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
       config: startupActivationSourceConfig,

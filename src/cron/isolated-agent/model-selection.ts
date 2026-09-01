@@ -23,7 +23,9 @@ import {
   publishedModelCatalogOwnerMatchesAgent,
   resolveAgentConfig,
   resolveAllowedModelRefCore,
-  resolveConfiguredModelRef,
+  resolveConfiguredModelSelection,
+  completeModelRefSelection,
+  buildConfiguredModelCatalog,
   resolveHooksGmailModel,
   resolveSubagentModelConfigSelectionResult,
   type ResolvedPublishedModelCatalogOwner,
@@ -207,18 +209,25 @@ export async function resolveCronModelSelection(
     config: owner.config,
     agentConfigOverride: ownerAgentConfigOverride,
   });
-  const resolvedDefault = resolveConfiguredModelRef({
-    cfg: cfgWithAgentDefaults,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    manifestPlugins: owner.metadataSnapshot,
-  });
+  const modelNormalization = { cfg: cfgWithAgentDefaults, manifestPlugins: owner.metadataSnapshot };
+  const resolvedDefault = completeModelRefSelection(
+    resolveConfiguredModelSelection({
+      ...modelNormalization,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      allowPluginNormalization: false,
+    }),
+    {
+      ...modelNormalization,
+      configuredCatalog: buildConfiguredModelCatalog(modelNormalization),
+    },
+  );
   // Overrides keep the owner's agent policy; flattened defaults only select the default model.
   const selectionParams = {
     cfg: owner.config,
     catalog: owner.modelCatalog.entries,
     defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
+    defaultModel: resolvedDefault,
     agentId: ownerAgentId,
     manifestPlugins: owner.metadataSnapshot,
   };

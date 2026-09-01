@@ -9,6 +9,7 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
@@ -255,6 +256,9 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
   const readConfigFileSnapshotWithPluginMetadata =
     async (): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
       const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.valid) {
+        return { snapshot };
+      }
       const validation = validateConfigObjectWithPlugins(snapshot.config, {
         env: process.env,
         pluginValidation: "skip",
@@ -266,6 +270,14 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
           issues: validation.ok ? [] : validation.issues,
           warnings: validation.warnings,
         },
+        ...(validation.ok
+          ? {
+              pluginMetadataSnapshot: resolveConfigWidePluginMetadataSnapshot({
+                config: snapshot.sourceConfig,
+                env: process.env,
+              }),
+            }
+          : {}),
       };
     };
 

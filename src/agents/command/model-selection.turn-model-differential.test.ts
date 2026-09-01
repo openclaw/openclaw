@@ -75,17 +75,6 @@ vi.mock("../harness/selection.js", () => ({
 vi.mock("../model-catalog.js", () => ({ loadManifestModelCatalog: () => [] }));
 vi.mock("../model-selection.js", () => ({
   modelKey: (provider: string, model: string) => `${provider}/${model}`,
-  resolveDefaultModelForAgent: ({ cfg }: { cfg: OpenClawConfig }) => {
-    const configured = cfg.agents?.defaults?.model;
-    const raw =
-      typeof configured === "string"
-        ? configured
-        : (configured?.primary ?? turnModelRefLabel(TURN_MODEL_DEFAULT_REF));
-    const slash = raw.indexOf("/");
-    return slash > 0
-      ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
-      : { provider: TURN_MODEL_DEFAULT_REF.provider, model: raw };
-  },
   resolveModelAliasFromPair: () => null,
   resolveThinkingDefault: () => "off",
 }));
@@ -97,7 +86,7 @@ vi.mock("../model-visibility-policy.js", () => ({
     allowAny: true,
     allowedCatalog: [],
     selectionAliasIndex: { byAlias: new Map(), byKey: new Map() },
-    allowsKey: () => true,
+    allows: () => true,
     resolveSelection: (ref: { provider: string; model: string }) => ref,
   }),
 }));
@@ -129,11 +118,6 @@ vi.mock("./attempt-execution.shared.js", () => ({
   persistAgentSession: async ({ entry }: { entry?: SessionEntry }) => entry,
 }));
 vi.mock("./model-ref.js", () => ({
-  normalizeAgentCommandDefaultModelRef: (
-    _cfg: OpenClawConfig,
-    provider: string,
-    model: string,
-  ) => ({ provider, model }),
   normalizeAgentCommandModelRef: (_cfg: OpenClawConfig, provider: string, model: string) => ({
     provider,
     model,
@@ -219,6 +203,7 @@ async function observeCommandSelection(fixture: TurnModelDifferentialFixture) {
     pluginsEnabled: false,
     modelManifestContext: {},
     configuredThinkingCatalog: [],
+    defaultModel: TURN_MODEL_DEFAULT_REF,
     isSubagentLane: false,
     suppressVisibleSessionEffects: true,
     runContext,

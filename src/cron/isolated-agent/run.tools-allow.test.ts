@@ -13,7 +13,7 @@ import {
   hasUsableWebSearchProviderMock,
   loadModelCatalogMock,
   loadRunCronIsolatedAgentTurn,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
@@ -282,7 +282,7 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
         },
       });
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(resolveConfiguredModelRefMock).not.toHaveBeenCalled();
+      expect(resolveConfiguredModelSelectionMock).not.toHaveBeenCalled();
     },
   );
 
@@ -480,9 +480,12 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     "does not warn when native web_search suppresses the managed provider tool",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
-      resolveConfiguredModelRefMock.mockReturnValue({
-        provider: "gateway",
-        model: "gpt-5.5",
+      resolveConfiguredModelSelectionMock.mockReturnValue({
+        ref: {
+          provider: "gateway",
+          model: "gpt-5.5",
+        },
+        normalization: "applied",
       });
       loadModelCatalogMock.mockResolvedValue([
         {

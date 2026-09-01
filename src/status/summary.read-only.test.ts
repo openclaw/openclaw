@@ -13,6 +13,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -172,6 +173,101 @@ describe("getStatusSummary read-only session access", () => {
         closeOpenClawAgentDatabasesForTest();
         closeOpenClawStateDatabaseForTest();
       }
+    },
+  );
+
+  it.each([
+    {
+      source: "resolved override",
+      provider: "custom",
+      model: "custom/model",
+      primary: "model",
+      stored: {
+        providerOverride: "custom",
+        modelOverride: "custom/model",
+        modelOverrideSource: "user" as const,
+        modelOverrideRouteResolution: "resolved" as const,
+      },
+      displayed: "custom/model",
+      contextTokens: 64_000,
+      reason: "session override",
+    },
+    {
+      source: "providerless alias",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      primary: "claude-opus-4-6",
+      stored: { modelOverride: "opus-4.6", modelOverrideSource: "user" as const },
+      displayed: "opus-4.6",
+      contextTokens: 48_000,
+      reason: null,
+    },
+    {
+      source: "configured primary",
+      provider: "custom",
+      model: "custom/model",
+      primary: "custom/model",
+      stored: {},
+      displayed: "custom/model",
+      contextTokens: 64_000,
+      reason: null,
+    },
+  ])(
+    "projects model metadata for $source",
+    async ({ provider, model, primary, stored, displayed, contextTokens, reason }) => {
+      await withOpenClawTestState(
+        { prefix: "openclaw-status-model-identity-", layout: "split" },
+        async (state) => {
+          const storePath = state.path("sessions.json");
+          const config: OpenClawConfig = {
+            agents: {
+              defaults: {
+                model: { primary: `${provider}/${primary}` },
+                models: {
+                  [`${provider}/model`]: { agentRuntime: { id: "openclaw" } },
+                  [`${provider}/${model}`]: { agentRuntime: { id: "claude-cli" } },
+                },
+              },
+              list: [{ id: "main", default: true }],
+            },
+            models: {
+              providers: {
+                [provider]: {
+                  baseUrl: "https://provider.example/v1",
+                  models: [
+                    { id: "model", contextTokens: 32_000 },
+                    { id: model, contextTokens },
+                  ].map(({ id, contextTokens: rowContextTokens }) => ({
+                    id,
+                    contextTokens: rowContextTokens,
+                    name: id,
+                    reasoning: false,
+                    input: ["text" as const],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    maxTokens: 1024,
+                  })),
+                },
+              },
+            },
+            session: { store: storePath },
+          };
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: "agent:main:main", storePath },
+            { sessionId: "model-identity", updatedAt: 10, ...stored },
+          );
+          closeOpenClawAgentDatabasesForTest();
+
+          const summary = await getStatusSummary({ includeChannelSummary: false, config });
+
+          expect(summary.sessions.recent[0]).toMatchObject({
+            model: displayed,
+            selectedModel: `${provider}/${displayed}`,
+            contextTokens,
+            runtime: "Claude CLI",
+            modelSelectionReason: reason,
+          });
+        },
+      );
     },
   );
 

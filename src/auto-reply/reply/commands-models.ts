@@ -1,4 +1,5 @@
 // Implements model listing and provider catalog commands.
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -26,11 +27,8 @@ import {
   modelCatalogLogicalKey,
 } from "../../agents/model-selection-shared.js";
 import {
-  buildModelAliasIndex,
   normalizeProviderId,
-  resolveBareModelDefaultProvider,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
+  resolveDefaultModelSelectionForAgent,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
@@ -184,12 +182,6 @@ async function buildPreparedDataForConfig(
   agentId: string | undefined,
   options: { view?: "default" | "all"; workspaceDir?: string },
 ): Promise<PreparedModelsProviderData> {
-  const runtimeNormalization = resolveRuntimeNormalization(cfg);
-  const resolvedDefault = resolveDefaultModelForAgent({
-    cfg,
-    agentId,
-    ...runtimeNormalization,
-  });
   const workspaceDir =
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
@@ -218,14 +210,21 @@ async function buildPreparedDataForConfig(
   const owner = loadedOwner?.modelCatalog === snapshot ? loadedOwner : undefined;
   const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
   const catalog = snapshot.entries;
-  const visibilityPolicy = createModelVisibilityPolicy({
+  const runtimeNormalization = resolveRuntimeNormalization(cfg);
+  const defaultSelection = resolveDefaultModelSelectionForAgent({
     cfg,
-    catalog,
-    defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
     agentId,
     ...runtimeNormalization,
   });
+  const visibilityPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog,
+    defaultProvider: defaultSelection.ref.provider,
+    defaultModel: defaultSelection,
+    agentId,
+    ...runtimeNormalization,
+  });
+  const resolvedDefault = visibilityPolicy.defaultRef;
   const authChecker = createProviderAuthChecker({
     cfg,
     workspaceDir,
@@ -250,7 +249,7 @@ async function buildPreparedDataForConfig(
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
+    defaultModel: resolvedDefault,
     agentId,
     workspaceDir,
     view: options.view,
@@ -278,12 +277,6 @@ async function buildPreparedDataForConfig(
     },
   });
 
-  const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: resolvedDefault.provider,
-    agentId,
-    ...runtimeNormalization,
-  });
   const restrictToProviderWildcards =
     options.view !== "all" && visibilityPolicy.hasProviderWildcards;
 
@@ -303,64 +296,6 @@ async function buildPreparedDataForConfig(
     const set = byProvider.get(key) ?? new Set<string>();
     set.add(m);
     byProvider.set(key, set);
-  };
-
-  const addRawModelRef = (raw?: string) => {
-    const trimmed = normalizeOptionalString(raw);
-    if (!trimmed) {
-      return;
-    }
-    const defaultProvider = !trimmed.includes("/")
-      ? resolveBareModelDefaultProvider({
-          cfg,
-          catalog,
-          model: trimmed,
-          defaultProvider: resolvedDefault.provider,
-          agentId,
-          manifestPlugins: runtimeNormalization.manifestPlugins,
-        })
-      : resolvedDefault.provider;
-    const resolved = resolveModelRefFromString({
-      cfg,
-      agentId,
-      raw: trimmed,
-      defaultProvider,
-      aliasIndex,
-      ...runtimeNormalization,
-    });
-    if (!resolved) {
-      return;
-    }
-    if (
-      incompatibleModelKeys.has(
-        logicalModelKey({ provider: resolved.ref.provider, id: resolved.ref.model }),
-      )
-    ) {
-      return;
-    }
-    add(resolved.ref.provider, resolved.ref.model);
-  };
-
-  const addModelConfigEntries = () => {
-    const modelConfig = cfg.agents?.defaults?.model;
-    if (typeof modelConfig === "string") {
-      addRawModelRef(modelConfig);
-    } else if (modelConfig && typeof modelConfig === "object") {
-      addRawModelRef(modelConfig.primary);
-      for (const fallback of modelConfig.fallbacks ?? []) {
-        addRawModelRef(fallback);
-      }
-    }
-
-    const imageConfig = cfg.agents?.defaults?.imageModel;
-    if (typeof imageConfig === "string") {
-      addRawModelRef(imageConfig);
-    } else if (imageConfig && typeof imageConfig === "object") {
-      addRawModelRef(imageConfig.primary);
-      for (const fallback of imageConfig.fallbacks ?? []) {
-        addRawModelRef(fallback);
-      }
-    }
   };
 
   for (const entry of visibleCatalog) {
@@ -383,18 +318,15 @@ async function buildPreparedDataForConfig(
     }
   }
 
-  for (const raw of visibilityPolicy.exactModelRefs) {
-    addRawModelRef(raw);
+  const configuredRefs = [cfg.agents?.defaults?.model, cfg.agents?.defaults?.imageModel]
+    .flatMap(listModelRefsFromConfigValue)
+    .flatMap((raw) => visibilityPolicy.configuredModelRefs.get(raw.trim()) ?? []);
+  for (const ref of [...visibilityPolicy.exactModelRefs, resolvedDefault, ...configuredRefs]) {
+    if (incompatibleModelKeys.has(logicalModelKey({ provider: ref.provider, id: ref.model }))) {
+      continue;
+    }
+    add(ref.provider, ref.model);
   }
-
-  if (
-    !incompatibleModelKeys.has(
-      logicalModelKey({ provider: resolvedDefault.provider, id: resolvedDefault.model }),
-    )
-  ) {
-    add(resolvedDefault.provider, resolvedDefault.model);
-  }
-  addModelConfigEntries();
 
   const providers = [...byProvider.keys()].toSorted();
 

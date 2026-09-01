@@ -1,4 +1,3 @@
-// Tests applying parsed directives to get-reply execution options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
@@ -6,7 +5,9 @@ import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
-import { createFastTestModelSelectionState } from "./model-selection.js";
+import { createModelSelectionStateFixture } from "./get-reply.test-fixtures.js";
+// Tests applying parsed directives to get-reply execution options.
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
@@ -45,6 +46,11 @@ describe("applyInlineDirectiveOverrides", () => {
       Provider: "webchat",
       Surface: "webchat",
     });
+    const defaultSelection: ReplyModelSelection = {
+      ref: { provider: "openai", model: "gpt-5.5" },
+      normalization: "applied",
+      routeResolution: "raw",
+    };
     const result = await resolveReplyDirectives({
       ctx,
       cfg: {
@@ -65,11 +71,9 @@ describe("applyInlineDirectiveOverrides", () => {
       triggerBodyNormalized: "/elevated on",
       resetTriggered: false,
       commandAuthorized: true,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
+      defaultSelection,
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
+      selection: defaultSelection,
       hasResolvedHeartbeatModelOverride: false,
       typing: createTypingController({}),
     });
@@ -191,7 +195,7 @@ describe("applyInlineDirectiveOverrides", () => {
         agentRuntimeOverride: "codex",
         modelSelectionLocked: true,
       };
-      const modelState = createFastTestModelSelectionState({
+      const modelState = createModelSelectionStateFixture({
         agentCfg: {},
         provider: "openai",
         model: "gpt-5.5",
@@ -333,7 +337,7 @@ describe("applyInlineDirectiveOverrides", () => {
         aliasIndex: { byAlias: new Map(), byKey: new Map() },
         provider: "openai",
         model,
-        modelState: createFastTestModelSelectionState({
+        modelState: createModelSelectionStateFixture({
           agentCfg: {},
           provider: "openai",
           model,

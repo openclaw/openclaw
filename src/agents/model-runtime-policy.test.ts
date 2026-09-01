@@ -230,13 +230,15 @@ describe("resolveModelRuntimePolicy", () => {
   it.each([
     {
       name: "provider-owned model id",
+      provider: "openrouter",
       modelId: "anthropic/claude-opus-4.6",
     },
     {
-      name: "provider-qualified model id",
+      name: "providerless raw ref",
+      provider: "",
       modelId: "openrouter/anthropic/claude-opus-4.6",
     },
-  ])("honors the OpenRouter agent model policy for a $name", ({ modelId }) => {
+  ])("honors the OpenRouter agent model policy for a $name", ({ provider, modelId }) => {
     const config = {
       agents: {
         defaults: {
@@ -264,7 +266,7 @@ describe("resolveModelRuntimePolicy", () => {
     expect(
       resolveModelRuntimePolicy({
         config,
-        provider: "openrouter",
+        provider,
         modelId,
       }),
     ).toEqual({
@@ -279,12 +281,6 @@ describe("resolveModelRuntimePolicy", () => {
       name: "provider-owned model id",
       provider: "openrouter",
       modelId: "anthropic/claude-opus-4.6",
-      matchedProvider: undefined,
-    },
-    {
-      name: "provider-qualified model id",
-      provider: "openrouter",
-      modelId: "openrouter/anthropic/claude-opus-4.6",
       matchedProvider: undefined,
     },
     {
@@ -313,6 +309,48 @@ describe("resolveModelRuntimePolicy", () => {
         source: "model",
         ...(matchedProvider ? { matchedProvider } : {}),
       });
+    },
+  );
+
+  it.each(["agent", "provider"] as const)(
+    "keeps literal model identities distinct in %s runtime policy",
+    (source) => {
+      const config: OpenClawConfig =
+        source === "agent"
+          ? {
+              agents: {
+                defaults: {
+                  models: {
+                    "custom/model": { agentRuntime: { id: "openclaw" } },
+                    "custom/custom/model": { agentRuntime: { id: "claude-cli" } },
+                  },
+                },
+              },
+            }
+          : {
+              models: {
+                providers: {
+                  custom: {
+                    baseUrl: "https://provider.example/v1",
+                    models: [
+                      createModelConfig("openclaw", "model"),
+                      createModelConfig("claude-cli", "custom/model"),
+                    ],
+                  },
+                },
+              },
+            };
+
+      expect(
+        resolveModelRuntimePolicy({ config, provider: "custom", modelId: "custom/model" }).policy
+          ?.id,
+      ).toBe("claude-cli");
+      expect(
+        resolveModelRuntimePolicy({ config, provider: "custom", modelId: "model" }).policy?.id,
+      ).toBe("openclaw");
+      expect(resolveModelRuntimePolicy({ config, modelId: "custom/custom/model" }).policy?.id).toBe(
+        "claude-cli",
+      );
     },
   );
 

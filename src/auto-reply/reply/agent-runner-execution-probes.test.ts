@@ -25,54 +25,60 @@ import type {
 const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: primary probe routing", () => {
-  it("rechecks queued auto fallback primary probes before running", async () => {
-    const { markAutoFallbackPrimaryProbe } = await import("../../agents/agent-scope.js");
-    const probe = {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      fallbackProvider: "google",
-      fallbackModel: "gemini-3-pro",
-      fallbackAuthProfileId: "google:fallback",
-      fallbackAuthProfileIdSource: "auto" as const,
-    };
-    markAutoFallbackPrimaryProbe({
-      probe,
-      sessionKey: "main",
-      now: Date.now(),
-    });
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      providerOverride: "google",
-      modelOverride: "gemini-3-pro",
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "anthropic",
-      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
-      authProfileOverride: "google:fallback",
-      authProfileOverrideSource: "auto",
-    };
-    const run = createFollowupRun().run;
-    run.provider = "anthropic";
-    run.model = "claude-sonnet-4-6";
-    run.authProfileId = "anthropic:primary";
-    run.authProfileIdSource = "auto";
-    run.autoFallbackPrimaryProbe = probe;
-
-    expect(
-      resolveRunAfterAutoFallbackPrimaryProbeRecheck({
-        run,
-        entry: sessionEntry,
+  it.each([
+    { provider: "google", model: "gemini-3.1-pro-preview" },
+    { provider: "custom", model: "custom/model" },
+  ])(
+    "rechecks queued auto fallback primary probes before running ($provider/$model)",
+    async ({ provider, model }) => {
+      const { markAutoFallbackPrimaryProbe } = await import("../../agents/agent-scope.js");
+      const probe = {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        fallbackProvider: provider,
+        fallbackModel: model,
+        fallbackAuthProfileId: `${provider}:fallback`,
+        fallbackAuthProfileIdSource: "auto" as const,
+      };
+      markAutoFallbackPrimaryProbe({
+        probe,
         sessionKey: "main",
-      }),
-    ).toMatchObject({
-      provider: "google",
-      model: "gemini-3.1-pro-preview",
-      requestedRouteResolution: "resolved",
-      authProfileId: "google:fallback",
-      authProfileIdSource: "auto",
-      autoFallbackPrimaryProbe: undefined,
-    });
-  });
+        now: Date.now(),
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        providerOverride: provider,
+        modelOverride: model,
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "anthropic",
+        modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+        authProfileOverride: `${provider}:fallback`,
+        authProfileOverrideSource: "auto",
+      };
+      const run = createFollowupRun().run;
+      run.provider = "anthropic";
+      run.model = "claude-sonnet-4-6";
+      run.authProfileId = "anthropic:primary";
+      run.authProfileIdSource = "auto";
+      run.autoFallbackPrimaryProbe = probe;
+
+      expect(
+        resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+          run,
+          entry: sessionEntry,
+          sessionKey: "main",
+        }),
+      ).toMatchObject({
+        provider,
+        model,
+        requestedRouteResolution: "resolved",
+        authProfileId: `${provider}:fallback`,
+        authProfileIdSource: "auto",
+        autoFallbackPrimaryProbe: undefined,
+      });
+    },
+  );
 
   it("drops stale queued primary probes after a user model switch", async () => {
     const probe = {

@@ -16,11 +16,11 @@ import type {
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   isGatewayRestartDrainError,
@@ -946,7 +946,7 @@ export async function startGatewaySidecars(params: {
           const [
             { DEFAULT_MODEL, DEFAULT_PROVIDER },
             { loadPreparedModelCatalog },
-            { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
+            { getModelRefStatus, resolveConfiguredModelSelection, resolveHooksGmailModel },
           ] = await Promise.all([
             loadAgentDefaultsModule(),
             import("../agents/prepared-model-catalog.js"),
@@ -960,12 +960,12 @@ export async function startGatewaySidecars(params: {
             defaultProvider: DEFAULT_PROVIDER,
           });
           if (hooksModelRef) {
-            const { provider: resolvedDefaultProvider, model: defaultModel } =
-              resolveConfiguredModelRef({
-                cfg: params.cfg,
-                defaultProvider: DEFAULT_PROVIDER,
-                defaultModel: DEFAULT_MODEL,
-              });
+            const defaultSelection = resolveConfiguredModelSelection({
+              cfg: params.cfg,
+              defaultProvider: DEFAULT_PROVIDER,
+              defaultModel: DEFAULT_MODEL,
+              allowPluginNormalization: false,
+            });
             const catalog = await loadPreparedModelCatalog({
               config: params.cfg,
               readOnly: true,
@@ -976,8 +976,8 @@ export async function startGatewaySidecars(params: {
               cfg: params.cfg,
               catalog,
               ref: hooksModelRef,
-              defaultProvider: resolvedDefaultProvider,
-              defaultModel,
+              defaultProvider: defaultSelection.ref.provider,
+              defaultModel: defaultSelection,
             });
             if (!status.allowed) {
               params.logHooks.warn(
@@ -1179,8 +1179,7 @@ export async function startGatewayPostAttachRuntime(
     controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
-    pluginManifestRecords: readonly PluginManifestRecord[];
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    pluginMetadataSnapshot: PluginMetadataSnapshot;
     ambientEnvTriggers?: AmbientEnvTriggerPolicy;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
@@ -1208,8 +1207,8 @@ export async function startGatewayPostAttachRuntime(
       retireGatewayRuntimeBindings?: () => void;
     }) => Awaitable<void>;
     pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
-    getCurrentPluginRegistry?: () => PluginRegistry;
-    getCurrentPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
+    getCurrentPluginRegistry: () => PluginRegistry;
+    getCurrentPluginMetadataSnapshot: () => PluginMetadataSnapshot;
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
@@ -1286,7 +1285,7 @@ export async function startGatewayPostAttachRuntime(
       if (params.isClosing?.() || params.pluginRuntimeClaim?.isCurrent() === false) {
         // Shutdown only owns attached bindings; retire unadopted results here.
         loaded.retireGatewayRuntimeBindings?.();
-        pluginRegistry = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
+        pluginRegistry = params.getCurrentPluginRegistry();
         startupPluginsLoaded = true;
         return { pluginRegistry, gatewayMethods: [] };
       }
@@ -1304,6 +1303,22 @@ export async function startGatewayPostAttachRuntime(
     })();
     return await startupPluginsLoadPromise;
   };
+  // Plugin loading or worker startup can yield to a replacement; select one owner per consumer.
+  const resolveStartupPluginRuntime = (startupConfig: OpenClawConfig) => {
+    const startupRuntimeCurrent = params.pluginRuntimeClaim?.isCurrent() !== false;
+    const config = startupRuntimeCurrent ? startupConfig : params.getConfig();
+    if (!startupRuntimeCurrent) {
+      pluginRegistry = params.getCurrentPluginRegistry();
+    }
+    return {
+      config,
+      activationSourceConfig: startupRuntimeCurrent ? params.activationSourceConfig : config,
+      metadataSnapshot: startupRuntimeCurrent
+        ? params.pluginMetadataSnapshot
+        : params.getCurrentPluginMetadataSnapshot(),
+      pluginRegistry,
+    };
+  };
   let startupLogPromise: Promise<void> | undefined;
   const startupLogSettled = createDeferredCore();
   // Tailscale and sidecar work can delay the public readiness handle past log failure.
@@ -1320,24 +1335,27 @@ export async function startGatewayPostAttachRuntime(
     if (startupLogPromise) {
       return startupLogPromise;
     }
+    const generation = resolveStartupPluginRuntime(params.cfgAtStart);
     startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
-      runtimeDeps.logGatewayStartup({
-        cfg: params.cfgAtStart,
-        activationSourceConfig: params.activationSourceConfig,
-        env: process.env,
-        manifestRecords: params.pluginManifestRecords,
-        ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
-        bindHost: params.bindHost,
-        bindHosts: params.bindHosts,
-        port: params.port,
-        tlsEnabled: params.tlsEnabled,
-        loadedPluginIds: pluginRegistry.plugins
-          .filter((plugin) => plugin.status === "loaded")
-          .map((plugin) => plugin.id),
-        log: params.log,
-        isNixMode: params.isNixMode,
-        startupStartedAt: params.startupStartedAt,
-      }),
+      withPluginRuntimeGenerationScope(generation, () =>
+        runtimeDeps.logGatewayStartup({
+          cfg: generation.config,
+          activationSourceConfig: generation.activationSourceConfig,
+          env: process.env,
+          manifestRecords: generation.metadataSnapshot.plugins,
+          ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
+          bindHost: params.bindHost,
+          bindHosts: params.bindHosts,
+          port: params.port,
+          tlsEnabled: params.tlsEnabled,
+          loadedPluginIds: generation.pluginRegistry.plugins
+            .filter((plugin) => plugin.status === "loaded")
+            .map((plugin) => plugin.id),
+          log: params.log,
+          isNixMode: params.isNixMode,
+          startupStartedAt: params.startupStartedAt,
+        }),
+      ),
     );
     void startupLogPromise.catch(() => {});
     assignStartupLogOwner(startupLogPromise);
@@ -1420,18 +1438,13 @@ export async function startGatewayPostAttachRuntime(
           const loaderStatsBefore = getPluginModuleLoaderStats();
           const result = await (async () => {
             try {
-              const startupRuntimeCurrent = params.pluginRuntimeClaim?.isCurrent() !== false;
-              const pluginMetadataSnapshot = startupRuntimeCurrent
-                ? params.pluginMetadataSnapshot
-                : params.getCurrentPluginMetadataSnapshot?.();
+              const generation = resolveStartupPluginRuntime(params.gatewayPluginConfigAtStart);
               return await measureStartup(params.startupTrace, "sidecars.total", () =>
                 runtimeDeps.startGatewaySidecars({
-                  cfg: startupRuntimeCurrent
-                    ? params.gatewayPluginConfigAtStart
-                    : params.getConfig(),
+                  cfg: generation.config,
                   getModelRuntimeConfig: params.getConfig,
-                  ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-                  pluginRegistry,
+                  pluginMetadataSnapshot: generation.metadataSnapshot,
+                  pluginRegistry: generation.pluginRegistry,
                   defaultWorkspaceDir: params.defaultWorkspaceDir,
                   deps: params.deps,
                   startChannels: params.startChannels,

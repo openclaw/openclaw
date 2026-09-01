@@ -25,8 +25,9 @@ import {
 import { findModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
+import type { ModelRefSelection } from "../agents/model-ref-shared.js";
 import {
-  resolveDefaultModelForAgent,
+  resolveDefaultModelSelectionForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
@@ -127,7 +128,7 @@ function resolveSessionCreateModelSelection(
       authProfileOverride: inherited.authProfileOverride,
     };
   }
-  const defaults = resolveDefaultModelForAgent({ cfg, agentId });
+  const defaultSelection = resolveDefaultModelSelectionForAgent({ cfg, agentId });
   // Reuse patch policy with the config-owned catalog projection. Persisted creation
   // remains the sole live-catalog availability validator.
   const resolved = resolveSessionPatchModelSelection({
@@ -135,8 +136,7 @@ function resolveSessionCreateModelSelection(
     agentId,
     catalog: [],
     raw: model,
-    defaultProvider: defaults.provider,
-    defaultModel: defaults.model,
+    defaultSelection,
   });
   if (!resolved.ok) {
     return null;
@@ -156,8 +156,7 @@ async function existingSessionSelectionWouldChange(params: {
   agentId: string;
   cfg: OpenClawConfig;
   catalogModel?: string;
-  defaultModel: string;
-  defaultProvider: string;
+  defaultSelection: ModelRefSelection;
   existingEntry: SessionEntry;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   requestedModel?: string;
@@ -208,8 +207,7 @@ async function existingSessionSelectionWouldChange(params: {
     agentId: params.agentId,
     catalog,
     raw: requestedModel,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
+    defaultSelection: params.defaultSelection,
     subagentModelHint: params.subagentModelHint,
   });
   if (!resolved.ok) {
@@ -218,17 +216,16 @@ async function existingSessionSelectionWouldChange(params: {
     return true;
   }
   let existingProvider =
-    normalizeOptionalString(params.existingEntry.providerOverride) ?? params.defaultProvider;
+    normalizeOptionalString(params.existingEntry.providerOverride) ?? resolved.defaultRef.provider;
   let existingModel =
-    normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
+    normalizeOptionalString(params.existingEntry.modelOverride) ?? resolved.defaultRef.model;
   if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
     const resolvedSubagentDefault = resolveSessionPatchModelSelection({
       cfg: params.cfg,
       agentId: params.agentId,
       catalog,
       raw: params.subagentModelHint,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
+      defaultSelection: params.defaultSelection,
     });
     if (!resolvedSubagentDefault.ok) {
       return true;
@@ -250,7 +247,7 @@ async function existingSessionSelectionWouldChange(params: {
           currentProvider:
             params.existingEntry.providerOverride ??
             params.existingEntry.modelProvider ??
-            params.defaultProvider,
+            resolved.defaultRef.provider,
           entry: params.existingEntry,
           provider: resolved.provider,
         });
@@ -1066,7 +1063,7 @@ export async function createGatewaySession(params: {
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         const requestedFastMode = params.fastMode;
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
-          const gateDefaultModel = resolveDefaultModelForAgent({
+          const defaultSelection = resolveDefaultModelSelectionForAgent({
             cfg: params.cfg,
             agentId: target.agentId,
           });
@@ -1074,8 +1071,7 @@ export async function createGatewaySession(params: {
             agentId: target.agentId,
             cfg: params.cfg,
             catalogModel,
-            defaultModel: gateDefaultModel.model,
-            defaultProvider: gateDefaultModel.provider,
+            defaultSelection,
             existingEntry,
             loadGatewayModelCatalog: params.loadGatewayModelCatalog,
             requestedModel,

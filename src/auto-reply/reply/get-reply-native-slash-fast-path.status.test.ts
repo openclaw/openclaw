@@ -8,6 +8,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
@@ -26,6 +27,16 @@ type NativeStatusSelectionCase = {
   preparedModel?: string;
   preparedProvider?: string;
 };
+
+// These fixtures enter the owner with static policy already applied; route resolution
+// remains separate so runtime hooks are still exercised by ordinary selections.
+function preparedSelection(
+  provider: string,
+  model: string,
+  routeResolution: ReplyModelSelection["routeResolution"] = "raw",
+): ReplyModelSelection {
+  return { ref: { provider, model }, normalization: "applied", routeResolution };
+}
 
 const buildStatusReplyMock = vi.hoisted(() => vi.fn());
 
@@ -206,6 +217,7 @@ describe("native /status channel model routing", () => {
         },
       );
 
+      const defaultSelection = preparedSelection("openai", "gpt-5.5");
       const result = await maybeResolveNativeSlashCommandFastReply({
         ctx: buildTestCtx({
           Body: "/status",
@@ -258,16 +270,17 @@ describe("native /status channel model routing", () => {
         agentDir: "/tmp/agent",
         agentCfg: undefined,
         commandAuthorized: true,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
+        defaultSelection,
         aliasIndex: {
           byKey: new Map(),
           byAlias: new Map([
             ["fable", { alias: "Fable", ref: { provider: "anthropic", model: "claude-fable-5" } }],
           ]),
         },
-        provider: preparedProvider,
-        model: preparedModel,
+        selection:
+          preparedProvider === "openai" && preparedModel === "gpt-5.5"
+            ? defaultSelection
+            : preparedSelection(preparedProvider, preparedModel, "resolved"),
         workspaceDir: "/tmp/workspace",
         typing: createTypingController(),
       });

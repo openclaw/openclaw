@@ -355,19 +355,26 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
     });
   });
 
-  it("prefers explicit overrides ahead of fallback runtime fields", () => {
-    expect(
-      statusSummaryRuntime.resolveSessionModelRef(cfg, {
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-        modelProvider: "amazon-bedrock",
-        model: "minimax.minimax-m2.5",
-      }),
-    ).toEqual({
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-  });
+  it.each([
+    { source: "raw", modelOverrideRouteResolution: undefined },
+    { source: "resolved", modelOverrideRouteResolution: "resolved" as const },
+  ])(
+    "prefers $source overrides ahead of fallback runtime fields",
+    ({ modelOverrideRouteResolution }) => {
+      expect(
+        statusSummaryRuntime.resolveSessionModelRef(cfg, {
+          providerOverride: "custom",
+          modelOverride: "custom/model",
+          modelOverrideRouteResolution,
+          modelProvider: "amazon-bedrock",
+          model: "minimax.minimax-m2.5",
+        }),
+      ).toEqual({
+        provider: "custom",
+        model: modelOverrideRouteResolution === "resolved" ? "custom/model" : "model",
+      });
+    },
+  );
 
   it("falls back to configured defaults when persisted session model fields are malformed", () => {
     expect(

@@ -1,54 +1,60 @@
-/**
- * Runtime bridge for provider-owned model id normalization hooks. Source and
- * built artifacts can resolve different extensions, so this module probes both
- * once and caches the result.
- */
+/** Provider-owned model normalization, using the retained generation before cold discovery. */
 import { createRequire } from "node:module";
-import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
+import { fileURLToPath } from "node:url";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
+import { resolveProviderRuntimeOwnerRefs } from "../plugins/provider-config-owner.js";
+import {
+  normalizeProviderModelIdWithResolvedPlugin,
+  type ProviderModelIdNormalizationParams,
+} from "../plugins/provider-model-normalization.js";
+import { findProviderRuntimePluginInRegistry } from "../plugins/provider-registry-shared.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 
-type ProviderRuntimeModule = Pick<
-  typeof import("../plugins/provider-runtime.js"),
-  "normalizeProviderModelIdWithPlugin"
->;
+type ProviderNormalizationRuntime =
+  typeof import("../plugins/provider-model-normalization.runtime.js");
 
 const require = createRequire(import.meta.url);
-// Built code loads .js while source/test paths may still resolve .ts. Try both
-// once, then cache the absence to avoid repeated require work on hot paths.
-const PROVIDER_RUNTIME_CANDIDATES = [
-  "../plugins/provider-runtime.js",
-  "../plugins/provider-runtime.ts",
-] as const;
+let runtime: ProviderNormalizationRuntime | undefined;
 
-let providerRuntimeModule: ProviderRuntimeModule | undefined;
-let providerRuntimeLoadAttempted = false;
-
-function loadProviderRuntime(): ProviderRuntimeModule | null {
-  if (providerRuntimeModule) {
-    return providerRuntimeModule;
-  }
-  if (providerRuntimeLoadAttempted) {
-    return null;
-  }
-  providerRuntimeLoadAttempted = true;
-  for (const candidate of PROVIDER_RUNTIME_CANDIDATES) {
-    try {
-      providerRuntimeModule = require(candidate) as ProviderRuntimeModule;
-      return providerRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
+function loadProviderNormalizationRuntime(): ProviderNormalizationRuntime {
+  if (!runtime) {
+    const filename = fileURLToPath(import.meta.url);
+    if (filename.endsWith(".ts")) {
+      // The canonical source loader supports import-only transitive dependencies;
+      // loading the facade itself through a TS require hook forces CJS resolution.
+      const modulePath = fileURLToPath(
+        new URL("../plugins/provider-model-normalization.runtime.ts", import.meta.url),
+      );
+      runtime = getCachedPluginModuleLoader({ modulePath, importerUrl: import.meta.url })(
+        modulePath,
+      ) as ProviderNormalizationRuntime; // SAFETY: The fixed source facade implements this runtime contract.
+    } else {
+      // Bundled chunks use the stable dist entry. Failures must not become cached hook misses.
+      const modulePath = fileURLToPath(
+        new URL("./plugins/provider-model-normalization.runtime.js", import.meta.url),
+      );
+      // SAFETY: The stable build entry exports the same source facade contract.
+      runtime = require(modulePath) as ProviderNormalizationRuntime;
     }
   }
-  return null;
+  return runtime;
 }
 
-/** Normalizes provider model ids through plugin runtime hooks when available. */
-export function normalizeProviderModelIdWithRuntime(params: {
-  provider: string;
-  plugins?: ManifestModelIdNormalizationSource;
-  context: {
-    provider: string;
-    modelId: string;
-  };
-}): string | undefined {
-  return loadProviderRuntime()?.normalizeProviderModelIdWithPlugin(params);
+/** Normalizes provider model ids through the owning plugin hook and manifest policy. */
+export function normalizeProviderModelIdWithRuntime(
+  params: ProviderModelIdNormalizationParams,
+): string | undefined {
+  const registry = getPluginRuntimeGenerationRegistry();
+  if (registry) {
+    // An empty retained generation is authoritative; ambient plugins cannot fill its misses.
+    return normalizeProviderModelIdWithResolvedPlugin(
+      params,
+      findProviderRuntimePluginInRegistry({
+        registry,
+        provider: params.provider,
+        ownerRefs: resolveProviderRuntimeOwnerRefs(params),
+      }),
+    );
+  }
+  return loadProviderNormalizationRuntime().normalizeProviderModelIdWithPlugin(params);
 }

@@ -52,8 +52,11 @@ vi.mock("../command-auth.js", () => ({
 
 vi.mock("./directive-handling.defaults.js", () => ({
   resolveDefaultModel: vi.fn(() => ({
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
+    defaultSelection: {
+      ref: { provider: "openai", model: "gpt-4o-mini" },
+      normalization: "applied",
+      routeResolution: "raw",
+    },
     aliasIndex: new Map(),
   })),
 }));

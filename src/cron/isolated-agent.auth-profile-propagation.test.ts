@@ -9,7 +9,7 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-h
 import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveSessionAuthSelectionMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
@@ -53,9 +53,9 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
   });
 
   it("passes authProfileId to runEmbeddedAgent when auth profiles exist", async () => {
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "openrouter",
-      model: "moonshotai/kimi-k2.5",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: { provider: "openrouter", model: "moonshotai/kimi-k2.5" },
+      normalization: "applied",
     });
     resolveSessionAuthSelectionMock.mockResolvedValue({
       profileId: "openrouter:default",

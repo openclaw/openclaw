@@ -9,7 +9,6 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
-  normalizeStoredOverrideModel,
   parseModelRef,
   resolvePersistedSelectedModelRef,
   type CliProviderClassifier,
@@ -23,6 +22,7 @@ type SessionDisplayModelRow = {
   modelProvider?: string;
   modelOverride?: string;
   providerOverride?: string;
+  modelOverrideRouteResolution?: "raw" | "resolved";
 };
 
 type SessionDisplayDefaults = {
@@ -123,23 +123,21 @@ export function resolveSessionDisplayModelRef(
   const agentId =
     ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
-  const normalizedOverride = normalizeStoredOverrideModel({
-    providerOverride: row.providerOverride,
-    modelOverride: row.modelOverride,
-  });
   const persistedRef = resolvePersistedSelectedModelRef({
+    cfg,
+    routeResolution: row.modelOverrideRouteResolution,
     defaultProvider: defaultRef.provider,
     runtimeProvider: row.modelProvider,
     runtimeModel: row.model,
-    overrideProvider: normalizedOverride.providerOverride,
-    overrideModel: normalizedOverride.modelOverride,
+    overrideProvider: row.providerOverride,
+    overrideModel: row.modelOverride,
     allowManifestNormalization: false,
     allowPluginNormalization: false,
   });
   if (!persistedRef) {
     return defaultRef;
   }
-  return normalizedOverride.modelOverride
+  return row.modelOverride?.trim()
     ? persistedRef
     : normalizeCliRuntimeDisplayRef(cfg, agentId, persistedRef, defaultRef, classifyCliProvider);
 }

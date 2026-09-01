@@ -7,7 +7,6 @@ const buildStatusReply = vi.fn(async (params: unknown) => params);
 const loadSessionEntry = vi.fn();
 const resolveSessionAgentId = vi.fn();
 const listAgentEntries = vi.fn();
-const resolveDefaultModelForAgent = vi.fn();
 const resolveDefaultModel = vi.fn();
 const createModelSelectionState = vi.fn();
 const resolveCurrentDirectiveLevels = vi.fn();
@@ -23,10 +22,6 @@ vi.mock("../gateway/session-utils.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentEntries,
   resolveSessionAgentId,
-}));
-
-vi.mock("../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent,
 }));
 
 vi.mock("../auto-reply/reply/directive-handling.defaults.js", () => ({
@@ -61,7 +56,6 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
     loadSessionEntry.mockReset();
     resolveSessionAgentId.mockReset();
     listAgentEntries.mockReset();
-    resolveDefaultModelForAgent.mockReset();
     resolveDefaultModel.mockReset();
     createModelSelectionState.mockReset();
     resolveCurrentDirectiveLevels.mockReset();
@@ -84,9 +78,16 @@ describe("resolveDirectStatusReplyForSessionCore", () => {
     });
     resolveSessionAgentId.mockReturnValue("main");
     listAgentEntries.mockReturnValue([]);
-    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
-    resolveDefaultModel.mockReturnValue({ defaultProvider: "openai", defaultModel: "gpt-5.4" });
+    resolveDefaultModel.mockReturnValue({
+      defaultSelection: {
+        ref: { provider: "openai", model: "gpt-5.4" },
+        normalization: "applied",
+        routeResolution: "raw",
+      },
+    });
     createModelSelectionState.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-5.4",
       resolveThinkingCatalog: vi.fn(async () => []),
       resolveDefaultThinkingLevel: vi.fn(async () => "off"),
       resolveDefaultReasoningLevel: vi.fn(async () => "on"),

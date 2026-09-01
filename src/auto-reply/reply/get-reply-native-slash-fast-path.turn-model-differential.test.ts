@@ -17,8 +17,19 @@ import {
   type TurnModelSelectionVerdict,
 } from "../../test-utils/turn-model-selection-differential.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
+import type { ReplyModelSelection } from "./model-runtime-normalization.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
+
+// These fixtures enter the owner with static policy already applied; route resolution
+// remains separate so runtime hooks are still exercised by ordinary selections.
+function preparedSelection(
+  provider: string,
+  model: string,
+  routeResolution: ReplyModelSelection["routeResolution"] = "raw",
+): ReplyModelSelection {
+  return { ref: { provider, model }, normalization: "applied", routeResolution };
+}
 
 const buildStatusReplyMock = vi.hoisted(() => vi.fn());
 
@@ -84,6 +95,10 @@ async function observeStatusSelection(
 
   buildStatusReplyMock.mockClear();
   buildStatusReplyMock.mockResolvedValue({ text: "status" });
+  const defaultSelection = preparedSelection(
+    TURN_MODEL_DEFAULT_REF.provider,
+    TURN_MODEL_DEFAULT_REF.model,
+  );
   await maybeResolveNativeSlashCommandFastReply({
     ctx: buildTestCtx({
       Body: "/status",
@@ -108,13 +123,15 @@ async function observeStatusSelection(
     agentDir: "/tmp/agent",
     agentCfg: undefined,
     commandAuthorized: true,
-    defaultProvider: TURN_MODEL_DEFAULT_REF.provider,
-    defaultModel: TURN_MODEL_DEFAULT_REF.model,
+    defaultSelection,
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: fixture.heartbeat
-      ? TURN_MODEL_OVERRIDE_REF.provider
-      : TURN_MODEL_DEFAULT_REF.provider,
-    model: fixture.heartbeat ? TURN_MODEL_OVERRIDE_REF.model : TURN_MODEL_DEFAULT_REF.model,
+    selection: fixture.heartbeat
+      ? preparedSelection(
+          TURN_MODEL_OVERRIDE_REF.provider,
+          TURN_MODEL_OVERRIDE_REF.model,
+          "resolved",
+        )
+      : defaultSelection,
     workspaceDir: "/tmp/workspace",
     typing: createTypingController(),
   });

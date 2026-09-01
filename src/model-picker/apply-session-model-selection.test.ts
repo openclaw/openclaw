@@ -1,4 +1,8 @@
 import path from "node:path";
+import type {
+  applySessionModelSelection as applySdkSessionModelSelection,
+  ApplySessionModelSelectionParams,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -58,10 +62,7 @@ vi.mock("../logging/subsystem.js", async () => {
   };
 });
 
-import {
-  applySessionModelSelection,
-  type ApplySessionModelSelectionParams,
-} from "./apply-session-model-selection.js";
+import { applySessionModelSelection } from "./apply-session-model-selection.js";
 
 const catalog = [
   {
@@ -106,7 +107,7 @@ function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {})
     },
     markLiveSwitchPending: true,
     ...overrides,
-  } satisfies ApplySessionModelSelectionParams;
+  } satisfies Parameters<typeof applySdkSessionModelSelection>[0];
 }
 
 beforeEach(() => {
@@ -556,16 +557,48 @@ describe("applySessionModelSelection", () => {
       },
       expectedOverride: "gpt-4o",
     },
-  ])("$name instead of trusting request.isDefault", async ({ request, expectedOverride }) => {
-    const sessionEntry = createEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-      modelOverrideSource: "user",
-      modelOverrideRouteResolution: "resolved",
-    });
-    await applySessionModelSelection(createParams({ sessionEntry, request }));
-    expect(sessionEntry.modelOverride).toBe(expectedOverride);
-  });
+    {
+      name: "persists a shorter id distinct from the literal default",
+      request: {
+        provider: "custom",
+        model: "model",
+        isDefault: true,
+        runtime: { kind: "unchanged" } as const,
+      },
+      defaults: {
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                api: "openai-completions" as const,
+                baseUrl: "https://custom.invalid/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        defaultProvider: "custom",
+        defaultModel: "custom/model",
+        modelCatalog: [{ provider: "custom", id: "model", name: "Model" }],
+      },
+      expectedOverride: "model",
+    },
+  ])(
+    "$name instead of trusting request.isDefault",
+    async ({ request, expectedOverride, defaults }) => {
+      const sessionEntry = createEntry({
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+      });
+      const result = await applySessionModelSelection(
+        createParams({ sessionEntry, request, ...defaults }),
+      );
+      expect(result.status).toBe("applied");
+      expect(sessionEntry.modelOverride).toBe(expectedOverride);
+    },
+  );
 
   it.each([
     {
@@ -740,6 +773,34 @@ describe("applySessionModelSelection", () => {
     {
       name: "allowlist",
       overrides: { cfg: { agents: { defaults: { modelPolicy: { allow: ["anthropic/*"] } } } } },
+    },
+    {
+      name: "supplied SDK policy",
+      overrides: {
+        modelPolicy: {
+          allowAny: false,
+          allowedCatalog: [catalog[0]!],
+          allowedKeys: new Set(["anthropic/claude-opus-4-6"]),
+          policyAliasIndex: { byAlias: new Map(), byKey: new Map() },
+          selectionAliasIndex: { byAlias: new Map(), byKey: new Map() },
+          configuredKeys: new Set(["anthropic/claude-opus-4-6"]),
+          retainedKeys: new Set<string>(),
+          exactModelRefs: ["anthropic/claude-opus-4-6"] satisfies NonNullable<
+            Parameters<typeof applySdkSessionModelSelection>[0]["modelPolicy"]
+          >["exactModelRefs"],
+          providerWildcards: new Set<string>(),
+          hasConfiguredEntries: true,
+          hasProviderWildcards: false,
+          allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
+          allowsKey: (key) => key === "anthropic/claude-opus-4-6",
+          allows(ref) {
+            return this.exactModelRefs.includes(`${ref.provider}/${ref.model}`);
+          },
+          allowsByWildcard: () => false,
+          resolveSelection: () => ({ provider: "anthropic", model: "claude-opus-4-6" }),
+          visibleCatalog: () => [catalog[0]!],
+        } satisfies NonNullable<ApplySessionModelSelectionParams["modelPolicy"]>,
+      },
     },
   ])("rejects a model missing from the $name", async ({ overrides }) => {
     const sessionEntry = createEntry();

@@ -203,7 +203,9 @@ vi.mock("../agents/model-selection.js", () => {
           allowAny,
           allowedKeys: refs,
           allowedCatalog: catalog,
-          exactModelRefs: policyRefs.filter((key) => !key.endsWith("/*")),
+          exactModelRefs: policyRefs
+            .filter((key) => !key.endsWith("/*"))
+            .flatMap((raw) => parseModelRefImpl(raw, "openai") ?? []),
           providerWildcards: wildcardProviders,
           hasConfiguredEntries: policyRefs.length > 0,
           hasProviderWildcards: wildcardModelKeys.size > 0,
@@ -232,6 +234,8 @@ vi.mock("../agents/model-selection.js", () => {
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    completeModelRefSelection: ({ ref }: { ref: ModelRef }) =>
+      normalizeModelRef(ref.provider, ref.model),
     normalizeProviderId,
     normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
@@ -242,6 +246,10 @@ vi.mock("../agents/model-selection.js", () => {
     resolveDefaultModelForAgent: vi.fn(({ cfg }: { cfg?: ConfigWithModels }) =>
       resolveDefaultRef(cfg),
     ),
+    resolveDefaultModelSelectionForAgent: vi.fn(({ cfg }: { cfg?: ConfigWithModels }) => ({
+      ref: resolveDefaultRef(cfg),
+      normalization: "applied",
+    })),
     resolveModelRefFromString: vi.fn(
       ({ raw, defaultProvider }: { raw: string; defaultProvider?: string }) => {
         const ref = parseModelRef(raw, defaultProvider ?? "openai");

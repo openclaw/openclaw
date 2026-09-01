@@ -16,7 +16,7 @@ import {
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveAllowedModelRefMock,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./isolated-agent/run.test-harness.js";
@@ -164,7 +164,10 @@ describe.sequential("cron execution diagnostics", () => {
     const endpoint = await listenForBrokenHttpConnections();
     servers.push(endpoint.server);
     const modelRef = { provider: "ollama", model: "diagnostic-model" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: modelRef,
+      normalization: "applied",
+    });
     resolveAllowedModelRefMock.mockReturnValue({ ref: modelRef });
 
     const { finished, history } = await runPersistedDiagnosticCase({
@@ -196,7 +199,10 @@ describe.sequential("cron execution diagnostics", () => {
 
   it("persists and emits the canonical terminal timeout diagnostic", async () => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: modelRef,
+      normalization: "applied",
+    });
     runWithModelFallbackMock.mockRejectedValueOnce(
       makeCommandLaneTaskTimeoutError("cron-nested", 330_000),
     );
@@ -230,7 +236,10 @@ describe.sequential("cron execution diagnostics", () => {
     const message =
       "The selected model was not found by the provider. Check the model id or choose a different model.";
     const modelRef = { provider: "openai", model: "not-a-real-model" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: modelRef,
+      normalization: "applied",
+    });
     resolveAllowedModelRefMock.mockReturnValue({ ref: modelRef });
     runWithModelFallbackMock.mockRejectedValueOnce(
       new FailoverError(message, {
@@ -268,7 +277,10 @@ describe.sequential("cron execution diagnostics", () => {
     ["stale gateway lifecycle", createAgentRunStaleLifecycleError],
   ])("persists the coded %s reason instead of reporting a timeout", async (name, createError) => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: modelRef,
+      normalization: "applied",
+    });
     const rejection = createError() as Error & { code: string };
     runWithModelFallbackMock.mockRejectedValueOnce(rejection);
 
@@ -291,7 +303,10 @@ describe.sequential("cron execution diagnostics", () => {
 
   it("persists and emits a fatal execution-denial diagnostic", async () => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: modelRef,
+      normalization: "applied",
+    });
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
@@ -336,7 +351,10 @@ describe.sequential("cron execution diagnostics", () => {
 
   it("persists and emits terminal tool detail while keeping the payload generic", async () => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: modelRef,
+      normalization: "applied",
+    });
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "⚠️ Exec failed", isError: true, toolName: "exec" }],

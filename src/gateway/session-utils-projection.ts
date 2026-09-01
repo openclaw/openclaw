@@ -1,14 +1,13 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import {
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
 } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
 import type {
   SessionActorProfileIdentity,
@@ -56,19 +55,16 @@ export function resolveSessionSelectedModelRef(params: {
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
 }): ReturnType<typeof resolveSessionModelRef> {
-  const override = normalizeStoredOverrideModel({
-    providerOverride: params.entry?.providerOverride,
-    modelOverride: params.entry?.modelOverride,
-  });
   if (!params.rowContext) {
     return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
       allowPluginNormalization: params.allowPluginNormalization,
     });
   }
   const key = [
-    normalizeAgentId(params.agentId),
-    override.providerOverride ?? "",
-    override.modelOverride ?? "",
+    params.agentId,
+    params.entry?.providerOverride ?? "",
+    params.entry?.modelOverride ?? "",
+    resolveSessionModelOverrideRouteResolution(params.entry),
   ].join("\0");
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {

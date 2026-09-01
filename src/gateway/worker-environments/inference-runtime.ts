@@ -25,8 +25,10 @@ import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
+  buildConfiguredModelCatalog,
+  completeModelRefSelection,
   normalizeProviderId,
-  resolveDefaultModelForAgent,
+  resolveDefaultModelSelectionForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import {
@@ -101,7 +103,7 @@ type WorkerInferenceRuntimeDependencies = {
     sessionId: string,
   ) => WorkerInferenceSessionTarget | undefined;
   acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
-  resolveDefaultModel: typeof resolveDefaultModelForAgent;
+  resolveDefaultModel: typeof resolveDefaultModelSelectionForAgent;
   resolveSessionAuthSelection: typeof resolveSessionAuthSelection;
   resolveModel: typeof resolveModelAsync;
   prepareModel: typeof prepareSimpleCompletionModel;
@@ -328,7 +330,7 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
     };
   },
   acquireRuntimeLease: acquireAgentRunPreparedModelRuntime,
-  resolveDefaultModel: resolveDefaultModelForAgent,
+  resolveDefaultModel: resolveDefaultModelSelectionForAgent,
   resolveSessionAuthSelection,
   resolveModel: resolveModelAsync,
   prepareModel: prepareSimpleCompletionModel,
@@ -376,12 +378,19 @@ async function resolveApprovedModel(params: {
       const workspaceDir =
         runtimeSnapshot.workspaceDir ?? resolveAgentWorkspaceDir(lifecycleConfig, target.agentId);
       const manifestSnapshot = runtimeSnapshot.metadataSnapshot;
-      const defaultModel = dependencies.resolveDefaultModel({
+      const normalization = {
         cfg: lifecycleConfig,
-        agentId: target.agentId,
         manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-      });
+      };
+      const defaultModel = completeModelRefSelection(
+        dependencies.resolveDefaultModel({
+          cfg: lifecycleConfig,
+          agentId: target.agentId,
+          manifestPlugins: manifestSnapshot,
+        }),
+        { ...normalization, configuredCatalog: buildConfiguredModelCatalog(normalization) },
+      );
       const aliasIndex = buildModelAliasIndex({
         cfg: lifecycleConfig,
         agentId: target.agentId,
@@ -411,7 +420,7 @@ async function resolveApprovedModel(params: {
         cfg: lifecycleConfig,
         catalog,
         defaultProvider: defaultModel.provider,
-        defaultModel: `${defaultModel.provider}/${defaultModel.model}`,
+        defaultModel,
         agentId: target.agentId,
         manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,

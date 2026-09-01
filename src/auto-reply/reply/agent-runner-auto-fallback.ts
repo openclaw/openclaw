@@ -39,9 +39,11 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   }
   const resolveEntrySelectionRun = (): FollowupRun["run"] => {
     const entryRef = resolvePersistedOverrideModelRef({
+      cfg: params.run.config,
       defaultProvider: params.run.provider,
       overrideProvider: params.entry?.providerOverride,
       overrideModel: params.entry?.modelOverride,
+      routeResolution: resolveSessionModelOverrideRouteResolution(params.entry),
     });
     const hasEntryModelOverride = Boolean(entryRef);
     const authProfileId = normalizeOptionalString(params.entry?.authProfileOverride);

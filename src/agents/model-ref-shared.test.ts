@@ -1,12 +1,20 @@
 // Documents provider/model id normalization from built-ins and plugin manifests.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import * as pluginModuleLoader from "../plugins/plugin-module-loader-cache.js";
+import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
+  normalizeModelRef,
   normalizeStaticProviderModelId,
 } from "./model-ref-shared.js";
+import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
 beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
@@ -110,6 +118,98 @@ describe("normalizeStaticProviderModelId", () => {
 
     expect(normalizeStaticProviderModelId("custom", "latest")).toBe("custom/modern-model");
   });
+});
+
+it("uses retained normalizers without cold discovery and propagates hook and load failures", () => {
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "fixture-owner",
+        modelIdNormalization: {
+          providers: {
+            fixture: {
+              aliases: { blank: "manifest-model", "manifest-model": "reapplied-model" },
+            },
+          },
+        },
+      },
+    ],
+  });
+  const hookError = new Error("normalizer failed");
+  const provider: ProviderPlugin = {
+    id: "fixture",
+    label: "Fixture",
+    aliases: ["fixture-alias"],
+    hookAliases: ["fixture-hook"],
+    auth: [],
+    normalizeModelId: vi.fn(function (this: ProviderPlugin, { modelId }) {
+      if (modelId === "throw") {
+        throw hookError;
+      }
+      return modelId === "blank" ? " " : ` ${this.pluginId}/${modelId} `;
+    }),
+  };
+  const retained = createEmptyPluginRegistry();
+  retained.providers.push(
+    { pluginId: "fixture-owner", provider, source: "test" },
+    {
+      pluginId: "without-hook",
+      provider: { id: "without-hook", label: "Without hook", auth: [] },
+      source: "test",
+    },
+  );
+  const ambient = createEmptyPluginRegistry();
+  const ambientNormalizer = vi.fn(() => "ambient-model");
+  ambient.providers.push({
+    pluginId: "ambient-owner",
+    provider: { ...provider, normalizeModelId: ambientNormalizer },
+    source: "test",
+  });
+  const normalize = (providerId: string, modelId: string) =>
+    normalizeProviderModelIdWithRuntime({
+      provider: providerId,
+      plugins: metadataSnapshot.plugins,
+      context: { provider: providerId, modelId },
+    }) ?? modelId;
+  const coldError = new Error("cold normalizer load failed");
+  const coldLoad = vi
+    .spyOn(pluginModuleLoader, "getCachedPluginModuleLoader")
+    .mockImplementation(() => {
+      throw coldError;
+    });
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(ambient);
+  try {
+    withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: retained }, () => {
+      for (const id of ["fixture", "fixture-alias", "fixture-hook"]) {
+        expect(normalize(id, "input")).toBe("fixture-owner/input");
+      }
+      expect(normalize("fixture", "blank")).toBe("manifest-model");
+      expect(() => normalize("fixture", "throw")).toThrow(hookError);
+      expect(normalize("without-hook", "input")).toBe("input");
+      expect(normalize("unowned", "input")).toBe("input");
+    });
+    withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
+      expect(normalize("fixture", "blank")).toBe("manifest-model");
+      expect(normalize("fixture", "input")).toBe("input");
+      expect(
+        normalizeModelRef("fixture", "blank", { manifestPlugins: metadataSnapshot.plugins }).model,
+      ).toBe("manifest-model");
+    });
+    expect(provider.normalizeModelId).toHaveBeenCalledTimes(5);
+    expect(provider.pluginId).toBeUndefined();
+    expect(ambientNormalizer).not.toHaveBeenCalled();
+    expect(coldLoad).not.toHaveBeenCalled();
+
+    expect(() =>
+      withPluginRuntimeRegistryScope(retained, () => normalize("fixture", "input")),
+    ).toThrow(coldError);
+    expect(() => normalize("fixture", "input")).toThrow(coldError);
+    expect(coldLoad).toHaveBeenCalledTimes(2);
+  } finally {
+    coldLoad.mockRestore();
+    resetPluginRuntimeStateForTest();
+  }
 });
 
 describe("normalizeConfiguredProviderCatalogModelId", () => {

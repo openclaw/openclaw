@@ -19,19 +19,36 @@ import {
 } from "../agents/context-resolution.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
+import {
+  normalizeModelRef,
+  resolveModelRefFromString,
+  resolvePersistedSelectedModelRef,
+} from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 
+type StatusModelRef = { provider: string; model: string; displayModel?: string };
+
+function resolveStatusDisplayModelRef(provider: string, model: string): StatusModelRef {
+  const ref = normalizeModelRef(provider, model, {
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
+  // Keep authored display text separate from lookup identity. Prepared session
+  // refs must not be parsed again just to support providerless legacy aliases.
+  return ref.model === model ? ref : { ...ref, displayModel: model };
+}
+
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
   rawModel: string;
   defaultProvider: string;
-}): { provider: string; model: string } | null {
+}): StatusModelRef | null {
   const trimmed = params.rawModel.trim();
   if (!trimmed) {
     return null;
@@ -46,20 +63,28 @@ function resolveStatusModelRefFromRaw(params: {
       if (!alias || normalizeOptionalLowercaseString(alias) !== aliasKey) {
         continue;
       }
-      const parsed = parseModelRef(modelKey, params.defaultProvider, {
+      const resolved = resolveModelRefFromString({
+        cfg: params.cfg,
+        raw: modelKey,
+        defaultProvider: params.defaultProvider,
         allowManifestNormalization: false,
         allowPluginNormalization: false,
       });
-      if (parsed) {
-        return parsed;
+      if (resolved) {
+        return resolved.ref;
       }
     }
-    return { provider: params.defaultProvider, model: trimmed };
+    return resolveStatusDisplayModelRef(params.defaultProvider, trimmed);
   }
-  return parseModelRef(trimmed, params.defaultProvider, {
-    allowManifestNormalization: false,
-    allowPluginNormalization: false,
-  });
+  return (
+    resolveModelRefFromString({
+      cfg: params.cfg,
+      raw: trimmed,
+      defaultProvider: params.defaultProvider,
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    })?.ref ?? null
+  );
 }
 
 function resolveConfiguredStatusModelRef(params: {
@@ -67,7 +92,7 @@ function resolveConfiguredStatusModelRef(params: {
   defaultProvider: string;
   defaultModel: string;
   agentId?: string;
-}): { provider: string; model: string } {
+}): StatusModelRef {
   const agentRawModel = params.agentId
     ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
     : undefined;
@@ -111,7 +136,7 @@ function resolveProviderlessPersistedStatusModelRef(params: {
   defaultProvider: string;
   provider?: unknown;
   model?: unknown;
-}): { provider: string; model: string } | null {
+}): StatusModelRef | null {
   const provider = normalizeOptionalString(params.provider);
   const model = normalizeOptionalString(params.model);
   if (
@@ -122,47 +147,15 @@ function resolveProviderlessPersistedStatusModelRef(params: {
   ) {
     return null;
   }
-  // Status rows report the persisted session text. Shared ref parsing still
-  // canonicalizes provider-local aliases, which would rewrite this display.
-  return { provider: params.defaultProvider, model };
-}
-
-function resolveStatusModelLookupRef(params: {
-  provider?: unknown;
-  model?: unknown;
-  defaultProvider?: unknown;
-}): { provider: string; model: string } | null {
-  const provider = normalizeOptionalString(params.provider);
-  const model = normalizeOptionalString(params.model);
-  if (!model) {
-    return null;
-  }
-  const defaultProvider =
-    normalizeOptionalString(params.defaultProvider) ?? provider ?? DEFAULT_PROVIDER;
-  const raw = provider ? `${provider}/${model}` : model;
-  const parsed = parseModelRef(raw, defaultProvider, {
-    allowManifestNormalization: false,
-    allowPluginNormalization: false,
-  });
-  return parsed ?? { provider: provider ?? defaultProvider, model };
-}
-
-function resolveStatusModelComparisonLabel(params: {
-  provider?: unknown;
-  model?: unknown;
-  defaultProvider?: unknown;
-}): string | null {
-  const ref = resolveStatusModelLookupRef(params);
-  return ref ? `${ref.provider}/${ref.model}` : null;
+  return resolveStatusDisplayModelRef(params.defaultProvider, model);
 }
 
 function resolveSessionModelRef(
   cfg: OpenClawConfig,
-  entry?:
-    | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+  entry?: Pick<SessionEntry, "model" | "modelProvider"> &
+    Parameters<typeof resolveSessionModelOverrideRouteResolution>[0],
   agentId?: string,
-): { provider: string; model: string } {
+): StatusModelRef {
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -187,11 +180,13 @@ function resolveSessionModelRef(
   return (
     // Persisted selected model or overrides describe the active session, not just current config.
     resolvePersistedSelectedModelRef({
+      cfg,
       defaultProvider,
       runtimeProvider: entry?.modelProvider,
       runtimeModel: entry?.model,
       overrideProvider: entry?.providerOverride,
       overrideModel: entry?.modelOverride,
+      routeResolution: resolveSessionModelOverrideRouteResolution(entry),
       allowManifestNormalization: false,
       allowPluginNormalization: false,
     }) ?? resolved
@@ -257,6 +252,4 @@ export const statusSummaryRuntime = {
   resolveSessionModelRef,
   resolveSessionRuntime,
   resolveConfiguredStatusModelRef,
-  resolveStatusModelLookupRef,
-  resolveStatusModelComparisonLabel,
 };

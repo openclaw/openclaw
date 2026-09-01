@@ -106,13 +106,53 @@ describe("sessionsCommand model resolution", () => {
     expect(model).toBe("gpt-5.4");
   });
 
-  it("preserves nested override models when their provider is recorded separately", async () => {
-    const model = await resolveSubagentModel(
-      { providerOverride: "clawrouter", modelOverride: "openai/gpt-5.6" },
-      "subagent-router-override",
-    );
-    expect(model).toBe("openai/gpt-5.6");
-  });
+  it.each([
+    { provider: "clawrouter", model: "openai/gpt-5.6", provenance: {}, expected: "openai/gpt-5.6" },
+    { provider: "custom", model: "custom/model", provenance: {}, expected: "model" },
+    {
+      provider: "custom",
+      model: "custom/model",
+      provenance: { modelOverrideRouteResolution: "resolved" },
+      expected: "custom/model",
+    },
+    {
+      provider: "custom",
+      model: "custom/model",
+      provenance: {
+        modelOverrideFallbackOriginProvider: "other",
+        modelOverrideFallbackOriginModel: "primary",
+      },
+      expected: "custom/model",
+    },
+  ] satisfies Array<{
+    provider: string;
+    model: string;
+    provenance: Partial<SessionEntry>;
+    expected: string;
+  }>)(
+    "preserves override identity for $provider/$model with $provenance",
+    async ({ provider, model, provenance, expected }) => {
+      const sessionKey = "agent:main:subagent:override";
+      await withSqliteStore(
+        "sessions-override",
+        {
+          [sessionKey]: {
+            sessionId: "override",
+            updatedAt: Date.now(),
+            providerOverride: provider,
+            modelOverride: model,
+            ...provenance,
+          },
+        },
+        async (store) => {
+          const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+          const row = payload.sessions?.find((session) => session.key === sessionKey);
+          expect(row).toMatchObject({ modelProvider: provider, model: expected });
+          expect(row).not.toHaveProperty("modelOverrideRouteResolution");
+        },
+      );
+    },
+  );
 
   it("separates Claude CLI runtime from canonical model provider in JSON output", async () => {
     setMockSessionsConfig(() => ({

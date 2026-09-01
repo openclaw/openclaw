@@ -65,7 +65,7 @@ const getModelRefStatusMock = createMock();
 export const isCliProviderMock = createMock();
 export const resolveCliRuntimeExecutionProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
-export const resolveConfiguredModelRefMock = createMock();
+export const resolveConfiguredModelSelectionMock = createMock();
 const resolveHooksGmailModelMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
 export const resolveEffectiveAgentRuntimeMock = createMock();
@@ -247,7 +247,9 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   getModelRefStatus: getModelRefStatusMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
   resolveAllowedModelRefCore: resolveAllowedModelRefMock,
-  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelection: resolveConfiguredModelSelectionMock,
+  buildConfiguredModelCatalog: () => [],
+  completeModelRefSelection: ({ ref }: { ref: { provider: string; model: string } }) => ref,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveSubagentModelConfigSelectionResult: ({
     cfg,
@@ -540,7 +542,10 @@ function resetRunConfigMocks(): void {
   });
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
-  resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
+  resolveConfiguredModelSelectionMock.mockReturnValue({
+    ref: { provider: "openai", model: "gpt-5.4" },
+    normalization: "applied",
+  });
   resolveCliRuntimeExecutionProviderMock.mockReturnValue(undefined);
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);

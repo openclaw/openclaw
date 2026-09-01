@@ -57,6 +57,29 @@ describe("Gateway test environment lifecycle", () => {
     },
   );
 
+  it.each([
+    { kind: "missing config", raw: null, valid: true },
+    { kind: "valid config", raw: "{}", valid: true },
+    { kind: "parse failure", raw: "{ invalid", valid: false },
+    { kind: "validation failure", raw: '{"gateway":{"mode":"invalid"}}', valid: false },
+  ])("preserves metadata ownership for $kind reads", async ({ raw, valid }) => {
+    const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+    const config = createGatewayConfigOverrides(actual);
+    if (raw !== null) {
+      await fs.writeFile(config.CONFIG_PATH, raw, "utf8");
+    }
+
+    const result = await config.readConfigFileSnapshotWithPluginMetadata();
+
+    expect(result.snapshot.valid).toBe(valid);
+    if (valid) {
+      expect(result.pluginMetadataSnapshot?.configFingerprint).toMatch(/^[a-f0-9]{64}$/u);
+    } else {
+      expect(result.pluginMetadataSnapshot).toBeUndefined();
+      expect(result.snapshot.issues).not.toEqual([]);
+    }
+  });
+
   it.each(["session store", "config mock"])(
     "keeps config readable while the %s fixture publishes an update",
     async (fixture) => {

@@ -2,25 +2,41 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
-import { normalizeModelSelection, resolveConfiguredModelRef } from "./model-selection-shared.js";
+import type {
+  ModelManifestNormalizationContext,
+  ModelRef,
+  ModelRefSelection,
+} from "./model-ref-shared.js";
+import {
+  normalizeModelSelection,
+  resolveConfiguredModelRef,
+  resolveConfiguredModelSelection,
+} from "./model-selection-shared.js";
 
-export function resolveDefaultModelForAgent(
-  params: {
-    cfg: OpenClawConfig;
-    agentId?: string;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
-): ModelRef {
+type DefaultModelParams = {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
+} & ModelManifestNormalizationContext;
+
+export function resolveDefaultModelForAgent(params: DefaultModelParams): ModelRef {
   return resolveConfiguredModelRef({
-    cfg: params.cfg,
-    agentId: params.agentId,
+    ...params,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
+  });
+}
+
+/** Retain static selection work for an owner that will later admit runtime normalization. */
+export function resolveDefaultModelSelectionForAgent(
+  params: Omit<DefaultModelParams, "allowPluginNormalization">,
+): ModelRefSelection {
+  return resolveConfiguredModelSelection({
+    ...params,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+    allowPluginNormalization: false,
   });
 }
 

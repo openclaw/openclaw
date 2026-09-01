@@ -10,7 +10,7 @@ type ConfiguredProviderModelParams = {
 };
 
 /** Find the first configured provider without rediscovering its normalized key. */
-export function findConfiguredModelProvider(
+function findConfiguredModelProvider(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderConfig | undefined {

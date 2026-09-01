@@ -390,6 +390,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     ).toEqual({
       provider: "anthropic",
       model: "gpt-5.4",
+      normalization: "pending",
       authProfileId: undefined,
     });
   });
@@ -408,6 +409,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     ).toEqual({
       provider: "openai",
       model: "gpt-5.5",
+      normalization: "pending",
       authProfileId: "openai:default",
     });
   });

@@ -163,8 +163,6 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
     resolveContextTokensForModel,
     resolveSessionRuntime,
     resolveSessionModelRef,
-    resolveStatusModelComparisonLabel,
-    resolveStatusModelLookupRef,
     waitForContextWindowCacheLoad,
   } = await loadStatusSummaryRuntimeModule();
   await waitForContextWindowCacheLoad();
@@ -209,16 +207,16 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const configModel = resolved.model ?? DEFAULT_MODEL;
+  const configModel = resolved.displayModel ?? resolved.model;
   const configModelContext = await resolveStaticModelContext(
     resolved.provider ?? DEFAULT_PROVIDER,
-    configModel,
+    resolved.model,
   );
   const configContextTokens =
     resolveContextTokensForModel({
       cfg,
       provider: resolved.provider ?? DEFAULT_PROVIDER,
-      model: configModel,
+      model: resolved.model,
       ...configModelContext,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
       // Keep `status`/`status --json` startup read-only. These summary lookups
@@ -245,36 +243,17 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           defaultModel: DEFAULT_MODEL,
           agentId,
         });
-        const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
-        const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
+        const configuredSessionModelLabel = `${configuredForSession.provider}/${configuredForSession.displayModel ?? configuredForSession.model}`;
         const resolvedModel = resolveSessionModelRef(cfg, entry, agentId);
-        const model = resolvedModel.model ?? configuredSessionModel ?? null;
-        const lookupModel =
-          resolveStatusModelLookupRef({
-            provider: resolvedModel.provider,
-            model,
-            defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-          }) ?? resolvedModel;
-        const lookupModelId = lookupModel.model ?? model;
+        const model = resolvedModel.displayModel ?? resolvedModel.model;
         const modelContext = await resolveStaticModelContext(
-          lookupModel.provider,
-          lookupModelId ?? undefined,
+          resolvedModel.provider,
+          resolvedModel.model,
         );
-        const selectedModelLabel =
-          resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-        const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
-          provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-          model: configuredSessionModel,
-          defaultProvider: DEFAULT_PROVIDER,
-        });
-        const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
-          provider: resolvedModel.provider,
-          model,
-          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        });
+        const selectedModelLabel = `${resolvedModel.provider}/${model}`;
+        const configuredSessionModelComparisonLabel = `${configuredForSession.provider}/${configuredForSession.model}`;
+        const selectedModelComparisonLabel = `${resolvedModel.provider}/${resolvedModel.model}`;
         const modelSelectionDiffers =
-          selectedModelComparisonLabel != null &&
-          configuredSessionModelComparisonLabel != null &&
           selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
           !areRuntimeModelRefsEquivalent(
             selectedModelComparisonLabel,
@@ -285,8 +264,8 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
         // differences as well as runtime fallback selections (#96126).
         const resolvedContextTokens = resolveContextTokensForModel({
           cfg,
-          provider: lookupModel.provider,
-          model: lookupModelId,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
           ...modelContext,
           fallbackContextTokens: configContextTokens ?? undefined,
           allowAsyncLoad: false,
@@ -294,22 +273,22 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
         const runtime = resolveSessionRuntime({
           cfg,
           entry,
-          provider: lookupModel.provider,
-          model: lookupModelId ?? "",
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
           agentId,
           sessionKey: key,
         });
         const contextTokens =
           resolveProjectedSessionContextTokens({
             entry,
-            provider: lookupModel.provider,
-            model: lookupModelId,
+            provider: resolvedModel.provider,
+            model: resolvedModel.model,
             agentHarnessId: runtime.id,
             resolvedContextTokens,
             authoredContextTokens: resolveAuthoredModelContextTokens({
               cfg,
-              provider: lookupModel.provider,
-              model: lookupModelId,
+              provider: resolvedModel.provider,
+              model: resolvedModel.model,
             }),
           }) ?? null;
         const total = resolveSessionTotalTokens(entry);

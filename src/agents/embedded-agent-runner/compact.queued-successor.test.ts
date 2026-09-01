@@ -5,8 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 import {
+  acquireAgentRunPreparedModelRuntimeMock,
   contextEngineCompactMock,
+  getCurrentPluginMetadataSnapshotMock,
   hookRunner,
   loadCompactHooksHarness,
   maybeCompactAgentHarnessSessionMock,
@@ -34,6 +37,10 @@ const [
   { compactionCheckpointStore },
   { resolveGatewaySessionStoreTarget },
   { markRuntimeCompactionDelegate },
+  { createPluginMetadataSnapshotFixture },
+  { createEmptyPluginRegistry },
+  { withPluginRuntimeGenerationScope },
+  { getPluginRuntimeGenerationRegistry },
 ] = await Promise.all([
   import("../../auto-reply/reply/session-updates.js"),
   import("../../config/sessions/session-accessor.js"),
@@ -46,6 +53,10 @@ const [
   import("./compaction-checkpoint.js"),
   import("../../gateway/session-utils.js"),
   import("../../context-engine/compaction-watchdog.js"),
+  import("../../plugins/plugin-metadata.test-support.js"),
+  import("../../plugins/registry-empty.js"),
+  import("../../plugins/runtime/generation-scope.js"),
+  import("../../plugins/runtime/generation-state.js"),
 ]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -168,6 +179,129 @@ beforeEach(async () => {
 });
 
 describe("queued compaction successor ownership", () => {
+  it("uses the acquired generation's config and normalizes the queued alias once", async () => {
+    const configFor = (model: string) => ({
+      agents: {
+        defaults: {
+          compaction: { model: "summary" },
+          models: { [`openai/${model}`]: { alias: "summary" } },
+        },
+      },
+    });
+    const requestedConfig = configFor("legacy-summary");
+    const ownedConfig = configFor("owned-summary");
+    const requestedAgentDir = join(workspaceDir, "agent-before-reload");
+    const ownedAgentDir = join(workspaceDir, "agent-after-reload");
+    const generation = (
+      prefix: string,
+      normalizeModelId: NonNullable<ProviderPlugin["normalizeModelId"]>,
+    ) => {
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.providers.push({
+        pluginId: "compaction-normalizer",
+        provider: { id: "openai", label: "Compaction", auth: [], normalizeModelId },
+        source: "test",
+      });
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "compaction-normalizer",
+            origin: "workspace",
+            rootDir: workspaceDir,
+            providers: ["openai"],
+            modelIdNormalization: {
+              providers: {
+                openai: {
+                  aliases: {
+                    "legacy-summary": `${prefix}-a`,
+                    "owned-summary": `${prefix}-b`,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      });
+      return { pluginRegistry, metadataSnapshot: { ...metadataSnapshot, workspaceDir } };
+    };
+    const selectedNormalizer = vi.fn<NonNullable<ProviderPlugin["normalizeModelId"]>>(
+      ({ modelId }) => (modelId === "static-b" ? "selected-wire-b" : "normalized-twice"),
+    );
+    const ambientNormalizer = vi.fn(() => "ambient-wire");
+    const selected = generation("static", selectedNormalizer);
+    const ambient = generation("ambient", ambientNormalizer);
+    getCurrentPluginMetadataSnapshotMock.mockImplementation((params = {}) =>
+      params.workspaceDir === workspaceDir ||
+      getPluginRuntimeGenerationRegistry() === selected.pluginRegistry
+        ? selected.metadataSnapshot
+        : ambient.metadataSnapshot,
+    );
+    const acquire = acquireAgentRunPreparedModelRuntimeMock.getMockImplementation();
+    if (!acquire) {
+      throw new Error("expected the queued fixture's runtime lease");
+    }
+    const release = vi.fn();
+    acquireAgentRunPreparedModelRuntimeMock.mockImplementation(async (input) => {
+      const lease = await acquire(input);
+      return {
+        ...lease,
+        snapshot: {
+          ...lease.snapshot,
+          ...selected,
+          config: ownedConfig,
+          agentDir: ownedAgentDir,
+        },
+        release,
+      };
+    });
+    let engineRegistry: ReturnType<typeof getPluginRuntimeGenerationRegistry>;
+    contextEngineCompactMock.mockImplementationOnce(async () => {
+      engineRegistry = getPluginRuntimeGenerationRegistry();
+      return completed(sessionId);
+    });
+    try {
+      const result = await withPluginRuntimeGenerationScope(ambient, () =>
+        compact({
+          ...backendCompactParams(),
+          config: requestedConfig,
+          agentDir: requestedAgentDir,
+        }),
+      );
+
+      expect(result).toMatchObject({ ok: true, compacted: true });
+      expect.soft(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: requestedConfig,
+          agentDir: requestedAgentDir,
+          workspaceDir,
+          runtimePluginSelections: [
+            { provider: "openai", modelId: "static-a", runtime: "openclaw", agentId: "main" },
+          ],
+        }),
+      );
+      expect.soft(resolveContextEngineMock).toHaveBeenCalledWith(ownedConfig, {
+        agentDir: ownedAgentDir,
+        workspaceDir,
+      });
+      expect.soft(contextEngineCompactMock.mock.calls[0]?.[0]?.runtimeContext).toMatchObject({
+        provider: "openai",
+        model: "selected-wire-b",
+        config: ownedConfig,
+        agentDir: ownedAgentDir,
+        workspaceDir,
+      });
+      expect.soft(engineRegistry).toBe(selected.pluginRegistry);
+      expect.soft(selectedNormalizer).toHaveBeenCalledExactlyOnceWith({
+        provider: "openai",
+        modelId: "static-b",
+      });
+      expect.soft(ambientNormalizer).not.toHaveBeenCalled();
+      expect.soft(release).toHaveBeenCalledOnce();
+    } finally {
+      acquireAgentRunPreparedModelRuntimeMock.mockImplementation(acquire);
+    }
+  });
+
   it.each([false, true])(
     "commits the successor before observers, with caller abort=%s",
     async (abortAfterCommit) => {

@@ -9,7 +9,7 @@ const {
   getModelRefStatusMock,
   normalizeModelSelectionMock,
   resolveAllowedModelRefMock,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveHooksGmailModelMock,
 } = vi.hoisted(() => ({
   loadFullModelCatalogMock: vi.fn(),
@@ -30,7 +30,7 @@ const {
     return undefined;
   }),
   resolveAllowedModelRefMock: vi.fn(),
-  resolveConfiguredModelRefMock: vi.fn(),
+  resolveConfiguredModelSelectionMock: vi.fn(),
   resolveHooksGmailModelMock: vi.fn(),
 }));
 
@@ -49,7 +49,9 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
     agentId: string,
   ) => cfg.agents?.list?.find((agent) => agent.id === agentId)?.workspace ?? "/tmp/workspace",
   resolveAllowedModelRefCore: resolveAllowedModelRefMock,
-  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelection: resolveConfiguredModelSelectionMock,
+  buildConfiguredModelCatalog: () => [],
+  completeModelRefSelection: ({ ref }: { ref: { provider: string; model: string } }) => ref,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveSubagentModelConfigSelectionResult: ({
     cfg,
@@ -197,8 +199,11 @@ describe("cron model formatting and precedence edge cases", () => {
     );
     getModelRefStatusMock.mockReturnValue({ allowed: false });
     resolveHooksGmailModelMock.mockReturnValue(null);
-    resolveConfiguredModelRefMock.mockImplementation(({ cfg }: { cfg?: Record<string, unknown> }) =>
-      resolveConfiguredModelForTest(cfg ?? {}),
+    resolveConfiguredModelSelectionMock.mockImplementation(
+      ({ cfg }: { cfg?: Record<string, unknown> }) => ({
+        ref: resolveConfiguredModelForTest(cfg ?? {}),
+        normalization: "applied",
+      }),
     );
     resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
       const parsed = parseModelRef(raw);
@@ -407,7 +412,7 @@ describe("cron model formatting and precedence edge cases", () => {
         readOnly: true,
         allowGatewaySubagentBinding: true,
       });
-      expect(resolveConfiguredModelRefMock).toHaveBeenCalledWith(
+      expect(resolveConfiguredModelSelectionMock).toHaveBeenCalledWith(
         expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),
       );
       expect(resolveAllowedModelRefMock).toHaveBeenCalledWith(

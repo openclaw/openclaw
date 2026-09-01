@@ -16,6 +16,7 @@ import {
   resolveConfiguredModelCatalogOverrides,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
+import type { ModelRef, ModelRefSelection } from "./model-ref-shared.js";
 import {
   buildConfiguredModelCatalog,
   dedupeModelCatalogEntries,
@@ -107,7 +108,7 @@ type LogicalModelCatalogParams = {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
-  defaultModel?: string;
+  defaultModel?: string | ModelRef | ModelRefSelection;
   agentId?: string;
   workspaceDir?: string;
   view?: ModelCatalogVisibilityView;

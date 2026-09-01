@@ -33,6 +33,38 @@ afterEach(() => {
 });
 
 describe("createStreamFnWithExtraParams sampling overrides", () => {
+  it.each([
+    { provider: "custom", modelId: "custom/model", full: 0.9, short: 0.1, expected: 0.9 },
+    {
+      provider: "custom",
+      modelId: "custom/model",
+      full: undefined,
+      short: 0.1,
+      expected: undefined,
+    },
+    {
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      full: undefined,
+      short: 0.1,
+      expected: 0.1,
+    },
+  ])(
+    "resolves exact settings and documented short spellings: $provider $full",
+    ({ provider, modelId, full, short, expected }) => {
+      const models = {
+        [modelId]: { params: { temperature: short } },
+        ...(full === undefined
+          ? {}
+          : { [`${provider}/${modelId}`]: { params: { temperature: full } } }),
+      };
+      expect(
+        resolveExtraParams({ cfg: { agents: { defaults: { models } } }, provider, modelId })
+          ?.temperature,
+      ).toBe(expected);
+    },
+  );
+
   it("forwards temperature, top_p, and maxTokens from override into the underlying streamFn options", () => {
     const underlying = vi.fn(() => ({
       push: vi.fn(),

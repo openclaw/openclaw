@@ -687,6 +687,14 @@ vi.mock("./model-selection.js", () => ({
   resolveModelAliasFromPair: resolveTestModelAliasFromPair,
   resolveConfiguredModelRef: resolveTestConfiguredModelRef,
   resolveDefaultModelForAgent: resolveTestDefaultModelForAgent,
+  resolveDefaultModelSelectionForAgent: (params: { cfg?: unknown }) => ({
+    ref: resolveTestDefaultModelForAgent(params),
+    normalization: "applied",
+  }),
+  completeModelRefSelection: ({ ref }: { ref: { provider: string; model: string } }) => ({
+    provider: normalizeTestProviderId(ref.provider),
+    model: ref.model,
+  }),
   resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
 }));
 

@@ -74,6 +74,7 @@ async function prepareBaselineClaimSession(sessionId: string) {
   });
   mocks.resolveReplyDirectives.mockResolvedValueOnce(
     createGetReplyContinueDirectivesResult({
+      defaultRef: { provider: "openai", model: "gpt-4o-mini" },
       body: "run after capture",
       abortKey: sessionKey,
       from: ctx.From ?? "telegram:user:42",

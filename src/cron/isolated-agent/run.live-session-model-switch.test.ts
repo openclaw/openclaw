@@ -12,7 +12,7 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   resolveAllowedModelRefMock,
-  resolveConfiguredModelRefMock,
+  resolveConfiguredModelSelectionMock,
   resolveCronSessionMock,
   resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
@@ -107,9 +107,12 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
 
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      normalization: "applied",
     });
     resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
       const [provider, model] = raw.split("/");
@@ -330,9 +333,12 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   });
 
   it("retries a same-model switch with the runtime carried by the error", async () => {
-    resolveConfiguredModelRefMock.mockReturnValue({
-      provider: "openai",
-      model: "gpt-5.6-luna",
+    resolveConfiguredModelSelectionMock.mockReturnValue({
+      ref: {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      },
+      normalization: "applied",
     });
     const cronSession = makeCronSession({
       sessionEntry: makeCronSessionEntry({

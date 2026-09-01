@@ -1,12 +1,12 @@
 // Command status runtime helpers collect agent/session state for plugin command status output.
 import { listAgentEntries, resolveSessionAgentId } from "../agents/agent-scope.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { buildStatusReply } from "../auto-reply/reply/commands-status.js";
 import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import { resolveCurrentDirectiveLevels } from "../auto-reply/reply/directive-handling.levels.js";
 import { createModelSelectionState } from "../auto-reply/reply/model-selection.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadGatewaySessionEntryReadOnly } from "../gateway/session-utils.js";
 
@@ -55,20 +55,23 @@ export async function resolveDirectStatusReplyForSessionCore(
   const agentEntry = listAgentEntries(statusCfg).find(
     (entry) => entry.id?.trim().toLowerCase() === statusAgentId,
   );
-  const statusModel = resolveDefaultModelForAgent({
-    cfg: statusCfg,
-    agentId: statusAgentId,
-  });
-  const { defaultProvider, defaultModel } = resolveDefaultModel({
-    cfg: statusCfg,
-    agentId: statusAgentId,
-  });
-  const selectedProvider =
-    statusEntry?.providerOverride?.trim() ||
-    statusEntry?.modelProvider?.trim() ||
-    statusModel.provider;
-  const selectedModel =
-    statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || statusModel.model;
+  const { defaultSelection } = resolveDefaultModel({ cfg: statusCfg, agentId: statusAgentId });
+  const storedModel = statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim();
+  const selection: typeof defaultSelection = storedModel
+    ? {
+        ref: {
+          provider:
+            statusEntry?.providerOverride?.trim() ||
+            statusEntry?.modelProvider?.trim() ||
+            defaultSelection.ref.provider,
+          model: storedModel,
+        },
+        normalization: "applied",
+        routeResolution: statusEntry?.modelOverride
+          ? resolveSessionModelOverrideRouteResolution(statusEntry)
+          : "resolved",
+      }
+    : defaultSelection;
   const modelState = await createModelSelectionState({
     cfg: statusCfg,
     agentId: statusAgentId,
@@ -78,10 +81,8 @@ export async function resolveDirectStatusReplyForSessionCore(
     sessionKey: statusSessionKey,
     parentSessionKey: statusEntry?.parentSessionKey,
     storePath: statusLoaded.storePath,
-    defaultProvider,
-    defaultModel,
-    provider: selectedProvider,
-    model: selectedModel,
+    defaultSelection,
+    selection,
     hasModelDirective: false,
   });
   const {
@@ -134,8 +135,8 @@ export async function resolveDirectStatusReplyForSessionCore(
     parentSessionKey: statusEntry?.parentSessionKey,
     sessionScope: statusCfg.session?.scope,
     storePath: statusLoaded.storePath,
-    provider: selectedProvider,
-    model: selectedModel,
+    provider: modelState.provider,
+    model: modelState.model,
     contextTokens: statusEntry?.contextTokens ?? 0,
     thinkingCatalog,
     resolvedThinkLevel: currentThinkLevel,

@@ -2073,60 +2073,89 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("plans direct compaction from the requested workspace metadata without ambient discovery", async () => {
-    const metadataSnapshot = {
-      ...createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "compaction-normalizer",
-            providers: ["anthropic"],
-            origin: "workspace",
-            rootDir: TEST_WORKSPACE_DIR,
-            source: `${TEST_WORKSPACE_DIR}/index.js`,
-            manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
-            modelIdNormalization: {
-              providers: {
-                anthropic: {
-                  aliases: { legacy: "claude-modern" },
+  it.each(["fallback", "current alias", "workspace alias"] as const)(
+    "plans direct compaction %s once from its metadata",
+    async (source) => {
+      const config =
+        source !== "fallback"
+          ? {
+              agents: {
+                defaults: {
+                  compaction: { model: "summary" },
+                  models: { "anthropic/legacy": { alias: "summary" } },
+                },
+              },
+            }
+          : {};
+      const metadataSnapshot = {
+        ...createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "compaction-normalizer",
+              providers: ["anthropic"],
+              origin: "workspace",
+              rootDir: TEST_WORKSPACE_DIR,
+              source: `${TEST_WORKSPACE_DIR}/index.js`,
+              manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
+              modelIdNormalization: {
+                providers: {
+                  anthropic: {
+                    aliases: { legacy: "claude-modern", "claude-modern": "normalized-twice" },
+                  },
                 },
               },
             },
-          },
-        ],
-      }),
-      configFingerprint: "workspace-compaction-normalization",
-    };
-    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
-      params?.workspaceDir === TEST_WORKSPACE_DIR ? metadataSnapshot : undefined,
-    );
+          ],
+        }),
+        configFingerprint: "workspace-compaction-normalization",
+      };
+      getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+        params?.workspaceDir === TEST_WORKSPACE_DIR ||
+        (source === "current alias" && params?.config === config)
+          ? metadataSnapshot
+          : undefined,
+      );
 
-    const result = await compactEmbeddedAgentSessionDirect({
-      ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
-      agentHarnessId: "codex",
-      modelFallbacksOverride: ["anthropic/legacy"],
-      config: {} as never,
-    });
+      const result = await compactEmbeddedAgentSessionDirect({
+        ...wrappedCompactionArgs({ provider: "openai", model: "gpt-primary" }),
+        agentHarnessId: "codex",
+        modelFallbacksOverride: source === "fallback" ? ["anthropic/legacy"] : undefined,
+        config,
+      });
 
-    expect(result.ok, JSON.stringify(result)).toBe(true);
-    expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimePluginSelections: expect.arrayContaining([
-          expect.objectContaining({
-            provider: "anthropic",
-            modelId: "claude-modern",
-            runtime: "codex",
-          }),
+      expect(result.ok, JSON.stringify(result)).toBe(true);
+      expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePluginSelections: expect.arrayContaining([
+            expect.objectContaining({
+              provider: "anthropic",
+              modelId: "claude-modern",
+              runtime: "codex",
+            }),
+          ]),
+        }),
+      );
+      expect(
+        acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[0]?.runtimePluginSelections,
+      ).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ modelId: "normalized-twice" })]),
+      );
+      expect(
+        acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[0]?.runtimePluginSelections,
+      ).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ provider: "anthropic", modelId: "legacy" }),
         ]),
-      }),
-    );
-    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        workspaceDir: TEST_WORKSPACE_DIR,
-        allowWorkspaceScopedSnapshot: true,
-      }),
-    );
-  });
+      );
+      expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config,
+          workspaceDir: TEST_WORKSPACE_DIR,
+          allowWorkspaceScopedSnapshot: true,
+        }),
+      );
+    },
+  );
 
   it("keeps model-locked OpenClaw compaction on its exact model without fallbacks", async () => {
     sessionCompactImpl.mockRejectedValueOnce(

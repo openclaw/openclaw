@@ -289,11 +289,20 @@ export async function compactEmbeddedAgentSessionDirect(
   const canonicalWorkspaceDir = resolveUserPath(
     resolveAgentWorkspaceDir(requestedParams.config ?? {}, requestedAgentIds.sessionAgentId),
   );
+  const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: requestedParams.config ?? {},
+    workspaceDir: requestedWorkspaceDir,
+    env: process.env,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  const manifestPlugins = currentPluginMetadataSnapshot ?? [];
   const runtimeSelection = resolveCompactionRuntimeSelection({
     ...requestedParams,
     modelId: requestedParams.model,
     boundHarnessRuntime: requestedParams.agentHarnessId,
     preparedRuntimePlan: requestedParams.runtimePlan,
+    allowPluginNormalization: false,
+    manifestPlugins,
   });
   // Native control operations reuse the backend's existing authenticated session.
   // Run them before generic model preparation so subscription-only CLI sessions do
@@ -312,27 +321,14 @@ export async function compactEmbeddedAgentSessionDirect(
   if (requestedParams.modelSelectionLocked === true && lockedHarnessRuntime !== "openclaw") {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
-  const pluginPlanCompactionTarget = resolveEmbeddedCompactionTarget({
-    config: requestedParams.config,
-    provider: requestedParams.provider,
-    modelId: requestedParams.model,
-    authProfileId: requestedParams.authProfileId,
-    modelSelectionLocked: requestedParams.modelSelectionLocked,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config: requestedParams.config ?? {},
-    workspaceDir: requestedWorkspaceDir,
-    env: process.env,
-    allowWorkspaceScopedSnapshot: true,
-  });
   const pluginPlanCandidates = resolveModelCandidateChain({
     cfg: requestedParams.config,
     agentId: requestedAgentIds.sessionAgentId,
-    manifestPlugins: currentPluginMetadataSnapshot ?? [],
-    provider: pluginPlanCompactionTarget.provider ?? DEFAULT_PROVIDER,
-    model: pluginPlanCompactionTarget.model ?? DEFAULT_MODEL,
+    manifestPlugins,
+    allowPluginNormalization: false,
+    provider: runtimeSelection.provider,
+    model: runtimeSelection.modelId,
+    requestedModelNormalization: runtimeSelection.target.normalization,
     requestedRouteResolution: "resolved",
     fallbacksOverride: resolveCompactionFallbacksOverride(requestedParams),
   });
