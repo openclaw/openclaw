@@ -32,6 +32,7 @@ import {
 import { runPackageInstallUpdate } from "./update-command-package.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import {
+  ManagedServiceStopFailure,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   resolvePreparedGatewayUpdatePolicy,
@@ -160,6 +161,9 @@ export async function executeMutableUpdate(params: {
       }
       if (err instanceof UpdateCommandAbort || err instanceof UpdatePreMutationError) {
         throw err;
+      }
+      if (err instanceof ManagedServiceStopFailure) {
+        preManagedServiceStop = err.inspectedState;
       }
       params.stop();
       throw new UpdatePreMutationError(

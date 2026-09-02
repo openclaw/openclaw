@@ -49,6 +49,7 @@ import {
 } from "./update-command-service-recovery.js";
 
 export {
+  ManagedServiceStopFailure,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
