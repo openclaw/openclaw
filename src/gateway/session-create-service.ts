@@ -312,6 +312,7 @@ export async function createGatewaySession(params: {
   /** In-process create-only title seed; never populated from public Gateway params. */
   displayName?: string;
   category?: string;
+  inheritParentGroup?: boolean;
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
@@ -575,6 +576,18 @@ export async function createGatewaySession(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, "spawn tool policy requires spawnDepth"),
     };
   }
+  if (params.inheritParentGroup === true && !parentSessionKey) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "inheritParentGroup requires parentSessionKey"),
+    };
+  }
+  if (params.inheritParentGroup === true && params.creation?.via !== "spawn") {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "inheritParentGroup requires a visible spawn"),
+    };
+  }
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
   let parentSelectedAgentId: string | undefined;
@@ -809,16 +822,15 @@ export async function createGatewaySession(params: {
           parentSessionKey: canonicalParentSessionKey,
         }
       : undefined;
+  const requiresCurrentParentSnapshot =
+    params.emitCommandHooks === true ||
+    params.fork === true ||
+    params.authorizedPluginId !== undefined ||
+    params.inheritParentGroup === true;
   const createChildSession = async (): Promise<GatewaySessionCommitResult> => {
     params.commitGuard?.();
     let currentParentSessionEntry = parentSessionEntry;
-    if (
-      canonicalParentSessionKey &&
-      parentSessionTarget &&
-      (params.emitCommandHooks === true ||
-        params.fork === true ||
-        params.authorizedPluginId !== undefined)
-    ) {
+    if (canonicalParentSessionKey && parentSessionTarget && requiresCurrentParentSnapshot) {
       const currentParent = loadGatewaySessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
@@ -1069,6 +1081,11 @@ export async function createGatewaySession(params: {
         const requestedModel = normalizeOptionalString(params.model);
         const requestedContextWindow = normalizeOptionalString(params.contextWindow);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
+        const category = normalizeOptionalString(
+          params.category === undefined && params.inheritParentGroup === true && createdNewEntry
+            ? currentParentSessionEntry?.category
+            : params.category,
+        );
         const requestedFastMode = params.fastMode;
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
           const gateDefaultModel = resolveDefaultModelForAgent({
@@ -1123,7 +1140,7 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
-            category: normalizeOptionalString(params.category),
+            category,
             ...((catalogModel ?? requestedModel) ? { model: catalogModel ?? requestedModel } : {}),
             ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
             ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
@@ -1487,9 +1504,7 @@ export async function createGatewaySession(params: {
     canonicalParentSessionKey &&
     parentSessionEntry?.sessionId &&
     parentSessionTarget &&
-    (params.emitCommandHooks === true ||
-      params.fork === true ||
-      params.authorizedPluginId !== undefined)
+    requiresCurrentParentSnapshot
   ) {
     lifecycleTargets.push({
       scope: parentSessionTarget.storePath,
