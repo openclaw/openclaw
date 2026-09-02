@@ -127,4 +127,45 @@ describe("subagent run liveness", () => {
       ),
     ).toBe(false);
   });
+
+  it("keeps the child link when cleanup finished without dispatching a delete", () => {
+    const endedAt = now - 60_000;
+    // Delete runs whose session effects were suppressed still get a completion
+    // stamp, but their child session was never handed to sessions.delete and is
+    // still navigable. Reading completion alone would hide a live session.
+    const entry = {
+      createdAt: now - 120_000,
+      execution: { endedAt },
+      cleanup: "delete" as const,
+      cleanupCompletedAt: endedAt + 1_000,
+    };
+    expect(shouldKeepSubagentRunChildLink(entry, { now })).toBe(true);
+  });
+
+  it("drops child links once delete cleanup dispatched sessions.delete", () => {
+    const endedAt = now - 60_000;
+    // The dispatch stamp is durable before the gateway call and the completion
+    // stamp only after it, so a run interrupted in between must not relink.
+    const entry = {
+      createdAt: now - 120_000,
+      execution: { endedAt },
+      cleanup: "delete" as const,
+      deleteCleanupDispatchedAt: endedAt + 1_000,
+    };
+    expect(shouldKeepSubagentRunChildLink(entry, { now })).toBe(false);
+    expect(shouldKeepSubagentRunChildLink(entry, { activeDescendants: 1, now })).toBe(false);
+  });
+
+  it("keeps the child link while delete cleanup has not been dispatched", () => {
+    expect(
+      shouldKeepSubagentRunChildLink(
+        {
+          createdAt: now - 120_000,
+          execution: { endedAt: now - 60_000 },
+          cleanup: "delete" as const,
+        },
+        { now },
+      ),
+    ).toBe(true);
+  });
 });

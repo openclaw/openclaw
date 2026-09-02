@@ -7,7 +7,7 @@ import type { callGateway } from "../../../gateway/call.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 
 type CallGateway = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
-type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
+export type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
 
 function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {

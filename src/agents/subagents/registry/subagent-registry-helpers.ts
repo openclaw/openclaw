@@ -24,6 +24,7 @@ import {
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasDispatchedDeleteCleanup } from "./subagent-run-liveness.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -280,6 +281,16 @@ export function reconcileOrphanedRun(params: {
   if (hasRetainedRequiredCompletionDelivery(params.entry)) {
     return false;
   }
+  // Dispatch already reached sessions.delete. Resume must not prune this
+  // unexpired row — startSubagentAnnounceCleanupFlow owns finalization.
+  // Stamping complete here (or pruning) skips requester settle and cleanup tails.
+  if (
+    hasDispatchedDeleteCleanup(params.entry) &&
+    typeof params.entry.archiveAtMs === "number" &&
+    params.entry.archiveAtMs > Date.now()
+  ) {
+    return false;
+  }
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
@@ -329,6 +340,16 @@ export function reconcileOrphanedRestoredRuns(params: {
       now,
     });
     if (!orphanReason) {
+      continue;
+    }
+    if (
+      hasDispatchedDeleteCleanup(entry) &&
+      typeof entry.archiveAtMs === "number" &&
+      entry.archiveAtMs > now
+    ) {
+      // Dispatch already reached sessions.delete. Keep the unexpired row, but
+      // do not stamp cleanupCompletedAt — resumeSubagentRun would skip
+      // requester settle and cleanup tails. Restore activation owns that.
       continue;
     }
     if (

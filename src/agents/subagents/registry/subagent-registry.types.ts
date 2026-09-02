@@ -274,8 +274,17 @@ export type SubagentRunRecord = {
   endedHookEmittedAt?: number;
   /** Set after cleanupBrowserSessionsForLifecycleEnd has been dispatched once. */
   browserCleanupDispatchedAt?: number;
-  /** Set immediately before irreversible sessions.delete cleanup is dispatched. */
+  /** Set immediately before irreversible sessions.delete cleanup is dispatched. Cleared when Gateway confirms the session changed. */
   deleteCleanupDispatchedAt?: number;
+  /**
+   * Exact child session identity captured with the dispatch stamp.
+   * Restart recovery must retry delete only against this identity; a live
+   * successor at the same key is a durable no-delete outcome.
+   */
+  deleteCleanupTarget?: {
+    sessionId: string;
+    lifecycleRevision: string;
+  };
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
   /** Durable top-level requester wake obligation, replayed after restart. */
@@ -327,7 +336,14 @@ export type SubagentRunReadRecord = Pick<
   | "accumulatedRuntimeMs"
   | "runTimeoutSeconds"
   | "endedReason"
+  // Delete-cleanup facts: a still-present dispatch stamp means sessions.delete
+  // was handed off and its outcome is not a confirmed session-changed
+  // rejection. The child is then gone while the row waits out its archive
+  // deadline. Both stamps ship so this projection suppresses child links
+  // exactly like the full-record surfaces do (see child-link liveness).
+  | "cleanup"
   | "cleanupCompletedAt"
+  | "deleteCleanupDispatchedAt"
   | "delivery"
 > & {
   execution: Pick<SubagentExecutionState, "status" | "startedAt" | "endedAt" | "outcome">;
