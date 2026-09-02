@@ -80,6 +80,7 @@ export async function prepareEmbeddedRunRuntime(input: {
   const {
     requestedModelId,
     modelSelectionChangedByHook,
+    thinkingOverride,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     pinnedHarnessId,
@@ -221,33 +222,36 @@ export async function prepareEmbeddedRunRuntime(input: {
     ? activePreparedAuthPlan.forwardedAuthProfileId
     : undefined;
   const requestedThinkLevel = resolveInitialThinkLevel({
-    requested: params.thinkLevel,
+    requested: params.thinkLevelExplicit
+      ? params.thinkLevel
+      : (thinkingOverride ?? params.thinkLevel),
     config: params.config,
     provider,
     modelId,
     model: models.effective,
   });
-  const initialThinkLevel = modelSelectionChangedByHook
-    ? (resolveCandidateThinkingLevel({
-        cfg: params.config,
-        provider,
-        modelId,
-        level: requestedThinkLevel,
-        catalog: [
-          {
-            provider,
-            id: modelId,
-            api: models.effective.api,
-            reasoning: models.effective.reasoning,
-            params: models.effective.params,
-            compat: models.effective.compat,
-          },
-        ],
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        agentRuntime: agentHarness.id,
-      }) ?? requestedThinkLevel)
-    : requestedThinkLevel;
+  const initialThinkLevel =
+    modelSelectionChangedByHook || thinkingOverride !== undefined
+      ? (resolveCandidateThinkingLevel({
+          cfg: params.config,
+          provider,
+          modelId,
+          level: requestedThinkLevel,
+          catalog: [
+            {
+              provider,
+              id: modelId,
+              api: models.effective.api,
+              reasoning: models.effective.reasoning,
+              params: models.effective.params,
+              compat: models.effective.compat,
+            },
+          ],
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          agentRuntime: agentHarness.id,
+        }) ?? requestedThinkLevel)
+      : requestedThinkLevel;
   const attemptedThinking = new Set<ThinkLevel>();
   const authState: EmbeddedRunAuthState = {
     models,

@@ -295,6 +295,8 @@ export type RunEmbeddedAgentParams = {
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
   thinkLevel?: ThinkLevel;
+  /** The current message explicitly selected thinking and takes precedence over routing hooks. */
+  thinkLevelExplicit?: boolean;
   fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
   fastModeStartedAtMs?: number;
