@@ -38,6 +38,7 @@ import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
+import type { CodeModeTranscriptAuthority } from "../../code-mode-waiting-claim.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
@@ -95,6 +96,8 @@ export type RunEmbeddedAgentParams = {
   preparedRunAdmission?: PreparedAgentRunAdmission;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
+  /** Admission-owned durable Code Mode transcript capability. */
+  codeModeTranscriptAuthority?: CodeModeTranscriptAuthority;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
   sessionId: string;

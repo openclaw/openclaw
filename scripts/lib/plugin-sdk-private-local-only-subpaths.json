@@ -38,6 +38,7 @@
   "codex-mcp-projection",
   "native-hook-relay-runtime",
   "codex-session-transcript-runtime",
+  "provider-session-transcript-runtime",
   "command-status-runtime",
   "command-surface",
   "concurrency-runtime",

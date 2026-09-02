@@ -137,8 +137,15 @@ describe("embedded run durable writer admission", () => {
       },
     });
 
+    let admittedAuthority: RunEmbeddedAgentParams["codeModeTranscriptAuthority"];
     try {
-      await controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
+      await controller.enqueueSession(() =>
+        controller.enqueueGlobal(async () => {
+          admittedAuthority = params.codeModeTranscriptAuthority;
+          admittedAuthority?.assertActive();
+          return completedResult;
+        }),
+      );
     } finally {
       unsubscribe();
     }
@@ -162,6 +169,8 @@ describe("embedded run durable writer admission", () => {
       expectedLifecycleRevision: lifecycleRevision,
       expectedWriterRunId: "run-b",
     });
+    expect(admittedAuthority).toBeDefined();
+    expect(() => admittedAuthority?.assertActive()).toThrow("authority is closed");
     expect(() =>
       staleManager.appendMessage(
         buildAssistantMessage({

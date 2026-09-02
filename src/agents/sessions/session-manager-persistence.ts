@@ -10,6 +10,10 @@ import {
   SessionTranscriptWriterClaimReboundError,
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
+import {
+  codeModeTranscriptReservationSlot,
+  type CodeModeTranscriptReservation,
+} from "../code-mode-waiting-claim.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
@@ -233,10 +237,15 @@ export class SessionManagerPersistence extends SessionManagerCore {
       );
       return undefined;
     }
+    // SAFETY: only the private session append owner writes this symbol-keyed reservation slot.
+    const pendingClaim = Reflect.get(options ?? {}, codeModeTranscriptReservationSlot) as
+      | CodeModeTranscriptReservation
+      | undefined;
     const appendOptions = copyCodeModeSourceAppendOptions(options, {
       cwd: this.cwd,
       eventId: entry.id,
       ...(options?.config ? { config: options.config } : {}),
+      ...(pendingClaim ? { codeModeClaimReservation: pendingClaim } : {}),
       ...(options?.idempotencyLookup ? { idempotencyLookup: options.idempotencyLookup } : {}),
       message: entry.message,
       now: Date.parse(entry.timestamp),
@@ -286,6 +295,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (result.effectiveParentId === undefined) {
       throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
     }
+    pendingClaim?.consume();
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
       effectiveParentId: result.effectiveParentId,

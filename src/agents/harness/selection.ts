@@ -569,6 +569,7 @@ function withoutHarnessSetupAuthority(
 ): EmbeddedRunAttemptParams {
   const {
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    codeModeTranscriptAuthority: _codeModeTranscriptAuthority,
     systemAgentTool: _systemAgentTool,
     ...attemptParams
   } = params;

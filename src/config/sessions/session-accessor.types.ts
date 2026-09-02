@@ -375,7 +375,20 @@ export type SessionTranscriptWriteTransactionContext = {
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
+export type CodeModeWaitingClaimIntent = {
+  expiresAt: number;
+  lifecycleRevision: string;
+  outcome: "remove" | "replace";
+  predecessorEntryId?: string;
+  runId: string;
+  sourceDigest: string;
+  sourceToolCallId: string;
+  sourceToolName: string;
+  writerRunId: string;
+};
+
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
+  codeModeClaimIntent?: CodeModeWaitingClaimIntent;
   /**
    * Runs inside the session writer queue before the SQLite transaction begins.
    * The commit phase revalidates session ownership and database idempotency

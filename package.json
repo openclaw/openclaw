@@ -83,6 +83,7 @@
     "!dist/plugin-sdk/cli-runtime.d.ts",
     "!dist/plugin-sdk/codex-mcp-projection.d.ts",
     "!dist/plugin-sdk/codex-session-transcript-runtime.d.ts",
+    "!dist/plugin-sdk/provider-session-transcript-runtime.d.ts",
     "!dist/plugin-sdk/command-status-runtime.d.ts",
     "!dist/plugin-sdk/command-surface.d.ts",
     "!dist/plugin-sdk/concurrency-runtime.d.ts",
@@ -823,6 +824,9 @@
     },
     "./plugin-sdk/codex-session-transcript-runtime": {
       "default": "./dist/plugin-sdk/codex-session-transcript-runtime.js"
+    },
+    "./plugin-sdk/provider-session-transcript-runtime": {
+      "default": "./dist/plugin-sdk/provider-session-transcript-runtime.js"
     },
     "./plugin-sdk/agent-harness-task-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-task-runtime.js"

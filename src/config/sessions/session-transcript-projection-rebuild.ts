@@ -1,12 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ColumnType, Generated, InferResult } from "kysely";
+import type { ColumnType, Generated } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
-  prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -241,18 +240,13 @@ export function visitSessionTranscriptProjection(
   const rows =
     visiblePath.length > 0
       ? (function* () {
-          const read = prepareSqliteQuerySync<number, InferResult<typeof query>[number]>(
-            db,
-            (parameter) =>
-              query.where(
-                "seq",
-                "=",
-                parameter((seq) => seq),
-              ),
-          );
-          for (const node of visiblePath) {
-            // The transcript primary key keeps this point read to zero or one row.
-            yield* read(node.entry.seq).rows;
+          const visibleSeqs = new Set(visiblePath.map((node) => node.entry.seq));
+          // Stream one second ordered pass instead of issuing one point query
+          // per active row; dirty transcripts can contain thousands of rows.
+          for (const row of iterateSqliteQuerySync(db, query.orderBy("seq", "asc"))) {
+            if (visibleSeqs.has(row.seq)) {
+              yield row;
+            }
           }
         })()
       : tree.hasLeafControl

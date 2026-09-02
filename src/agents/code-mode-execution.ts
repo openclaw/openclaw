@@ -612,7 +612,7 @@ export async function runWait(params: {
       output: state.output,
       replaySafe: state.replaySafe,
       deadlineMs,
-      parentToolCallId: state.parentToolCallId,
+      parentToolCallId: params.toolCallId,
       codeModeReplayId: state.replayId,
       ctx: state.ctx,
       config: state.config,

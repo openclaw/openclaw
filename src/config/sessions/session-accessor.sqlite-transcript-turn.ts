@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import {
   applySessionGoalOperation,
@@ -43,15 +46,17 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import {
+  buildCodeModeClaimPatch,
   buildExpectedTranscriptTurnSessionPatch,
+  type CodeModeClaimAppend,
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
-import { mergeSessionEntry, type SessionEntry } from "./types.js";
+import { mergeSessionEntry, type InternalSessionEntry, type SessionEntry } from "./types.js";
 
 type SqliteExpectedSessionTranscriptTurnResult = {
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
-  rejectedReason?: "session-rebound";
+  rejectedReason?: "session-rebound" | "validation-conflict";
   sessionEntry: SessionEntry | undefined;
   sessionFile: string;
 };
@@ -73,6 +78,7 @@ export async function appendExpectedSessionTranscriptTurn(
     sessionTurnMutation?: SessionTranscriptTurnMutation;
     sessionFile: string;
     touchSessionEntry?: boolean;
+    validateBeforeAppend?: (database: OpenClawAgentDatabase) => boolean;
   },
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
   const initialEntry = options.initialSessionEntry
@@ -175,12 +181,27 @@ export async function appendExpectedSessionTranscriptTurn(
         result = sqliteSessionTranscriptTurnRebound(fresh, options.sessionFile);
         return;
       }
+      if (options.validateBeforeAppend && !options.validateBeforeAppend(transactionDb)) {
+        result = {
+          appendedMessages: [],
+          rejectedReason: "validation-conflict",
+          sessionEntry: cloneSessionEntry(currentEntry),
+          sessionFile: options.sessionFile,
+        };
+        return;
+      }
       const goal = mutation
         ? applySessionGoalOperation(currentEntry, mutation.operation, Date.now())
         : undefined;
       const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+      const claimAppends: CodeModeClaimAppend[] = [];
       for (const append of messages) {
-        const { shouldAppend: _shouldAppend, shouldAppendInTransaction, ...appendOptions } = append;
+        const {
+          codeModeClaimIntent,
+          shouldAppend: _shouldAppend,
+          shouldAppendInTransaction,
+          ...appendOptions
+        } = append;
         if (shouldAppendInTransaction) {
           const latestAssistant = findTranscriptEventInDatabase(
             transactionDb,
@@ -221,13 +242,17 @@ export async function appendExpectedSessionTranscriptTurn(
         });
         if (appended) {
           appendedMessages.push(appended);
+          if (codeModeClaimIntent) {
+            claimAppends.push({ intent: codeModeClaimIntent, result: appended });
+          }
         }
       }
       if (
         options.atomicGroup &&
         (appendedMessages.length !== messages.length ||
-          appendedMessages.some((message) => message.appended) !==
-            appendedMessages.every((message) => message.appended))
+          (messages.length > 0 &&
+            appendedMessages.some((message) => message.appended) !==
+              appendedMessages.every((message) => message.appended)))
       ) {
         throw new Error("SQLite transcript batch was not wholly inserted or replayed");
       }
@@ -264,9 +289,13 @@ export async function appendExpectedSessionTranscriptTurn(
       if (mutation) {
         sessionPatch.goal = goal;
       }
+      const claimPatch = buildCodeModeClaimPatch(
+        currentEntry as InternalSessionEntry, // SAFETY: resolved from the canonical row in this transaction.
+        claimAppends,
+      );
       const next =
-        Object.keys(sessionPatch).length > 0
-          ? mergeSessionEntry(currentEntry, sessionPatch)
+        Object.keys(sessionPatch).length > 0 || claimPatch
+          ? { ...mergeSessionEntry(currentEntry, sessionPatch), ...claimPatch }
           : currentEntry;
       if (initialEntry || next !== currentEntry) {
         const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);

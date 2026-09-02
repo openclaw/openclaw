@@ -120,6 +120,7 @@
   "codex-mcp-projection",
   "native-hook-relay-runtime",
   "codex-session-transcript-runtime",
+  "provider-session-transcript-runtime",
   "agent-harness-task-runtime",
   "agent-harness",
   "agent-harness-exec-review-runtime",

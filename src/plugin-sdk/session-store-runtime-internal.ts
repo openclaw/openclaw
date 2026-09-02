@@ -73,6 +73,9 @@ export function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.activeWriterRunId !== undefined
       ? { activeWriterRunId: existingEntry.activeWriterRunId }
       : {}),
+    ...(existingEntry.codeModeWaitingClaims
+      ? { codeModeWaitingClaims: existingEntry.codeModeWaitingClaims }
+      : {}),
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }
       : {}),

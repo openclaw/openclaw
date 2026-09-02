@@ -29,6 +29,7 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
+import { CodeModeTranscriptAuthority } from "../../code-mode-waiting-claim.js";
 import {
   resolveSessionKeyForRequestCore,
   resolveStoredSessionKeyForSessionId,
@@ -279,7 +280,7 @@ export function prepareInitialSessionWriter(params: {
 }
 
 type AgentSessionWriterAdmissionSnapshot = {
-  agentId?: string;
+  agentId: string;
   entry: InternalSessionEntry;
   sessionKey: string;
   storePath: string;
@@ -309,7 +310,7 @@ export function assertAgentHarnessRunAdmission(
     targetStoreOwner.kind === "none",
   );
   const admissionAgentId = trustExplicitAlternateStoreAgent
-    ? targetAgentId
+    ? targetAgentId!
     : resolveSessionAgentId({
         agentId: targetAgentId ?? params.agentId,
         config: params.config,
@@ -319,7 +320,7 @@ export function assertAgentHarnessRunAdmission(
     targetStorePath ??
     resolveSessionStorePathCore(params.config?.session?.store, { agentId: admissionAgentId });
   const durableEntry = loadSessionEntry({
-    ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
+    agentId: admissionAgentId,
     readConsistency: "latest",
     sessionKey,
     storePath,
@@ -336,7 +337,7 @@ export function assertAgentHarnessRunAdmission(
   }
   return durableEntry
     ? {
-        ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
+        agentId: admissionAgentId,
         entry: durableEntry as InternalSessionEntry,
         sessionKey,
         storePath,
@@ -348,6 +349,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   | {
       expectedLifecycleRevision: string | undefined;
       expectedWriterRunId: string;
+      transcriptAuthority?: CodeModeTranscriptAuthority;
     }
   | undefined
 > {
@@ -364,7 +366,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
   const claimed = await updateSessionEntry(
     {
-      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+      agentId: snapshot.agentId,
       sessionKey: snapshot.sessionKey,
       storePath: snapshot.storePath,
     },
@@ -398,7 +400,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
         stream: "lifecycle",
         sessionKey: snapshot.sessionKey,
         sessionId: expectedSessionId,
-        ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+        agentId: snapshot.agentId,
         data: {
           phase: "end",
           aborted: true,
@@ -420,8 +422,21 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
       );
     }
   }
+  const transcriptAuthority = expectedLifecycleRevision
+    ? new CodeModeTranscriptAuthority({
+        scope: {
+          agentId: snapshot.agentId,
+          sessionId: expectedSessionId,
+          sessionKey: snapshot.sessionKey,
+          storePath: snapshot.storePath,
+        },
+        lifecycleRevision: expectedLifecycleRevision,
+        writerRunId: params.runId,
+      })
+    : undefined;
   return {
     expectedLifecycleRevision,
     expectedWriterRunId: params.runId,
+    ...(transcriptAuthority ? { transcriptAuthority } : {}),
   };
 }

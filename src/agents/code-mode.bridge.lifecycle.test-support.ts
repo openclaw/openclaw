@@ -1,6 +1,7 @@
 /** Real embedded subscriber/catalog executor shared by bridge lifecycle regressions. */
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
 import type { NestedToolActivity } from "../sessions/nested-tool-activity.js";
+import type { CodeModeTranscriptAuthority } from "./code-mode-waiting-claim.js";
 import { createCodeModeTools } from "./code-mode.js";
 import { prepareEmbeddedAttemptStream } from "./embedded-agent-runner/run/attempt-stream-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
@@ -79,6 +80,11 @@ export function createSubscribedCodeModeHarness(params: {
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
   });
+  const transcriptAuthority = {
+    assertActive: () => undefined,
+    capture: () => undefined,
+    verify: () => ({ anchor: { entryId: "persisted-test-result" } }),
+  } as unknown as CodeModeTranscriptAuthority;
   const context = {
     config,
     runtimeConfig: config,
@@ -88,6 +94,7 @@ export function createSubscribedCodeModeHarness(params: {
     catalogRef,
     abortSignal: runAbortController.signal,
     executeTool: stream.toolSearchCatalogExecutor,
+    transcriptAuthority,
   };
   return {
     ...context,

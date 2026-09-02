@@ -37,6 +37,7 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
+import { createSessionTranscriptMessagePreparer } from "../session-tool-result-guard-wrapper.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { registerTrustedToolNoStartError } from "../tool-result-error.js";
 import type { AnyAgentTool } from "../tools/common.js";
@@ -56,6 +57,7 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   registerAgentHarnessScheduledToolProjectionCapability,
   registerAgentHarnessTtsProvenanceTransferCapability,
+  registerAgentHarnessTranscriptPrefixCommit,
 } from "./host-private-capabilities.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
@@ -629,6 +631,19 @@ export function createAgentHarnessHostCapabilities(params: {
       };
     },
   });
+  if (attempt.codeModeTranscriptAuthority) {
+    const authority = attempt.codeModeTranscriptAuthority;
+    const prepareTranscriptMessage = createSessionTranscriptMessagePreparer({
+      ...attempt,
+      hidden: attempt.trigger === "memory",
+      prepareAssistantTranscriptMessage:
+        attempt.trigger === "memory" ? undefined : attempt.prepareAssistantTranscriptMessage,
+      skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
+    });
+    registerAgentHarnessTranscriptPrefixCommit(capabilities, (prefix) =>
+      authority.commitPrefix(prefix, prepareTranscriptMessage, assertActive),
+    );
+  }
   registerAgentHarnessScheduledToolProjectionCapability({
     hostCapabilities: capabilities,
     ownerPluginId: params.pluginId,

@@ -570,6 +570,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     {
       agentId: input.sessionAgentId,
       runId: attempt.runId,
+      codeModeTranscriptAuthority: attempt.codeModeTranscriptAuthority,
       sessionKey: attempt.sessionKey,
       config: attempt.config,
       contextWindowTokens: attempt.contextTokenBudget,

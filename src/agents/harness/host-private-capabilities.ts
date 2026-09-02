@@ -1,3 +1,4 @@
+import type { CodeModeTranscriptAuthority } from "../code-mode-waiting-claim.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -24,6 +25,28 @@ const ttsProvenanceTransferCapabilities = new WeakMap<
   AgentHarnessHostCapabilities,
   Readonly<{ ownerPluginId: string; transfer: AgentHarnessTtsProvenanceTransfer }>
 >();
+export type AgentHarnessTranscriptPrefixCommit = (
+  params: Parameters<CodeModeTranscriptAuthority["commitPrefix"]>[0],
+) => ReturnType<CodeModeTranscriptAuthority["commitPrefix"]>;
+
+const transcriptPrefixCommitCapabilities = new WeakMap<
+  AgentHarnessHostCapabilities,
+  AgentHarnessTranscriptPrefixCommit
+>();
+
+export const registerAgentHarnessTranscriptPrefixCommit = (
+  hostCapabilities: AgentHarnessHostCapabilities,
+  commit: AgentHarnessTranscriptPrefixCommit,
+): void => {
+  transcriptPrefixCommitCapabilities.set(hostCapabilities, commit);
+};
+
+export const resolveAgentHarnessTranscriptPrefixCommit = (
+  hostCapabilities: AgentHarnessHostCapabilities,
+): AgentHarnessTranscriptPrefixCommit | undefined => {
+  hostCapabilities.assertActive();
+  return transcriptPrefixCommitCapabilities.get(hostCapabilities);
+};
 
 export function registerAgentHarnessScheduledToolProjectionCapability(params: {
   hostCapabilities: AgentHarnessHostCapabilities;

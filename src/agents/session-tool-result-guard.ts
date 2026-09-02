@@ -30,6 +30,11 @@ import {
 } from "../sessions/transcript-events.js";
 import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
+import {
+  codeModeTranscriptReservationSlot,
+  type CodeModeTranscriptAuthority,
+  type CodeModeTranscriptReservation,
+} from "./code-mode-waiting-claim.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -646,6 +651,7 @@ export function installSessionToolResultGuard(
       event: PluginHookBeforeMessageWriteEvent,
       sourceAppend?: CodeModeSourceAppend,
     ) => PluginHookBeforeMessageWriteResult | undefined;
+    codeModeTranscriptAuthority?: CodeModeTranscriptAuthority;
     redactLoggingConfig?: ToolResultDetailRedactionConfig;
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
@@ -666,6 +672,7 @@ export function installSessionToolResultGuard(
   clearPendingToolResults: () => void;
   clearNextUserMessagePersistenceSuppression: () => void;
   getPendingIds: () => string[];
+  setTranscriptAuthority: (authority: CodeModeTranscriptAuthority | undefined) => void;
   setTranscriptRunId: (runId: string | undefined) => void;
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
@@ -695,6 +702,7 @@ export function installSessionToolResultGuard(
   const redactionConfig = opts?.redactLoggingConfig;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
   const transcriptSeqByEntryId: TranscriptSeqByEntryId = new Map();
+  let transcriptAuthority = opts?.codeModeTranscriptAuthority;
   let transcriptRunId = opts?.runId;
   let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
@@ -703,6 +711,7 @@ export function installSessionToolResultGuard(
     options?: AppendMessageOptions,
     sourceAppend?: CodeModeSourceAppend,
     acknowledgementSource: AgentMessage = message,
+    claimReservation?: CodeModeTranscriptReservation,
   ): {
     anchor?: TranscriptEntryAnchor;
     entryId: string;
@@ -710,21 +719,23 @@ export function installSessionToolResultGuard(
     messageSeq?: number;
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   } => {
-    const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
+    const ownedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
+    const runOwnedMessage = claimReservation ? claimReservation.attach(ownedMessage) : ownedMessage;
     copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
+    const appendOptions = sourceAppend
+      ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
+      : (options ?? {});
+    if (claimReservation) {
+      Reflect.set(appendOptions, codeModeTranscriptReservationSlot, claimReservation);
+    }
     const {
       entryId,
       anchor,
       message: persistedMessage,
     } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, () =>
-      originalAppendWithTranscriptAnchor(
-        runOwnedMessage as never,
-        sourceAppend
-          ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
-          : options,
-      ),
+      originalAppendWithTranscriptAnchor(runOwnedMessage as never, appendOptions),
     );
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
@@ -868,6 +879,7 @@ export function installSessionToolResultGuard(
         toolName,
         id ?? undefined,
       );
+      const claimReservation = transcriptAuthority?.reserve(normalizedToolResult);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
       const persistedToolResult = persistMessage(normalizedToolResult);
@@ -885,9 +897,13 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      // A blocked or failed append must remain pending for transcript repair.
+      const finalMessage = capToolResultForPersistence(
+        persisted.message,
+        maxToolResultChars,
+        redactionConfig,
+      );
       return appendMessageAndCacheTranscriptSeq(
-        capToolResultForPersistence(persisted.message, maxToolResultChars, redactionConfig),
+        finalMessage,
         {
           invalidateSerializedPrefixCache:
             callerInvalidatesCache ||
@@ -897,6 +913,7 @@ export function installSessionToolResultGuard(
         },
         undefined,
         message,
+        claimReservation,
       ).entryId;
     }
 
@@ -1026,6 +1043,9 @@ export function installSessionToolResultGuard(
       suppressNextUserMessagePersistence = false;
     },
     getPendingIds: pendingState.getPendingIds,
+    setTranscriptAuthority: (authority) => {
+      transcriptAuthority = authority;
+    },
     setTranscriptRunId: (runId) => {
       transcriptRunId = runId;
     },

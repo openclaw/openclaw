@@ -8,6 +8,7 @@ type RetiredThinkingSelectionQuarantine = {
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   activeWriterRunId: undefined,
+  codeModeWaitingClaims: undefined,
   lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
@@ -19,6 +20,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
   "activeWriterRunId",
+  "codeModeWaitingClaims",
   "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",

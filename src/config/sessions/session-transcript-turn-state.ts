@@ -1,13 +1,61 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   mergeRestartRecoveryTerminalRunIds,
   sameRestartRecoveryTerminalRunIds,
 } from "./restart-recovery-state.js";
+import type { TranscriptMessageAppendResult } from "./session-accessor.sqlite-contract.js";
+import type { CodeModeWaitingClaimIntent } from "./session-accessor.types.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+export type CodeModeClaimAppend = {
+  intent: CodeModeWaitingClaimIntent;
+  result: TranscriptMessageAppendResult<unknown>;
+};
+
+/* oxlint-disable eslint/curly -- Keep bounded claim validation compact. */
+export function buildCodeModeClaimPatch(
+  currentEntry: SessionEntry,
+  appends: readonly CodeModeClaimAppend[],
+): Pick<SessionEntry, "codeModeWaitingClaims"> | undefined {
+  if (!appends.length) return undefined;
+  const now = Date.now();
+  const claims = { ...currentEntry.codeModeWaitingClaims };
+  for (const [runId, claim] of Object.entries(claims))
+    if (claim.expiresAt <= now) delete claims[runId];
+  for (const { intent, result } of appends) {
+    const message = asOptionalRecord(result?.message);
+    const details = asOptionalRecord(message?.details);
+    const predecessor = claims[intent.runId];
+    if (
+      !result?.anchor ||
+      message?.role !== "toolResult" ||
+      message.toolCallId !== intent.sourceToolCallId ||
+      message.toolName !== intent.sourceToolName ||
+      currentEntry.lifecycleRevision !== intent.lifecycleRevision ||
+      currentEntry.activeWriterRunId !== intent.writerRunId ||
+      predecessor?.anchor.entryId !== intent.predecessorEntryId ||
+      (intent.predecessorEntryId !== undefined &&
+        predecessor?.sourceDigest !== intent.sourceDigest) ||
+      (intent.outcome === "replace"
+        ? details?.status !== "waiting" || details.runId !== intent.runId
+        : details?.status !== "completed" && details?.status !== "failed")
+    )
+      throw new Error("Code Mode waiting claim changed before transcript commit");
+    const { lifecycleRevision: _, outcome, runId, writerRunId: _writer, ...claim } = intent;
+    if (outcome === "remove" || claim.expiresAt <= now) delete claims[intent.runId];
+    else claims[runId] = { ...claim, anchor: result.anchor };
+  }
+  Object.entries(claims)
+    .toSorted(([, left], [, right]) => right.expiresAt - left.expiresAt)
+    .slice(64)
+    .forEach(([runId]) => delete claims[runId]);
+  return { codeModeWaitingClaims: Object.keys(claims).length ? claims : undefined };
+}
 
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(
   selected: T | undefined,

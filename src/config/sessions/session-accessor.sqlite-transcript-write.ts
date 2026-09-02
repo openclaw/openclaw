@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type { CodeModeTranscriptReservation } from "../../agents/code-mode-waiting-claim.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import {
   openOpenClawAgentDatabase,
@@ -50,8 +51,11 @@ import {
   replaceSqliteTranscriptEventsInTransaction,
   rewriteSqliteTranscriptEventRowsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
-import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
-import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import type {
+  SessionTranscriptWriteLockAccessorContext,
+  SessionTranscriptWriteTransactionContext,
+} from "./session-accessor.types.js";
+import { buildCodeModeClaimPatch } from "./session-transcript-turn-state.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -67,25 +71,6 @@ class SqliteTranscriptMutationConflictError extends Error {
     this.name = "SqliteTranscriptMutationConflictError";
   }
 }
-
-type SqliteTranscriptWriteLockContext = {
-  appendMessage: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
-  ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
-  appendMessageWithMessageSequence: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
-  ) => Promise<{
-    messageSeq?: number;
-    result: TranscriptMessageAppendResult<TMessage> | undefined;
-  }>;
-  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
-    anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
-    existingIdempotencyKeys: Set<string>;
-    messagesByIdempotencyKey: Map<string, unknown>;
-  }>;
-  readEvents: () => Promise<TranscriptEvent[]>;
-  replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
-};
 
 type SqliteTranscriptSnapshotState =
   | { kind: "current"; rows: SqliteTranscriptSnapshotRow[] }
@@ -338,7 +323,9 @@ export async function appendTranscriptMessage<TMessage>(
 /** Appends one transcript message synchronously for sync session runtimes. */
 export function appendTranscriptMessageSync<TMessage>(
   scope: SessionTranscriptWriteScope,
-  options: TranscriptMessageAppendOptions<TMessage>,
+  options: TranscriptMessageAppendOptions<TMessage> & {
+    codeModeClaimReservation?: CodeModeTranscriptReservation;
+  },
 ): Result<TranscriptMessageAppendResult<TMessage> | undefined, TranscriptAppendRefusal> {
   // Every sync message append inherits and enforces the admitted writer claim.
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
@@ -347,14 +334,27 @@ export function appendTranscriptMessageSync<TMessage>(
     ok(undefined);
   runOpenClawAgentWriteTransaction((database) => {
     assertOwnedTranscriptWriteCommit(fencedScope);
+    options.codeModeClaimReservation?.assertCurrent(database);
     const fresh = readSessionEntryRow(database, resolved.sessionKey);
     const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
     if (refusal) {
       result = err(refusal);
       return;
     }
-    result = ok(appendTranscriptMessageInTransaction(database, resolved, options));
-    // Synchronous message preparation can revoke the owner. Roll back before COMMIT.
+    const appended = appendTranscriptMessageInTransaction(database, resolved, options);
+    result = ok(appended);
+    const claimPatch = buildCodeModeClaimPatch(
+      fresh!.entry,
+      appended && options.codeModeClaimReservation
+        ? [{ intent: options.codeModeClaimReservation.intent, result: appended }]
+        : [],
+    );
+    if (claimPatch) {
+      const next = { ...fresh!.entry, ...claimPatch };
+      writeSessionEntry(database, resolved.sessionKey, next, { previousEntry: fresh!.entry });
+    }
+    // Synchronous preparation can revoke either owner. Roll back before COMMIT.
+    options.codeModeClaimReservation?.assertCurrent(database);
     assertOwnedTranscriptWriteCommit(fencedScope);
   }, toDatabaseOptions(resolved));
   if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
@@ -420,7 +420,7 @@ function assertLockedTranscriptWriteAllowed(
 /** Runs read/append transcript work under one SQLite writer-queue critical section. */
 export async function withTranscriptWriteLock<T>(
   scope: SessionTranscriptWriteScope,
-  run: (context: SqliteTranscriptWriteLockContext) => Promise<T> | T,
+  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
 ): Promise<T> {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
@@ -437,7 +437,11 @@ export async function withTranscriptWriteLock<T>(
       },
       // openclaw-agent-db.ts cache rule: never retain a handle across caller awaits; LRU may close it.
       readMessageFacts: async (params) =>
-        readTranscriptMirrorFacts(openOpenClawAgentDatabase(databaseOptions), resolved, params),
+        readTranscriptMirrorFacts(
+          openOpenClawAgentDatabase(databaseOptions),
+          resolved,
+          params.idempotencyKeys,
+        ),
       replaceEvents: async (events) => {
         if (transcriptSnapshot?.kind === "stale") {
           throw new SqliteTranscriptMutationConflictError(resolved.sessionId);

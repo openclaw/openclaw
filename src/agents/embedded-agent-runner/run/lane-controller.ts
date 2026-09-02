@@ -287,10 +287,13 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       }
       // Queue waits can outlive durable harness and placement bindings.
       // Recheck and claim only after lifecycle admission, before context or hooks execute.
+      params.codeModeTranscriptAuthority?.close();
+      params = { ...params, codeModeTranscriptAuthority: undefined };
       const writerClaim = await claimAgentSessionWriter(params);
       if (writerClaim) {
         params = {
           ...params,
+          codeModeTranscriptAuthority: writerClaim.transcriptAuthority,
           sessionTarget: {
             ...params.sessionTarget,
             expectedLifecycleRevision: writerClaim.expectedLifecycleRevision,
@@ -299,34 +302,38 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         };
         options.setParams(params);
       }
-      return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-        withSessionPlacementTurnAdmission(
-          {
-            sessionId: params.sessionId,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-            runId: params.runId,
-          },
-          params,
-          task,
-          () => {
-            throwIfAborted();
-            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            releaseQueuedContext("admitted");
-            // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
-            claimAgentRunContext(params.runId, {
-              ...existingContext,
-              agentId: params.agentId ?? existingContext?.agentId,
-              sessionKey: params.sessionKey ?? existingContext?.sessionKey,
-              sessionId: params.sessionId ?? existingContext?.sessionId,
-              lifecycleGeneration,
-              lastActiveAt: Date.now(),
-            });
-            // Queue dequeue can still block on writer or placement admission.
-            params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
-          },
-        ),
-      );
+      try {
+        return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+          withSessionPlacementTurnAdmission(
+            {
+              sessionId: params.sessionId,
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              runId: params.runId,
+            },
+            params,
+            task,
+            () => {
+              throwIfAborted();
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+              releaseQueuedContext("admitted");
+              // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
+              claimAgentRunContext(params.runId, {
+                ...existingContext,
+                agentId: params.agentId ?? existingContext?.agentId,
+                sessionKey: params.sessionKey ?? existingContext?.sessionKey,
+                sessionId: params.sessionId ?? existingContext?.sessionId,
+                lifecycleGeneration,
+                lastActiveAt: Date.now(),
+              });
+              // Queue dequeue can still block on writer or placement admission.
+              params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
+            },
+          ),
+        );
+      } finally {
+        params.codeModeTranscriptAuthority?.close();
+      }
     };
     const params = options.getParams();
     let queuedRun: Promise<EmbeddedAgentRunResult>;
