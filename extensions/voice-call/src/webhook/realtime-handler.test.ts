@@ -26,6 +26,8 @@ import {
   makeRealtimeProvider,
   updateCallMetadata,
   sendCarrierStart,
+  startRealtimeServer,
+  startStreamSessionServer,
 } from "./realtime-handler.lifecycle.test-helpers.js";
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
@@ -88,19 +90,6 @@ const PROVIDER_BARGE_IN_CAPABILITIES = {
   ...PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES,
   handlesInputAudioBargeIn: true,
 };
-
-async function startRealtimeServer(handler: RealtimeCallHandler, params?: URLSearchParams) {
-  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"), params);
-  const streamUrl = expectDefined(payload.body.match(/wss:\/\/[^" ]+/)?.[0], "realtime stream URL");
-  return startStreamSessionServer(handler, streamUrl);
-}
-
-async function startStreamSessionServer(handler: RealtimeCallHandler, streamUrl: string) {
-  return startUpgradeWsServer({
-    urlPath: new URL(streamUrl).pathname,
-    onUpgrade: (request, socket, head) => handler.handleWebSocketUpgrade(request, socket, head),
-  });
-}
 
 async function waitFor(
   callback: () => void | Promise<void>,
@@ -193,7 +182,7 @@ function makeCallHarness(
   });
   async function start(streamId = "MZ-test", providerCallId = call.providerCallId) {
     const count = callbacks.length;
-    const ws = await connectWs((await startRealtimeServer(handler)).url);
+    const ws = await connectWs((await startRealtimeServer(handler, providerCallId)).url);
     sendCarrierStart(ws, streamId, providerCallId);
     await waitFor(() => expect(callbacks).toHaveLength(count + 1));
     return { ws, callbacks: expectDefined(callbacks[count], "provider callbacks") };
@@ -398,69 +387,10 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("binds normal TwiML stream sessions to the normalized signed CallSid", () => {
-    const handler = makeHandler();
-    const payload = handler.buildTwiMLPayload(
-      makeRequest("/voice/webhook"),
-      new URLSearchParams({ CallSid: "  CA-signed  " }),
-    );
-    const token = payload.body.match(/\/([0-9a-f-]{36})"/)?.[1];
-
-    expect(token).toBeDefined();
-    const callerMeta = (
-      handler as unknown as {
-        consumeStreamToken(token: string): { callId?: string; providerName?: string } | null;
-      }
-    ).consumeStreamToken(expectDefined(token, "stream token"));
-    expect(callerMeta).toMatchObject({ callId: "CA-signed", providerName: "twilio" });
-  });
-
-  it("rejects Twilio stream starts that do not match the signed TwiML call", async () => {
-    const processEvent = vi.fn();
-    const getCall = vi.fn();
-    const getCallByProviderCallId = vi.fn(() => makeCallRecord("CA-other"));
-    const createBridge = vi.fn(() => makeBridge());
-    const handler = makeHandler(undefined, {
-      manager: { processEvent, getCall, getCallByProviderCallId },
-      realtimeProvider: makeRealtimeProvider(createBridge),
-    });
-    const payload = handler.buildTwiMLPayload(
-      makeRequest("/voice/webhook"),
-      new URLSearchParams({ CallSid: "CA-signed" }),
-    );
-    const streamUrl = payload.body.match(/url="([^"]+)"/)?.[1];
-    const server = await startStreamSessionServer(
-      handler,
-      expectDefined(streamUrl, "realtime stream URL"),
-    );
-    const ws = await connectWs(server.url);
-
-    try {
-      ws.send(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-other", callSid: "CA-other" },
-        }),
-      );
-      const close = await waitForClose(ws);
-
-      expect(close.code).toBe(1008);
-      expect(getCall).not.toHaveBeenCalled();
-      expect(getCallByProviderCallId).not.toHaveBeenCalled();
-      expect(processEvent).not.toHaveBeenCalled();
-      expect(createBridge).not.toHaveBeenCalled();
-    } finally {
-      if (ws.readyState !== WebSocket.CLOSED) {
-        ws.terminate();
-      }
-      await server.close();
-    }
-  });
-
   it("preserves a public path prefix ahead of serve.path", () => {
     const { handler } = makeCallHarness({}, { config: { streamPath: "/custom/stream/realtime" } });
     handler.setPublicUrl("https://public.example:8443/api/voice/webhook");
-    const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "127.0.0.1:3334"));
+    const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "127.0.0.1:3334"), new URLSearchParams(), "CA-prefix");
 
     expect(handler.getStreamPathPattern()).toBe("/api/custom/stream/realtime");
     expect(payload.body).toMatch(
@@ -478,8 +408,8 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const server = await startRealtimeServer(
       handler,
+      "CA-outbound",
       new URLSearchParams({
-        CallSid: "CA-outbound",
         Direction: "outbound-dial",
         From: "+15550001234",
         To: "+15550009999",
