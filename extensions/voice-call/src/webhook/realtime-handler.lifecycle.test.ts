@@ -479,7 +479,9 @@ describe("RealtimeCallHandler lifecycle", () => {
       if (managerSettlement) {
         expect(handler.close()).toBe(closing);
       }
-      const session = managerSettlement ? handler.issueStreamSession({ providerName: "twilio", callId: "CA-shutdown-pending" }) : undefined;
+      const session = managerSettlement
+        ? handler.issueStreamSession({ providerName: "twilio", callId: "CA-shutdown-pending" })
+        : undefined;
       let settled = false;
       const completion = closing
         .catch((error: unknown) => error)

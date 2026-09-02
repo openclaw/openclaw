@@ -549,8 +549,9 @@ export class RealtimeCallHandler {
         if (this.closing) {
           return;
         }
-        const call = request.callId ? ` for call ${request.callId}` : "";
-        const endpoints = [request.from ? `from ${request.from}` : "", request.to ? `to ${request.to}` : ""]
+        const { callId, from, to } = request;
+        const call = callId ? ` for call ${callId}` : "";
+        const endpoints = [from ? `from ${from}` : "", to ? `to ${to}` : ""]
           .filter(Boolean)
           .join(" ");
         const participants = endpoints ? ` (${endpoints})` : "";
@@ -1462,10 +1463,7 @@ export class RealtimeCallHandler {
     }
   }
 
-  private async prepareCallInManager(
-    callSid: string,
-    callerMeta: StreamSessionRequest,
-  ) {
+  private async prepareCallInManager(callSid: string, callerMeta: StreamSessionRequest) {
     const timestamp = Date.now();
     const baseFields = {
       providerCallId: callSid,
