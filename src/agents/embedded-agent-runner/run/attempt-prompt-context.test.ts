@@ -267,7 +267,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.warn).not.toHaveBeenCalled();
   });
 
-  it("moves runtime-only context into the active system prompt", () => {
+  it("keeps runtime-only inbound context out of the visible prompt", () => {
     const fixture = createInput({
       attempt: createAttempt({
         currentInboundContext: { text: "Room event metadata" },
@@ -285,8 +285,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
     expect(result.promptSubmission.runtimeOnly).toBe(true);
-    expect(result.promptForSession).toContain("Room event metadata");
-    expect(result.runtimeContextMessageForCurrentTurn).toBeUndefined();
+    expect(result.promptForSession).toBe("Continue the OpenClaw runtime event.");
+    expect(result.promptForModel).toBe("Continue the OpenClaw runtime event.");
+    expect(result.promptForSession).not.toContain("Room event metadata");
+    expect(result.promptForModel).not.toContain("Room event metadata");
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Room event metadata");
     expect(result.systemPromptForHook).toContain("Runtime room event");
     expect(fixture.setActiveSessionSystemPrompt).toHaveBeenCalledWith(
       expect.stringContaining("Runtime room event"),
