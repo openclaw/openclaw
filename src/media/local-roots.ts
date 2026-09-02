@@ -9,6 +9,7 @@ import {
 } from "../agents/tool-fs-policy.js";
 import { resolveDeliveryQueueMediaDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir } from "../utils.js";
 import { resolveLocalMediaPath } from "./local-media-path.js";
@@ -58,11 +59,57 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
+/** Normalizes configured media roots; skips empty / relative / unresolved `~` prefixes. */
+export function appendConfiguredMediaLocalRoots(
+  roots: string[],
+  configuredRoots: readonly string[] | undefined,
+): string[] {
+  for (const rawRoot of configuredRoots ?? []) {
+    const trimmedRoot = normalizeOptionalString(rawRoot);
+    if (!trimmedRoot) {
+      continue;
+    }
+    // Keep the declared absolute-or-`~/…` contract: never authorize via cwd-relative
+    // resolve, and never accept bare `~` / `~/` (whole home directory).
+    if (trimmedRoot === "~" || trimmedRoot === "~/") {
+      continue;
+    }
+    if (!(path.isAbsolute(trimmedRoot) || trimmedRoot.startsWith("~/"))) {
+      continue;
+    }
+    const expanded = trimmedRoot.startsWith("~") ? expandHomePrefix(trimmedRoot) : trimmedRoot;
+    // expandHomePrefix leaves `~` intact when home is unknown — do not trust `<cwd>/~/…`.
+    if (expanded.startsWith("~") || !path.isAbsolute(expanded)) {
+      continue;
+    }
+    const normalizedRoot = path.resolve(expanded);
+    // Match local-media-access: never authorize a whole filesystem volume.
+    if (normalizedRoot === path.parse(normalizedRoot).root) {
+      continue;
+    }
+    // Defense in depth: `~/…/..` (or a config path that bypassed schema
+    // validation) can normalize back to the effective home directory. Never
+    // widen the allowlist to the whole home when host reads are allowed.
+    const homeDir = expandHomePrefix("~/");
+    if (!homeDir.startsWith("~") && normalizedRoot === path.resolve(homeDir)) {
+      continue;
+    }
+    if (!roots.includes(normalizedRoot)) {
+      roots.push(normalizedRoot);
+    }
+  }
+  return roots;
+}
+
 /** Adds the active agent workspace to the default media roots without exposing all agent state. */
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
 ): readonly string[] {
+  // Managed OpenClaw roots + agent workspace only. Operator-configured
+  // `agents.defaults.mediaLocalRoots` are appended only by policy-gated outbound
+  // resolvers (see resolveAgentScopedOutboundMediaAccess) so channel reply paths
+  // cannot treat them as an ambient authorization grant.
   const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {

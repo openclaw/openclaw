@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Telegram tests cover bot message dispatch plugin behavior.
 import type { Bot } from "grammy";
 import {
@@ -30,7 +29,11 @@ export function requireInvocationOrder(
   index: number,
   context: string,
 ): number {
-  return expectDefined(mock.mock.invocationCallOrder[index], context);
+  const value = mock.mock.invocationCallOrder[index];
+  if (value === undefined) {
+    throw new Error("expected " + context + " to be defined");
+  }
+  return value;
 }
 
 const createTelegramDraftStreamHoisted = vi.hoisted(() => vi.fn());
@@ -112,8 +115,10 @@ const resolveDefaultModelForAgentHoisted = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
 const resolveHumanDelayConfigHoisted = vi.hoisted(() => vi.fn());
-const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
-  vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
+const resolveAgentScopedOutboundMediaAccessHoisted = vi.hoisted(() =>
+  vi.fn((params: { agentId?: string }) => ({
+    localRoots: [`/tmp/.openclaw/workspace-${params.agentId ?? "default"}`],
+  })),
 );
 const resolveChunkModeHoisted = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableModeHoisted = vi.hoisted(() => vi.fn(() => "preserve"));
@@ -157,7 +162,7 @@ const modelSupportsVision = modelSupportsVisionHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
 const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
 export const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
-const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
+export const resolveAgentScopedOutboundMediaAccess = resolveAgentScopedOutboundMediaAccessHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
 export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
 export const getGlobalHookRunner = getGlobalHookRunnerHoisted;
@@ -291,7 +296,7 @@ vi.mock("./send.js", () => ({
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel: generateTopicLabelHoisted,
   getSessionEntry: getSessionEntryHoisted,
-  getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
+  resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessHoisted,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
   resolveMarkdownTableMode: resolveMarkdownTableModeHoisted,
@@ -406,7 +411,7 @@ function resetTelegramDispatchTestState() {
   loadSessionStore.mockReset();
   resolveStorePath.mockReset();
   generateTopicLabel.mockReset();
-  getAgentScopedMediaLocalRoots.mockClear();
+  resolveAgentScopedOutboundMediaAccess.mockClear();
   resolveChunkMode.mockClear();
   resolveMarkdownTableMode.mockClear();
   getGlobalHookRunner.mockReset();

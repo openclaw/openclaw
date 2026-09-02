@@ -1,4 +1,5 @@
 // Defines Zod schema fragments for agent default configuration.
+import path from "node:path";
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
@@ -195,6 +196,40 @@ export const AgentDefaultsSchema = z
     // 0 = unlimited run budget; stream liveness watchdogs still apply.
     timeoutSeconds: z.number().int().nonnegative().optional(),
     mediaMaxMb: z.number().positive().optional(),
+    /**
+     * Extra absolute (or `~/…`) directories outbound MEDIA/local-file delivery may read.
+     * Merged into the shared agent-scoped media-root allowlist used by all channels.
+     * Relative values are rejected — they must not resolve against the gateway cwd.
+     */
+    mediaLocalRoots: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .refine((value) => {
+            // Bare `~` / `~/` expand to the whole home directory — only `~/…` subpaths.
+            if (value === "~" || value === "~/") {
+              return false;
+            }
+            if (value.startsWith("~/")) {
+              // Reject `~/…` values whose `..` segments collapse back to (or
+              // escape) home, e.g. `~/captures/..` normalizes to `~`.
+              const virtualExpanded = path.posix.normalize(value.replaceAll("\\", "/"));
+              return (
+                virtualExpanded !== "~" &&
+                virtualExpanded !== "~/" &&
+                virtualExpanded.startsWith("~/")
+              );
+            }
+            if (!path.isAbsolute(value)) {
+              return false;
+            }
+            const resolved = path.resolve(value);
+            return resolved !== path.parse(resolved).root;
+          }, "mediaLocalRoots entries must be absolute (non-root) paths or start with ~/"),
+      )
+      .optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
