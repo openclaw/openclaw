@@ -69,6 +69,8 @@ Auth writes that explicitly select a state directory, including isolated QA stag
 
 Do not write `type: "aws-sdk"` into the credential store; stored credentials are only `api_key`, `token`, or `oauth`. If a legacy `auth-profiles.json` has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and removes the marker from the store.
 
+`models auth paste-api-key` and `paste-token` write only the targeted agent's SQLite store. They never add global `auth.profiles` / `auth.order` metadata, so a secondary-agent paste cannot declare a profile the default agent cannot resolve. They also do not persist a stored per-agent order copied from the current global `auth.order`; later global-order edits still govern that agent unless the operator opts in with `models auth order set`.
+
 ## Explicit auth order filtering
 
 - When `auth.order.<provider>` or the auth-store order override is set for a provider, `models status --probe` only probes profile ids that remain in the resolved auth order for that provider. The stored override wins over `auth.order` config.
