@@ -45,17 +45,18 @@ import {
   registerPendingCronSessionCleanup,
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
+import { resolveEffectiveJobAgentId } from "./ops-shared.js";
 import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
-import type {
-  CronAddResult,
-  CronAddOptions,
-  CronServiceState,
-  CronUpdateOptions,
-  CronUpdatePrecondition,
-  DeferredCronNotifications,
+import {
+  emit,
+  resolveCronServiceDefaultAgentId,
+  type CronAddResult,
+  type CronAddOptions,
+  type CronServiceState,
+  type CronUpdateOptions,
+  type CronUpdatePrecondition,
+  type DeferredCronNotifications,
 } from "./state.js";
-import { emit } from "./state.js";
 import {
   ensureLoaded,
   persist,
@@ -223,7 +224,7 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  const defaultAgentId = resolveCurrentDefaultAgentId(state);
+  const defaultAgentId = resolveCronServiceDefaultAgentId(state);
   const ownerChanged =
     resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
     resolveEffectiveJobAgentId(nextJob, defaultAgentId);
@@ -313,7 +314,7 @@ export async function add(
       );
     }
     await ensureLoaded(state, { skipRecompute: true });
-    const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
+    const agentId = resolveEffectiveJobAgentId(input, resolveCronServiceDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
     }
@@ -508,7 +509,7 @@ async function updateLoadedJob(params: {
     configuredChannels,
   });
   if (patch.agentId !== undefined) {
-    const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
+    const agentId = resolveEffectiveJobAgentId(nextJob, resolveCronServiceDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
       throw new Error(`cron job agent is unavailable: ${agentId}`);
     }
@@ -611,7 +612,7 @@ export async function remove(
       suppressScheduledJobId: id,
     });
     const activeMarker = noteActiveCronJobRemoval(id);
-    const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
+    const agentId = resolveEffectiveJobAgentId(removedJob, resolveCronServiceDefaultAgentId(state));
     const sessionStorePath =
       state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
     if (
@@ -682,7 +683,7 @@ export async function removeAgentJobsTransactional<T>(
     if (!id || !state.store) {
       return await commit();
     }
-    const defaultAgentId = resolveCurrentDefaultAgentId(state);
+    const defaultAgentId = resolveCronServiceDefaultAgentId(state);
     const removedJobs = state.store.jobs.filter(
       (job) => resolveEffectiveJobAgentId(job, defaultAgentId) === id,
     );

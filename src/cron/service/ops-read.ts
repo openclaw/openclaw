@@ -24,14 +24,13 @@ import type {
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { emitCronRunFinished } from "./ops-run-preparation.js";
-import {
-  ensureLoadedForRead,
-  ownsStreamSource,
-  resolveCurrentDefaultAgentId,
-  resolveEffectiveJobAgentId,
-} from "./ops-shared.js";
+import { ensureLoadedForRead, ownsStreamSource, resolveEffectiveJobAgentId } from "./ops-shared.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import {
+  resolveCronServiceDefaultAgentId,
+  type CronServiceState,
+  type DeferredCronNotifications,
+} from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult, armTimer } from "./timer.js";
 
@@ -341,7 +340,8 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       }
       if (
         requestedAgentId &&
-        resolveEffectiveJobAgentId(job, resolveCurrentDefaultAgentId(state)) !== requestedAgentId
+        resolveEffectiveJobAgentId(job, resolveCronServiceDefaultAgentId(state)) !==
+          requestedAgentId
       ) {
         return false;
       }

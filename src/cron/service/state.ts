@@ -370,6 +370,11 @@ export type CronServiceState = {
   storeLoadedAtMs: number | null;
 };
 
+/** Resolves the current configured default agent without caching reloadable state. */
+export function resolveCronServiceDefaultAgentId(state: CronServiceState) {
+  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+}
+
 /** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   // The public CronService constructor shipped before roster-aware callers.

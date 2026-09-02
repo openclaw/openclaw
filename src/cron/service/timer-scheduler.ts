@@ -34,7 +34,7 @@ import {
   recoverNonTerminalCronRunReceipts,
 } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
-import type { CronServiceState } from "./state.js";
+import { resolveCronServiceDefaultAgentId, type CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import { createCronCapacityRecheckTracker } from "./timer-capacity-recheck.js";
@@ -502,9 +502,7 @@ async function onAdmittedTimer(state: CronServiceState) {
       // Reaper discovery is maintenance: failure must never strand the timer
       // or leave the scheduler's execution slot permanently occupied.
       if (state.deps.resolveSessionStorePath || state.deps.sessionStorePath) {
-        const configuredDefaultAgentId = (
-          state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId
-        )?.trim();
+        const configuredDefaultAgentId = resolveCronServiceDefaultAgentId(state)?.trim();
         const defaultAgentId = configuredDefaultAgentId
           ? normalizeAgentId(configuredDefaultAgentId)
           : undefined;

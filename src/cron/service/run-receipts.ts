@@ -20,16 +20,12 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronStoreTransactionHooks } from "../store/transaction-hooks.js";
 import type { CronJob, CronRunStatus } from "../types.js";
-import type { CronServiceState } from "./state.js";
+import { resolveCronServiceDefaultAgentId, type CronServiceState } from "./state.js";
 
 export type CronRunReceiptSettlementDisposition = "owner-unavailable";
 
-function currentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
-}
-
 function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronJob): string {
-  return resolveCronJobEffectiveAgentId(job, currentDefaultAgentId(state));
+  return resolveCronJobEffectiveAgentId(job, resolveCronServiceDefaultAgentId(state));
 }
 
 function resolveAgentId(state: CronServiceState) {

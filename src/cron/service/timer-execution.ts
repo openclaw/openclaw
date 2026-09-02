@@ -29,7 +29,7 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
 import { resolveJobPayloadTextForMain } from "./jobs-scheduling.js";
-import type { CronServiceState } from "./state.js";
+import { resolveCronServiceDefaultAgentId, type CronServiceState } from "./state.js";
 import {
   type CronTriggerEvalOutcome,
   type ExecuteJobCoreOptions,
@@ -196,7 +196,7 @@ export async function executeJobCore(
       ? await state.deps.runSkillCollectionReview({
           agentId: resolveCronJobEffectiveAgentId(
             effectiveJob,
-            state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+            resolveCronServiceDefaultAgentId(state),
           ),
           ...(abortSignal ? { abortSignal } : {}),
         })
@@ -313,10 +313,7 @@ async function executeMainSessionCronJob(
           : 'main job requires payload.kind="systemEvent"',
     };
   }
-  const agentId = resolveCronJobEffectiveAgentId(
-    job,
-    state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-  );
+  const agentId = resolveCronJobEffectiveAgentId(job, resolveCronServiceDefaultAgentId(state));
   const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
   const queuedSystemEvent = normalizeQueuedSystemEventHandle(
     enqueueCronSystemEvent(state, text, {
@@ -581,10 +578,7 @@ async function executeScriptCronJob(
 
   const notify = result.notify?.trim() ? result.notify : undefined;
   if ((job.sessionTarget === "main" && notify) || result.wake) {
-    const agentId = resolveCronJobEffectiveAgentId(
-      job,
-      state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-    );
+    const agentId = resolveCronJobEffectiveAgentId(job, resolveCronServiceDefaultAgentId(state));
     const deliveryContext =
       job.sessionTarget === "main" ? resolveMainSessionCronDeliveryContext(state, job) : undefined;
     const eventOptions = { agentId, ...(deliveryContext ? { deliveryContext } : {}) };

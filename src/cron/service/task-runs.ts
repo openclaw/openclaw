@@ -49,7 +49,12 @@ import type {
   CronRunStatus,
 } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
-import type { CronEvent, CronExecutionIdentityAdmission, CronServiceState } from "./state.js";
+import {
+  resolveCronServiceDefaultAgentId,
+  type CronEvent,
+  type CronExecutionIdentityAdmission,
+  type CronServiceState,
+} from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 
 function requireCronAgentId(agentId: string | undefined): string {
@@ -57,10 +62,6 @@ function requireCronAgentId(agentId: string | undefined): string {
     throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
   }
   return normalizeAgentId(agentId);
-}
-
-function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
-  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
 
 /** Carries exact admission into the first post-admission owner lifecycle phase. */
@@ -291,7 +292,7 @@ function tryCreateCronTaskRunRecord(params: {
   try {
     const childSessionKey = params.childSessionKey;
     const effectiveJobAgentId = params.job
-      ? resolveCronJobEffectiveAgentId(params.job, resolveCurrentDefaultAgentId(params.state))
+      ? resolveCronJobEffectiveAgentId(params.job, resolveCronServiceDefaultAgentId(params.state))
       : undefined;
     const task = createRunningTaskRunCore({
       runtime: "cron",
@@ -305,9 +306,9 @@ function tryCreateCronTaskRunRecord(params: {
         (childSessionKey
           ? resolveAgentIdFromSessionKey(
               childSessionKey,
-              resolveCurrentDefaultAgentId(params.state),
+              resolveCronServiceDefaultAgentId(params.state),
             )
-          : requireCronAgentId(resolveCurrentDefaultAgentId(params.state))),
+          : requireCronAgentId(resolveCronServiceDefaultAgentId(params.state))),
       runId: params.runId,
       label: params.job?.name,
       task: params.job?.name || params.jobId,
