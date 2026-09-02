@@ -124,7 +124,7 @@ contracts above; a modifying hook is not an observation hook.
 
 | Hook                            | Kind    | Purpose                                                                                                     |
 | ------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Modify  | Override provider or model before session messages load                                                     |
+| `before_model_resolve`          | Modify  | Override provider, model, or turn-local thinking before session messages load                               |
 | `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                  |
 | `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment |
 | `before_agent_run`              | Gate    | Inspect the final prompt and session messages before model submission; can block the run                    |
