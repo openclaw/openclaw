@@ -62,7 +62,7 @@ export type PlacementRecoveryDeps = {
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
   recoverPlacementMoves?: (environmentId?: string) => Promise<Set<string>>;
-  isInterruptedDelegatedChild?: ((sessionKey: string) => boolean) | undefined;
+  isInterruptedDelegatedChild?: ((placement: WorkerDispatchPlacement) => boolean) | undefined;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
@@ -127,24 +127,18 @@ export async function recoverPendingWorkspaceResults(
     if (environmentId !== undefined && placement?.environmentId !== environmentId) {
       continue;
     }
-    if (placement && deps.isInterruptedDelegatedChild?.(placement.sessionKey)) {
-      const error = new Error(
-        "Delegated child placement lost its initiating worker turn during restart",
-      );
-      if (placement.state === "active" || placement.state === "draining") {
-        const failed = placements.failWorkspaceResultAndReleaseTurn(pending, error);
-        if (failed.state === "failed") {
-          await failure.retryFailedTeardown(failed);
-        }
-      }
-      continue;
-    }
+    const interruptedDelegatedChild =
+      placement !== undefined && deps.isInterruptedDelegatedChild?.(placement) === true;
     if (pending.stagedResultRef) {
       stagedResultOwners.add(pending.sessionId);
     }
     const sameGatewayInstance =
       pending.gatewayInstanceId === placements.workspaceResultInstanceId();
-    if (sameGatewayInstance && pending.recoveryRequestedAtMs === null) {
+    if (
+      sameGatewayInstance &&
+      pending.recoveryRequestedAtMs === null &&
+      !interruptedDelegatedChild
+    ) {
       continue;
     }
     try {
@@ -194,8 +188,6 @@ export async function recoverPendingWorkspaceResults(
         continue;
       }
       const localPath = await deps.resolveWorkspacePath(active);
-      const priorWorkspaceResultConflict =
-        active.workspaceResultConflict ?? (await deps.resolveWorkspaceResultConflict(active));
       const canonicalStagedResultRef = workerWorkspaceResultRef(turnClaim.claimId);
       let stagedResultRef = pending.stagedResultRef;
       if (
@@ -227,6 +219,23 @@ export async function recoverPendingWorkspaceResults(
           root: localPath,
           stagedResultRef: preparedWorkerWorkspaceResultRef(canonicalStagedResultRef),
         }));
+      if (interruptedDelegatedChild && !stagedResultRef) {
+        if (hasPreparedResult) {
+          // The snapshot exists but was never durably published as the turn result.
+          // Keep its SQLite fence for retry or explicit operator abandonment.
+          continue;
+        }
+        const failed = placements.failWorkspaceResultAndReleaseTurn(
+          pending,
+          new Error("Delegated child placement lost its initiating worker turn during restart"),
+        );
+        if (failed.state === "failed") {
+          await failure.retryFailedTeardown(failed);
+        }
+        continue;
+      }
+      const priorWorkspaceResultConflict =
+        active.workspaceResultConflict ?? (await deps.resolveWorkspaceResultConflict(active));
       const environment = environments.get(active.environmentId);
       if (
         environment?.state === "attached" &&
