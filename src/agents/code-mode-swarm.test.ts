@@ -532,6 +532,24 @@ describe("Code Mode swarm host bridge", () => {
     expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
 
+  it("reuses an in-flight durable reservation without a second spawn", async () => {
+    swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
+      collectorRecord({
+        collect: true,
+        collectorLaunchPhase: "reserved",
+        swarmLaunchPending: true,
+        swarmLaunchRequestFingerprint: collectorFingerprint(),
+      }),
+    );
+    const harness = createSwarmHarness();
+
+    const result = await runSwarmCode(harness, 'return await agents.run("Research");');
+
+    expect(result).toMatchObject({ status: "completed", value: "restored" });
+    expect(swarmMocks.initSubagentRegistry).not.toHaveBeenCalled();
+    expect(harness.spawnTool.execute).not.toHaveBeenCalled();
+  });
+
   it("re-enqueues a durable pending reservation before returning its handle", async () => {
     swarmMocks.getSwarmRunByLaunchReplayKey.mockReturnValue(
       collectorRecord({

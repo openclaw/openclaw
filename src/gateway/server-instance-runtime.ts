@@ -164,6 +164,7 @@ export function createGatewayInstanceRuntime(
           onAccepted: dispatchOptions.onAccepted,
           onExecutionStarted: dispatchOptions.onExecutionStarted,
           onSignalAbort: dispatchOptions.onSignalAbort,
+          providerDispatchLifecycle: dispatchOptions.providerDispatchLifecycle,
           signal: dispatchOptions.signal,
           timeoutMs,
         });

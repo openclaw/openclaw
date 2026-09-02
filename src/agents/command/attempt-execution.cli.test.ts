@@ -834,6 +834,10 @@ describe("CLI attempt execution", () => {
     runId: string;
     cwd?: string;
     onExecutionStarted?: () => void;
+    providerDispatchLifecycle?: {
+      onDispatch: () => void;
+      onAccepted: () => void;
+    };
     onAgentEvent?: RunAgentAttemptParams["onAgentEvent"];
   }) {
     await runAgentAttempt({
@@ -845,7 +849,10 @@ describe("CLI attempt execution", () => {
       cwd: params.cwd,
       body: params.body,
       runId: params.runId,
-      opts: { onExecutionStarted: params.onExecutionStarted },
+      opts: {
+        onExecutionStarted: params.onExecutionStarted,
+        providerDispatchLifecycle: params.providerDispatchLifecycle,
+      },
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       agentDir,
       sessionStore: params.sessionStore,
@@ -893,6 +900,36 @@ describe("CLI attempt execution", () => {
       expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
     },
   );
+
+  it("maps provider receipts without treating a worker tunnel as acceptance", async () => {
+    const sessionKey = "agent:main:direct:collector-receipts";
+    const sessionEntry = makeSessionEntry("session-collector-receipts");
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    const onDispatch = vi.fn();
+    const onAccepted = vi.fn();
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "start",
+      runId: "run-collector-receipts",
+      providerDispatchLifecycle: { onDispatch, onAccepted },
+    });
+    const observe = firstRunCliAgentArg().onExecutionPhase!;
+    observe({ phase: "attempt_dispatch", backend: "cloud-worker" });
+    observe({ phase: "process_spawned", backend: "cloud-worker" });
+    observe({ phase: "model_call_started", backend: "claude-cli" });
+    observe({ phase: "assistant_output_started", backend: "claude-cli" });
+    observe({ phase: "tool_execution_started", backend: "claude-cli" });
+    expect(onDispatch).toHaveBeenCalledOnce();
+    expect(onAccepted).not.toHaveBeenCalled();
+    observe({ phase: "process_spawned", backend: "claude-cli" });
+    expect(onAccepted).toHaveBeenCalledOnce();
+    observe({ phase: "turn_accepted", backend: "codex" });
+    expect(onAccepted).toHaveBeenCalledTimes(2);
+  });
 
   it("forwards authoritative group type to CLI runs with opaque session keys", async () => {
     const sessionKey = "agent:main:opaque:binding";

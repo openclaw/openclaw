@@ -22,6 +22,7 @@ import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
+import type { ProviderDispatchLifecycle } from "../provider-dispatch-lifecycle.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
@@ -144,6 +145,7 @@ export type AgentCommandOpts = {
   lifecycleGeneration?: string;
   /** Called once when the selected runtime actually admits the prompt for execution. */
   onExecutionStarted?: () => void;
+  providerDispatchLifecycle?: ProviderDispatchLifecycle;
   extraSystemPrompt?: string;
   /** Frozen profile-backed human Git attribution prepared by trusted ingress. */
   gitCoauthorAttribution?: string;

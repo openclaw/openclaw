@@ -613,7 +613,15 @@ export function runAgentAttempt(params: {
     authProfileIdSource?: "auto" | "user";
   }) => void;
 }) {
-  const onRuntimeActivity = (info: { phase: string }) => {
+  const onRuntimeActivity = (info: { phase: string; backend?: string }) => {
+    if (info.phase === "attempt_dispatch") {
+      params.opts.providerDispatchLifecycle?.onDispatch();
+    } else if (
+      info.phase === "turn_accepted" ||
+      (info.phase === "process_spawned" && info.backend !== "cloud-worker")
+    ) {
+      params.opts.providerDispatchLifecycle?.onAccepted();
+    }
     // CLI preparation and child launch do not prove a native turn. Parsed
     // assistant/tool activity does, even when the backend omits lifecycle events.
     if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {

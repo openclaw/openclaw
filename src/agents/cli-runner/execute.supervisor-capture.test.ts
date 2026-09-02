@@ -1038,13 +1038,32 @@ describe("executePreparedCliRun supervisor output capture", () => {
         { text: "Hello", delta: "Hello" },
         { text: "Hello world", delta: " world" },
       ]);
-      expect(context.params.onExecutionPhase).toHaveBeenCalledTimes(2);
-      expect(context.params.onExecutionPhase).toHaveBeenNthCalledWith(2, {
-        phase: "assistant_output_started",
-        provider: "claude-cli",
-        model: "model",
-        backend: "claude-cli",
-      });
+      expect(vi.mocked(context.params.onExecutionPhase).mock.calls).toEqual([
+        [
+          {
+            phase: "attempt_dispatch",
+            provider: "claude-cli",
+            model: "model",
+            backend: "claude-cli",
+          },
+        ],
+        [
+          {
+            phase: "assistant_output_started",
+            provider: "claude-cli",
+            model: "model",
+            backend: "claude-cli",
+          },
+        ],
+        [
+          {
+            phase: "process_spawned",
+            provider: "claude-cli",
+            model: "model",
+            backend: "claude-cli",
+          },
+        ],
+      ]);
     } finally {
       stop();
     }

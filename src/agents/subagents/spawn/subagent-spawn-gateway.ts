@@ -7,6 +7,7 @@ import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.j
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import type { ProviderDispatchLifecycle } from "../../provider-dispatch-lifecycle.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
@@ -36,6 +37,7 @@ async function callSubagentGatewayWithDispatchMode(
   options?: {
     agentRunTracking?: "native_subagent";
     gatewayContextResolver?: GatewayContextResolver;
+    providerDispatchLifecycle?: ProviderDispatchLifecycle;
   },
 ): Promise<{ response: SubagentGatewayResponse; dispatchMode: SubagentGatewayDispatchMode }> {
   const { sessionSpawnContext, parentExecutionIdentityToken } =
@@ -123,6 +125,9 @@ async function callSubagentGatewayWithDispatchMode(
             expectFinal: request.expectFinal,
             ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
             ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
+            ...(options?.providerDispatchLifecycle
+              ? { providerDispatchLifecycle: options.providerDispatchLifecycle }
+              : {}),
             ...(gatewayContextResolver ? { resolveGatewayContext: gatewayContextResolver } : {}),
             ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
             ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
@@ -228,6 +233,7 @@ export async function callNativeSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
   gatewayContextResolver?: GatewayContextResolver,
+  providerDispatchLifecycle?: ProviderDispatchLifecycle,
 ): Promise<{
   response: SubagentGatewayResponse;
   taskRowOwnership: "required" | "gateway_best_effort";
@@ -235,6 +241,7 @@ export async function callNativeSubagentGateway(
   const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
     agentRunTracking: "native_subagent",
     gatewayContextResolver,
+    providerDispatchLifecycle,
   });
   return {
     response: result.response,

@@ -342,6 +342,10 @@ const subagentRestorer = createSubagentRegistryRestorer({
     listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),
   startQueuedSubagentRun: (runId, gatewayRunId, lifecycleGeneration) =>
     subagentRunManager.startQueuedSubagentRun(runId, gatewayRunId, lifecycleGeneration),
+  markCollectorLaunchDispatching: (runId) =>
+    subagentRunManager.markCollectorLaunchDispatching(runId),
+  settleCollectorLaunchAfterRestart: (runId, phase) =>
+    subagentRunManager.settleCollectorLaunchAfterRestart(runId, phase),
   terminateAcceptedRestoredCollectorRun: ({
     entry,
     gatewayRunId,
@@ -484,6 +488,10 @@ export function registerSubagentRun(params: RegisterSubagentRunParams): void {
       fenceScheduledGatewayContextResolver(activeGatewayContextResolver),
   });
 }
+export const reserveCollectorRun = subagentRunManager.reserveCollectorRun;
+export const prepareCollectorRun = subagentRunManager.prepareCollectorRun;
+export const markCollectorLaunchDispatching = subagentRunManager.markCollectorLaunchDispatching;
+export const markCollectorLaunchRunning = subagentRunManager.markCollectorLaunchRunning;
 export const startQueuedSubagentRun = subagentRunManager.startQueuedSubagentRun;
 export const settleFailedQueuedSubagentLaunch = subagentRunManager.settleFailedQueuedSubagentLaunch;
 
@@ -565,7 +573,7 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 }
 
 const testing = {
-  failQueuedSubagentRun: subagentRunManager.failQueuedSubagentRun,
+  failQueuedSubagentRun: subagentRunManager.settleFailedQueuedSubagentLaunch,
   async sweepOnceForTests() {
     await subagentSweeper.sweepOnce();
   },

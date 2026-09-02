@@ -9,6 +9,7 @@ import {
   removeExpiredRuns,
   resumingRunIds,
 } from "./code-mode-state.js";
+import type { CodeModeTranscriptAuthority } from "./code-mode-waiting-claim.js";
 import { normalizeCodeModeTimeoutResult, runCodeModeWorker } from "./code-mode-worker.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
@@ -183,6 +184,11 @@ export function createCodeModeHarness(
 ) {
   const catalogRef = params.catalogRef ?? createToolSearchCatalogRef();
   const config = { tools: { codeMode: true } } as never;
+  const transcriptAuthority = {
+    assertActive: () => undefined,
+    capture: () => undefined,
+    verify: () => ({ anchor: { entryId: "persisted-test-result" } }),
+  } as unknown as CodeModeTranscriptAuthority;
   const ctx = {
     config,
     runtimeConfig: config,
@@ -191,6 +197,7 @@ export function createCodeModeHarness(
     sessionKey: params.agentId ? `agent:${params.agentId}:main` : "agent:main:main",
     runId: "run-code-mode",
     catalogRef,
+    transcriptAuthority,
     forceRestartSafeTools: params.forceRestartSafeTools,
     codeModeSkills: params.codeModeSkills,
   };

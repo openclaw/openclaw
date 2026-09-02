@@ -299,6 +299,7 @@ export type SubagentRunRecord = {
   swarmLaunchReplayKey?: string;
   /** Canonical collector request hash paired with a host-reserved launch identity. */
   swarmLaunchRequestFingerprint?: string;
+  collectorLaunchPhase?: "reserved" | "prepared" | "dispatching" | "running";
   /** True only between host reservation and accepted Gateway dispatch. */
   swarmLaunchPending?: boolean;
   groupId?: string;

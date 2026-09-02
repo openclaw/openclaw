@@ -42,6 +42,7 @@ type SpawnPipelineParams<TState> = {
   adapter: SpawnBackendAdapter<TState>;
   admissionReservation?: { release: () => void };
   buildRegistration: (state: TState, runId: string) => RegisterSubagentRunInput;
+  registerRun?: (registration: RegisterSubagentRunInput) => void;
   hookRunner?: SubagentLifecycleHookRunner | null;
   progressOrigin?: SpawnProgressOrigin;
   /** Session key the started-progress hook fires against. Backends differ on
@@ -81,11 +82,8 @@ async function executeSpawnPipeline<TState>(
 
   let registration: RegisterSubagentRunInput;
   try {
-    // Keep construction and registration in one synchronous section so callers
-    // can revalidate shared admission state without an interleaving await.
     registration = params.buildRegistration(state, runId);
-    registerSubagentRun(registration);
-    // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
+    (params.registerRun ?? registerSubagentRun)(registration);
     params.admissionReservation?.release();
   } catch (error) {
     await params.adapter.cleanupOnFailure({ phase: "register", state, error });

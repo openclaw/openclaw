@@ -121,7 +121,7 @@ async function runAgentSpawnBridge(params: {
     if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
       throw new ToolInputError("agents.run replay request does not match the persisted collector.");
     }
-    if (existing.swarmLaunchPending === true) {
+    if (existing.swarmLaunchPending && existing.collectorLaunchPhase !== "reserved") {
       if (!existing.queuedLaunch) {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }

@@ -135,6 +135,36 @@ export function upsertSubagentRunRowInDatabase(
   );
 }
 
+export function insertSubagentRunRowInDatabase(
+  database: OpenClawStateDatabase,
+  row: BoundSubagentRunRecord,
+): boolean {
+  const result = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .insertInto("subagent_runs")
+      .values(row)
+      .onConflict((conflict) => conflict.column("run_id").doNothing()),
+  );
+  return Number(result.numAffectedRows ?? 0) === 1;
+}
+
+export function replaceSubagentRunRowInDatabase(params: {
+  database: OpenClawStateDatabase;
+  expected: BoundSubagentRunRecord;
+  next: BoundSubagentRunRecord;
+}): boolean {
+  const result = executeSqliteQuerySync(
+    params.database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(params.database.db)
+      .updateTable("subagent_runs")
+      .set(subagentRunRecordToSqliteUpdate(params.next))
+      .where("run_id", "=", params.expected.run_id)
+      .where("payload_json", "=", params.expected.payload_json!),
+  );
+  return Number(result.numAffectedRows ?? 0) === 1;
+}
+
 export function readSubagentRun(
   database: OpenClawStateDatabase,
   runId: string,

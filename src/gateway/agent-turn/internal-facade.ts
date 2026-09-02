@@ -152,6 +152,9 @@ export function createInternalAgentTurnFacade(
       ...(dispatchOptions.onExecutionStarted
         ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
         : {}),
+      ...(dispatchOptions.providerDispatchLifecycle
+        ? { providerDispatchLifecycle: dispatchOptions.providerDispatchLifecycle }
+        : {}),
     };
     const operation = runWithGatewayRequestEnvelope(
       method,

@@ -462,6 +462,7 @@ export function startAgentRunExecution(params: {
                   });
                 }
               },
+              providerDispatchLifecycle: params.io.providerDispatchLifecycle,
               onActiveModelSelected: createAgentRunModelSelectionHandler({
                 context: params.context,
                 runId: params.runId,

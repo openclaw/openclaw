@@ -318,15 +318,16 @@ function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
 export function upsertTaskRunRowInDatabase(
   database: OpenClawStateDatabase,
   row: BoundTaskRecord,
+  insertOnly = false,
 ): void {
   const { db } = database;
   const updates = { ...row, task_id: undefined };
+  const insert = getTaskRegistryKysely(db).insertInto("task_runs").values(row);
   executeSqliteQuerySync(
     db,
-    getTaskRegistryKysely(db)
-      .insertInto("task_runs")
-      .values(row)
-      .onConflict((conflict) => conflict.column("task_id").doUpdateSet(updates)),
+    insertOnly
+      ? insert
+      : insert.onConflict((conflict) => conflict.column("task_id").doUpdateSet(updates)),
   );
 }
 

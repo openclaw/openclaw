@@ -38,6 +38,7 @@ import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry
 import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
+import { loadTaskRegistryStateFromSqlite } from "../../../tasks/task-registry.store.sqlite.js";
 import {
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
@@ -52,7 +53,11 @@ import {
 } from "../../admitted-run-context.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
+import { codeModeSwarmHandlers } from "../../code-mode-swarm.runtime.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
 import { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
+import { ToolSearchRuntime } from "../../tool-search-runtime.js";
+import { createToolSearchCatalogRef, resolveToolSearchConfig } from "../../tool-search.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -63,7 +68,14 @@ import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import {
+  activateSubagentRegistry,
+  initSubagentRegistry,
+  markCollectorLaunchDispatching,
+  markCollectorLaunchRunning,
+  prepareCollectorRun,
+  reserveCollectorRun,
   resetSubagentRegistryForTests,
   testing as registryTesting,
 } from "../registry/subagent-registry.test-helpers.js";
@@ -205,8 +217,15 @@ describe("pending spawn invocation authority", () => {
       dispatchGatewayMethodInProcess: async <T>(
         method: string,
         params: Record<string, unknown>,
+        options?: {
+          providerDispatchLifecycle?: {
+            onDispatch: () => void;
+            onAccepted: () => void;
+          };
+        },
       ) => {
         if (method === "agent") {
+          options?.providerDispatchLifecycle?.onDispatch();
           agentDispatch(params);
           if (closure === "native acceptance") {
             const childSessionKey = params.sessionKey as string;
@@ -222,6 +241,7 @@ describe("pending spawn invocation authority", () => {
             acceptedEntered.resolve();
             await acceptedGate.promise;
           }
+          options?.providerDispatchLifecycle?.onAccepted();
           return { runId: params.idempotencyKey, status: "accepted" } as T;
         }
         if (method === "chat.abort") {
@@ -331,8 +351,37 @@ describe("pending spawn invocation authority", () => {
       (error: unknown) => error,
     );
     try {
-      const childSessionKey = await entered.promise;
-      expect(subagentRuns.size, "no ownership transfer before preparation resolves").toBe(0);
+      const childSessionKey = await Promise.race([
+        entered.promise,
+        wrappedOutcome.then((error) => {
+          throw error;
+        }),
+      ]);
+      expect([...subagentRuns.values()]).toEqual(
+        closure === "native acceptance"
+          ? []
+          : [
+              expect.objectContaining({
+                childSessionKey,
+                collectorLaunchPhase: "reserved",
+              }),
+            ],
+      );
+      expect([...loadSubagentRegistryFromSqlite().values()]).toEqual(
+        closure === "native acceptance"
+          ? []
+          : [
+              expect.objectContaining({
+                childSessionKey,
+                collectorLaunchPhase: "reserved",
+              }),
+            ],
+      );
+      expect(
+        [...loadTaskRegistryStateFromSqlite().tasks.values()].some(
+          (entry) => entry.runId === [...subagentRuns.keys()][0],
+        ),
+      ).toBe(false);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeDefined();
       if (closure === "native acceptance") {
         release.resolve();
@@ -388,10 +437,19 @@ describe("pending spawn invocation authority", () => {
           childController?.controller.signal.aborted,
           "exact accepted local child aborted before deletion",
         ).toBe(true);
+        expect(subagentRuns.size).toBe(0);
       } else {
         expect(agentDispatch, "cancelled source never dispatches a child").not.toHaveBeenCalled();
+        expect([...subagentRuns.values()]).toEqual([
+          expect.objectContaining({
+            childSessionKey,
+            execution: expect.objectContaining({ status: "terminal" }),
+            collectorCompletion: expect.objectContaining({
+              status: closure === "native abort" ? "killed" : "failed",
+            }),
+          }),
+        ]);
       }
-      expect(subagentRuns.size, "cancelled source never registers runnable work").toBe(0);
       expect(rollback).toHaveBeenCalledOnce();
       expect(deleted).toEqual([childSessionKey]);
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
@@ -468,9 +526,17 @@ describe("pending spawn invocation authority", () => {
         dispatchGatewayMethodInProcess: async <T>(
           method: string,
           params: Record<string, unknown>,
+          options?: {
+            providerDispatchLifecycle?: {
+              onDispatch: () => void;
+              onAccepted: () => void;
+            };
+          },
         ) => {
           expect(method).toBe("agent");
+          options?.providerDispatchLifecycle?.onDispatch();
           dispatch(params.idempotencyKey);
+          options?.providerDispatchLifecycle?.onAccepted();
           return { runId: params.idempotencyKey, status: "accepted" } as T;
         },
       });
@@ -577,15 +643,26 @@ describe("pending spawn invocation authority", () => {
     },
   );
 
-  it("cancels the task's captured row when delayed acceptance rekeys it during the drain", async () => {
+  it("keeps deterministic collector identity through delayed provider acceptance", async () => {
     const { cfg, storePath, context, admission, parent } = await createBoundParent();
     const response = createDeferred();
     const dispatchEntered = createDeferred();
     spawnTesting.setDepsForTest({
-      dispatchGatewayMethodInProcess: async <T>(method: string) => {
+      dispatchGatewayMethodInProcess: async <T>(
+        method: string,
+        _params: Record<string, unknown>,
+        options?: {
+          providerDispatchLifecycle?: {
+            onDispatch: () => void;
+            onAccepted: () => void;
+          };
+        },
+      ) => {
         expect(method).toBe("agent");
+        options?.providerDispatchLifecycle?.onDispatch();
         dispatchEntered.resolve();
         await response.promise;
+        options?.providerDispatchLifecycle?.onAccepted();
         return { runId: "accepted-task-run", status: "accepted" } as T;
       },
     });
@@ -637,7 +714,12 @@ describe("pending spawn invocation authority", () => {
         }),
       ]);
       response.resolve();
-      await vi.waitFor(() => expect(subagentRuns.get("accepted-task-run")).toBe(entry));
+      await vi.waitFor(() =>
+        expect(subagentRuns.get(spawned.runId!)).toMatchObject({
+          collectorLaunchPhase: "running",
+        }),
+      );
+      expect(subagentRuns.has("accepted-task-run")).toBe(false);
       expect(entry).toMatchObject({ generation, createdAt, taskRunId, schedulerSlotId });
       lease?.release();
       const result = await cancellation;
@@ -651,4 +733,264 @@ describe("pending spawn invocation authority", () => {
       parent.cleanup();
     }
   });
+
+  it("serializes competing replay reservations before session or provider side effects", async () => {
+    const runId = "cm_replay_competing:bridge:agentSpawn:1";
+    const childSessionKey = `agent:main:subagent:${runId}`;
+    const registration = {
+      runId,
+      childSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      requesterAgentId: "main",
+      agentId: "main",
+      task: "bounded replay",
+      cleanup: "keep" as const,
+      collect: true,
+      swarmRequesterSessionKey: parentSessionKey,
+      swarmLaunchIdempotencyKey: runId,
+      swarmLaunchReplayKey: runId,
+      swarmLaunchRequestFingerprint: "sha256:matching",
+      groupId,
+    };
+
+    const reservations = await Promise.all([
+      Promise.resolve().then(() => reserveCollectorRun(registration)),
+      Promise.resolve().then(() => reserveCollectorRun(registration)),
+    ]);
+
+    expect(
+      reservations
+        .map((entry) => entry.created)
+        .toSorted((left, right) => Number(left) - Number(right)),
+    ).toEqual([false, true]);
+    expect(reservations[0]?.runId).toBe(reservations[1]?.runId);
+    expect(loadSubagentRegistryFromSqlite().size).toBe(1);
+    expect(loadTaskRegistryStateFromSqlite().tasks.size).toBe(0);
+    expect(() =>
+      reserveCollectorRun({
+        ...registration,
+        swarmLaunchRequestFingerprint: "sha256:different",
+      }),
+    ).toThrow("collector replay key was reused with a different request");
+  });
+
+  it("persists the real agents.run bridge through sessions_spawn into matching SQLite rows", async () => {
+    const { cfg, context, admission, parent, admitted } = await createBoundParent();
+    const providerDispatch = vi.fn();
+    spawnTesting.setDepsForTest({
+      dispatchGatewayMethodInProcess: async <T>(
+        method: string,
+        params: Record<string, unknown>,
+        options?: {
+          providerDispatchLifecycle?: {
+            onDispatch: () => void;
+            onAccepted: () => void;
+          };
+        },
+      ) => {
+        expect(method).toBe("agent");
+        options?.providerDispatchLifecycle?.onDispatch();
+        providerDispatch(params);
+        options?.providerDispatchLifecycle?.onAccepted();
+        return { runId: params.idempotencyKey, status: "accepted" } as T;
+      },
+    });
+    const source = createSessionsSpawnTool({
+      config: cfg,
+      agentSessionKey: parentSessionKey,
+      requesterRunId: parentRunId,
+      requesterTurnRunId: parentRunId,
+    });
+    const [tool] = finalizeAgentTools({
+      tools: [source],
+      hookContext: {
+        config: cfg,
+        agentId: "main",
+        sessionKey: parentSessionKey,
+        runId: parentRunId,
+      },
+      abortSignal: parent.controller.signal,
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const bridgeContext = {
+      config: cfg,
+      runtimeConfig: cfg,
+      sessionKey: parentSessionKey,
+      agentId: "main",
+      runId: parentRunId,
+      catalogRef,
+    };
+    applyCodeModeCatalog({
+      tools: [...createCodeModeTools(bridgeContext), tool!],
+      config: cfg,
+      sessionId: "parent-session",
+      sessionKey: parentSessionKey,
+      agentId: "main",
+      runId: parentRunId,
+      catalogRef,
+    });
+    const runtime = new ToolSearchRuntime(bridgeContext, resolveToolSearchConfig(cfg));
+    const caller = createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext: admitted,
+      agentId: "main",
+      sessionKey: parentSessionKey,
+    });
+    const invoke = (task: string) =>
+      withPluginRuntimeGatewayRequestScope(
+        { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
+        () =>
+          withGatewayToolCallerIdentity(caller, () =>
+            codeModeSwarmHandlers.agentSpawn({
+              runtime,
+              parentToolCallId: "code-mode-integration",
+              request: {
+                id: "bridge:agentSpawn:1",
+                method: "agentSpawn",
+                args: [task],
+              },
+              codeModeRunId: "cm_replay_integration",
+              ctx: bridgeContext,
+            }),
+          ),
+      );
+
+    try {
+      const spawned = await invoke("bounded integration");
+      await vi.waitFor(() => expect(providerDispatch).toHaveBeenCalledOnce());
+      const runId = (spawned as { runId: string }).runId;
+      const persisted = loadSubagentRegistryFromSqlite().get(runId);
+      expect(persisted).toMatchObject({
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        collectorLaunchPhase: "running",
+        execution: { status: "running" },
+        swarmLaunchReplayKey: "cm_replay_integration:bridge:agentSpawn:1",
+        swarmLaunchRequestFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
+      });
+      expect(
+        [...loadTaskRegistryStateFromSqlite().tasks.values()].find(
+          (entry) => entry.runId === runId,
+        ),
+      ).toMatchObject({ sourceId: runId, status: "running" });
+      await expect(invoke("bounded integration")).resolves.toMatchObject({ runId });
+      await expect(invoke("different request")).rejects.toThrow(
+        "agents.run replay request does not match the persisted collector",
+      );
+      expect(providerDispatch).toHaveBeenCalledOnce();
+    } finally {
+      admission.close();
+      parent.cleanup();
+    }
+  });
+
+  it.each(["reserved", "prepared", "dispatching", "running"] as const)(
+    "recovers a %s collector with matching provider and task state",
+    async (phase) => {
+      const runId = `restart-${phase}`;
+      const childSessionKey = `agent:main:subagent:${runId}`;
+      const registration = {
+        runId,
+        childSessionKey,
+        requesterSessionKey: parentSessionKey,
+        requesterDisplayKey: parentSessionKey,
+        requesterAgentId: "main",
+        agentId: "main",
+        task: `restart ${phase}`,
+        cleanup: "keep" as const,
+        collect: true,
+        queued: true,
+        swarmRequesterSessionKey: parentSessionKey,
+        swarmLaunchIdempotencyKey: runId,
+        swarmLaunchReplayKey: runId,
+        swarmLaunchRequestFingerprint: `sha256:${phase}`,
+        groupId,
+        queuedLaunch: {
+          request: {
+            idempotencyKey: runId,
+            sessionKey: childSessionKey,
+            message: `restart ${phase}`,
+          },
+          timeoutMs: 1_000,
+          schedulerGroupKey: groupId,
+          maxConcurrent: 1,
+        },
+      };
+      const reservation = reserveCollectorRun(registration);
+      if (phase !== "reserved") {
+        await writeSubagentSessionEntry({
+          stateDir,
+          agentId: "main",
+          sessionKey: childSessionKey,
+          defaultSessionId: `session-${phase}`,
+        });
+        prepareCollectorRun(reservation, registration);
+      }
+      if (phase === "dispatching" || phase === "running") {
+        expect(markCollectorLaunchDispatching(runId)).toBe(true);
+      }
+      if (phase === "running") {
+        expect(markCollectorLaunchRunning(runId)).toBe(true);
+      }
+
+      const dispatchAgent = vi.fn(
+        async (
+          _params: Record<string, unknown>,
+          _timeoutMs?: number,
+          options?: {
+            providerDispatchLifecycle?: {
+              onDispatch: () => void;
+              onAccepted: () => void;
+            };
+          },
+        ) => {
+          options?.providerDispatchLifecycle?.onDispatch();
+          options?.providerDispatchLifecycle?.onAccepted();
+          return { status: "accepted", runId };
+        },
+      );
+      resetSubagentRegistryForTests({ persist: false });
+      schedulerTesting.reset();
+      initSubagentRegistry();
+      const recoveryContext = {
+        recoveryRuntime: {
+          dispatchAgent,
+          waitForAgent: async () => await new Promise<never>(() => {}),
+        },
+        resolveGatewayContext: () => recoveryContext,
+      };
+      activateSubagentRegistry(() => recoveryContext as never);
+
+      if (phase === "prepared") {
+        await vi.waitFor(() =>
+          expect({
+            dispatches: dispatchAgent.mock.calls.length,
+            run: loadSubagentRegistryFromSqlite().get(runId),
+            task: findTaskByRunId(runId),
+          }).toMatchObject({
+            dispatches: 1,
+            run: { collectorLaunchPhase: "running" },
+            task: { status: "running" },
+          }),
+        );
+        expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+          collectorLaunchPhase: "running",
+          execution: { status: "running" },
+        });
+        expect(findTaskByRunId(runId)).toMatchObject({ status: "running" });
+      } else {
+        if (phase === "reserved") {
+          await vi.waitFor(() => expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false));
+        } else {
+          await vi.waitFor(() =>
+            expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
+              execution: { status: "terminal" },
+            }),
+          );
+        }
+        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(findTaskByRunId(runId)?.status).toBe(phase === "reserved" ? undefined : "lost");
+      }
+    },
+  );
 });

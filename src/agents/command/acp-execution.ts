@@ -177,9 +177,13 @@ export async function runAcpAgentCommand(params: {
           throw new Error("ACP input could not enter the session transcript");
         }
         params.opts.onExecutionStarted?.();
+        params.opts.providerDispatchLifecycle?.onDispatch();
       },
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
+          if (event.authoritative) {
+            params.opts.providerDispatchLifecycle?.onAccepted();
+          }
           attemptExecutionRuntime.emitAcpPromptSubmitted({
             runId: params.runId,
             sessionKey: params.sessionKey,

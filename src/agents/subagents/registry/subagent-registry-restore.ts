@@ -15,7 +15,6 @@ import {
 } from "../../subagent-requester-owner.js";
 import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import { retrySubagentCleanup } from "../spawn/subagent-spawn-cleanup.js";
-import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { bindSwarmRunReservation, enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
@@ -73,6 +72,11 @@ export function createSubagentRegistryRestorer(config: {
     gatewayRunId?: string,
     lifecycleGeneration?: string,
   ) => boolean;
+  markCollectorLaunchDispatching: (runId: string) => boolean;
+  settleCollectorLaunchAfterRestart: (
+    runId: string,
+    phase: "reserved" | "dispatching" | "running",
+  ) => boolean;
   terminateAcceptedRestoredCollectorRun: (params: {
     entry: SubagentRunRecord;
     gatewayRunId: string;
@@ -101,6 +105,8 @@ export function createSubagentRegistryRestorer(config: {
     resumeRun,
     listSwarmRunsForGroup,
     startQueuedSubagentRun,
+    markCollectorLaunchDispatching,
+    settleCollectorLaunchAfterRestart,
     terminateAcceptedRestoredCollectorRun,
     cleanupCollectorLaunchResources,
     settleFailedQueuedSubagentLaunch,
@@ -203,7 +209,20 @@ export function createSubagentRegistryRestorer(config: {
       if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
         continue;
       }
-      if (entry.collect && entry.execution.status === "queued") {
+      if (
+        entry.collect &&
+        (entry.collectorLaunchPhase === "reserved" ||
+          entry.collectorLaunchPhase === "dispatching" ||
+          entry.collectorLaunchPhase === "running")
+      ) {
+        settleCollectorLaunchAfterRestart(runId, entry.collectorLaunchPhase);
+        continue;
+      }
+      if (
+        entry.collect &&
+        entry.execution.status === "queued" &&
+        entry.collectorLaunchPhase === "prepared"
+      ) {
         const cleanupSessionEntry = loadSubagentSessionEntry({
           childSessionKey: entry.childSessionKey,
           storeCache: restoredSessionCache,
@@ -248,24 +267,35 @@ export function createSubagentRegistryRestorer(config: {
               if (!gatewayRuntime) {
                 throw new GatewayDrainingError();
               }
-              const response = await gatewayRuntime.dispatchAgent(
+              await gatewayRuntime.dispatchAgent(
                 request.params as Parameters<typeof gatewayRuntime.dispatchAgent>[0],
                 request.timeoutMs,
-                launch.authorization
-                  ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
-                  : undefined,
+                {
+                  ...(launch.authorization
+                    ? { allowModelOverride: true, scopes: [ADMIN_SCOPE] }
+                    : {}),
+                  providerDispatchLifecycle: {
+                    onDispatch: () => {
+                      if (!markCollectorLaunchDispatching(runId)) {
+                        throw new Error("collector could not enter provider dispatch");
+                      }
+                    },
+                    onAccepted: () => {
+                      if (!startQueuedSubagentRun(runId)) {
+                        throw new Error("collector could not record provider acceptance");
+                      }
+                    },
+                  },
+                },
               );
-              const gatewayRunId = readGatewayRunId(response) ?? runId;
               try {
-                if (!startQueuedSubagentRun(runId, gatewayRunId, launchLifecycleGeneration)) {
-                  throw new Error(
-                    "collector registry row could not transition from queued to running",
-                  );
+                if (entry.execution.status !== "running") {
+                  throw new Error("collector registry row did not record provider acceptance");
                 }
               } catch (error) {
                 await terminateAcceptedRestoredCollectorRun({
                   entry,
-                  gatewayRunId,
+                  gatewayRunId: runId,
                   timeoutMs: launch.timeoutMs,
                   expectedSessionId: cleanupSessionEntry?.sessionId,
                   expectedLifecycleRevision: cleanupSessionEntry?.lifecycleRevision,

@@ -166,7 +166,7 @@ export async function executeCliProcess(params: {
   };
 
   runParams.onExecutionPhase?.({
-    phase: "process_spawned",
+    phase: "attempt_dispatch",
     provider: runParams.provider,
     model: context.modelId,
     backend: context.backendResolved.id,
@@ -279,6 +279,12 @@ export async function executeCliProcess(params: {
         captureOutput: false,
         onStdout: consumeStdout,
         onStderr: consumeStderr,
+      });
+      runParams.onExecutionPhase?.({
+        phase: "process_spawned",
+        provider: runParams.provider,
+        model: context.modelId,
+        backend: context.backendResolved.id,
       });
       managedRunPid = managedRun.pid;
       const replyBackendHandle = runParams.replyOperation

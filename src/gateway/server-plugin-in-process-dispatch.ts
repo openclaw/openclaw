@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
+import type { ProviderDispatchLifecycle } from "../agents/provider-dispatch-lifecycle.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -70,6 +71,7 @@ type DispatchGatewayMethodInProcessOptions = {
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;
+  providerDispatchLifecycle?: ProviderDispatchLifecycle;
   onSignalAbort?: () => Promise<void> | void;
   operatorRoleActor?: GatewayOperatorRoleActor;
   pluginRuntimeOwnerId?: string;
@@ -353,6 +355,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
             onExecutionStarted: options?.onExecutionStarted,
+            providerDispatchLifecycle: options?.providerDispatchLifecycle,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,
             timeoutMs: options?.timeoutMs,
