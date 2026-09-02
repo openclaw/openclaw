@@ -415,6 +415,37 @@ export function normalizeForwardedContext(msg: Message): TelegramForwardedContex
   }
 }
 
+export type TelegramDiceRoll = {
+  emoji: string;
+  value: number;
+};
+
+/**
+ * Telegram dice rolls carry no text and no downloadable file, so they are
+ * neither text nor media. Extract them explicitly, the same way locations are
+ * handled, otherwise the message normalizes to an empty body and is dropped.
+ */
+export function extractTelegramDice(msg: Pick<Message, "dice">): TelegramDiceRoll | null {
+  const dice = msg.dice;
+  if (!dice || typeof dice.value !== "number" || !Number.isFinite(dice.value)) {
+    return null;
+  }
+  const emoji = normalizeOptionalString(dice.emoji);
+  if (!emoji) {
+    return null;
+  }
+  return { emoji, value: dice.value };
+}
+
+/**
+ * Attribution stays out of the marker: the envelope already prefixes group bodies with the
+ * sender label, and the inbound debounce buffer keys on sender id, so a marker can never
+ * end up under someone else's name.
+ */
+export function formatTelegramDiceText(dice: TelegramDiceRoll): string {
+  return `[Dice ${dice.emoji} = ${dice.value}]`;
+}
+
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
   const { venue } = msg;
   const location = venue?.location ?? msg.location;

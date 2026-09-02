@@ -40,7 +40,9 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderName,
+  extractTelegramDice,
   extractTelegramLocation,
+  formatTelegramDiceText,
   getTelegramTextParts,
   hasLeadingBotCommandAddressedToOtherBot,
   hasBotMentionInText,
@@ -194,13 +196,18 @@ export async function resolveTelegramInboundBody(params: {
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
+  const diceData = extractTelegramDice(msg);
+  const diceText = diceData ? formatTelegramDiceText(diceData) : undefined;
   const rawText = renderTelegramTextEntities(
     messageTextParts.text,
     messageTextParts.entities,
   ).trim();
   const richText = resolveTelegramRichMessageText(msg);
+  // Dice stays out of this flag on purpose: its only consumer is the audio preflight
+  // below, and a Bot API message carries either `dice` or `voice`/`audio`, never both,
+  // so adding it here could not change any decision.
   const hasUserText = Boolean(rawText || locationText);
-  let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
+  let rawBody = [rawText, locationText, diceText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
     rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? "";
   }
